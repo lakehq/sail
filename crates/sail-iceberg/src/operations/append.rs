@@ -18,9 +18,9 @@ use uuid::Uuid;
 
 use super::{ActionCommit, SnapshotProducer, SnapshotUpdateKind, Transaction, TransactionAction};
 use crate::io::StoreContext;
-use crate::spec::DataFile;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::manifest_list::ManifestList;
+use crate::spec::{DataFile, PartitionSpec};
 
 pub struct FastAppendAction {
     check_duplicate: bool,
@@ -31,6 +31,7 @@ pub struct FastAppendAction {
     parent_manifest_list: Option<ManifestList>,
     store_ctx: Option<StoreContext>,
     manifest_metadata: Option<ManifestMetadata>,
+    partition_specs: Vec<PartitionSpec>,
     row_lineage_start_row_id: Option<i64>,
 }
 
@@ -51,6 +52,7 @@ impl FastAppendAction {
             parent_manifest_list: None,
             store_ctx: None,
             manifest_metadata: None,
+            partition_specs: Vec::new(),
             row_lineage_start_row_id: None,
         }
     }
@@ -94,6 +96,11 @@ impl FastAppendAction {
         self
     }
 
+    pub fn with_partition_specs(mut self, partition_specs: Vec<PartitionSpec>) -> Self {
+        self.partition_specs = partition_specs;
+        self
+    }
+
     pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
         self.row_lineage_start_row_id = start_row_id;
         self
@@ -109,6 +116,7 @@ impl TransactionAction for FastAppendAction {
             self.store_ctx.clone(),
             self.manifest_metadata.clone(),
         )
+        .with_partition_specs(self.partition_specs.clone())
         .with_row_lineage_start_row_id(self.row_lineage_start_row_id);
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;
 

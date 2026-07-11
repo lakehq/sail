@@ -1376,14 +1376,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 data_file_path,
                 file_column_name,
                 row_index_column_name,
+                data_file_partition_spec_id,
+                data_file_partition_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
-                Ok(Arc::new(IcebergMergeMetadataExec::try_new(
-                    input,
-                    data_file_path,
-                    file_column_name,
-                    row_index_column_name,
-                )?))
+                let merge_metadata = if data_file_path.is_empty() {
+                    IcebergMergeMetadataExec::try_new_partitioned_files(
+                        input,
+                        file_column_name.ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "partitioned Iceberg merge metadata plan is missing file column"
+                            )
+                        })?,
+                        row_index_column_name,
+                    )?
+                } else {
+                    IcebergMergeMetadataExec::try_new(
+                        input,
+                        data_file_path,
+                        data_file_partition_spec_id.ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "Iceberg merge metadata plan is missing partition spec id"
+                            )
+                        })?,
+                        data_file_partition_json.ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "Iceberg merge metadata plan is missing partition values"
+                            )
+                        })?,
+                        file_column_name,
+                        row_index_column_name,
+                    )?
+                };
+                Ok(Arc::new(merge_metadata))
             }
             NodeKind::IcebergPositionDeleteWriter(r#gen::IcebergPositionDeleteWriterExecNode {
                 input,
@@ -2231,10 +2256,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let input = try_encode_physical_plan(self, merge_metadata.input().clone())?;
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
                 input,
-                data_file_path: merge_metadata.data_file_path().to_string(),
+                data_file_path: merge_metadata
+                    .data_file_path()
+                    .unwrap_or_default()
+                    .to_string(),
                 file_column_name: merge_metadata.file_column_name().map(ToString::to_string),
                 row_index_column_name: merge_metadata
                     .row_index_column_name()
+                    .map(ToString::to_string),
+                data_file_partition_spec_id: merge_metadata.data_file_partition_spec_id(),
+                data_file_partition_json: merge_metadata
+                    .data_file_partition_json()
                     .map(ToString::to_string),
             })
         } else if let Some(position_writer) = node.downcast_ref::<IcebergPositionDeleteWriterExec>()
@@ -4920,6 +4952,44 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_merge_metadata_file_context() -> Result<()> {
+        use datafusion::arrow::datatypes::Field;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::{MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN};
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let original = IcebergMergeMetadataExec::try_new(
+            input,
+            "s3://bucket/table/data.parquet".to_string(),
+            7,
+            "[]".to_string(),
+            Some(MERGE_FILE_COLUMN.to_string()),
+            Some(MERGE_ROW_INDEX_COLUMN.to_string()),
+        )?;
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(original))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<IcebergMergeMetadataExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergMergeMetadataExec"))?;
+
+        assert_eq!(
+            decoded.data_file_path(),
+            Some("s3://bucket/table/data.parquet")
+        );
+        assert_eq!(decoded.data_file_partition_spec_id(), Some(7));
+        assert_eq!(decoded.data_file_partition_json(), Some("[]"));
+        assert_eq!(decoded.file_column_name(), Some(MERGE_FILE_COLUMN));
+        assert_eq!(
+            decoded.row_index_column_name(),
+            Some(MERGE_ROW_INDEX_COLUMN)
+        );
+        Ok(())
     }
 
     #[test]

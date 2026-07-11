@@ -59,6 +59,71 @@ Feature: Iceberg MERGE
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN keeps merge metadata scans constant across target files
+      Given variable location for temporary directory iceberg_merge_many_files_plan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS merge_many_files_plan_table
+        """
+      Given statement template
+        """
+        CREATE TABLE merge_many_files_plan_table (
+          id INT,
+          value STRING
+        )
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO merge_many_files_plan_table VALUES (1, 'one')
+        """
+      Given statement
+        """
+        INSERT INTO merge_many_files_plan_table VALUES (2, 'two')
+        """
+      Given statement
+        """
+        INSERT INTO merge_many_files_plan_table VALUES (3, 'three')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW merge_many_files_plan_source AS
+        SELECT * FROM VALUES
+          (1, 'updated-one'),
+          (2, 'updated-two'),
+          (3, 'updated-three')
+        AS source(id, value)
+        """
+      When query
+        """
+        EXPLAIN MERGE INTO merge_many_files_plan_table AS t
+        USING merge_many_files_plan_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO merge_many_files_plan_table AS t
+        USING merge_many_files_plan_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT id, value FROM merge_many_files_plan_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value         |
+        | 1  | updated-one   |
+        | 2  | updated-two   |
+        | 3  | updated-three |
+
     Scenario: MERGE writes overwrite metadata with data and position-delete manifests
       Given variable location for temporary directory iceberg_merge_metadata
       Given final statement
@@ -197,3 +262,42 @@ Feature: Iceberg MERGE
         | id | left_value  | right_value | kind                 |
         | 2  | new-left    | old-right   | partial-update       |
         | 3  | source-left | old-right   | source-update-delete |
+
+  Rule: Internal MERGE columns cannot shadow table data
+
+    Scenario: A target column using an internal operation name is rejected clearly
+      Given variable location for temporary directory iceberg_merge_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_internal_column (
+          `__sail_operation_type` INT,
+          value STRING
+        )
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_internal_column VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_internal_column_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_internal_column AS t
+        USING iceberg_merge_internal_column_source AS s
+        ON t.`__sail_operation_type` = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error reserved internal MERGE column

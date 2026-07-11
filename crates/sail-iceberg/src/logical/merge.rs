@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, not_impl_err};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
@@ -10,9 +10,10 @@ use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge};
+use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge, validate_merge_internal_columns};
 
 use crate::logical::table_source::IcebergTableSource;
+use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 
 /// Expand MERGE information into a unified row-level write node for Iceberg.
 ///
@@ -20,6 +21,19 @@ use crate::logical::table_source::IcebergTableSource;
 /// UPDATE clauses are represented by position deletes, and UPDATE/INSERT output
 /// rows are appended as new data files.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
+    // TODO: Add Iceberg MERGE schema evolution support.
+    if info.options.with_schema_evolution {
+        return not_impl_err!("Iceberg MERGE WITH SCHEMA EVOLUTION is not supported");
+    }
+    validate_merge_internal_columns(
+        &info,
+        &[
+            MERGE_FILE_COLUMN,
+            MERGE_ROW_INDEX_COLUMN,
+            MERGE_PARTITION_SPEC_ID_COLUMN,
+            MERGE_PARTITION_COLUMN,
+        ],
+    )?;
     let expected_snapshot_id = Some(merge_target_snapshot_id(info.target.as_ref())?);
     let row_index_column = merge_needs_position_deletes(&info).then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
@@ -37,20 +51,26 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         "iceberg merge target schema after metadata columns: {:?}",
         target_fields
     );
-    if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
-        || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))
+    let mut required_metadata_columns = vec![
+        MERGE_FILE_COLUMN,
+        MERGE_PARTITION_SPEC_ID_COLUMN,
+        MERGE_PARTITION_COLUMN,
+    ];
+    if let Some(row_index_column) = row_index_column {
+        required_metadata_columns.push(row_index_column);
+    }
+    if required_metadata_columns
+        .iter()
+        .any(|column| !target_fields.iter().any(|name| name == column))
     {
         let mut exprs: Vec<Expr> = target_fields
             .iter()
             .map(|name| Expr::Column(Column::from_name(name.clone())))
             .collect();
-        if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
-            exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
-        }
-        if let Some(row_index_column) = row_index_column
-            && !target_fields.iter().any(|n| n == row_index_column)
-        {
-            exprs.push(Expr::Column(Column::from_name(row_index_column)).alias(row_index_column));
+        for metadata_column in required_metadata_columns {
+            if !target_fields.iter().any(|name| name == metadata_column) {
+                exprs.push(Expr::Column(Column::from_name(metadata_column)).alias(metadata_column));
+            }
         }
         target_plan = LogicalPlanBuilder::from(target_plan)
             .project(exprs)?
@@ -66,7 +86,12 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     let raw_target = Arc::clone(&info.target);
     let raw_source = Arc::clone(&info.source);
     let raw_input_schema = info.input_schema.clone();
-    let expansion = expand_merge(info, MERGE_FILE_COLUMN, row_index_column)?;
+    let expansion = expand_merge(
+        info,
+        MERGE_FILE_COLUMN,
+        row_index_column,
+        &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
+    )?;
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
         raw_source,
@@ -161,7 +186,11 @@ fn ensure_merge_metadata_columns(
     file_col: &str,
     row_index_col: Option<&str>,
 ) -> Result<LogicalPlan> {
-    let mut metadata_cols = vec![file_col];
+    let mut metadata_cols = vec![
+        file_col,
+        MERGE_PARTITION_SPEC_ID_COLUMN,
+        MERGE_PARTITION_COLUMN,
+    ];
     if let Some(row_index_col) = row_index_col {
         metadata_cols.push(row_index_col);
     }

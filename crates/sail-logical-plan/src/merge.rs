@@ -440,10 +440,42 @@ pub struct MergeExpansion {
     pub options: MergeIntoOptions,
 }
 
+pub fn validate_merge_internal_columns(info: &MergeInfo, format_columns: &[&str]) -> Result<()> {
+    let target_schema = info.target.schema();
+    let reserved_columns = [
+        TARGET_PRESENT_COLUMN,
+        SOURCE_PRESENT_COLUMN,
+        TARGET_ROW_ID_COLUMN,
+        OPERATION_COLUMN,
+        MERGE_SOURCE_METRIC_COLUMN,
+    ]
+    .into_iter()
+    .chain(format_columns.iter().copied());
+
+    for reserved_column in reserved_columns {
+        if info
+            .options
+            .resolved_target_field_names
+            .iter()
+            .any(|name| name == reserved_column)
+            || target_schema
+                .fields()
+                .iter()
+                .any(|field| field.name() == reserved_column)
+        {
+            return plan_err!(
+                "MERGE target column '{reserved_column}' uses a reserved internal MERGE column name"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn expand_merge(
     info: MergeInfo,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
 ) -> Result<MergeExpansion> {
     let target_plan = info.target.as_ref().clone();
     let source_plan = info.source.as_ref().clone();
@@ -559,6 +591,21 @@ pub fn expand_merge(
             );
         }
     }
+    for metadata_column in row_delete_metadata_columns {
+        let already_present = target_proj_exprs
+            .iter()
+            .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == *metadata_column));
+        if !already_present
+            && target_plan
+                .schema()
+                .has_column_with_unqualified_name(metadata_column)
+        {
+            target_proj_exprs.push(
+                Expr::Column(Column::from_name((*metadata_column).to_string()))
+                    .alias((*metadata_column).to_string()),
+            );
+        }
+    }
 
     trace!(
         "target projection expr names: {:?}",
@@ -604,6 +651,12 @@ pub fn expand_merge(
     target_rename_map.insert(path_column.to_string(), path_column.to_string());
     if let Some(row_index_column) = row_index_column {
         target_rename_map.insert(row_index_column.to_string(), row_index_column.to_string());
+    }
+    for metadata_column in row_delete_metadata_columns {
+        target_rename_map.insert(
+            (*metadata_column).to_string(),
+            (*metadata_column).to_string(),
+        );
     }
     // keep row id stable if present
     target_rename_map.insert(
@@ -742,6 +795,7 @@ pub fn expand_merge(
             source_schema,
             path_column,
             row_index_column,
+            row_delete_metadata_columns,
             insert_operation,
         )?;
         let insert_projected = LogicalPlanBuilder::from(insert_rows)
@@ -761,8 +815,12 @@ pub fn expand_merge(
             false,
         )?;
         let noop_rows = LogicalPlan::Join(noop_rows);
-        let noop_projection_exprs =
-            build_insert_only_noop_projection(target_schema, path_column, row_index_column)?;
+        let noop_projection_exprs = build_insert_only_noop_projection(
+            target_schema,
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        )?;
         let noop_projected = LogicalPlanBuilder::from(noop_rows)
             .project(noop_projection_exprs)?
             .build()?;
@@ -796,6 +854,7 @@ pub fn expand_merge(
         should_check_cardinality,
         path_column,
         row_index_column,
+        row_delete_metadata_columns,
     )
 }
 
@@ -807,6 +866,7 @@ fn build_default_merge_expansion(
     should_check_cardinality: bool,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
@@ -918,6 +978,7 @@ fn build_default_merge_expansion(
         source_schema,
         path_column,
         row_index_column,
+        row_delete_metadata_columns,
     )?;
     trace!("projection exprs: {:?}", projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
@@ -933,6 +994,7 @@ fn build_default_merge_expansion(
         target_schema,
         path_column,
         row_index_column,
+        row_delete_metadata_columns,
     )?;
     let projected = LogicalPlanBuilder::from(projected)
         .union(source_metric_projected)?
@@ -954,13 +1016,19 @@ fn build_default_merge_expansion(
         .build()?;
 
     let row_index_delete_plan = if let Some(row_index_column) = row_index_column {
+        let mut delete_projection = vec![
+            col(path_column).alias(path_column.to_string()),
+            col(row_index_column).alias(row_index_column.to_string()),
+        ];
+        delete_projection.extend(
+            row_delete_metadata_columns
+                .iter()
+                .map(|column| col(*column).alias((*column).to_string())),
+        );
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
                 .filter(row_delete_expr)?
-                .project(vec![
-                    col(path_column).alias(path_column.to_string()),
-                    col(row_index_column).alias(row_index_column.to_string()),
-                ])?
+                .project(delete_projection)?
                 .build()?,
         )
     } else {
@@ -1143,12 +1211,25 @@ fn row_level_data_operation_expr() -> Expr {
         .or(op.eq(lit(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32())))
 }
 
+fn is_merge_metadata_column(
+    name: &str,
+    path_column: &str,
+    row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
+) -> bool {
+    name == path_column
+        || row_index_column.is_some_and(|column| name == column)
+        || row_delete_metadata_columns.contains(&name)
+        || name == TARGET_ROW_ID_COLUMN
+}
+
 fn build_insert_only_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
     source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
     operation_expr: Expr,
 ) -> Result<Vec<Expr>> {
     // Match existing MERGE behavior: clause order determines first-match semantics.
@@ -1170,10 +1251,12 @@ fn build_insert_only_projection(
         .collect();
 
     for field in target_schema.fields().iter() {
-        if field.name() == path_column
-            || row_index_column.is_some_and(|c| field.name() == c)
-            || field.name() == TARGET_ROW_ID_COLUMN
-        {
+        if is_merge_metadata_column(
+            field.name(),
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        ) {
             continue;
         }
         let name = field.name().clone();
@@ -1229,13 +1312,16 @@ fn build_insert_only_noop_projection(
     target_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
 ) -> Result<Vec<Expr>> {
     let mut projections = Vec::new();
     for field in target_schema.fields().iter() {
-        if field.name() == path_column
-            || row_index_column.is_some_and(|c| field.name() == c)
-            || field.name() == TARGET_ROW_ID_COLUMN
-        {
+        if is_merge_metadata_column(
+            field.name(),
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        ) {
             continue;
         }
         let null_value = ScalarValue::try_new_null(field.data_type())?;
@@ -1250,6 +1336,7 @@ fn build_source_metric_plan(
     target_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
 ) -> Result<LogicalPlan> {
     let source_count = Expr::AggregateFunction(AggregateFunction {
         func: count_udaf(),
@@ -1275,9 +1362,12 @@ fn build_source_metric_plan(
             path_expr = Some(lit(null_value).alias(path_column.to_string()));
             continue;
         }
-        if row_index_column.is_some_and(|c| field.name() == c)
-            || field.name() == TARGET_ROW_ID_COLUMN
-        {
+        if is_merge_metadata_column(
+            field.name(),
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        ) {
             continue;
         }
         let null_value = ScalarValue::try_new_null(field.data_type())?;
@@ -1498,6 +1588,7 @@ fn build_merge_projection(
     source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
 ) -> Result<Vec<Expr>> {
     let matched_base = col(TARGET_PRESENT_COLUMN)
         .is_not_null()
@@ -1533,10 +1624,13 @@ fn build_merge_projection(
     let mut cases: HashMap<String, Vec<(Expr, Expr)>> = target_schema
         .fields()
         .iter()
-        .filter(|f| {
-            f.name() != path_column
-                && row_index_column.is_none_or(|c| f.name() != c)
-                && f.name() != TARGET_ROW_ID_COLUMN
+        .filter(|field| {
+            !is_merge_metadata_column(
+                field.name(),
+                path_column,
+                row_index_column,
+                row_delete_metadata_columns,
+            )
         })
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
@@ -1643,10 +1737,12 @@ fn build_merge_projection(
 
     let mut projections = Vec::new();
     for field in target_schema.fields() {
-        if field.name() == path_column
-            || row_index_column.is_some_and(|c| field.name() == c)
-            || field.name() == TARGET_ROW_ID_COLUMN
-        {
+        if is_merge_metadata_column(
+            field.name(),
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        ) {
             continue;
         }
         let name = field.name();

@@ -95,10 +95,8 @@ async fn plan_iceberg_merge(
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(row_index_delete_plan) =
         row_index_delete_plan
     {
-        let delete_input: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalescePartitionsExec::new(row_index_delete_plan));
         let delete_writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergPositionDeleteWriterExec::new(
-            delete_input,
+            row_index_delete_plan,
             table_url.clone(),
             writer_options.table_properties.clone(),
             writer_options.write_data_path.clone(),

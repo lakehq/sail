@@ -480,6 +480,58 @@ def test_iceberg_merge_rejects_position_deletes_on_v3_table_without_metadata_com
         _drop_table(spark, table_name)
 
 
+def test_iceberg_merge_with_schema_evolution_is_rejected_without_side_effects(spark, tmp_path):
+    table_name = "iceberg_merge_schema_evolution_reject"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_schema_evolution_reject VALUES (1, 'old')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_schema_evolution_source AS
+            SELECT 1 AS id, 'new' AS value, 'extra' AS extra
+            """
+        )
+        before_metadata_path = _latest_metadata_path(table_path)
+        before_parquet_files = _parquet_file_paths(table_path)
+
+        with pytest.raises(Exception, match=r"Iceberg MERGE WITH SCHEMA EVOLUTION.*not supported"):
+            spark.sql(
+                f"""
+                MERGE WITH SCHEMA EVOLUTION INTO {table_name} AS t
+                USING iceberg_merge_schema_evolution_source AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN UPDATE SET *
+                WHEN NOT MATCHED THEN INSERT *
+                """
+            ).collect()
+
+        assert spark.table(table_name).schema.names == ["id", "value"]
+        rows = [
+            tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_schema_evolution_reject").collect()
+        ]
+        assert rows == [(1, "old")]
+        assert _latest_metadata_path(table_path) == before_metadata_path
+        assert _parquet_file_paths(table_path) == before_parquet_files
+    finally:
+        _drop_table(spark, table_name)
+
+
 def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path):
     table_name = "iceberg_merge_multi_batch"
     table_path = tmp_path / table_name

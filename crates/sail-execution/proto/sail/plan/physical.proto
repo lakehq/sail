@@ -975,6 +975,8 @@ message IcebergMergeMetadataExecNode {
   string data_file_path = 2;
   optional string file_column_name = 3;
   optional string row_index_column_name = 4;
+  optional int32 data_file_partition_spec_id = 5;
+  optional string data_file_partition_json = 6;
 }
 
 message IcebergPositionDeleteWriterExecNode {

@@ -1,5 +1,39 @@
 Feature: Delta Lake Merge
 
+  Rule: Internal MERGE columns cannot shadow table data
+
+    Scenario: A target column using an internal operation name is rejected clearly
+      Given variable location for temporary directory delta_merge_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_internal_column (
+          `__sail_operation_type` INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_internal_column VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_internal_column_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_internal_column AS t
+        USING delta_merge_internal_column_source AS s
+        ON t.`__sail_operation_type` = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error reserved internal MERGE column
+
   Rule: Matched updates, deletes, and default inserts
     Background:
       Given variable location for temporary directory merge_basic

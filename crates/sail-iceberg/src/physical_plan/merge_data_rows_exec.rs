@@ -22,6 +22,8 @@ use sail_common_datafusion::datasource::{
     RowLevelOperationType,
 };
 
+use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+
 #[derive(Debug, Clone)]
 pub struct IcebergMergeDataRowsExec {
     input: Arc<dyn ExecutionPlan>,
@@ -40,6 +42,8 @@ impl IcebergMergeDataRowsExec {
             MERGE_ROW_INDEX_COLUMN,
             MERGE_SOURCE_METRIC_COLUMN,
             OPERATION_COLUMN,
+            MERGE_PARTITION_SPEC_ID_COLUMN,
+            MERGE_PARTITION_COLUMN,
         ]
         .into_iter()
         .collect();

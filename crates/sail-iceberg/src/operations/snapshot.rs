@@ -105,18 +105,24 @@ fn with_manifest_totals<'a>(
     summary
 }
 
-fn delete_manifest_inputs(
+fn manifest_inputs(
     manifest_metadata: &crate::spec::manifest::ManifestMetadata,
     partition_specs: &[PartitionSpec],
-    delete_files: &[DataFile],
+    files: &[DataFile],
+    content: ManifestContentType,
 ) -> Result<Vec<(crate::spec::manifest::ManifestMetadata, Vec<DataFile>)>, String> {
     let mut files_by_spec = BTreeMap::<i32, Vec<DataFile>>::new();
-    for delete_file in delete_files {
+    for file in files {
         files_by_spec
-            .entry(delete_file.partition_spec_id)
+            .entry(file.partition_spec_id)
             .or_default()
-            .push(delete_file.clone());
+            .push(file.clone());
     }
+
+    let manifest_kind = match content {
+        ManifestContentType::Data => "data",
+        ManifestContentType::Deletes => "delete",
+    };
 
     files_by_spec
         .into_iter()
@@ -128,15 +134,67 @@ fn delete_manifest_inputs(
                 .cloned()
                 .ok_or_else(|| {
                     format!(
-                        "cannot write Iceberg delete manifest: partition spec {spec_id} is missing from table metadata"
+                        "cannot write Iceberg {manifest_kind} manifest: partition spec {spec_id} is missing from table metadata"
                     )
                 })?;
-            let mut delete_metadata = manifest_metadata.clone();
-            delete_metadata.partition_spec = partition_spec;
-            delete_metadata.content = ManifestContentType::Deletes;
-            Ok((delete_metadata, files))
+            let mut metadata = manifest_metadata.clone();
+            metadata.partition_spec = partition_spec;
+            metadata.content = content.clone();
+            Ok((metadata, files))
         })
         .collect()
+}
+
+fn data_manifest_inputs(
+    manifest_metadata: &crate::spec::manifest::ManifestMetadata,
+    partition_specs: &[PartitionSpec],
+    data_files: &[DataFile],
+) -> Result<Vec<(crate::spec::manifest::ManifestMetadata, Vec<DataFile>)>, String> {
+    manifest_inputs(
+        manifest_metadata,
+        partition_specs,
+        data_files,
+        ManifestContentType::Data,
+    )
+}
+
+fn delete_manifest_inputs(
+    manifest_metadata: &crate::spec::manifest::ManifestMetadata,
+    partition_specs: &[PartitionSpec],
+    delete_files: &[DataFile],
+) -> Result<Vec<(crate::spec::manifest::ManifestMetadata, Vec<DataFile>)>, String> {
+    manifest_inputs(
+        manifest_metadata,
+        partition_specs,
+        delete_files,
+        ManifestContentType::Deletes,
+    )
+}
+
+fn validate_delete_files_for_format(
+    format_version: FormatVersion,
+    delete_files: &[DataFile],
+) -> Result<(), String> {
+    if delete_files
+        .iter()
+        .any(|file| file.content == crate::spec::DataContentType::Data)
+    {
+        return Err("Iceberg delete manifest input contains a data file".to_string());
+    }
+    if format_version == FormatVersion::V1 && !delete_files.is_empty() {
+        return Err("Iceberg v1 snapshots cannot add delete files".to_string());
+    }
+    if format_version == FormatVersion::V3
+        && delete_files
+            .iter()
+            .any(|file| file.content == crate::spec::DataContentType::PositionDeletes)
+    {
+        return Err(
+            "Iceberg v3 snapshots cannot add position delete files; v3 requires deletion vectors"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn manifest_counts_are_complete(manifest_file: &crate::spec::manifest_list::ManifestFile) -> bool {
@@ -395,6 +453,9 @@ impl<'a> SnapshotProducer<'a> {
             }
         };
         let format_version = metadata.format_version;
+        validate_delete_files_for_format(format_version, &self.added_delete_files)?;
+        let data_manifest_inputs =
+            data_manifest_inputs(&metadata, &self.partition_specs, &self.added_data_files)?;
         let delete_manifest_inputs =
             delete_manifest_inputs(&metadata, &self.partition_specs, &self.added_delete_files)?;
 
@@ -468,15 +529,21 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
-        let new_manifest_first_row_id = row_lineage_next_row_id;
         if self.row_lineage_start_row_id.is_some() {
             snapshot_added_rows += new_added_rows;
         }
 
         let mut new_manifest_files = Vec::new();
-        let added_data_files = self.added_data_files.clone();
-        if !added_data_files.is_empty() {
-            let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+        for (data_metadata, added_data_files) in data_manifest_inputs {
+            let manifest_first_row_id = row_lineage_next_row_id;
+            let manifest_added_rows = added_data_files
+                .iter()
+                .map(|file| file.record_count as i64)
+                .sum::<i64>();
+            if let Some(next_row_id) = &mut row_lineage_next_row_id {
+                *next_row_id += manifest_added_rows;
+            }
+            let mut writer = ManifestWriterBuilder::new(None, None, data_metadata.clone()).build();
             for df in &added_data_files {
                 writer.add(df.clone());
             }
@@ -502,14 +569,14 @@ impl<'a> SnapshotProducer<'a> {
                     &self.write_path_mode,
                 ))
                 .with_manifest_length(manifest_len)
-                .with_partition_spec_id(metadata.partition_spec.spec_id())
+                .with_partition_spec_id(data_metadata.partition_spec.spec_id())
                 .with_content(ManifestContentType::Data)
                 .with_sequence_number(new_sequence_number)
                 .with_min_sequence_number(new_sequence_number)
                 .with_added_snapshot_id(new_snapshot_id)
                 .with_file_counts(added_data_files.len() as i32, 0, 0)
-                .with_row_counts(new_added_rows, 0, 0);
-            if let Some(first_row_id) = new_manifest_first_row_id {
+                .with_row_counts(manifest_added_rows, 0, 0);
+            if let Some(first_row_id) = manifest_first_row_id {
                 manifest_file_builder = manifest_file_builder.with_first_row_id(first_row_id);
             }
             new_manifest_files.push(manifest_file_builder.build()?);
@@ -842,6 +909,110 @@ mod tests {
             .expect_err("unknown partition spec must fail");
 
         assert!(error.contains("partition spec 1 is missing"));
+    }
+
+    #[test]
+    fn snapshot_commit_rejects_position_deletes_after_format_v3_upgrade() {
+        futures::executor::block_on(async {
+            let table_url =
+                url::Url::parse("file:///tmp/iceberg-v3-position-delete/").expect("table URL");
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(object_store::memory::InMemory::new());
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let schema = Schema::builder().build().expect("schema");
+            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                partition_spec.clone(),
+                FormatVersion::V3,
+                ManifestContentType::Data,
+            );
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(0)
+                .with_sequence_number(0)
+                .with_manifest_list(String::new())
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+
+            let result =
+                SnapshotProducer::new(&transaction, vec![], Some(store_ctx), Some(metadata))
+                    .with_bootstrap(true)
+                    .with_added_delete_files(vec![delete_file("delete.parquet", 0)])
+                    .with_partition_specs(vec![partition_spec])
+                    .commit(SnapshotUpdateKind::RowDelta)
+                    .await;
+
+            let error = result
+                .err()
+                .expect("v3 snapshot commit must reject position delete files");
+            assert!(error.contains("v3"));
+            assert!(error.contains("position delete"));
+        });
+    }
+
+    #[test]
+    fn snapshot_commit_uses_data_files_historical_partition_spec() {
+        futures::executor::block_on(async {
+            let table_url = url::Url::parse("file:///tmp/iceberg-concurrent-spec-evolution/")
+                .expect("table URL");
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(object_store::memory::InMemory::new());
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let schema = Schema::builder().build().expect("schema");
+            let historical_spec = PartitionSpec::builder().with_spec_id(1).build();
+            let current_spec = PartitionSpec::builder().with_spec_id(2).build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                current_spec.clone(),
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            );
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(0)
+                .with_sequence_number(0)
+                .with_manifest_list(String::new())
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let mut added_data_file = delete_file("data.parquet", historical_spec.spec_id());
+            added_data_file.content = DataContentType::Data;
+            added_data_file.referenced_data_file = None;
+
+            let action_commit = SnapshotProducer::new(
+                &transaction,
+                vec![added_data_file],
+                Some(store_ctx.clone()),
+                Some(metadata),
+            )
+            .with_bootstrap(true)
+            .with_partition_specs(vec![historical_spec, current_spec])
+            .commit(SnapshotUpdateKind::RowDelta)
+            .await
+            .expect("snapshot commit");
+            let snapshot = action_commit
+                .updates()
+                .iter()
+                .find_map(|update| match update {
+                    TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                    _ => None,
+                })
+                .expect("added snapshot");
+            let manifest_list = crate::io::load_manifest_list(&store_ctx, snapshot.manifest_list())
+                .await
+                .expect("manifest list");
+            let added_data_manifest = manifest_list
+                .entries()
+                .iter()
+                .find(|manifest| manifest.content == ManifestContentType::Data)
+                .expect("data manifest");
+
+            assert_eq!(added_data_manifest.partition_spec_id, 1);
+        });
     }
 
     #[test]

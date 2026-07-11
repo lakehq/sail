@@ -97,7 +97,7 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
-        partition_spec,
+        partition_spec.clone(),
         format_version,
         crate::spec::ManifestContentType::Data,
     );
@@ -110,6 +110,7 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
+    .with_partition_specs(table_meta.partition_specs.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
@@ -193,6 +194,7 @@ pub async fn bootstrap_new_table_with_style(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
+    .with_partition_specs(vec![partition_spec.clone()])
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 

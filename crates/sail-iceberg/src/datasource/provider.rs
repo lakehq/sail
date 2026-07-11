@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::catalog::Session;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
@@ -24,6 +24,7 @@ use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
@@ -55,7 +56,9 @@ use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
-use crate::row_level_metadata::RowLevelMetadataColumns;
+use crate::row_level_metadata::{
+    MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
+};
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
@@ -196,13 +199,17 @@ impl IcebergTableProvider {
     }
 
     fn rebuild_output_schema(&mut self) -> Result<()> {
-        self.output_schema = Arc::new(
-            RowLevelMetadataColumns::new(
-                self.file_column_name.as_deref(),
-                self.row_index_column_name.as_deref(),
-            )
-            .append_to_schema(self.arrow_schema.as_ref())?,
+        let metadata_columns = RowLevelMetadataColumns::new(
+            self.file_column_name.as_deref(),
+            self.row_index_column_name.as_deref(),
         );
+        let metadata_columns = if self.file_column_name.is_some() {
+            metadata_columns.with_delete_file_metadata()
+        } else {
+            metadata_columns
+        };
+        self.output_schema =
+            Arc::new(metadata_columns.append_to_schema(self.arrow_schema.as_ref())?);
         Ok(())
     }
 
@@ -511,6 +518,36 @@ impl IcebergTableProvider {
         Ok(partitioned_files)
     }
 
+    fn create_merge_partitioned_files(
+        &self,
+        store_ctx: &StoreContext,
+        data_files: Vec<DataFile>,
+    ) -> Result<Vec<PartitionedFile>> {
+        let file_metadata = data_files
+            .iter()
+            .map(|file| {
+                Ok((
+                    file.file_path.clone(),
+                    file.partition_spec_id,
+                    serde_json::to_string(&file.partition).map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut partitioned_files = self.create_partitioned_files(store_ctx, data_files)?;
+        for (partitioned_file, (file_path, partition_spec_id, partition_json)) in
+            partitioned_files.iter_mut().zip(file_metadata)
+        {
+            partitioned_file.partition_values = vec![
+                ScalarValue::Utf8(Some(file_path)),
+                ScalarValue::Int32(Some(partition_spec_id)),
+                ScalarValue::Utf8(Some(partition_json)),
+            ];
+        }
+        Ok(partitioned_files)
+    }
+
     /// Create file groups from partitioned files
     fn create_file_groups(&self, partitioned_files: Vec<PartitionedFile>) -> Vec<FileGroup> {
         // Group files by partition values
@@ -559,6 +596,30 @@ impl IcebergTableProvider {
             }
         }
         Ok(Arc::new(parquet_source))
+    }
+
+    fn build_merge_parquet_source(
+        &self,
+        session: &dyn Session,
+        file_column_name: &str,
+    ) -> Arc<dyn datafusion::datasource::physical_plan::FileSource> {
+        let parquet_options = TableParquetOptions {
+            global: session.config().options().execution.parquet.clone(),
+            ..Default::default()
+        };
+        let table_schema = TableSchema::new(
+            self.arrow_schema.clone(),
+            vec![
+                Arc::new(Field::new(file_column_name, DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    MERGE_PARTITION_SPEC_ID_COLUMN,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, false)),
+            ],
+        );
+        Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
     }
 
     fn expanded_projection(
@@ -1071,10 +1132,51 @@ impl IcebergTableProvider {
             .build_delete_file_index(&store_ctx, &manifest_list)
             .await?;
         let object_store_url = self.object_store_url()?;
-        let mut branches: Vec<Arc<dyn ExecutionPlan>> =
-            Vec::with_capacity(data_files_with_seq.len());
+        let file_column_name = self.file_column_name.as_ref().ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "Iceberg merge metadata scan requires a file column".to_string(),
+            )
+        })?;
+        let mut clean_files = Vec::new();
+        let mut dirty_units = Vec::new();
 
-        for (df, seq) in data_files_with_seq {
+        for (data_file, sequence_number) in data_files_with_seq {
+            let matched = delete_index.for_data_file(&data_file, sequence_number);
+            if matched.is_empty() {
+                clean_files.push(data_file);
+            } else {
+                dirty_units.push((data_file, matched.positional, matched.equality));
+            }
+        }
+
+        let mut branches: Vec<Arc<dyn ExecutionPlan>> =
+            Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
+
+        if !clean_files.is_empty() {
+            let partitioned_files = self.create_merge_partitioned_files(&store_ctx, clean_files)?;
+            let file_groups = partitioned_files
+                .into_iter()
+                .map(|file| FileGroup::from(vec![file]))
+                .collect::<Vec<_>>();
+            let parquet_source =
+                self.build_merge_parquet_source(session, file_column_name.as_str());
+            let file_scan_config =
+                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
+                    .with_file_groups(file_groups)
+                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
+                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .build();
+            let data_scan = DataSourceExec::from_data_source(file_scan_config);
+            branches.push(Arc::new(
+                IcebergMergeMetadataExec::try_new_partitioned_files(
+                    data_scan,
+                    file_column_name.clone(),
+                    self.row_index_column_name.clone(),
+                )?,
+            ));
+        }
+
+        for (df, positional_deletes, equality_deletes) in dirty_units {
             let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
             let file_scan_config =
@@ -1089,23 +1191,22 @@ impl IcebergTableProvider {
                 Arc::new(IcebergMergeMetadataExec::try_new(
                     data_scan,
                     df.file_path.clone(),
+                    df.partition_spec_id,
+                    serde_json::to_string(&df.partition).map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?,
                     self.file_column_name.clone(),
                     self.row_index_column_name.clone(),
                 )?);
 
-            let matched = delete_index.for_data_file(&df, seq);
-            if matched.is_empty() {
-                branches.push(with_metadata);
-            } else {
-                branches.push(Arc::new(IcebergDeleteApplyExec::new(
-                    with_metadata,
-                    df.file_path.clone(),
-                    matched.positional,
-                    matched.equality,
-                    self.table_uri.clone(),
-                    self.schema.clone(),
-                )));
-            }
+            branches.push(Arc::new(IcebergDeleteApplyExec::new(
+                with_metadata,
+                df.file_path.clone(),
+                positional_deletes,
+                equality_deletes,
+                self.table_uri.clone(),
+                self.schema.clone(),
+            )));
         }
 
         let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {

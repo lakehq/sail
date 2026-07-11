@@ -1,12 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use async_stream::try_stream;
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
+use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray};
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch as ArrowRecordBatch;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalExpr,
+    PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -15,20 +21,53 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
-use futures::stream::once;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
-use crate::io::{
-    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
-};
+use crate::io::StoreContext;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::action_schema::{encode_delete_data_files, iceberg_action_schema};
 use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
-use crate::spec::{
-    DataContentType, DataFile, ManifestContentType, ManifestList, ManifestStatus, TableMetadata,
-};
+use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::spec::types::values::Literal;
+use crate::spec::{DataContentType, DataFile, TableMetadata};
+
+#[derive(Debug, Clone, PartialEq)]
+struct PositionDeleteTarget {
+    file_path: String,
+    partition_spec_id: i32,
+    partition_json: String,
+    partition: Vec<Option<Literal>>,
+}
+
+fn position_delete_target(
+    table_meta: &TableMetadata,
+    file_path: &str,
+    partition_spec_id: i32,
+    partition_json: &str,
+) -> Result<PositionDeleteTarget> {
+    if !table_meta
+        .partition_specs
+        .iter()
+        .any(|spec| spec.spec_id() == partition_spec_id)
+    {
+        return Err(DataFusionError::Plan(format!(
+            "MERGE target file uses unknown Iceberg partition spec {partition_spec_id}: {file_path}"
+        )));
+    }
+    let partition = serde_json::from_str(partition_json).map_err(|error| {
+        DataFusionError::Plan(format!(
+            "failed to decode Iceberg partition metadata for {file_path}: {error}"
+        ))
+    })?;
+    Ok(PositionDeleteTarget {
+        file_path: file_path.to_string(),
+        partition_spec_id,
+        partition_json: partition_json.to_string(),
+        partition,
+    })
+}
 
 const POSITION_DELETE_FILE_PATH_COL: &str = "file_path";
 const POSITION_DELETE_POS_COL: &str = "pos";
@@ -58,10 +97,11 @@ impl IcebergPositionDeleteWriterExec {
             log::error!("failed to initialize iceberg action schema: {e}");
             Arc::new(Schema::empty())
         });
+        let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Self {
@@ -118,7 +158,39 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        let Ok(index) = self.input.schema().index_of(&self.file_column_name) else {
+            return vec![Distribution::SinglePartition];
+        };
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new(&self.file_column_name, index));
+        vec![Distribution::HashPartitioned(vec![expression])]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        let schema = self.input.schema();
+        let (Ok(file_index), Ok(row_index)) = (
+            schema.index_of(&self.file_column_name),
+            schema.index_of(&self.row_index_column_name),
+        ) else {
+            return vec![None];
+        };
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new(&self.file_column_name, file_index)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new(&self.row_index_column_name, row_index)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+        ]);
+        vec![ordering.map(OrderingRequirements::from)]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -152,80 +224,169 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
+        let input_partitions = self.input.output_partitioning().partition_count().max(1);
+        if partition >= input_partitions {
             return internal_err!(
-                "IcebergPositionDeleteWriterExec can only be executed in a single partition"
-            );
-        }
-        let input_partitions = self.input.output_partitioning().partition_count();
-        if input_partitions != 1 {
-            return internal_err!(
-                "IcebergPositionDeleteWriterExec requires exactly one input partition, got {input_partitions}"
+                "IcebergPositionDeleteWriterExec partition {partition} exceeds partition count {input_partitions}"
             );
         }
 
-        let input = self.input.execute(0, Arc::clone(&context))?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
         let writer_config = self.writer_config.clone();
         let file_column_name = self.file_column_name.clone();
         let row_index_column_name = self.row_index_column_name.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
-        let future = async move {
+        let stream = try_stream! {
             let store_ctx =
                 delete_writer_common::store_context(&context, writer_config.table_url())?;
-
-            let mut positions_by_file: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
-            let mut stream = input;
-            while let Some(batch_result) = stream.next().await {
-                let batch = batch_result?;
-                collect_positions(
-                    &batch,
-                    &file_column_name,
-                    &row_index_column_name,
-                    &mut positions_by_file,
-                )?;
-            }
-
-            if positions_by_file.is_empty() {
-                return encode_delete_data_files(vec![]);
-            }
-
             let table_meta = writer_config
                 .load_current_table_metadata(&store_ctx)
                 .await?;
             delete_writer_common::ensure_position_delete_file_writes(&table_meta)?;
             let data_dir = writer_config.resolve_data_dir(&table_meta);
-            let data_files = load_current_data_files(&store_ctx, &table_meta).await?;
-            let data_file_by_path = data_files
-                .into_iter()
-                .map(|file| (file.file_path.clone(), file))
-                .collect::<HashMap<_, _>>();
 
-            let mut delete_files = Vec::with_capacity(positions_by_file.len());
-            for (data_file_path, positions) in positions_by_file {
-                let target_file = data_file_by_path.get(&data_file_path).ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "MERGE attempted to delete rows from unknown Iceberg data file: {data_file_path}"
-                    ))
-                })?;
+            let mut current_target: Option<PositionDeleteTarget> = None;
+            let mut current_positions = BTreeSet::new();
+            let mut input = input;
+            while let Some(batch_result) = input.next().await {
+                let batch = batch_result?;
+                let file_paths = batch
+                    .column_by_name(&file_column_name)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!("missing column {file_column_name}"))
+                    })?
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "{file_column_name} must be a Utf8 column"
+                        ))
+                    })?;
+                let row_indices = batch
+                    .column_by_name(&row_index_column_name)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "missing column {row_index_column_name}"
+                        ))
+                    })?
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "{row_index_column_name} must be an Int64 column"
+                        ))
+                    })?;
+                let partition_spec_ids = batch
+                    .column_by_name(MERGE_PARTITION_SPEC_ID_COLUMN)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "missing column {MERGE_PARTITION_SPEC_ID_COLUMN}"
+                        ))
+                    })?
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "{MERGE_PARTITION_SPEC_ID_COLUMN} must be an Int32 column"
+                        ))
+                    })?;
+                let partitions = batch
+                    .column_by_name(MERGE_PARTITION_COLUMN)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "missing column {MERGE_PARTITION_COLUMN}"
+                        ))
+                    })?
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "{MERGE_PARTITION_COLUMN} must be a Utf8 column"
+                        ))
+                    })?;
+
+                for row in 0..batch.num_rows() {
+                    if file_paths.is_null(row) || row_indices.is_null(row) {
+                        continue;
+                    }
+                    if partition_spec_ids.is_null(row) || partitions.is_null(row) {
+                        Err(DataFusionError::Plan(
+                            "MERGE position delete rows require Iceberg partition metadata"
+                                .to_string(),
+                        ))?;
+                    }
+                    let file_path = file_paths.value(row);
+                    let partition_spec_id = partition_spec_ids.value(row);
+                    let partition_json = partitions.value(row);
+                    if current_target
+                        .as_ref()
+                        .is_some_and(|target| target.file_path != file_path)
+                    {
+                        let next_target = position_delete_target(
+                            &table_meta,
+                            file_path,
+                            partition_spec_id,
+                            partition_json,
+                        )?;
+                        let completed_target = current_target.replace(next_target).ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "missing current Iceberg position-delete target".to_string(),
+                            )
+                        })?;
+                        let completed_positions = std::mem::take(&mut current_positions);
+                        let delete_file = write_position_delete_file(
+                            &store_ctx,
+                            writer_config.table_url(),
+                            &data_dir,
+                            &completed_target,
+                            &completed_positions,
+                        )
+                        .await?;
+                        yield encode_delete_data_files(vec![delete_file])?;
+                    } else if let Some(target) = &current_target {
+                        if target.partition_spec_id != partition_spec_id
+                            || target.partition_json != partition_json
+                        {
+                            Err(DataFusionError::Plan(format!(
+                                "inconsistent Iceberg partition metadata for MERGE target file {file_path}"
+                            )))?;
+                        }
+                    } else {
+                        current_target = Some(position_delete_target(
+                            &table_meta,
+                            file_path,
+                            partition_spec_id,
+                            partition_json,
+                        )?);
+                    }
+                    let row_index = row_indices.value(row);
+                    if row_index < 0 {
+                        Err(DataFusionError::Plan(format!(
+                            "MERGE position delete row index must be non-negative, got {row_index}"
+                        )))?;
+                    }
+                    current_positions.insert(row_index);
+                }
+            }
+
+            if let Some(completed_target) = current_target {
                 let delete_file = write_position_delete_file(
                     &store_ctx,
                     writer_config.table_url(),
                     &data_dir,
-                    target_file,
-                    &positions,
+                    &completed_target,
+                    &current_positions,
                 )
                 .await?;
-                delete_files.push(delete_file);
+                yield encode_delete_data_files(vec![delete_file])?;
             }
-
-            encode_delete_data_files(delete_files)
         };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema_for_adapter,
-            once(future),
+            Box::pin(stream),
         )))
     }
 }
@@ -246,91 +407,16 @@ impl DisplayAs for IcebergPositionDeleteWriterExec {
     }
 }
 
-fn collect_positions(
-    batch: &RecordBatch,
-    file_column_name: &str,
-    row_index_column_name: &str,
-    positions_by_file: &mut BTreeMap<String, BTreeSet<i64>>,
-) -> Result<()> {
-    let file_col = batch
-        .column_by_name(file_column_name)
-        .ok_or_else(|| DataFusionError::Internal(format!("missing column {file_column_name}")))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("{file_column_name} must be a Utf8 column"))
-        })?;
-    let pos_col = batch
-        .column_by_name(row_index_column_name)
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("missing column {row_index_column_name}"))
-        })?
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("{row_index_column_name} must be an Int64 column"))
-        })?;
-
-    for row in 0..batch.num_rows() {
-        if file_col.is_null(row) || pos_col.is_null(row) {
-            continue;
-        }
-        positions_by_file
-            .entry(file_col.value(row).to_string())
-            .or_default()
-            .insert(pos_col.value(row));
-    }
-    Ok(())
-}
-
-async fn load_current_data_files(
-    store_ctx: &StoreContext,
-    table_meta: &TableMetadata,
-) -> Result<Vec<DataFile>> {
-    let snapshot = table_meta.current_snapshot().ok_or_else(|| {
-        DataFusionError::Plan("Iceberg table has no current snapshot".to_string())
-    })?;
-    let manifest_list = io_load_manifest_list(store_ctx, snapshot.manifest_list()).await?;
-    data_files_from_manifest_list(store_ctx, &manifest_list).await
-}
-
-async fn data_files_from_manifest_list(
-    store_ctx: &StoreContext,
-    manifest_list: &ManifestList,
-) -> Result<Vec<DataFile>> {
-    let mut out = Vec::new();
-    for manifest_file in manifest_list
-        .entries()
-        .iter()
-        .filter(|mf| mf.content == ManifestContentType::Data)
-    {
-        let manifest = io_load_manifest(store_ctx, manifest_file.manifest_path.as_str()).await?;
-        for entry_ref in manifest.entries().iter() {
-            let entry = entry_ref.as_ref();
-            if !matches!(
-                entry.status,
-                ManifestStatus::Added | ManifestStatus::Existing
-            ) {
-                continue;
-            }
-            let mut data_file = entry.data_file.clone();
-            data_file.partition_spec_id = manifest_file.partition_spec_id;
-            out.push(data_file);
-        }
-    }
-    Ok(out)
-}
-
 async fn write_position_delete_file(
     store_ctx: &StoreContext,
     table_url: &Url,
     data_dir: &str,
-    target_file: &DataFile,
+    target: &PositionDeleteTarget,
     positions: &BTreeSet<i64>,
 ) -> Result<DataFile> {
     let delete_schema = position_delete_arrow_schema();
     let file_paths = (0..positions.len())
-        .map(|_| Some(target_file.file_path.as_str()))
+        .map(|_| Some(target.file_path.as_str()))
         .collect::<Vec<_>>();
     let pos_values = positions.iter().copied().collect::<Vec<_>>();
     let batch = ArrowRecordBatch::try_new(
@@ -353,12 +439,12 @@ async fn write_position_delete_file(
         data_dir,
         "delete",
         writer,
-        target_file.partition_spec_id,
-        target_file.partition.clone(),
+        target.partition_spec_id,
+        target.partition.clone(),
     )
     .await?;
     delete_file.content = DataContentType::PositionDeletes;
-    delete_file.referenced_data_file = Some(target_file.file_path.clone());
+    delete_file.referenced_data_file = Some(target.file_path.clone());
     delete_file.sort_order_id = None;
     delete_file.equality_ids.clear();
     Ok(delete_file)

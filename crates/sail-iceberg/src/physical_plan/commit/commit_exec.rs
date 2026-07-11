@@ -846,6 +846,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             .fast_append()
                             .with_store_context(store_ctx.clone())
                             .with_manifest_metadata(manifest_meta)
+                            .with_partition_specs(table_meta.partition_specs.clone())
                             .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         for df in commit_info.data_files.clone().into_iter() {
                             action.add_file(df);

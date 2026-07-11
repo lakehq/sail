@@ -3,10 +3,14 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion_common::{Result, plan_err};
 
+pub(crate) const MERGE_PARTITION_SPEC_ID_COLUMN: &str = "__sail_iceberg_partition_spec_id";
+pub(crate) const MERGE_PARTITION_COLUMN: &str = "__sail_iceberg_partition";
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RowLevelMetadataColumns<'a> {
     file_column_name: Option<&'a str>,
     row_index_column_name: Option<&'a str>,
+    include_delete_file_metadata: bool,
 }
 
 impl<'a> RowLevelMetadataColumns<'a> {
@@ -17,7 +21,13 @@ impl<'a> RowLevelMetadataColumns<'a> {
         Self {
             file_column_name,
             row_index_column_name,
+            include_delete_file_metadata: false,
         }
+    }
+
+    pub(crate) fn with_delete_file_metadata(mut self) -> Self {
+        self.include_delete_file_metadata = true;
+        self
     }
 
     pub(crate) fn append_to_schema(&self, data_schema: &ArrowSchema) -> Result<ArrowSchema> {
@@ -25,6 +35,18 @@ impl<'a> RowLevelMetadataColumns<'a> {
         let mut fields = data_schema.fields().iter().cloned().collect::<Vec<_>>();
         if let Some(name) = self.file_column_name {
             fields.push(Arc::new(Field::new(name, DataType::Utf8, true)));
+        }
+        if self.include_delete_file_metadata {
+            fields.push(Arc::new(Field::new(
+                MERGE_PARTITION_SPEC_ID_COLUMN,
+                DataType::Int32,
+                false,
+            )));
+            fields.push(Arc::new(Field::new(
+                MERGE_PARTITION_COLUMN,
+                DataType::Utf8,
+                false,
+            )));
         }
         if let Some(name) = self.row_index_column_name {
             fields.push(Arc::new(Field::new(name, DataType::Int64, true)));
@@ -36,9 +58,13 @@ impl<'a> RowLevelMetadataColumns<'a> {
     }
 
     fn validate_no_collisions(&self, data_schema: &ArrowSchema) -> Result<()> {
+        let delete_file_metadata_columns = self
+            .include_delete_file_metadata
+            .then_some([MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN]);
         for name in [self.file_column_name, self.row_index_column_name]
             .into_iter()
             .flatten()
+            .chain(delete_file_metadata_columns.into_iter().flatten())
         {
             if data_schema.field_with_name(name).is_ok() {
                 return plan_err!(
