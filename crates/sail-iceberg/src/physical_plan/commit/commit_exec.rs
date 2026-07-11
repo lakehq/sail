@@ -442,6 +442,8 @@ impl ExecutionPlan for IcebergCommitExec {
             let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
 
             // Read writer result as Arrow-native action batches (may be empty for IgnoreIfExists).
+            // FIXME: Track task-produced files so failed or cancelled commits can remove
+            // uncommitted files.
             let mut data = input_stream;
             let mut added_data_files = Vec::new();
             let mut added_delete_files = Vec::new();

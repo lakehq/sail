@@ -248,6 +248,8 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
             let data_dir = writer_config.resolve_data_dir(&table_meta);
 
             let mut current_target: Option<PositionDeleteTarget> = None;
+            // FIXME: Stream and roll position-delete files instead of buffering every
+            // position for a data file.
             let mut current_positions = BTreeSet::new();
             let mut input = input;
             while let Some(batch_result) = input.next().await {

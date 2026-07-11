@@ -24,6 +24,7 @@ pub(crate) fn resolve_data_dir_from_property_value(
     }
 
     let base_path = crate::utils::url_to_object_path(table_url).ok();
+    // TODO: Support write paths outside the table root with operation-scoped object stores.
     if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
         if prop_url.scheme() == table_url.scheme()
             && prop_url.host_str() == table_url.host_str()

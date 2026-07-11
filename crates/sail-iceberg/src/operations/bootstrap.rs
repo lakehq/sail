@@ -414,6 +414,8 @@ pub async fn replace_empty_table_metadata(
     let mut partition_specs = previous_metadata.partition_specs.clone();
     partition_specs.push(partition_spec.clone());
 
+    // FIXME: Preserve snapshot history, non-main refs, and historical sort/statistics
+    // metadata when replacing table metadata.
     let mut table_meta = TableMetadata {
         format_version,
         table_uuid: previous_metadata.table_uuid,
