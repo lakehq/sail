@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{JoinType, TableReference};
+use datafusion_common::{DFSchema, JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, build_join_schema};
 use sail_catalog::manager::CatalogManager;
@@ -116,6 +117,14 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
+        self.validate_merge_star_columns(
+            &matched_clauses,
+            &not_matched_by_target,
+            target_schema,
+            &resolved_target_field_names,
+            &resolved_source_field_names,
+            with_schema_evolution,
+        )?;
 
         let generated_column_exprs = self
             .resolve_delta_merge_generated_column_exprs(
@@ -124,6 +133,9 @@ impl PlanResolver<'_> {
                 &merge_schema,
                 state,
             )
+            .await?;
+        let default_column_exprs = self
+            .resolve_merge_default_column_exprs(target_schema, &resolved_target_field_names, state)
             .await?;
         let check_constraint_exprs = self
             .resolve_delta_merge_check_constraints(
@@ -140,10 +152,12 @@ impl PlanResolver<'_> {
             source_alias: source_alias_string,
             target: target_metadata,
             with_schema_evolution,
+            case_sensitive: self.config.case_sensitive,
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
             resolved_target_field_names,
             resolved_source_field_names,
+            source_column_aliases: vec![],
             on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
@@ -152,6 +166,7 @@ impl PlanResolver<'_> {
             residual_predicates,
             target_only_predicates,
             generated_column_exprs,
+            default_column_exprs,
             check_constraint_exprs,
         };
 
@@ -388,6 +403,11 @@ impl PlanResolver<'_> {
                         state,
                     )
                     .await?;
+                if columns.len() != values.len() {
+                    return Err(PlanError::invalid(
+                        "MERGE INSERT column and value counts do not match",
+                    ));
+                }
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values }
             }
         };
@@ -403,10 +423,17 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<MergeAssignment>> {
         let mut out = Vec::with_capacity(assignments.len());
+        let mut assigned_columns = HashSet::with_capacity(assignments.len());
         for (column, value) in assignments {
             let resolved_column = self
                 .resolve_merge_column(column, target_schema.clone(), state)
                 .await?;
+            let assignment_key = self.merge_name_key(&resolved_column);
+            if !assigned_columns.insert(assignment_key) {
+                return Err(PlanError::invalid(format!(
+                    "Multiple assignments for MERGE target column `{resolved_column}`"
+                )));
+            }
             let value = merge_disambiguate_unqualified_plan_ids(
                 value,
                 state,
@@ -429,11 +456,18 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<String>> {
         let mut out = Vec::with_capacity(columns.len());
+        let mut assigned_columns = HashSet::with_capacity(columns.len());
         for column in columns {
-            out.push(
-                self.resolve_merge_column(column, target_schema.clone(), state)
-                    .await?,
-            );
+            let resolved_column = self
+                .resolve_merge_column(column, target_schema.clone(), state)
+                .await?;
+            let assignment_key = self.merge_name_key(&resolved_column);
+            if !assigned_columns.insert(assignment_key) {
+                return Err(PlanError::invalid(format!(
+                    "Multiple assignments for MERGE target column `{resolved_column}`"
+                )));
+            }
+            out.push(resolved_column);
         }
         Ok(out)
     }
@@ -502,6 +536,100 @@ impl PlanResolver<'_> {
             }
             None => Ok(None),
         }
+    }
+
+    fn merge_name_key(&self, name: &str) -> String {
+        if self.config.case_sensitive {
+            name.to_string()
+        } else {
+            name.to_ascii_lowercase()
+        }
+    }
+
+    fn merge_names_equal(&self, left: &str, right: &str) -> bool {
+        if self.config.case_sensitive {
+            left == right
+        } else {
+            left.eq_ignore_ascii_case(right)
+        }
+    }
+
+    fn validate_merge_star_columns(
+        &self,
+        matched_clauses: &[MergeMatchedClause],
+        not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
+        target_schema: &datafusion_common::DFSchemaRef,
+        target_names: &[String],
+        source_names: &[String],
+        with_schema_evolution: bool,
+    ) -> PlanResult<()> {
+        if with_schema_evolution
+            || (!matched_clauses
+                .iter()
+                .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
+                && !not_matched_by_target_clauses.iter().any(|clause| {
+                    matches!(clause.action, MergeNotMatchedByTargetAction::InsertAll)
+                }))
+        {
+            return Ok(());
+        }
+
+        for (field, target_name) in target_schema.fields().iter().zip(target_names) {
+            if ColumnFeatures::from_field(field)
+                .generation_expression()
+                .is_some()
+            {
+                continue;
+            }
+            if !source_names
+                .iter()
+                .any(|source_name| self.merge_names_equal(source_name, target_name))
+            {
+                return Err(PlanError::invalid(format!(
+                    "Cannot resolve source column `{target_name}` for MERGE * action without schema evolution"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_merge_default_column_exprs(
+        &self,
+        target_schema: &datafusion_common::DFSchemaRef,
+        target_names: &[String],
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<(String, Expr)>> {
+        let empty_schema = Arc::new(DFSchema::empty());
+        let mut defaults = Vec::new();
+        for (field, target_name) in target_schema.fields().iter().zip(target_names) {
+            let Some(default) = ColumnFeatures::from_field(field).current_default() else {
+                continue;
+            };
+            let ast_expr =
+                sail_sql_analyzer::parser::parse_expression(&default).map_err(|error| {
+                    PlanError::invalid(format!(
+                        "failed to parse default expression `{default}`: {error}"
+                    ))
+                })?;
+            let spec_expr =
+                sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|error| {
+                    PlanError::invalid(format!(
+                        "failed to analyze default expression `{default}`: {error}"
+                    ))
+                })?;
+            let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(default),
+                })
+            } else {
+                spec_expr
+            };
+            let resolved = self
+                .resolve_expression(spec_expr, &empty_schema, state)
+                .await?;
+            defaults.push((target_name.clone(), resolved));
+        }
+        Ok(defaults)
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {

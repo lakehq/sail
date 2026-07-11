@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator, ScalarUDF,
-    UserDefinedLogicalNodeCore, col, lit, when,
+    UserDefinedLogicalNodeCore, cast, col, lit, when,
 };
 use educe::Educe;
 use log::trace;
@@ -440,6 +440,38 @@ pub struct MergeExpansion {
     pub options: MergeIntoOptions,
 }
 
+fn merge_name_key(name: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        name.to_string()
+    } else {
+        name.to_ascii_lowercase()
+    }
+}
+
+fn merge_names_equal(left: &str, right: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        left == right
+    } else {
+        left.eq_ignore_ascii_case(right)
+    }
+}
+
+fn collision_free_source_alias(
+    source_name: &str,
+    occupied_names: &mut HashSet<String>,
+    case_sensitive: bool,
+) -> String {
+    let base = format!("__sail_src_{source_name}");
+    let mut alias = base.clone();
+    let mut suffix = 0usize;
+    while occupied_names.contains(&merge_name_key(&alias, case_sensitive)) {
+        suffix += 1;
+        alias = format!("{base}_{suffix}");
+    }
+    occupied_names.insert(merge_name_key(&alias, case_sensitive));
+    alias
+}
+
 pub fn validate_merge_internal_columns(info: &MergeInfo, format_columns: &[&str]) -> Result<()> {
     let target_schema = info.target.schema();
     let reserved_columns = [
@@ -457,11 +489,10 @@ pub fn validate_merge_internal_columns(info: &MergeInfo, format_columns: &[&str]
             .options
             .resolved_target_field_names
             .iter()
-            .any(|name| name == reserved_column)
-            || target_schema
-                .fields()
-                .iter()
-                .any(|field| field.name() == reserved_column)
+            .any(|name| merge_names_equal(name, reserved_column, info.options.case_sensitive))
+            || target_schema.fields().iter().any(|field| {
+                merge_names_equal(field.name(), reserved_column, info.options.case_sensitive)
+            })
         {
             return plan_err!(
                 "MERGE target column '{reserved_column}' uses a reserved internal MERGE column name"
@@ -630,7 +661,7 @@ pub fn expand_merge(
         });
     }
 
-    // To avoid duplicate unqualified names after JOIN, rename source columns with a stable prefix.
+    // To avoid duplicate unqualified names after JOIN, assign collision-free source aliases.
     let target_input_len = options.resolved_target_schema.fields().len();
     let mut target_rename_map: HashMap<String, String> = HashMap::new();
     for (idx, desired) in desired_target_names
@@ -664,13 +695,24 @@ pub fn expand_merge(
         TARGET_ROW_ID_COLUMN.to_string(),
     );
 
+    let mut occupied_names = target_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| merge_name_key(field.name(), options.case_sensitive))
+        .collect::<HashSet<_>>();
     let mut source_rename_map: HashMap<String, String> = HashMap::new();
+    options.source_column_aliases.clear();
     let target_input_len = options.resolved_target_schema.fields().len();
     for (idx, desired) in desired_source_names.iter().enumerate() {
-        let prefixed = format!("__sail_src_{desired}");
-        source_rename_map.insert(desired.clone(), prefixed.clone());
+        let source_alias =
+            collision_free_source_alias(desired, &mut occupied_names, options.case_sensitive);
+        options
+            .source_column_aliases
+            .push((desired.clone(), source_alias.clone()));
+        source_rename_map.insert(desired.clone(), source_alias.clone());
         if let Some(field) = merge_schema.fields().get(target_input_len + idx) {
-            source_rename_map.insert(field.name().clone(), prefixed.clone());
+            source_rename_map.insert(field.name().clone(), source_alias);
         }
     }
 
@@ -740,6 +782,11 @@ pub fn expand_merge(
         .iter()
         .map(|(name, expr)| Ok((name.clone(), rewrite(expr.clone())?)))
         .collect::<Result<Vec<_>>>()?;
+    options.default_column_exprs = options
+        .default_column_exprs
+        .iter()
+        .map(|(name, expr)| Ok((name.clone(), rewrite(expr.clone())?)))
+        .collect::<Result<Vec<_>>>()?;
     options.check_constraint_exprs = options
         .check_constraint_exprs
         .iter()
@@ -792,7 +839,6 @@ pub fn expand_merge(
         let insert_projection_exprs = build_insert_only_projection(
             &options,
             target_schema,
-            source_schema,
             path_column,
             row_index_column,
             row_delete_metadata_columns,
@@ -975,7 +1021,6 @@ fn build_default_merge_expansion(
     let projection_exprs = build_merge_projection(
         &options,
         target_schema,
-        source_schema,
         path_column,
         row_index_column,
         row_delete_metadata_columns,
@@ -1223,10 +1268,40 @@ fn is_merge_metadata_column(
         || name == TARGET_ROW_ID_COLUMN
 }
 
+fn merge_source_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {
+    options
+        .source_column_aliases
+        .iter()
+        .find(|(source_name, _)| {
+            merge_names_equal(source_name, target_name, options.case_sensitive)
+        })
+        .map(|(_, source_alias)| Expr::Column(Column::from_name(source_alias.clone())))
+}
+
+fn merge_default_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {
+    options
+        .default_column_exprs
+        .iter()
+        .find(|(column_name, _)| {
+            merge_names_equal(column_name, target_name, options.case_sensitive)
+        })
+        .map(|(_, expr)| expr.clone())
+}
+
+fn merge_insert_value(options: &MergeIntoOptions, target_name: &str) -> Expr {
+    merge_default_expr(options, target_name).unwrap_or_else(|| lit(ScalarValue::Null))
+}
+
+fn align_merge_value(
+    value: Expr,
+    target_field: &datafusion_common::arrow::datatypes::Field,
+) -> Expr {
+    cast(value, target_field.data_type().clone())
+}
+
 fn build_insert_only_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
-    source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
@@ -1235,20 +1310,6 @@ fn build_insert_only_projection(
     // Match existing MERGE behavior: clause order determines first-match semantics.
     // Source rows that should not be written flow through as `Noop` rows for metrics.
     let mut projections = Vec::new();
-
-    // Source columns are prefixed with `__sail_src_`, so target field "id" maps
-    // to source column "__sail_src_id". Keys are lowercased for case-insensitive
-    // SQL resolution.
-    let source_exprs_by_name: HashMap<String, Expr> = source_schema
-        .fields()
-        .iter()
-        .map(|f| {
-            (
-                f.name().to_ascii_lowercase(),
-                Expr::Column(Column::from_name(f.name().clone())),
-            )
-        })
-        .collect();
 
     for field in target_schema.fields().iter() {
         if is_merge_metadata_column(
@@ -1269,16 +1330,12 @@ fn build_insert_only_projection(
                 .map(|x| x.expr.clone())
                 .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
-                MergeNotMatchedByTargetAction::InsertAll => source_exprs_by_name
-                    .get(&format!("__sail_src_{}", name.to_ascii_lowercase()))
-                    .cloned()
-                    .unwrap_or_else(|| lit(ScalarValue::Null)),
+                MergeNotMatchedByTargetAction::InsertAll => merge_source_expr(options, &name)
+                    .unwrap_or_else(|| merge_insert_value(options, &name)),
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
-                    // If column not specified in this clause, it becomes NULL for this clause
-                    // (and must NOT fall through to later clauses).
-                    let mut out = lit(ScalarValue::Null);
+                    let mut out = merge_insert_value(options, &name);
                     for (col_name, expr) in columns.iter().zip(values.iter()) {
-                        if col_name.eq_ignore_ascii_case(&name) {
+                        if merge_names_equal(col_name, &name, options.case_sensitive) {
                             out = expr.clone();
                             break;
                         }
@@ -1286,7 +1343,7 @@ fn build_insert_only_projection(
                     out
                 }
             };
-            branches.push((pred, value));
+            branches.push((pred, align_merge_value(value, field)));
         }
 
         let when_then_expr = branches
@@ -1585,7 +1642,6 @@ fn first_matching_clause_predicates<'a>(
 fn build_merge_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
-    source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
@@ -1641,29 +1697,6 @@ fn build_merge_projection(
         .map(|f| (f.name().clone(), Expr::Column(Column::from_name(f.name()))))
         .collect();
 
-    let source_exprs_by_name: HashMap<String, Expr> = source_schema
-        .fields()
-        .iter()
-        .map(|f| {
-            (
-                f.name().to_ascii_lowercase(),
-                Expr::Column(Column::from_name(f.name().clone())),
-            )
-        })
-        .collect();
-
-    // Find the source expression that corresponds to a target field by name.
-    // Source columns are prefixed with `__sail_src_`, so target field "id"
-    // maps to source column "__sail_src_id". Keys are lowercased for
-    // case-insensitive SQL resolution.
-    let source_expr_for_target = |target_name: &str| -> Expr {
-        let prefixed = format!("__sail_src_{}", target_name.to_ascii_lowercase());
-        source_exprs_by_name
-            .get(&prefixed)
-            .cloned()
-            .unwrap_or_else(|| lit(ScalarValue::Null))
-    };
-
     for (clause, pred) in options
         .matched_clauses
         .iter()
@@ -1673,18 +1706,27 @@ fn build_merge_projection(
             MergeMatchedAction::Delete => {}
             MergeMatchedAction::UpdateAll => {
                 for field in target_schema.fields().iter() {
-                    let value = source_expr_for_target(field.name());
+                    let value = merge_source_expr(options, field.name())
+                        .or_else(|| target_exprs_by_name.get(field.name()).cloned())
+                        .unwrap_or_else(|| lit(ScalarValue::Null));
                     if let Some(v) = cases.get_mut(field.name()) {
-                        v.push((pred.clone(), value));
+                        v.push((pred.clone(), align_merge_value(value, field)));
                     }
                 }
             }
             MergeMatchedAction::UpdateSet(assignments) => {
                 for assignment in assignments {
-                    let resolved =
-                        resolve_target_column(assignment.column.as_str(), target_schema)?;
+                    let resolved = resolve_target_column(
+                        assignment.column.as_str(),
+                        target_schema,
+                        options.case_sensitive,
+                    )?;
                     if let Some(v) = cases.get_mut(&resolved) {
-                        v.push((pred.clone(), assignment.value.clone()));
+                        let field = merge_target_field(target_schema, &resolved)?;
+                        v.push((
+                            pred.clone(),
+                            align_merge_value(assignment.value.clone(), field),
+                        ));
                     }
                 }
             }
@@ -1700,10 +1742,17 @@ fn build_merge_projection(
             MergeNotMatchedBySourceAction::Delete => {}
             MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
                 for assignment in assignments {
-                    let resolved =
-                        resolve_target_column(assignment.column.as_str(), target_schema)?;
+                    let resolved = resolve_target_column(
+                        assignment.column.as_str(),
+                        target_schema,
+                        options.case_sensitive,
+                    )?;
                     if let Some(v) = cases.get_mut(&resolved) {
-                        v.push((pred.clone(), assignment.value.clone()));
+                        let field = merge_target_field(target_schema, &resolved)?;
+                        v.push((
+                            pred.clone(),
+                            align_merge_value(assignment.value.clone(), field),
+                        ));
                     }
                 }
             }
@@ -1718,17 +1767,25 @@ fn build_merge_projection(
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {
                 for field in target_schema.fields().iter() {
-                    let value = source_expr_for_target(field.name());
+                    let value = merge_source_expr(options, field.name())
+                        .unwrap_or_else(|| merge_insert_value(options, field.name()));
                     if let Some(v) = cases.get_mut(field.name()) {
-                        v.push((pred.clone(), value));
+                        v.push((pred.clone(), align_merge_value(value, field)));
                     }
                 }
             }
             MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
-                for (col_name, value) in columns.iter().zip(values.iter()) {
-                    let resolved = resolve_target_column(col_name, target_schema)?;
-                    if let Some(v) = cases.get_mut(&resolved) {
-                        v.push((pred.clone(), value.clone()));
+                for field in target_schema.fields().iter() {
+                    if let Some(v) = cases.get_mut(field.name()) {
+                        let value = columns
+                            .iter()
+                            .zip(values.iter())
+                            .find(|(column_name, _)| {
+                                merge_names_equal(column_name, field.name(), options.case_sensitive)
+                            })
+                            .map(|(_, value)| value.clone())
+                            .unwrap_or_else(|| merge_insert_value(options, field.name()));
+                        v.push((pred.clone(), align_merge_value(value, field)));
                     }
                 }
             }
@@ -1862,11 +1919,31 @@ fn combine_rewrite_preds(matched: Vec<Expr>, not_matched_by_source: Vec<Expr>) -
     combine_disjunction(&preds)
 }
 
-fn resolve_target_column(column: &str, target_schema: &DFSchemaRef) -> Result<String> {
+fn merge_target_field<'a>(
+    target_schema: &'a DFSchemaRef,
+    column: &str,
+) -> Result<&'a datafusion_common::arrow::datatypes::Field> {
+    target_schema
+        .fields()
+        .iter()
+        .find(|field| field.name() == column)
+        .map(AsRef::as_ref)
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "unable to resolve column {column} in MERGE target projection"
+            ))
+        })
+}
+
+fn resolve_target_column(
+    column: &str,
+    target_schema: &DFSchemaRef,
+    case_sensitive: bool,
+) -> Result<String> {
     let matches = target_schema
         .fields()
         .iter()
-        .filter(|f| f.name().eq_ignore_ascii_case(column))
+        .filter(|field| merge_names_equal(field.name(), column, case_sensitive))
         .collect::<Vec<_>>();
     if matches.len() != 1 {
         return plan_err!("unable to resolve column {column} in MERGE target projection");

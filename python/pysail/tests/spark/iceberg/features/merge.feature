@@ -43,6 +43,213 @@ Feature: Iceberg MERGE
         | id | value |
         | 1  | old   |
 
+  Rule: MERGE assignments follow target schema semantics
+
+    Scenario: A legal target column does not collide with generated source aliases
+      Given variable location for temporary directory iceberg_merge_source_alias
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_source_alias
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_source_alias (`__sail_src_id` INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_source_alias VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_source_alias_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      Given statement
+        """
+        MERGE INTO iceberg_merge_source_alias AS t
+        USING iceberg_merge_source_alias_source AS s
+        ON t.`__sail_src_id` = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT `__sail_src_id`, value FROM iceberg_merge_source_alias
+        """
+      Then query result
+        | __sail_src_id | value |
+        | 1             | new   |
+
+    Scenario: Star actions reject source columns missing from the target schema
+      Given variable location for temporary directory iceberg_merge_star_missing
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_star_missing
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_star_missing (id INT, value STRING, keep STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_star_missing VALUES (1, 'old', 'preserved')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_star_missing_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_star_missing AS t
+        USING iceberg_merge_star_missing_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then query error Cannot resolve source column `keep` for MERGE \* action without schema evolution
+
+    Scenario: Assignments cast to target types and reject overflow
+      Given config spark.sql.ansi.enabled = true
+      Given variable location for temporary directory iceberg_merge_assignment_cast
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_assignment_cast
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_assignment_cast (id INT, value INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_assignment_cast VALUES (1, 10)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_assignment_cast_source AS
+        SELECT 1 AS id, CAST(20 AS BIGINT) AS value
+        """
+      Given statement
+        """
+        MERGE INTO iceberg_merge_assignment_cast AS t
+        USING iceberg_merge_assignment_cast_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT id, value FROM iceberg_merge_assignment_cast
+        """
+      Then query result
+        | id | value |
+        | 1  | 20    |
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_assignment_cast_source AS
+        SELECT 1 AS id, CAST(2147483648 AS BIGINT) AS value
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_assignment_cast AS t
+        USING iceberg_merge_assignment_cast_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error (?i).*(cast|overflow).*
+      When query
+        """
+        SELECT id, value FROM iceberg_merge_assignment_cast
+        """
+      Then query result
+        | id | value |
+        | 1  | 20    |
+
+    Scenario: Duplicate target assignments are rejected
+      Given variable location for temporary directory iceberg_merge_duplicate_assignment
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_duplicate_assignment
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_duplicate_assignment (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_duplicate_assignment VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_duplicate_assignment_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_duplicate_assignment AS t
+        USING iceberg_merge_duplicate_assignment_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = 'first', value = 'second'
+        """
+      Then query error Multiple assignments for MERGE target column
+
+    Scenario: Star matching honors case-sensitive resolution
+      Given config spark.sql.caseSensitive = true
+      Given variable location for temporary directory iceberg_merge_case_sensitive
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_case_sensitive
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_case_sensitive (`A` INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_case_sensitive VALUES (1)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_case_sensitive_source AS
+        SELECT 1 AS a
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_case_sensitive AS t
+        USING iceberg_merge_case_sensitive_source AS s
+        ON t.`A` = s.a
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      Then query error Cannot resolve source column `A` for MERGE \* action without schema evolution
+
   Rule: Merge-on-read execution plans and metadata
 
     Scenario: EXPLAIN shows merge-on-read data and position-delete writers
