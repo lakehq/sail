@@ -342,7 +342,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     options.write_folder_storage_path.as_deref(),
                     &table_meta.properties,
                     &table_url,
-                );
+                )?;
                 let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
@@ -461,7 +461,7 @@ impl ExecutionPlan for IcebergWriterExec {
                         options.write_folder_storage_path.as_deref(),
                         &metadata_properties,
                         &table_url,
-                    ),
+                    )?,
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),

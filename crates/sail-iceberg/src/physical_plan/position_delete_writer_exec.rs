@@ -245,7 +245,7 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                 .load_current_table_metadata(&store_ctx)
                 .await?;
             delete_writer_common::ensure_position_delete_file_writes(&table_meta)?;
-            let data_dir = writer_config.resolve_data_dir(&table_meta);
+            let data_dir = writer_config.resolve_data_dir(&table_meta)?;
 
             let mut current_target: Option<PositionDeleteTarget> = None;
             // FIXME: Stream and roll position-delete files instead of buffering every

@@ -158,6 +158,35 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_iceberg_io_rejects_external_write_data_path_without_side_effects(spark, tmp_path):
+    table_path = tmp_path / "iceberg_external_write_path"
+    external_data_path = tmp_path / "external_data"
+    table_name = "iceberg_external_write_path_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id BIGINT)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
+            TBLPROPERTIES (
+              'write.data.path' = '{escape_sql_string_literal(external_data_path.as_uri())}'
+            )
+            """
+        )
+        before_metadata = latest_iceberg_metadata(table_path)
+
+        with pytest.raises(Exception, match=r"external Iceberg write paths are not supported"):
+            spark.sql(f"INSERT INTO {table_name} VALUES (1)").collect()  # noqa: S608
+
+        assert latest_iceberg_metadata(table_path) == before_metadata
+        assert not list(table_path.rglob("*.parquet"))
+        assert not list(external_data_path.rglob("*.parquet"))
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clears_rows(spark, tmp_path):
     table_path = tmp_path / "iceberg_replace_existing"
     table_location = table_path.as_uri()

@@ -174,7 +174,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 .cloned()
                 .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
             ensure_unpartitioned_equality_delete_spec(&default_spec)?;
-            let data_dir = writer_config.resolve_data_dir(&table_meta);
+            let data_dir = writer_config.resolve_data_dir(&table_meta)?;
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
             let delete_spec = EqualityDeleteSpec::full_row(current_schema, &input_schema)?;

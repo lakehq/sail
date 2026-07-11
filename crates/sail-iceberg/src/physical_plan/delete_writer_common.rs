@@ -72,7 +72,7 @@ impl IcebergDeleteWriterConfig {
         load_current_table_metadata(store_ctx, &self.table_url, &self.table_properties).await
     }
 
-    pub(crate) fn resolve_data_dir(&self, table_meta: &TableMetadata) -> String {
+    pub(crate) fn resolve_data_dir(&self, table_meta: &TableMetadata) -> Result<String> {
         write_location::resolve_data_dir_from_options_and_properties(
             self.write_data_path(),
             self.write_folder_storage_path(),
