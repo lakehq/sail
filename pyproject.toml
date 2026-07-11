@@ -281,6 +281,7 @@ python-source = "python"
 module-name = "pysail._native"
 manifest-path = "crates/sail-python/Cargo.toml"
 features = [
+    "mimalloc",
     "pyo3/extension-module",
     "pyo3/abi3-py38",
     "pyo3/generate-import-lib",
