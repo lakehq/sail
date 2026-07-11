@@ -612,10 +612,11 @@ impl IcebergTableFormat {
                 continue;
             }
 
+            let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             table_meta.last_updated_ms = timestamp_ms;
             table_meta.metadata_log.push(MetadataLog {
-                timestamp_ms,
+                timestamp_ms: previous_metadata_timestamp_ms,
                 metadata_file: latest_meta.clone(),
             });
 

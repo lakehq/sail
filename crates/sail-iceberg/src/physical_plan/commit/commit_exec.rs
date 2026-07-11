@@ -935,6 +935,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 log::trace!("commit_exec: applying updates: {:?}", action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
+                let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
                 for upd in action_updates {
                     match upd {
@@ -971,7 +972,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_meta
                     .metadata_log
                     .push(crate::spec::metadata::table_metadata::MetadataLog {
-                        timestamp_ms,
+                        timestamp_ms: previous_metadata_timestamp_ms,
                         metadata_file: catalog_metadata_location
                             .clone()
                             .unwrap_or_else(|| latest_meta.clone()),

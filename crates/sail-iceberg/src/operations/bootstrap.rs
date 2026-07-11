@@ -93,7 +93,11 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot, 0);
+    let tx = Transaction::new(
+        table_url.to_string(),
+        empty_snapshot,
+        table_meta.last_sequence_number,
+    );
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
@@ -219,7 +223,7 @@ pub async fn bootstrap_new_table_with_style(
         format_version,
         table_uuid: None,
         location: table_url.to_string(),
-        last_sequence_number: 1,
+        last_sequence_number: snapshot.sequence_number(),
         last_updated_ms: commit_timestamp_ms,
         last_column_id: iceberg_schema.highest_field_id(),
         schemas: vec![iceberg_schema.clone()],
@@ -399,9 +403,17 @@ pub async fn replace_empty_table_metadata(
 
     let mut metadata_log = previous_metadata.metadata_log.clone();
     metadata_log.push(crate::spec::metadata::table_metadata::MetadataLog {
-        timestamp_ms: commit_timestamp_ms,
+        timestamp_ms: previous_metadata.last_updated_ms,
         metadata_file: latest_meta_path.to_string(),
     });
+
+    let next_row_id = if format_version >= FormatVersion::V3 {
+        let mut row_lineage_metadata = previous_metadata.clone();
+        row_lineage_metadata.format_version = format_version;
+        row_lineage_metadata.row_lineage_start_row_id()
+    } else {
+        None
+    };
 
     let last_column_id = previous_metadata
         .last_column_id
@@ -430,7 +442,7 @@ pub async fn replace_empty_table_metadata(
         last_partition_id,
         properties: table_properties,
         current_snapshot_id: Some(-1),
-        next_row_id: (format_version >= FormatVersion::V3).then_some(0),
+        next_row_id,
         encryption_keys: previous_metadata.encryption_keys.clone(),
         snapshots: vec![],
         snapshot_log: vec![],
@@ -525,6 +537,7 @@ pub async fn bootstrap_first_snapshot(
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
     // Update table metadata with the new snapshot
+    let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
     table_meta.snapshots.push(snapshot.clone());
@@ -535,12 +548,12 @@ pub async fn bootstrap_first_snapshot(
     table_meta
         .metadata_log
         .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: commit_timestamp_ms,
+            timestamp_ms: previous_metadata_timestamp_ms,
             metadata_file: previous_metadata_file
                 .unwrap_or(latest_meta_path)
                 .to_string(),
         });
-    table_meta.last_sequence_number = 1;
+    table_meta.last_sequence_number = snapshot.sequence_number();
     table_meta.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {
         table_meta.advance_next_row_id(added_rows);

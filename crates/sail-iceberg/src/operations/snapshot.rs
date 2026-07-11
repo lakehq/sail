@@ -466,11 +466,7 @@ impl<'a> SnapshotProducer<'a> {
 
         // Generate new snapshot ID using UUID (not timestamp) and sequence number
         let new_snapshot_id = crate::utils::snapshot_id::generate_snapshot_id();
-        let new_sequence_number = if self.is_bootstrap {
-            1 // First snapshot starts at sequence 1
-        } else {
-            self.tx.next_sequence_number()?
-        };
+        let new_sequence_number = self.tx.next_sequence_number()?;
 
         let parent_snapshot = self.tx.snapshot();
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
