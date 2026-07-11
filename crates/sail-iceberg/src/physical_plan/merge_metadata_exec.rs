@@ -4,6 +4,8 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -84,6 +86,9 @@ impl IcebergMergeMetadataExec {
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
     ) -> Result<Self> {
+        if row_index_column_name.is_some() {
+            ensure_absolute_row_position_scan(&input)?;
+        }
         let appended_file_column = data_file_path
             .is_some()
             .then_some(file_column_name.as_deref())
@@ -215,8 +220,8 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
         let include_row_index = self.row_index_column_name.is_some();
 
         let stream = try_stream! {
-            // TODO: Derive positions from Parquet metadata; stream-local offsets are wrong
-            // after file splitting or row-group reordering.
+            // The provider and constructor guarantee that each input partition contains
+            // complete, naturally ordered files, so this offset is file-absolute.
             let mut row_offset = 0i64;
             let mut current_file_path: Option<String> = None;
             let mut stream = child;
@@ -286,6 +291,54 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
             Box::pin(stream),
         )))
     }
+}
+
+fn ensure_absolute_row_position_scan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    if let Some(scan) = plan.downcast_ref::<DataSourceExec>() {
+        let config = scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Iceberg row-position metadata requires a data-file scan".to_string(),
+                )
+            })?;
+        if !config.preserve_order {
+            return Err(DataFusionError::Plan(
+                "Iceberg row-position scans must preserve data-file row order".to_string(),
+            ));
+        }
+        if !config.partitioned_by_file_group {
+            return Err(DataFusionError::Plan(
+                "Iceberg row-position scans must disable data-file repartitioning".to_string(),
+            ));
+        }
+        for group in &config.file_groups {
+            if group.len() > 1 {
+                return Err(DataFusionError::Plan(
+                    "Iceberg row-position scans require at most one data file per input partition"
+                        .to_string(),
+                ));
+            }
+            if group.iter().any(|file| file.range.is_some()) {
+                return Err(DataFusionError::Plan(
+                    "Iceberg row-position scans do not support split data-file ranges".to_string(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    let children = plan.children();
+    if children.is_empty() {
+        return Err(DataFusionError::Plan(
+            "Iceberg row-position metadata requires a data-file scan".to_string(),
+        ));
+    }
+    for child in children {
+        ensure_absolute_row_position_scan(child)?;
+    }
+    Ok(())
 }
 
 impl DisplayAs for IcebergMergeMetadataExec {

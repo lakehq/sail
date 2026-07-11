@@ -981,6 +981,9 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
+                    // Position deletes require the original file order and absolute offsets.
+                    .with_partitioned_by_file_group(true)
+                    .with_preserve_order(true)
                     .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
@@ -1163,6 +1166,11 @@ impl IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
+                    // MERGE synthesizes file-local row positions before applying filters.
+                    // Keep every file group whole so DataFusion cannot split a Parquet file
+                    // into byte ranges whose streams would each start at position zero.
+                    .with_partitioned_by_file_group(true)
+                    .with_preserve_order(true)
                     .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
@@ -1182,6 +1190,10 @@ impl IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
+                    // Existing position deletes and MERGE row positions both require the
+                    // original file order and absolute offsets.
+                    .with_partitioned_by_file_group(true)
+                    .with_preserve_order(true)
                     .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();

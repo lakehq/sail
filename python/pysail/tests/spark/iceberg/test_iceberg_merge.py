@@ -579,9 +579,6 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
         _drop_table(spark, table_name)
 
 
-@pytest.mark.skip(
-    reason="Known bug: MERGE uses stream-local positions after Parquet file splitting or row-group reordering"
-)
 def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(spark, tmp_path):
     table_name = "iceberg_merge_split_file_position"
     table_path = tmp_path / table_name
