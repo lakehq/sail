@@ -150,7 +150,7 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         assert append_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
         assert append_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
 
-        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('custom.key' = 'value')")  # noqa: S608
+        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('custom.key' = 'value')")
         altered_metadata = latest_iceberg_metadata(table_path)
         assert altered_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v3.metadata.json")
         assert altered_metadata["metadata-log"][-1]["timestamp-ms"] == append_metadata["last-updated-ms"]

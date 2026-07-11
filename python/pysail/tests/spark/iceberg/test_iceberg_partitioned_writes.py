@@ -265,18 +265,17 @@ def test_identity_partition_distinguishes_null_from_null_string(spark, tmp_path)
             LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
             """
         )
-        spark.sql(
-            f"""
-            INSERT INTO {table_name} VALUES
-              (1, NULL),
-              (2, 'null')
-            """
+        partition_rows_insert_sql = (
+            f"INSERT INTO {table_name} VALUES "  # noqa: S608
+            "(1, NULL), "
+            "(2, 'null')"
         )
+        spark.sql(partition_rows_insert_sql)
 
-        null_rows = [row.id for row in spark.sql(f"SELECT id FROM {table_name} WHERE part IS NULL").collect()]
-        string_rows = [
-            row.id for row in spark.sql(f"SELECT id FROM {table_name} WHERE part = 'null'").collect()
-        ]
+        null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part IS NULL"  # noqa: S608
+        literal_null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part = 'null'"  # noqa: S608
+        null_rows = [row.id for row in spark.sql(null_partition_rows_sql).collect()]
+        string_rows = [row.id for row in spark.sql(literal_null_partition_rows_sql).collect()]
         assert null_rows == [1]
         assert string_rows == [2]
 

@@ -603,13 +603,12 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
             )
             """
         )
-        spark.sql(
-            f"""
-            INSERT INTO {table_name}
-            SELECT id, sha2(CAST(id AS STRING), 256) AS value
-            FROM range(1200000)
-            """
+        large_file_insert_sql = (
+            f"INSERT INTO {table_name} "  # noqa: S608
+            "SELECT id, sha2(CAST(id AS STRING), 256) AS value "
+            "FROM range(1200000)"
         )
+        spark.sql(large_file_insert_sql)
 
         data_files = sorted(table_path / path for path in _parquet_file_paths(table_path))
         assert len(data_files) == 1
@@ -643,10 +642,8 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
             """
         ).collect()
 
-        rows = [
-            tuple(row)
-            for row in spark.sql(f"SELECT id, value FROM {table_name} WHERE id = {target_id}").collect()
-        ]
+        target_row_sql = f"SELECT id, value FROM {table_name} WHERE id = {target_id}"  # noqa: S608
+        rows = [tuple(row) for row in spark.sql(target_row_sql).collect()]
         assert rows == [(target_id, "updated")]
 
         delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
