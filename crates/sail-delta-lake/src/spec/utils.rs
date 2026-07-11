@@ -20,7 +20,7 @@ use std::str::Utf8Error;
 
 use arrow_schema::extension::ExtensionType;
 use parquet_variant_compute::VariantType;
-use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use super::schema::{DataType, StructField};

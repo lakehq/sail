@@ -8,8 +8,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_common::exec_err;
-use parquet_variant_compute::{cast_to_variant, VariantType};
-use sail_common_datafusion::variant::{variant_metadata_field, VARIANT_VALUE_FIELD_NAME};
+use parquet_variant_compute::{VariantType, cast_to_variant};
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use super::spark_parse_json::convert_variant_binaryview_to_binary;
 

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use chrono::{Datelike, Duration, Weekday};
-use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
+use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::invalid_arg_count_exec_err;
@@ -58,29 +58,39 @@ impl ScalarUDFImpl for SparkNextDay {
         match (date, day_of_week) {
             (ColumnarValue::Scalar(date), ColumnarValue::Scalar(day_of_week)) => {
                 match (date, day_of_week) {
-                    (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
-                        if let Some(days) = days {
-                            if let Some(day_of_week) = day_of_week {
-                                match parse_day_of_week(day_of_week.as_str()) {
-                                    Some(weekday) => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
-                                        spark_next_day(*days, weekday),
-                                    ))),
-                                    None if self.ansi_mode => illegal_day_of_week_err(day_of_week),
-                                    None => Ok(ColumnarValue::Scalar(ScalarValue::Date32(None))),
-                                }
-                            } else {
-                                Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
+                    (
+                        ScalarValue::Date32(days),
+                        ScalarValue::Utf8(day_of_week)
+                        | ScalarValue::LargeUtf8(day_of_week)
+                        | ScalarValue::Utf8View(day_of_week),
+                    ) => {
+                        if let Some(days) = days
+                            && let Some(day_of_week) = day_of_week
+                        {
+                            match parse_day_of_week(day_of_week.as_str()) {
+                                Some(weekday) => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                                    spark_next_day(*days, weekday),
+                                ))),
+                                None if self.ansi_mode => illegal_day_of_week_err(day_of_week),
+                                None => Ok(ColumnarValue::Scalar(ScalarValue::Date32(None))),
                             }
                         } else {
                             Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                         }
                     }
-                    _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
+                    _ => exec_err!(
+                        "Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"
+                    ),
                 }
             }
             (ColumnarValue::Array(date_array), ColumnarValue::Scalar(day_of_week)) => {
                 match (date_array.data_type(), day_of_week) {
-                    (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
+                    (
+                        DataType::Date32,
+                        ScalarValue::Utf8(day_of_week)
+                        | ScalarValue::LargeUtf8(day_of_week)
+                        | ScalarValue::Utf8View(day_of_week),
+                    ) => {
                         if let Some(day_of_week) = day_of_week {
                             match parse_day_of_week(day_of_week.as_str()) {
                                 Some(weekday) => {
@@ -97,10 +107,15 @@ impl ScalarUDFImpl for SparkNextDay {
                                 )))),
                             }
                         } else {
-                            Ok(ColumnarValue::Array(Arc::new(new_null_array(&DataType::Date32, date_array.len()))))
+                            Ok(ColumnarValue::Array(Arc::new(new_null_array(
+                                &DataType::Date32,
+                                date_array.len(),
+                            ))))
                         }
                     }
-                    _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
+                    _ => exec_err!(
+                        "Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"
+                    ),
                 }
             }
             (ColumnarValue::Array(date_array), ColumnarValue::Array(day_of_week_array)) => {
@@ -136,7 +151,9 @@ impl ScalarUDFImpl for SparkNextDay {
                                 )
                             }
                             other => {
-                                exec_err!("Spark `next_day` function: second arg must be string. Got {other:?}")
+                                exec_err!(
+                                    "Spark `next_day` function: second arg must be string. Got {other:?}"
+                                )
                             }
                         }
                     }
@@ -188,7 +205,8 @@ impl ScalarUDFImpl for SparkNextDay {
             }
         } else {
             plan_err!(
-                "The first argument of the Spark `next_day` function can only be a date, string or timestamp, but got {}", &arg_types[0]
+                "The first argument of the Spark `next_day` function can only be a date, string or timestamp, but got {}",
+                &arg_types[0]
             )
         }
     }

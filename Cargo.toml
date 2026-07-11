@@ -5,14 +5,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 authors = ["LakeSail <hello@lakesail.com>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://lakesail.com"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lakehq/sail"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 
 [workspace.lints.clippy]
 allow_attributes = "deny"
@@ -118,8 +118,6 @@ apache-avro = { version = "0.21.0" }
 rust_decimal = "1.42.0"
 wiremock = "0.6.5"
 testcontainers = "0.26.2"
-progenitor = "0.11.2"
-progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.27.0"
 readonly = "0.2.13"

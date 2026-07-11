@@ -1,7 +1,7 @@
 use datafusion::arrow::array::types::{Decimal128Type, Int32Type, Time64MicrosecondType};
 use datafusion::arrow::array::{AsArray, Int32Array, PrimitiveArray};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 use lazy_static::lazy_static;
 use regex::Regex;

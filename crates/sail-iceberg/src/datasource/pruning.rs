@@ -361,27 +361,27 @@ fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, Pri
                 let r = strip(right);
 
                 // col = lit
-                if let Expr::Column(c) = l {
-                    if let Expr::Literal(sv, _) = r {
-                        let col_name = c.name.clone();
-                        if let Some(field) = schema.field_by_name(&col_name) {
-                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
-                                acc.push((field.id, pl));
-                                return;
-                            }
-                        }
+                if let Expr::Column(c) = l
+                    && let Expr::Literal(sv, _) = r
+                {
+                    let col_name = c.name.clone();
+                    if let Some(field) = schema.field_by_name(&col_name)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                    {
+                        acc.push((field.id, pl));
+                        return;
                     }
                 }
 
                 // lit = col
-                if let Expr::Literal(sv, _) = l {
-                    if let Expr::Column(c) = r {
-                        let col_name = c.name.clone();
-                        if let Some(field) = schema.field_by_name(&col_name) {
-                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
-                                acc.push((field.id, pl));
-                            }
-                        }
+                if let Expr::Literal(sv, _) = l
+                    && let Expr::Column(c) = r
+                {
+                    let col_name = c.name.clone();
+                    if let Some(field) = schema.field_by_name(&col_name)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                    {
+                        acc.push((field.id, pl));
                     }
                 }
             }
@@ -417,19 +417,19 @@ fn collect_source_in_filters(
         match e {
             Expr::InList(in_list) if !in_list.negated => {
                 let e = strip(&in_list.expr);
-                if let Expr::Column(c) = e {
-                    if let Some(field) = schema.field_by_name(&c.name) {
-                        let mut vals = Vec::new();
-                        for item in &in_list.list {
-                            if let Expr::Literal(ref sv, _) = item {
-                                if let Ok(pl) = scalar_to_primitive_literal(sv) {
-                                    vals.push(pl);
-                                }
-                            }
+                if let Expr::Column(c) = e
+                    && let Some(field) = schema.field_by_name(&c.name)
+                {
+                    let mut vals = Vec::new();
+                    for item in &in_list.list {
+                        if let Expr::Literal(sv, _) = item
+                            && let Ok(pl) = scalar_to_primitive_literal(sv)
+                        {
+                            vals.push(pl);
                         }
-                        if !vals.is_empty() {
-                            acc.entry(field.id).or_default().extend(vals);
-                        }
+                    }
+                    if !vals.is_empty() {
+                        acc.entry(field.id).or_default().extend(vals);
                     }
                 }
             }
@@ -510,10 +510,9 @@ fn partition_predicates_for_spec(
                     partition_field.transform,
                     source_type,
                     literal.clone(),
-                ) {
-                    if seen.insert(value.clone()) {
-                        values.push(value);
-                    }
+                ) && seen.insert(value.clone())
+                {
+                    values.push(value);
                 }
             }
             if !values.is_empty() {
@@ -524,15 +523,14 @@ fn partition_predicates_for_spec(
             }
         }
 
-        if let Some(range) = range_filters.get(&partition_field.source_id) {
-            if let Some(range) =
+        if let Some(range) = range_filters.get(&partition_field.source_id)
+            && let Some(range) =
                 transform_range_constraint(partition_field.transform, source_type, range)
-            {
-                predicates.push(PartitionPredicate {
-                    field_index,
-                    constraint: PartitionConstraint::Range(range),
-                });
-            }
+        {
+            predicates.push(PartitionPredicate {
+                field_index,
+                constraint: PartitionConstraint::Range(range),
+            });
         }
     }
 
@@ -663,15 +661,15 @@ fn literal_may_match_bounds(
     lower: Option<&PrimitiveLiteral>,
     upper: Option<&PrimitiveLiteral>,
 ) -> bool {
-    if let Some(lower) = lower {
-        if value < lower {
-            return false;
-        }
+    if let Some(lower) = lower
+        && value < lower
+    {
+        return false;
     }
-    if let Some(upper) = upper {
-        if value > upper {
-            return false;
-        }
+    if let Some(upper) = upper
+        && value > upper
+    {
+        return false;
     }
     true
 }
@@ -681,29 +679,29 @@ fn range_may_match_bounds(
     lower: Option<&PrimitiveLiteral>,
     upper: Option<&PrimitiveLiteral>,
 ) -> bool {
-    if let (Some((min, inclusive)), Some(upper)) = (&range.min, upper) {
-        if min > upper || (min == upper && !inclusive) {
-            return false;
-        }
+    if let (Some((min, inclusive)), Some(upper)) = (&range.min, upper)
+        && (min > upper || (min == upper && !inclusive))
+    {
+        return false;
     }
-    if let (Some((max, inclusive)), Some(lower)) = (&range.max, lower) {
-        if max < lower || (max == lower && !inclusive) {
-            return false;
-        }
+    if let (Some((max, inclusive)), Some(lower)) = (&range.max, lower)
+        && (max < lower || (max == lower && !inclusive))
+    {
+        return false;
     }
     true
 }
 
 fn literal_may_match_range(value: &PrimitiveLiteral, range: &RangeConstraint) -> bool {
-    if let Some((min, inclusive)) = &range.min {
-        if value < min || (value == min && !inclusive) {
-            return false;
-        }
+    if let Some((min, inclusive)) = &range.min
+        && (value < min || (value == min && !inclusive))
+    {
+        return false;
     }
-    if let Some((max, inclusive)) = &range.max {
-        if value > max || (value == max && !inclusive) {
-            return false;
-        }
+    if let Some((max, inclusive)) = &range.max
+        && (value > max || (value == max && !inclusive))
+    {
+        return false;
     }
     true
 }
@@ -723,7 +721,7 @@ fn collect_source_range_filters(
     fn tighten_min(cur: &mut Option<(PrimitiveLiteral, bool)>, cand: (PrimitiveLiteral, bool)) {
         match cur {
             None => *cur = Some(cand),
-            Some((ref mut v, ref mut incl)) => {
+            Some((v, incl)) => {
                 if cand.0 > *v || (cand.0 == *v && !cand.1 && *incl) {
                     *v = cand.0;
                     *incl = cand.1;
@@ -734,7 +732,7 @@ fn collect_source_range_filters(
     fn tighten_max(cur: &mut Option<(PrimitiveLiteral, bool)>, cand: (PrimitiveLiteral, bool)) {
         match cur {
             None => *cur = Some(cand),
-            Some((ref mut v, ref mut incl)) => {
+            Some((v, incl)) => {
                 if cand.0 < *v || (cand.0 == *v && !cand.1 && *incl) {
                     *v = cand.0;
                     *incl = cand.1;
@@ -752,11 +750,11 @@ fn collect_source_range_filters(
         literal: &datafusion::common::scalar::ScalarValue,
         inclusive: bool,
     ) {
-        if let Some(field) = schema.field_by_name(column_name) {
-            if let Ok(pl) = scalar_to_primitive_literal(literal) {
-                let entry = acc.entry(field.id).or_default();
-                tighten_min(&mut entry.min, (pl, inclusive));
-            }
+        if let Some(field) = schema.field_by_name(column_name)
+            && let Ok(pl) = scalar_to_primitive_literal(literal)
+        {
+            let entry = acc.entry(field.id).or_default();
+            tighten_min(&mut entry.min, (pl, inclusive));
         }
     }
 
@@ -767,11 +765,11 @@ fn collect_source_range_filters(
         literal: &datafusion::common::scalar::ScalarValue,
         inclusive: bool,
     ) {
-        if let Some(field) = schema.field_by_name(column_name) {
-            if let Ok(pl) = scalar_to_primitive_literal(literal) {
-                let entry = acc.entry(field.id).or_default();
-                tighten_max(&mut entry.max, (pl, inclusive));
-            }
+        if let Some(field) = schema.field_by_name(column_name)
+            && let Ok(pl) = scalar_to_primitive_literal(literal)
+        {
+            let entry = acc.entry(field.id).or_default();
+            tighten_max(&mut entry.max, (pl, inclusive));
         }
     }
 

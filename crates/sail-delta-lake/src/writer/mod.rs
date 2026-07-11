@@ -44,8 +44,8 @@ use partitioning::partition_ranges;
 use stats::create_add;
 use uuid::Uuid;
 use variant_shredding::{
-    apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingConfig,
-    VariantShreddingPlan,
+    VariantShreddingConfig, VariantShreddingPlan, apply_variant_shredding_plan,
+    build_variant_shredding_plan,
 };
 
 use crate::conversion::ScalarExt;
@@ -713,9 +713,9 @@ mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
+    use object_store::ObjectStore;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::ObjectStore;
     use parquet_variant::{Variant, VariantMetadata};
     use parquet_variant_compute::json_to_variant;
     use parquet_variant_json::VariantToJson;
@@ -828,8 +828,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn variant_shredding_writer_drains_pending_batches_sequentially(
-    ) -> Result<(), DeltaTableError> {
+    async fn variant_shredding_writer_drains_pending_batches_sequentially()
+    -> Result<(), DeltaTableError> {
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let table_path = Path::from("delta_table");
         let batch1 = make_variant_batch(vec![Some(r#"{"a":1,"b":"delta","nested":{"c":7}}"#)])?;
@@ -899,8 +899,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partition_path_with_percent_encoded_value_is_not_double_encoded(
-    ) -> Result<(), DeltaTableError> {
+    async fn partition_path_with_percent_encoded_value_is_not_double_encoded()
+    -> Result<(), DeltaTableError> {
         use datafusion::arrow::datatypes::TimeUnit;
 
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

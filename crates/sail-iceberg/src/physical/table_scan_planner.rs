@@ -10,7 +10,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::logical::IcebergTableSource;
-use crate::table_format::{plan_iceberg_write, IcebergWriteNode};
+use crate::table_format::{IcebergWriteNode, plan_iceberg_write};
 
 pub struct IcebergPhysicalPlanner;
 

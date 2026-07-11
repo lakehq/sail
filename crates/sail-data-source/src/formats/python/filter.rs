@@ -11,9 +11,9 @@
 //! - String patterns: StartsWith, EndsWith, Contains
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion_common::ScalarValue;
+use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyList, PyTuple};
-use pyo3::IntoPyObject;
 use serde::{Deserialize, Serialize};
 
 /// Represents a filter that can be pushed to Python.

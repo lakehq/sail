@@ -7,7 +7,7 @@ use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -60,12 +60,14 @@ impl AggregateUDFImpl for CountMinSketchFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "count_min_sketch"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "count_min_sketch"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 

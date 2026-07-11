@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use chrono::{NaiveTime, Timelike};
 use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 

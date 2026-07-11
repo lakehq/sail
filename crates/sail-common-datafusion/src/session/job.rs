@@ -22,6 +22,11 @@ pub trait JobRunner: StateObservable<JobRunnerObserver> + Send + Sync + 'static 
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream>;
 
+    /// Returns an execution-mode-specific plan for EXPLAIN output.
+    fn explain(&self, _plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>);
 }
 

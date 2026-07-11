@@ -16,8 +16,8 @@ use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
 use crate::delta_log::LogStore;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
-    checkpoint_path, delta_log_root_path, is_uuid_checkpoint_filename, sidecar_file_name,
-    sidecars_dir_path, DeltaResult,
+    DeltaResult, checkpoint_path, delta_log_root_path, is_uuid_checkpoint_filename,
+    sidecar_file_name, sidecars_dir_path,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -174,13 +174,13 @@ async fn ensure_v2_compat_classic_checkpoint(
             .rsplit('/')
             .next()
             .unwrap_or_default();
-        if is_uuid_checkpoint_filename(filename) && filename.ends_with(".parquet") {
-            if let Some(v) = parse_checkpoint_version_from_location(&meta.location) {
-                if v == version {
-                    uuid_checkpoint_meta = Some(meta);
-                    break;
-                }
-            }
+        if is_uuid_checkpoint_filename(filename)
+            && filename.ends_with(".parquet")
+            && let Some(v) = parse_checkpoint_version_from_location(&meta.location)
+            && v == version
+        {
+            uuid_checkpoint_meta = Some(meta);
+            break;
         }
     }
 
@@ -378,11 +378,11 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
+    use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::snapshot::DeltaSnapshot;
     use crate::spec::{
-        checkpoint_path, checksum_path, commit_path, Action, CommitInfo, DataType, Metadata,
-        Protocol, StructField, StructType, TableFeature, VersionChecksum,
+        Action, CommitInfo, DataType, Metadata, Protocol, StructField, StructType, TableFeature,
+        VersionChecksum, checkpoint_path, checksum_path, commit_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
@@ -19,7 +20,6 @@ use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::window_topn::WindowTopN;
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
@@ -94,8 +94,7 @@ mod tests {
             .filter(|name| datafusion_optimizer_names.contains(name))
             .collect();
         assert_eq!(
-            datafusion_optimizer_names,
-            actual_datafusion_optimizer_names,
+            datafusion_optimizer_names, actual_datafusion_optimizer_names,
             "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
         );
 

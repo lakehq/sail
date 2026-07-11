@@ -6,7 +6,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, plan_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -154,16 +154,19 @@ impl ScalarUDFImpl for SparkFromJson {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
-                Ok(vec![DataType::Utf8, arg_types[1].clone()])
-            }
-            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
-                Ok(vec![
-                    DataType::Utf8,
-                    arg_types[1].clone(),
-                    arg_types[2].clone(),
-                ])
-            }
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![DataType::Utf8, arg_types[1].clone()]),
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![
+                DataType::Utf8,
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
             _ => plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
                 Self::FROM_JSON_NAME,
@@ -216,7 +219,7 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
                 "`{}` function doesn't support target schema type {}",
                 SparkFromJson::FROM_JSON_NAME,
                 other
-            )
+            );
         }
     }
 
@@ -381,18 +384,16 @@ fn create_builder(
             })
         }
         DataType::LargeUtf8 => Ok(FieldBuilder::LargeString(
-            LargeStringBuilder::with_capacity(capacity, capacity * 16),
+            LargeStringBuilder::with_capacity(capacity, 0),
         )),
         DataType::Map(field, ordered) => {
             let (keys_field, values_field) = match field.data_type() {
-                DataType::Struct(fields) => {
-                    Ok((fields[0].clone(), fields[1].clone()))
-                },
+                DataType::Struct(fields) => Ok((fields[0].clone(), fields[1].clone())),
                 other => exec_err!(
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
                     SparkFromJson::FROM_JSON_NAME,
                     other
-                )
+                ),
             }?;
             let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
             let values_builder =
@@ -420,8 +421,7 @@ fn create_builder(
             })
         }
         DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(
-            capacity,
-            capacity * 16,
+            capacity, 0,
         ))),
         DataType::Timestamp(time_unit, tz) => {
             let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
@@ -770,7 +770,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
                     SparkFromJson::FROM_JSON_NAME,
                     other
-                )
+                ),
             }?;
             let struct_array =
                 StructArray::new(fields.clone(), vec![finished_keys, finished_values], None);
@@ -1124,20 +1124,18 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(precision), Some(scale), None) =
                     (parts.next(), parts.next(), parts.next())
-                {
-                    if let (Ok(precision), Ok(scale)) =
+                    && let (Ok(precision), Ok(scale)) =
                         (precision.parse::<u8>(), scale.parse::<i8>())
-                    {
-                        datafusion::arrow::datatypes::validate_decimal_precision_and_scale::<
-                            Decimal128Type,
-                        >(precision, scale)
-                        .map_err(|e| {
-                            DataFusionError::Plan(format!(
-                                "Invalid decimal precision/scale in '{other}': {e}"
-                            ))
-                        })?;
-                        return Ok(DataType::Decimal128(precision, scale));
-                    }
+                {
+                    datafusion::arrow::datatypes::validate_decimal_precision_and_scale::<
+                        Decimal128Type,
+                    >(precision, scale)
+                    .map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "Invalid decimal precision/scale in '{other}': {e}"
+                        ))
+                    })?;
+                    return Ok(DataType::Decimal128(precision, scale));
                 }
             }
             if let Some(args) = other

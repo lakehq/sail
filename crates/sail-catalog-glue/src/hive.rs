@@ -1,8 +1,8 @@
 /// Hive-style table creation logic for AWS Glue Data Catalog.
 use std::collections::{HashMap, HashSet};
 
-use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
+use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::{HiveCatalogFormat, HiveStorageFormat};
 use sail_catalog::provider::{
@@ -10,8 +10,8 @@ use sail_catalog::provider::{
 };
 use sail_common_datafusion::catalog::TableStatus;
 
-use crate::data_type::arrow_to_glue_type;
 use crate::GlueCatalogProvider;
+use crate::data_type::arrow_to_glue_type;
 
 pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
 

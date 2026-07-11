@@ -7,8 +7,8 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result,
-    ScalarValue, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result, ScalarValue,
+    TableReference, plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, Case};
 use datafusion_expr::expr_fn::not;
@@ -17,8 +17,8 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    col, lit, when, BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator,
-    ScalarUDF, UserDefinedLogicalNodeCore,
+    BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator, ScalarUDF,
+    UserDefinedLogicalNodeCore, col, lit, when,
 };
 use educe::Educe;
 use log::trace;
@@ -35,10 +35,10 @@ pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 pub use sail_common_datafusion::datasource::{
-    DeltaCheckConstraintExpr, MergeAssignment, MergeInfo, MergeIntoOptions, MergeMatchedAction,
-    MergeMatchedClause, MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause,
-    MergeNotMatchedByTargetAction, MergeNotMatchedByTargetClause, MergeTargetInfo,
-    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+    DeltaCheckConstraintExpr, MERGE_SOURCE_METRIC_COLUMN, MergeAssignment, MergeInfo,
+    MergeIntoOptions, MergeMatchedAction, MergeMatchedClause, MergeNotMatchedBySourceAction,
+    MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction, MergeNotMatchedByTargetClause,
+    MergeTargetInfo, OPERATION_COLUMN,
 };
 use sail_common_datafusion::datasource::{OptionLayer, RowLevelOperationType};
 
@@ -492,8 +492,8 @@ pub fn expand_merge(
                 .collect()
         })
     };
-    trace!("resolved target names: {:?}", &desired_target_names);
-    trace!("resolved source names: {:?}", &desired_source_names);
+    trace!("resolved target names: {:?}", desired_target_names);
+    trace!("resolved source names: {:?}", desired_source_names);
 
     let _target_relation = options.target_alias.as_ref().map(|a| TableReference::Bare {
         table: a.clone().into(),
@@ -510,7 +510,7 @@ pub fn expand_merge(
         .collect();
     trace!(
         "target scan fields pre-projection: {:?}",
-        &target_scan_fields
+        target_scan_fields
     );
 
     let mut target_proj_exprs: Vec<Expr> = target_plan
@@ -686,11 +686,11 @@ pub fn expand_merge(
         .collect::<Result<Vec<_>>>()?;
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
-        &options.join_key_pairs,
-        &options.matched_clauses,
-        &options.not_matched_by_source_clauses,
-        &options.not_matched_by_target_clauses,
-        &options.on_condition
+        options.join_key_pairs,
+        options.matched_clauses,
+        options.not_matched_by_source_clauses,
+        options.not_matched_by_target_clauses,
+        options.on_condition
     );
 
     // Detect insert-only MERGE that can use fast append (no touched files).
@@ -904,7 +904,7 @@ fn build_default_merge_expansion(
         path_column,
         row_index_column,
     )?;
-    trace!("projection exprs: {:?}", &projection_exprs);
+    trace!("projection exprs: {:?}", projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
@@ -974,11 +974,11 @@ fn append_presence_projection(
         .map(|f| Expr::Column(Column::from_name(f.name().clone())))
         .collect();
 
-    if let Some(path_name) = path_column {
-        if schema.index_of_column_by_name(None, path_name).is_none() {
-            let path_expr = lit(ScalarValue::Utf8(None));
-            exprs.push(path_expr.alias(path_name.to_string()));
-        }
+    if let Some(path_name) = path_column
+        && schema.index_of_column_by_name(None, path_name).is_none()
+    {
+        let path_expr = lit(ScalarValue::Utf8(None));
+        exprs.push(path_expr.alias(path_name.to_string()));
     }
 
     exprs.push(lit(true).alias(present_col));
@@ -1017,10 +1017,10 @@ fn can_fast_append_insert_only(
     };
 
     for clause in &options.not_matched_by_target_clauses {
-        if let Some(cond) = &clause.condition {
-            if references_target(&cond.expr)? {
-                return Ok(false);
-            }
+        if let Some(cond) = &clause.condition
+            && references_target(&cond.expr)?
+        {
+            return Ok(false);
         }
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {}
@@ -1741,17 +1741,16 @@ fn rewrite_merge_columns(
     source_map: &HashMap<String, String>,
 ) -> Result<Expr> {
     expr.transform(|expr| {
-        if let Expr::Column(col) = &expr {
-            if let Some(new_name) = target_map
+        if let Expr::Column(col) = &expr
+            && let Some(new_name) = target_map
                 .get(&col.name)
                 .or_else(|| source_map.get(&col.name))
-            {
-                return Ok(Transformed::yes(Expr::Column(Column {
-                    relation: None,
-                    name: new_name.clone(),
-                    spans: col.spans.clone(),
-                })));
-            }
+        {
+            return Ok(Transformed::yes(Expr::Column(Column {
+                relation: None,
+                name: new_name.clone(),
+                spans: col.spans.clone(),
+            })));
         }
         Ok(Transformed::no(expr))
     })

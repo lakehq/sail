@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, Date32Builder, Int16Array, Int32Array, Int64Array, Int8Array,
+    Array, ArrayRef, AsArray, Date32Builder, Int8Array, Int16Array, Int32Array, Int64Array,
     ListArray, ListBuilder, NullBufferBuilder, TimestampMicrosecondBuilder,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{
-    ArrowNativeType, DataType, Date32Type, Field, Int16Type, Int32Type, Int64Type, Int8Type,
+    ArrowNativeType, DataType, Date32Type, Field, Int8Type, Int16Type, Int32Type, Int64Type,
     IntervalMonthDayNanoType, IntervalUnit, TimeUnit, TimestampMicrosecondType,
 };
 use datafusion::arrow::temporal_conversions::as_datetime_with_timezone;
-use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -192,10 +192,12 @@ fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
             ),
         )?;
         let mut current = start;
-        let mut current_dt = as_datetime_with_timezone::<TimestampMicrosecondType>(current, start_tz)
-            .ok_or(exec_datafusion_err!(
-                "Spark `sequence` function cannot generate timestamp for start: {current}: {start_tz:?}"
-            ))?;
+        let mut current_dt = as_datetime_with_timezone::<TimestampMicrosecondType>(
+            current, start_tz,
+        )
+        .ok_or(exec_datafusion_err!(
+            "Spark `sequence` function cannot generate timestamp for start: {current}: {start_tz:?}"
+        ))?;
 
         let values = from_fn(|| {
             if (negative && current_dt < stop_dt) || (!negative && current_dt > stop_dt) {
@@ -347,7 +349,7 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 macro_rules! impl_sequence_for_type {
-    ($name:ident, $native_type:ty, $array_type:ty, $array_builder:ty, $data_type:expr, $zero:expr, $one:expr, $max:expr) => {
+    ($name:ident, $native_type:ty, $array_type:ty, $array_builder:ty, $data_type:expr_2021, $zero:expr_2021, $one:expr_2021, $max:expr_2021) => {
         fn $name(args: &[ArrayRef]) -> Result<ArrayRef> {
             let (start_array, stop_array, step_array) = match args.len() {
                 1 => (None, args[0].as_primitive::<$array_type>(), None),

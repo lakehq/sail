@@ -20,14 +20,14 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, LargeListArray, ListArr
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
 use crate::scalar::array::lambda_utils::{
-    coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair, ListValuesResult,
+    ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
 };
 
 /// Like [`super::spark_array_filter::SparkArrayFilter`], the physical lambda
@@ -215,7 +215,7 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
-    use datafusion_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+    use datafusion_expr::{Expr, HigherOrderUDF, col, lambda, lit};
     use datafusion_physical_expr::create_physical_expr;
 
     use super::*;
