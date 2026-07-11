@@ -17,7 +17,7 @@ What maintainers can rely on today:
 - Kerberos SASL frame wrapping (`auth-int` / `auth-conf`) with configurable minimum QOP (`min_sasl_qop`).
 - HMS endpoint lists with automatic failover on retryable transport/Thrift errors.
 - Basic metadata CRUD for databases and tables through `HmsCatalogProvider`.
-- Table format resolution: when reading existing HMS metadata, Sail preserves the recorded provider and resolves its authoritative location without filtering providers by current execution support. Operations on the table are governed by the table format execution layer; see [Data Sources](../../guide/sources/index.md) for the supported set.
+- Table format resolution: Sail preserves the provider and resolves the location recorded in existing HMS metadata. The table format execution layer determines whether an operation is supported; see [Data Sources](../../guide/sources/index.md) for the supported set.
 - Iceberg-in-HMS tables: Sail detects HMS-registered Iceberg tables, resolves their metadata location, reads via the Iceberg table provider, and commits new snapshots under a per-table HMS lock with compare-and-swap precondition checking (`crates/sail-catalog-hms/src/managed_table.rs`).
 - A self-contained Kerberos integration harness built with `testcontainers`.
 - A format interop harness (`python/pysail/tests/spark/catalog/hms/`) that round-trips tables between JVM Spark and Sail through a real HMS + MinIO.

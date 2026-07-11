@@ -18,7 +18,7 @@ The following areas are supported:
 - HMS high-availability URI lists with endpoint failover.
 - Flat database namespaces.
 - Database, table, and view metadata stored in HMS.
-- Table format resolution: when reading existing HMS metadata, Sail preserves the recorded provider and resolves its authoritative location without filtering providers by current execution support. Whether Sail can operate on the table depends on [Sail's data source support](../sources/index.md), not on HMS metadata conversion. Metadata-only listing and description remain available for unregistered providers; operations that need the format implementation fail later during planning.
+- Table format resolution: Sail resolves the provider and location recorded in existing HMS metadata. Support for individual formats is documented in [Data Sources](../sources/index.md).
 
 The following areas are not implemented yet:
 
