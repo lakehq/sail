@@ -175,6 +175,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 .default_partition_spec()
                 .cloned()
                 .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
+            ensure_unpartitioned_equality_delete_spec(&default_spec)?;
             let data_dir = writer_config.resolve_data_dir(&table_meta);
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
@@ -189,14 +190,6 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                     continue;
                 }
                 delete_writer_common::ensure_equality_delete_writes(&table_meta)?;
-                if !default_spec.is_unpartitioned() {
-                    // TODO: Group rows by partition and write partition-scoped delete files.
-                    return Err(DataFusionError::NotImplemented(
-                        "Iceberg equality delete writes for partitioned tables are not supported yet"
-                            .to_string(),
-                    ));
-                }
-
                 let delete_batch = delete_spec.project_batch(&batch)?;
                 let row_count = delete_batch.num_rows();
                 total_rows = total_rows
@@ -357,10 +350,28 @@ pub(crate) fn ensure_full_row_equality_delete_schema(
 
 pub(crate) fn ensure_full_row_equality_delete_preflight(table_meta: &TableMetadata) -> Result<()> {
     delete_writer_common::ensure_equality_delete_writes(table_meta)?;
+    let default_spec = table_meta
+        .default_partition_spec()
+        .cloned()
+        .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
+    ensure_unpartitioned_equality_delete_spec(&default_spec)?;
     let current_schema = table_meta.current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
     })?;
     ensure_full_row_equality_delete_schema(current_schema)
+}
+
+fn ensure_unpartitioned_equality_delete_spec(
+    partition_spec: &crate::spec::PartitionSpec,
+) -> Result<()> {
+    if partition_spec.is_unpartitioned() {
+        Ok(())
+    } else {
+        Err(DataFusionError::NotImplemented(
+            "Iceberg equality delete writes for partitioned tables are not supported yet"
+                .to_string(),
+        ))
+    }
 }
 
 fn validate_equality_delete_type(name: &str, ty: &Type) -> Result<()> {

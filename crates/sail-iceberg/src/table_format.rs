@@ -172,6 +172,11 @@ impl TableFormat for IcebergTableFormat {
             read_case_sensitive: true,
         };
         let provider = build_iceberg_provider(ctx, source_info).await?;
+        let expected_snapshot_id = Some(
+            provider
+                .current_snapshot()
+                .map(|snapshot| snapshot.snapshot_id()),
+        );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
         let raw_input_schema = table_source.schema().to_dfschema_ref()?;
         let target_scan = LogicalPlan::TableScan(TableScan::try_new(
@@ -191,7 +196,8 @@ impl TableFormat for IcebergTableFormat {
             table_name,
             options,
             lakehouse_table,
-        );
+        )
+        .with_expected_snapshot_id(expected_snapshot_id);
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),

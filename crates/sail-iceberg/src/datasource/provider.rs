@@ -757,15 +757,15 @@ impl TableProvider for IcebergTableProvider {
             )));
         };
 
-        if self.metadata_as_data_read {
-            return self
-                .scan_metadata_as_data(session, projection, filters, limit)
-                .await;
-        }
-
         if self.file_column_name.is_some() || self.row_index_column_name.is_some() {
             return self
                 .scan_with_merge_metadata(session, projection, filters, limit)
+                .await;
+        }
+
+        if self.metadata_as_data_read {
+            return self
+                .scan_metadata_as_data(session, projection, filters, limit)
                 .await;
         }
 

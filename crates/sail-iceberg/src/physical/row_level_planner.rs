@@ -166,11 +166,14 @@ async fn plan_iceberg_delete(
         writer_options.lakehouse_table.clone(),
     ));
 
-    Ok(Arc::new(IcebergCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(delete_writer)),
-        table_url,
-        writer_options.lakehouse_table.clone(),
-    )))
+    Ok(Arc::new(
+        IcebergCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(delete_writer)),
+            table_url,
+            writer_options.lakehouse_table.clone(),
+        )
+        .with_expected_snapshot_id(node.expected_snapshot_id()),
+    ))
 }
 
 fn ensure_current_row_level_mode(table: &Table, command: RowLevelCommand) -> Result<()> {

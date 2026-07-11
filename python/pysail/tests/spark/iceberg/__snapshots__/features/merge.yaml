@@ -26,8 +26,7 @@ data:
                                       ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                         MonotonicIdExec: col=__sail_merge_target_row_id
                                           IcebergMergeMetadataExec: data_file=file://<tmp>/iceberg_merge_plan/data/part-<uuid>.parquet
-                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                              DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag], file_type=parquet
+                                            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag], file_type=parquet
                   ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, 3 as __sail_merge_source_metric]
                     PlaceholderRowExec
           IcebergPositionDeleteWriterExec(table_path=file://<tmp>/iceberg_merge_plan/)
@@ -43,8 +42,7 @@ data:
                           ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                             MonotonicIdExec: col=__sail_merge_target_row_id
                               IcebergMergeMetadataExec: data_file=file://<tmp>/iceberg_merge_plan/data/part-<uuid>.parquet
-                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag], file_type=parquet
+                                DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag], file_type=parquet
 ---
 name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests"
 data:

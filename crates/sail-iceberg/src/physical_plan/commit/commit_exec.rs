@@ -1162,6 +1162,7 @@ fn commit_conflict_error() -> DataFusionError {
 #[expect(clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::{Arc, Barrier, Mutex};
 
     use super::*;
     use crate::spec::FormatVersion;
@@ -1195,14 +1196,30 @@ mod tests {
     }
 
     #[test]
-    fn stale_planned_snapshot_requirement_rejects_new_branch_head() {
-        let metadata = table_metadata_at_snapshot(Some(2));
-        let requirement = TableRequirement::RefSnapshotIdMatch {
-            r#ref: MAIN_BRANCH.to_string(),
-            snapshot_id: Some(1),
-        };
+    fn planned_delete_snapshot_requirement_rejects_concurrent_branch_advance() {
+        let metadata = Arc::new(Mutex::new(table_metadata_at_snapshot(Some(1))));
+        let barrier = Arc::new(Barrier::new(2));
+        let delete_metadata = Arc::clone(&metadata);
+        let delete_barrier = Arc::clone(&barrier);
+        let delete = std::thread::spawn(move || {
+            let requirement = {
+                let metadata = delete_metadata.lock().expect("metadata lock");
+                expected_snapshot_requirement(Some(metadata.current_snapshot_id))
+                    .expect("DELETE must capture its read snapshot")
+            };
+            delete_barrier.wait();
+            delete_barrier.wait();
+            let metadata = delete_metadata.lock().expect("metadata lock");
+            IcebergCommitExec::validate_requirements(Some(&metadata), &[requirement])
+        });
 
-        let error = IcebergCommitExec::validate_requirements(Some(&metadata), &[requirement])
+        barrier.wait();
+        metadata.lock().expect("metadata lock").current_snapshot_id = Some(2);
+        barrier.wait();
+
+        let error = delete
+            .join()
+            .expect("DELETE validation thread")
             .expect_err("planned snapshot 1 must conflict with current snapshot 2");
 
         assert!(error.to_string().contains("expected snapshot Some(1)"));

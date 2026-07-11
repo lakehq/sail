@@ -312,6 +312,11 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             )
             """
         )
+        empty_table_metadata_path = _latest_metadata_path(table_path)
+        with pytest.raises(Exception, match="partitioned tables are not supported"):
+            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
+        assert _latest_metadata_path(table_path) == empty_table_metadata_path
+
         spark.sql(
             """
             INSERT INTO iceberg_sql_equality_delete_partitioned_reject
@@ -322,6 +327,10 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             """
         )
         before_metadata_path = _latest_metadata_path(table_path)
+
+        with pytest.raises(Exception, match="partitioned tables are not supported"):
+            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'missing'").collect()
+        assert _latest_metadata_path(table_path) == before_metadata_path
 
         with pytest.raises(Exception, match="partitioned tables are not supported"):
             spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
