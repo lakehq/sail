@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, PrimitiveArray, PrimitiveBuilder, StringArrayType,
+    Array, ArrayRef, AsArray, PrimitiveArray, PrimitiveBuilder, StringArrayType, new_null_array,
 };
 use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -84,10 +84,12 @@ impl ScalarUDFImpl for SparkTimeTrunc {
                     (Some(unit), Some(time)) => {
                         let divisor = match truncation_divisor(unit) {
                             Some(d) => d,
-                            None => return exec_err!(
-                                "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                                unit
-                            ),
+                            None => {
+                                return exec_err!(
+                                    "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
+                                    unit
+                                );
+                            }
                         };
                         Some(time - (time % divisor))
                     }
@@ -116,10 +118,12 @@ impl ScalarUDFImpl for SparkTimeTrunc {
                     Some(unit) => {
                         let divisor = match truncation_divisor(unit) {
                             Some(d) => d,
-                            None => return exec_err!(
-                                "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                                unit
-                            ),
+                            None => {
+                                return exec_err!(
+                                    "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
+                                    unit
+                                );
+                            }
                         };
                         let times = time_array.as_primitive::<Time64MicrosecondType>();
                         let result = times
@@ -195,7 +199,7 @@ where
                     return exec_err!(
                         "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
                         unit
-                    )
+                    );
                 }
             },
         }

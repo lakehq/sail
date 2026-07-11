@@ -8,7 +8,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use sail_logical_plan::range::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;

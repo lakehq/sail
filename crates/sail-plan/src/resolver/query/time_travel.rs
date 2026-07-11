@@ -8,8 +8,8 @@ use datafusion_expr::{EmptyRelation, Expr, Limit, LogicalPlan, Projection};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_time_travel_options(

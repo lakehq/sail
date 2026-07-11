@@ -734,9 +734,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.152.0"
+version = "1.153.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "267d3459c708985a1c1472bb2eb8def3b8673abbcdb3e8057d73e40fa5a7f5b4"
+checksum = "48b33661f9c0b02b6c23d42646f43ea9eab6db37fdcbd80f85fabe72a70b9d8e"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -857,9 +857,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-async"
-version = "1.2.14"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffcaf626bdda484571968400c326a244598634dc75fd451325a54ad1a59acfc"
+checksum = "f02e407fb3b54891734224b9ffac8a71fdd35f542500fa1af95754a6b2beb316"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -1009,9 +1009,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.5.0"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32b42fcf341259d85ca10fac9a2f6448a8ec691c6955a18e45bc3b71a85fab85"
+checksum = "d6dc683efb34b9e755675b37fedbe0103141e5b6df7bdc9eb6967756a8c167d8"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -1448,9 +1448,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.12.0"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 dependencies = [
  "serde",
 ]
@@ -3016,9 +3016,9 @@ dependencies = [
 
 [[package]]
 name = "env_filter"
-version = "1.0.1"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e90c2accc4b07a8456ea0debdc2e7587bdd890680d71173a15d4ae604f6eef"
+checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
 dependencies = [
  "log",
  "regex",
@@ -3026,9 +3026,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.11.10"
+version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
+checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
 dependencies = [
  "anstream",
  "anstyle",
@@ -3104,7 +3104,7 @@ dependencies = [
  "fastrace-macro",
  "parking_lot",
  "pin-project",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rtrb",
  "serde",
 ]
@@ -3575,17 +3575,6 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
@@ -3739,12 +3728,9 @@ dependencies = [
 
 [[package]]
 name = "html-escape"
-version = "0.2.13"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d1ad449764d627e22bfd7cd5e8868264fc9236e07c752972b4080cd351cb476"
-dependencies = [
- "utf8-width",
-]
+checksum = "46c1ff2d1cbf39efe5af0900ced8a069b5e61557a17544eb0c4a50239937389e"
 
 [[package]]
 name = "http"
@@ -5548,7 +5534,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "quick-xml",
- "rand 0.10.1",
+ "rand 0.10.2",
  "reqwest 0.12.28",
  "ring",
  "rustls-pki-types",
@@ -5581,17 +5567,6 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "openapiv3"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c8d427828b22ae1fff2833a03d8486c2c881367f1c336349f307f321e7f4d05"
-dependencies = [
- "indexmap 2.14.0",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "openssl-probe"
@@ -6391,72 +6366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "progenitor"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2326f73d5326257514712436680ef8da4543ee47c0e9e0d501545c8909ee12e4"
-dependencies = [
- "progenitor-client",
- "progenitor-impl",
- "progenitor-macro",
-]
-
-[[package]]
-name = "progenitor-client"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71a0beb939758f229cbae70a4889c7c76a4ac0e90f0b1e7ae9b4636a927d1018"
-dependencies = [
- "bytes",
- "futures-core",
- "percent-encoding",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_urlencoded",
-]
-
-[[package]]
-name = "progenitor-impl"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90f6d9109b04e005bbdec84cacec7e81cc15533f2b5dc505f0defc212d270c15"
-dependencies = [
- "heck",
- "http 1.4.2",
- "indexmap 2.14.0",
- "openapiv3",
- "proc-macro2",
- "quote",
- "regex",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "syn 2.0.118",
- "thiserror 2.0.18",
- "typify",
- "unicode-ident",
-]
-
-[[package]]
-name = "progenitor-macro"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46596c574831739c661f22923fe587399c61f5e3e79b73cc9a93644c72248d84"
-dependencies = [
- "openapiv3",
- "proc-macro2",
- "progenitor-impl",
- "quote",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "serde_tokenstream",
- "serde_yaml",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "proptest"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6819,9 +6728,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -6890,7 +6799,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
- "rand 0.10.1",
+ "rand 0.10.2",
 ]
 
 [[package]]
@@ -7083,16 +6992,6 @@ dependencies = [
  "icu_casemap",
  "icu_collections 1.5.0",
  "icu_properties 1.5.1",
-]
-
-[[package]]
-name = "regress"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2057b2325e68a893284d1538021ab90279adac1139957ca2a74426c6f118fb48"
-dependencies = [
- "hashbrown 0.16.1",
- "memchr",
 ]
 
 [[package]]
@@ -7335,7 +7234,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7424,7 +7323,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail-build-scripts"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "lazy_static",
  "prettyplease",
@@ -7434,11 +7333,12 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn 2.0.118",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "sail-cache"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "datafusion",
@@ -7451,7 +7351,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7472,11 +7372,12 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-glue",
  "aws-smithy-types",
  "sail-catalog",
@@ -7487,7 +7388,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-hms"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7511,13 +7412,14 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
  "log",
  "percent-encoding",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -7526,6 +7428,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "url",
  "uuid",
@@ -7534,7 +7437,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -7544,7 +7447,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "object_store",
@@ -7558,7 +7461,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7572,32 +7475,30 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
  "chrono",
- "prettyplease",
- "progenitor",
- "progenitor-client",
+ "percent-encoding",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "secrecy",
  "serde",
  "serde_json",
- "serde_yaml",
- "syn 2.0.118",
  "tempfile",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "wiremock",
 ]
 
 [[package]]
 name = "sail-cli"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "clap",
  "log",
@@ -7615,7 +7516,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -7637,7 +7538,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7673,7 +7574,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-hms"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "pilota",
  "volo",
@@ -7683,7 +7584,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -7723,7 +7624,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7768,7 +7669,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow-flight",
  "chrono",
@@ -7784,7 +7685,7 @@ dependencies = [
  "object_store",
  "prost",
  "prost-build",
- "rand 0.10.1",
+ "rand 0.10.2",
  "readonly",
  "sail-catalog",
  "sail-catalog-system",
@@ -7813,7 +7714,7 @@ dependencies = [
 
 [[package]]
 name = "sail-flight"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -7842,7 +7743,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -7871,7 +7772,7 @@ dependencies = [
  "parquet-variant-compute",
  "parquet-variant-json",
  "percent-encoding",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rand_chacha 0.10.0",
  "rand_distr",
  "regex",
@@ -7888,7 +7789,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "clap",
  "lazy_static",
@@ -7900,7 +7801,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "apache-avro",
  "arrow-schema",
@@ -7938,7 +7839,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7947,7 +7848,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -7963,7 +7864,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -7997,7 +7898,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -8007,7 +7908,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8023,7 +7924,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -8046,7 +7947,7 @@ dependencies = [
  "log",
  "object_store",
  "parquet-variant-compute",
- "rand 0.10.1",
+ "rand 0.10.2",
  "regex",
  "ryu",
  "sail-catalog",
@@ -8061,6 +7962,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -8069,7 +7971,7 @@ dependencies = [
 
 [[package]]
 name = "sail-pyarrow"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -8079,7 +7981,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "fastrace",
  "log",
@@ -8094,7 +7996,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8114,7 +8016,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "axum",
  "fastrace",
@@ -8130,7 +8032,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8175,7 +8077,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-stream",
@@ -8221,7 +8123,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "chumsky 0.12.0",
@@ -8235,7 +8137,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8244,7 +8146,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chumsky 0.12.0",
  "either",
@@ -8261,7 +8163,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -8356,20 +8258,6 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
-dependencies = [
- "chrono",
- "dyn-clone",
- "schemars_derive",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
@@ -8390,18 +8278,6 @@ dependencies = [
  "ref-cast",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "schemars_derive"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde_derive_internals",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -8470,10 +8346,6 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
-dependencies = [
- "serde",
- "serde_core",
-]
 
 [[package]]
 name = "seq-macro"
@@ -8547,17 +8419,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_derive_internals"
-version = "0.29.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "serde_json"
 version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8608,18 +8469,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "serde_tokenstream"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c49585c52c01f13c5c2ebb333f14f6885d76daa768d8a037d28017ec538c69"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -9053,7 +8902,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -9646,53 +9495,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
-name = "typify"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7144144e97e987c94758a3017c920a027feac0799df325d6df4fc8f08d02068e"
-dependencies = [
- "typify-impl",
- "typify-macro",
-]
-
-[[package]]
-name = "typify-impl"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "062879d46aa4c9dfe0d33b035bbaf512da192131645d05deacb7033ec8581a09"
-dependencies = [
- "heck",
- "log",
- "proc-macro2",
- "quote",
- "regress",
- "schemars 0.8.22",
- "semver",
- "serde",
- "serde_json",
- "syn 2.0.118",
- "thiserror 2.0.18",
- "unicode-ident",
-]
-
-[[package]]
-name = "typify-macro"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9708a3ceb6660ba3f8d2b8f0567e7d4b8b198e2b94d093b8a6077a751425de9e"
-dependencies = [
- "proc-macro2",
- "quote",
- "schemars 0.8.22",
- "semver",
- "serde",
- "serde_json",
- "serde_tokenstream",
- "syn 2.0.118",
- "typify-impl",
-]
-
-[[package]]
 name = "ucd-trie"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9834,12 +9636,6 @@ name = "utf16_iter"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
-
-[[package]]
-name = "utf8-width"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091"
 
 [[package]]
 name = "utf8-zero"
@@ -10265,15 +10061,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

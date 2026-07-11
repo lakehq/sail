@@ -9,7 +9,7 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def remote():
     with spark_connect_server(envs={"SAIL_OPTIMIZER__ENABLE_JOIN_REORDER": "true"}) as server:
         yield server.remote

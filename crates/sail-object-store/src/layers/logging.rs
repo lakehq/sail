@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use fastrace::Span;
 use fastrace_futures::StreamExt;
-use futures::stream::BoxStream;
 use futures::FutureExt;
+use futures::stream::BoxStream;
 use log::debug;
 use object_store::path::Path;
 use object_store::{

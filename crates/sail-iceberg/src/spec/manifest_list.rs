@@ -18,7 +18,7 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest_list.rs
 
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value as avro_from_value};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::FormatVersion;
@@ -86,7 +86,9 @@ impl ManifestList {
                             if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
                                 entries.push(mf);
                             } else {
-                                let err = format!("Avro decode error: Failed to deserialize Avro value into value: {value:?}");
+                                let err = format!(
+                                    "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
+                                );
                                 return Err(err);
                             }
                         }
@@ -107,7 +109,9 @@ impl ManifestList {
                                 if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
                                     entries.push(mf);
                                 } else {
-                                    let err = format!("Avro decode error: Failed to deserialize Avro value into value: {value:?}");
+                                    let err = format!(
+                                        "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
+                                    );
                                     return Err(err);
                                 }
                             }

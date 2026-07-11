@@ -17,21 +17,21 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-    OffsetBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray, OffsetBufferBuilder,
+    OffsetSizeTrait, new_empty_array,
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{filter as arrow_filter, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
 use crate::scalar::array::lambda_utils::{
-    coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair, ListValuesResult,
+    ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
 };
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
@@ -287,7 +287,7 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
-    use datafusion_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+    use datafusion_expr::{Expr, HigherOrderUDF, col, lambda, lit};
     use datafusion_physical_expr::create_physical_expr;
 
     use super::*;

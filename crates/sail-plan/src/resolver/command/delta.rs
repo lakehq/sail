@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
-    col, lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col, lit,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -14,20 +14,20 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry,
+    OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::check_constraints::{
-    apply_delta_check_constraint_filter, DeltaCheckConstraintExpr, DeltaConstraintViolation,
+    DeltaCheckConstraintExpr, DeltaConstraintViolation, apply_delta_check_constraint_filter,
 };
 
 use super::merge::merge_disambiguate_unqualified_plan_ids;
 use super::write::{TableInfo, WriteColumnMatch};
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 const DELTA_FORMAT: &str = "delta";
 const DELTA_CHECK_CONSTRAINT_PREFIX: &str = "delta.constraints.";
@@ -48,12 +48,12 @@ impl PlanResolver<'_> {
         operation: spec::AlterTableOperation,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if let Some(key) = delta_constraint_property_mutation_key(&operation) {
-            if self.alter_table_target_is_delta(&table, if_exists).await? {
-                return Err(PlanError::invalid(format!(
-                    "[DELTA_ADD_CONSTRAINTS] Please use ALTER TABLE ADD CONSTRAINT to add CHECK constraints. Invalid property: {key}"
-                )));
-            }
+        if let Some(key) = delta_constraint_property_mutation_key(&operation)
+            && self.alter_table_target_is_delta(&table, if_exists).await?
+        {
+            return Err(PlanError::invalid(format!(
+                "[DELTA_ADD_CONSTRAINTS] Please use ALTER TABLE ADD CONSTRAINT to add CHECK constraints. Invalid property: {key}"
+            )));
         }
         match operation {
             spec::AlterTableOperation::AddCheckConstraint { name, expression } => {
@@ -298,7 +298,9 @@ impl PlanResolver<'_> {
         let validation = LogicalPlanBuilder::new(scan)
             .filter(Expr::IsNotTrue(Box::new(resolved_expr)))?
             .limit(0, Some(1))?
-            .project(vec![validation_error.alias("__delta_constraint_validation")])?
+            .project(vec![
+                validation_error.alias("__delta_constraint_validation"),
+            ])?
             .build()?;
 
         let command = self.resolve_catalog_command(CatalogCommand::AlterTable {

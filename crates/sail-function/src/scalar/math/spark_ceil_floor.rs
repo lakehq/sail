@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray};
+use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, Float32Array, Float64Array};
+use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Decimal128Type, Field, FieldRef,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
 };
+use datafusion::arrow::util::display::FormatOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    expr, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    expr,
 };
 use num::integer::{div_ceil, div_floor};
 use num::traits::CheckedAdd;
@@ -22,23 +24,31 @@ use crate::error::{
 };
 use crate::scalar::math::utils::decimal::round_decimal_base;
 
+fn extract_call_args<'a>(
+    name: &str,
+    args: &'a [ColumnarValue],
+) -> Result<(&'a ColumnarValue, &'a Option<i32>)> {
+    match args.len() {
+        1 => Ok((&args[0], &None)),
+        2 => match &args[1] {
+            ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok((&args[0], value)),
+            other => Err(unsupported_data_type_exec_err(
+                name,
+                "Target scale must be Integer literal",
+                &other.data_type(),
+            )),
+        },
+        n => Err(invalid_arg_count_exec_err(name, (1, 2), n)),
+    }
+}
+
 fn ceil_floor_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<DataType>> {
     if arg_types.len() == 1 {
-        if arg_types[0].is_numeric() {
-            Ok(vec![ceil_floor_coerce_first_arg(name, &arg_types[0])?])
-        } else {
-            Err(unsupported_data_types_exec_err(
-                name,
-                "Numeric Type",
-                arg_types,
-            ))
-        }
+        Ok(vec![ceil_floor_coerce_first_arg(name, &arg_types[0])?])
     } else if arg_types.len() == 2 {
-        if arg_types[0].is_numeric() && arg_types[1].is_integer() {
-            Ok(vec![
-                ceil_floor_coerce_first_arg(name, &arg_types[0])?,
-                DataType::Int32,
-            ])
+        let first = ceil_floor_coerce_first_arg(name, &arg_types[0])?;
+        if arg_types[1].is_integer() {
+            Ok(vec![first, DataType::Int32])
         } else {
             Err(unsupported_data_types_exec_err(
                 name,
@@ -94,10 +104,12 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result
                     &target_scale.data_type(),
                 )),
             }?;
-            if target_scale < -38 {
+            // Decimal128 can hold 10^37 (38 digits: 1 followed by 37 zeros) but not 10^38.
+            // target_scale = -n produces a result that's a multiple of 10^n, so n ≤ 37.
+            if target_scale < -37 {
                 return Err(generic_exec_err(
                     name,
-                    "Target scale must be greater than -38",
+                    "Target scale must be greater than or equal to -37",
                 ));
             }
             let (precision, scale) = match expr {
@@ -133,36 +145,36 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result
             ))
         }
     } else {
+        // Defensive: DataFusion may call `return_field_from_args` in paths
+        // that bypass `coerce_types`. Surface a precise arity error.
         Err(invalid_arg_count_exec_err(name, (1, 2), arg_fields.len()))
     }?;
     Ok(Arc::new(Field::new(name.to_string(), return_type, true)))
 }
 
 fn ceil_floor_coerce_first_arg(name: &str, arg_type: &DataType) -> Result<DataType> {
-    if arg_type.is_numeric() {
-        match arg_type {
-            DataType::UInt8 => Ok(DataType::Int16),
-            DataType::UInt16 => Ok(DataType::Int32),
-            DataType::UInt32 | DataType::UInt64 => Ok(DataType::Int64),
-            DataType::Decimal256(precision, scale) => {
-                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                    Ok(DataType::Decimal128(*precision, *scale))
-                } else {
-                    Err(unsupported_data_type_exec_err(
-                        name,
-                        format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                        arg_type,
-                    ))
-                }
+    match arg_type {
+        DataType::Null => Ok(DataType::Float64),
+        DataType::UInt8 => Ok(DataType::Int16),
+        DataType::UInt16 => Ok(DataType::Int32),
+        DataType::UInt32 | DataType::UInt64 => Ok(DataType::Int64),
+        DataType::Decimal256(precision, scale) => {
+            if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                Ok(DataType::Decimal128(*precision, *scale))
+            } else {
+                Err(unsupported_data_type_exec_err(
+                    name,
+                    format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
+                    arg_type,
+                ))
             }
-            other => Ok(other.clone()),
         }
-    } else {
-        Err(unsupported_data_type_exec_err(
+        other if other.is_numeric() => Ok(other.clone()),
+        other => Err(unsupported_data_type_exec_err(
             name,
             "First arg must be Numeric Type",
-            arg_type,
-        ))
+            other,
+        )),
     }
 }
 
@@ -199,30 +211,39 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
         _ => {}
     }
     // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
-    if let Expr::ScalarFunction(ref func) = arg {
-        if func.func.inner().is::<T>() && func.args.len() == 1 {
-            return Ok(ExprSimplifyResult::Simplified(arg));
-        }
+    if let Expr::ScalarFunction(ref func) = arg
+        && func.func.inner().is::<T>()
+        && func.args.len() == 1
+    {
+        return Ok(ExprSimplifyResult::Simplified(arg));
     }
     Ok(ExprSimplifyResult::Original(vec![arg]))
 }
 
+/// Spark-compatible `ceil` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
+    ansi_mode: bool,
 }
 
 impl Default for SparkCeil {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkCeil {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -251,25 +272,9 @@ impl ScalarUDFImpl for SparkCeil {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg_len = args.args.len();
-        let target_scale = if arg_len == 1 {
-            Ok(&None)
-        } else if arg_len == 2 {
-            let target_scale = &args.args[1];
-            match target_scale {
-                ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok(value),
-                _ => Err(unsupported_data_type_exec_err(
-                    "ceil",
-                    "Target scale must be Integer literal",
-                    &target_scale.data_type(),
-                )),
-            }
-        } else {
-            Err(invalid_arg_count_exec_err("ceil", (1, 2), arg_len))
-        }?;
-        let arg = &args.args[0];
+        let (arg, target_scale) = extract_call_args("ceil", &args.args)?;
         let return_type = args.return_field.data_type();
-        spark_ceil_floor("ceil", arg, target_scale, return_type)
+        spark_ceil_floor("ceil", arg, target_scale, return_type, self.ansi_mode)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -277,22 +282,30 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
+/// Spark-compatible `floor` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#floor>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFloor {
     signature: Signature,
+    ansi_mode: bool,
 }
 
 impl Default for SparkFloor {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkFloor {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -321,25 +334,9 @@ impl ScalarUDFImpl for SparkFloor {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg_len = args.args.len();
-        let target_scale = if arg_len == 1 {
-            Ok(&None)
-        } else if arg_len == 2 {
-            let target_scale = &args.args[1];
-            match target_scale {
-                ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok(value),
-                _ => Err(unsupported_data_type_exec_err(
-                    "floor",
-                    "Target scale must be Integer literal",
-                    &target_scale.data_type(),
-                )),
-            }
-        } else {
-            Err(invalid_arg_count_exec_err("floor", (1, 2), arg_len))
-        }?;
-        let arg = &args.args[0];
+        let (arg, target_scale) = extract_call_args("floor", &args.args)?;
         let return_type = args.return_field.data_type();
-        spark_ceil_floor("floor", arg, target_scale, return_type)
+        spark_ceil_floor("floor", arg, target_scale, return_type, self.ansi_mode)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -356,12 +353,28 @@ impl ScalarUDFImpl for SparkFloor {
     }
 }
 
+/// Safe cast options: overflow becomes NULL instead of erroring. Used in
+/// the Float→Decimal path when `spark.sql.ansi.enabled = false`.
+const SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: true,
+    format_options: FormatOptions::new(),
+};
+
 fn spark_ceil_floor(
     name: &str,
     arg: &ColumnarValue,
     target_scale: &Option<i32>,
     return_type: &DataType,
+    ansi_mode: bool,
 ) -> Result<ColumnarValue> {
+    // Float→Decimal cast options depend on ANSI mode:
+    //   ANSI=true  → None (default: safe=false) → overflow errors, matching Spark ANSI.
+    //   ANSI=false → Some(&SAFE_CAST_OPTIONS) → overflow becomes NULL, matching Spark non-ANSI.
+    let float_cast_options: Option<&CastOptions> = if ansi_mode {
+        None
+    } else {
+        Some(&SAFE_CAST_OPTIONS)
+    };
     if matches!(
         arg.data_type(),
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
@@ -525,9 +538,10 @@ fn spark_ceil_floor(
                 if let Some(target_scale) = *target_scale {
                     let (return_type_precision, return_type_scale) =
                         get_return_type_precision_scale(return_type)?;
-                    let arg = arg.cast_to(
+                    let masked = mask_non_finite_f32(arg);
+                    let arg = masked.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
-                        None,
+                        float_cast_options,
                     )?;
                     decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
@@ -560,9 +574,10 @@ fn spark_ceil_floor(
                 if let Some(target_scale) = *target_scale {
                     let (return_type_precision, return_type_scale) =
                         get_return_type_precision_scale(return_type)?;
-                    let arg = arg.cast_to(
+                    let masked = mask_non_finite_f64(arg);
+                    let arg = masked.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
-                        None,
+                        float_cast_options,
                     )?;
                     decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
@@ -585,7 +600,7 @@ fn spark_ceil_floor(
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
                             name,
-                            format!("{}", DataType::Float32).as_str(),
+                            format!("{}", DataType::Float64).as_str(),
                             &arg.data_type(),
                         )),
                     }
@@ -662,7 +677,50 @@ fn decimal128_ceil_floor(
     }
 }
 
-#[inline]
+/// Replace NaN and +/-Infinity values with NULL so they survive the cast to Decimal128.
+/// Spark semantics: `ceil(NaN, s)` and `ceil(+/-Infinity, s)` return NULL even under ANSI,
+/// because NaN/Inf have no valid decimal representation. Finite overflow is intentionally
+/// left to raise a cast error (matching Spark ANSI=true).
+fn mask_non_finite_f32(arg: &ColumnarValue) -> ColumnarValue {
+    match arg {
+        ColumnarValue::Scalar(ScalarValue::Float32(Some(v))) if !v.is_finite() => {
+            ColumnarValue::Scalar(ScalarValue::Float32(None))
+        }
+        ColumnarValue::Array(array) => {
+            let float_arr = array.as_primitive::<Float32Type>();
+            let masked: Float32Array = float_arr
+                .iter()
+                .map(|v| match v {
+                    Some(x) if !x.is_finite() => None,
+                    other => other,
+                })
+                .collect();
+            ColumnarValue::Array(Arc::new(masked) as ArrayRef)
+        }
+        other => other.clone(),
+    }
+}
+
+fn mask_non_finite_f64(arg: &ColumnarValue) -> ColumnarValue {
+    match arg {
+        ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) if !v.is_finite() => {
+            ColumnarValue::Scalar(ScalarValue::Float64(None))
+        }
+        ColumnarValue::Array(array) => {
+            let float_arr = array.as_primitive::<Float64Type>();
+            let masked: Float64Array = float_arr
+                .iter()
+                .map(|v| match v {
+                    Some(x) if !x.is_finite() => None,
+                    other => other,
+                })
+                .collect();
+            ColumnarValue::Array(Arc::new(masked) as ArrayRef)
+        }
+        other => other.clone(),
+    }
+}
+
 fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_scale: i32) -> i128 {
     // Round to powers of 10 to the left of decimal point when target_scale < 0
     if target_scale < 0 {
@@ -688,7 +746,10 @@ fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_sca
     } else {
         let scale_diff = target_scale - (scale as i32);
         if scale_diff >= 0 {
-            decimal * 10_i128.pow_wrapping(scale_diff as u32)
+            // target_scale >= input scale: no rounding needed. `round_decimal_base`
+            // keeps the return scale equal to the input scale, so the stored value
+            // is unchanged.
+            decimal
         } else {
             let abs_diff = (-scale_diff) as u32;
             if matches!(name, "ceil") {
@@ -790,11 +851,7 @@ fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
         ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
         ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
             let pow = 10_i128.checked_pow(*scale as u32)?;
-            if n % pow == 0 {
-                Some(n / pow)
-            } else {
-                None
-            }
+            if n % pow == 0 { Some(n / pow) } else { None }
         }
         _ => None,
     }

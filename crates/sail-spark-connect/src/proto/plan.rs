@@ -8,15 +8,15 @@ use sail_sql_analyzer::parser::{
 use sail_sql_analyzer::statement::from_ast_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+use crate::proto::data_type::{DEFAULT_FIELD_NAME, parse_spark_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::write_stream_operation_start::SinkDestination;
 use crate::spark::connect::{
-    plan, Catalog, CreateDataFrameViewCommand, MergeIntoTableCommand, Plan, Relation,
-    RelationCommon, StreamingForeachFunction, TransformWithStateInfo, WriteOperation,
-    WriteOperationV2, WriteStreamOperationStart,
+    Catalog, CreateDataFrameViewCommand, MergeIntoTableCommand, Plan, Relation, RelationCommon,
+    StreamingForeachFunction, TransformWithStateInfo, WriteOperation, WriteOperationV2,
+    WriteStreamOperationStart, plan,
 };
 
 struct RelationMetadata {
@@ -90,7 +90,7 @@ impl TryFrom<Plan> for spec::QueryPlan {
             plan::OpType::Root(relation) => relation,
             plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
             plan::OpType::CompressedOperation(_) => {
-                return Err(SparkError::unsupported("compressed operation"))
+                return Err(SparkError::unsupported("compressed operation"));
             }
         };
         relation.try_into()
@@ -274,7 +274,7 @@ impl TryFrom<RelType> for RelationNode {
                 let join_condition = join_condition.map(|x| x.try_into()).transpose()?;
                 let join_type = match JoinType::try_from(join_type)? {
                     JoinType::Unspecified => {
-                        return Err(SparkError::invalid("unspecified join type"))
+                        return Err(SparkError::invalid("unspecified join type"));
                     }
                     JoinType::Inner => spec::JoinType::Inner,
                     JoinType::FullOuter => spec::JoinType::FullOuter,
@@ -305,7 +305,7 @@ impl TryFrom<RelType> for RelationNode {
                     (Some(_), false) => {
                         return Err(SparkError::invalid(
                             "join with both condition and using columns",
-                        ))
+                        ));
                     }
                 };
                 Ok(RelationNode::Query(spec::QueryNode::Join(spec::Join {
@@ -331,7 +331,7 @@ impl TryFrom<RelType> for RelationNode {
                 let right_input = right_input.required("set operation right input")?;
                 let set_op_type = match SetOpType::try_from(set_op_type)? {
                     SetOpType::Unspecified => {
-                        return Err(SparkError::invalid("unspecified set operation type"))
+                        return Err(SparkError::invalid("unspecified set operation type"));
                     }
                     SetOpType::Union => spec::SetOpType::Union,
                     SetOpType::Intersect => spec::SetOpType::Intersect,
@@ -399,7 +399,7 @@ impl TryFrom<RelType> for RelationNode {
                     .collect::<SparkResult<Vec<_>>>()?;
                 let node = match GroupType::try_from(group_type)? {
                     GroupType::Unspecified => {
-                        return Err(SparkError::invalid("unspecified aggregate group type"))
+                        return Err(SparkError::invalid("unspecified aggregate group type"));
                     }
                     GroupType::Groupby => {
                         if pivot.is_some() {
@@ -454,7 +454,7 @@ impl TryFrom<RelType> for RelationNode {
                             .collect::<SparkResult<Vec<_>>>()?;
                         spec::QueryNode::Pivot(spec::Pivot {
                             input: Box::new(input),
-                            grouping,
+                            grouping: Some(grouping),
                             aggregate,
                             columns: vec![col.try_into()?],
                             values,
@@ -495,7 +495,7 @@ impl TryFrom<RelType> for RelationNode {
                 } = sql;
                 let positional_arguments = match (pos_args.is_empty(), pos_arguments.is_empty()) {
                     (false, false) => {
-                        return Err(SparkError::invalid("conflicting positional arguments"))
+                        return Err(SparkError::invalid("conflicting positional arguments"));
                     }
                     (false, true) => pos_args
                         .into_iter()
@@ -509,7 +509,7 @@ impl TryFrom<RelType> for RelationNode {
                 };
                 let named_arguments = match (args.is_empty(), named_arguments.is_empty()) {
                     (false, false) => {
-                        return Err(SparkError::invalid("conflicting named arguments"))
+                        return Err(SparkError::invalid("conflicting named arguments"));
                     }
                     (false, true) => args
                         .into_iter()
@@ -684,7 +684,7 @@ impl TryFrom<RelType> for RelationNode {
                 let input = input.required("with columns renamed input")?;
                 let rename_columns_map = match (rename_columns_map.is_empty(), renames.is_empty()) {
                     (false, false) => {
-                        return Err(SparkError::invalid("conflicting column renames"))
+                        return Err(SparkError::invalid("conflicting column renames"));
                     }
                     (false, true) => rename_columns_map
                         .into_iter()
@@ -1099,10 +1099,21 @@ impl TryFrom<RelType> for RelationNode {
                     .into_iter()
                     .map(|r| r.try_into())
                     .collect::<SparkResult<_>>()?;
-                Ok(RelationNode::Query(spec::QueryNode::WithRelations {
-                    root: Box::new(root.try_into()?),
-                    references,
-                }))
+                let root_plan: spec::Plan = root.try_into()?;
+                match root_plan {
+                    spec::Plan::Query(query_plan) => {
+                        Ok(RelationNode::Query(spec::QueryNode::WithRelations {
+                            root: Box::new(query_plan),
+                            references,
+                        }))
+                    }
+                    spec::Plan::Command(command_plan) => {
+                        Ok(RelationNode::Command(spec::CommandNode::WithRelations {
+                            root: Box::new(command_plan),
+                            references,
+                        }))
+                    }
+                }
             }
             RelType::Transpose(_) => Err(SparkError::todo("transpose")),
             RelType::UnresolvedTableValuedFunction(_) => {
@@ -1122,7 +1133,7 @@ impl TryFrom<RelType> for RelationNode {
                 let right = right.required("lateral join right")?;
                 let join_type = match JoinType::try_from(join_type)? {
                     JoinType::Unspecified => {
-                        return Err(SparkError::invalid("unspecified join type"))
+                        return Err(SparkError::invalid("unspecified join type"));
                     }
                     JoinType::Inner => spec::JoinType::Inner,
                     JoinType::FullOuter => spec::JoinType::FullOuter,
@@ -1697,7 +1708,7 @@ impl TryFrom<WriteOperation> for spec::Write {
                 let save_method = TableSaveMethod::try_from(save_method).required("save method")?;
                 let save_method = match save_method {
                     TableSaveMethod::Unspecified => {
-                        return Err(SparkError::invalid("unspecified save method"))
+                        return Err(SparkError::invalid("unspecified save method"));
                     }
                     TableSaveMethod::SaveAsTable => spec::TableSaveMethod::SaveAsTable,
                     TableSaveMethod::InsertInto => spec::TableSaveMethod::InsertInto,
@@ -1894,7 +1905,7 @@ fn merge_matched_clause_from_expression(
         sc::merge_action::ActionType::Invalid
         | sc::merge_action::ActionType::Insert
         | sc::merge_action::ActionType::InsertStar => {
-            return Err(SparkError::invalid("invalid merge matched action type"))
+            return Err(SparkError::invalid("invalid merge matched action type"));
         }
     };
     Ok(spec::MergeClause::Matched(spec::MergeMatchedClause {
@@ -1923,7 +1934,7 @@ fn merge_not_matched_by_target_clause_from_expression(
         | sc::merge_action::ActionType::Delete
         | sc::merge_action::ActionType::Update
         | sc::merge_action::ActionType::UpdateStar => {
-            return Err(SparkError::invalid("invalid merge not matched action type"))
+            return Err(SparkError::invalid("invalid merge not matched action type"));
         }
     };
     Ok(spec::MergeClause::NotMatchedByTarget(
@@ -1954,7 +1965,7 @@ fn merge_not_matched_by_source_clause_from_expression(
         | sc::merge_action::ActionType::UpdateStar => {
             return Err(SparkError::invalid(
                 "invalid merge not matched by source action type",
-            ))
+            ));
         }
     };
     Ok(spec::MergeClause::NotMatchedBySource(
@@ -2150,7 +2161,7 @@ mod tests {
     #[test]
     fn test_merge_into_table_command_to_plan() -> SparkResult<()> {
         use sc::expression::{ExprType, ExpressionString, UnresolvedAttribute};
-        use sc::{merge_action, relation, MergeAction};
+        use sc::{MergeAction, merge_action, relation};
 
         let source_table_plan = sc::Relation {
             common: None,

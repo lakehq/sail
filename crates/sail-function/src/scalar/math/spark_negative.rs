@@ -1,8 +1,8 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegative;
 

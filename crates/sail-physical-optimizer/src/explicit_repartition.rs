@@ -168,9 +168,11 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized
-            .downcast_ref::<ExplicitRepartitionExec>()
-            .is_some());
+        assert!(
+            optimized
+                .downcast_ref::<ExplicitRepartitionExec>()
+                .is_some()
+        );
         assert_eq!(optimized.output_partitioning().partition_count(), 4);
     }
 }

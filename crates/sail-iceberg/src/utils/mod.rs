@@ -33,12 +33,11 @@ pub enum WritePathMode {
 
 impl WritePathMode {
     pub fn from_properties(props: Option<&std::collections::HashMap<String, String>>) -> Self {
-        if let Some(p) = props {
-            if let Some(v) = p.get(WRITE_RELATIVE_PROP) {
-                if v.eq_ignore_ascii_case("true") || v == "1" {
-                    return WritePathMode::Relative;
-                }
-            }
+        if let Some(p) = props
+            && let Some(v) = p.get(WRITE_RELATIVE_PROP)
+            && (v.eq_ignore_ascii_case("true") || v == "1")
+        {
+            return WritePathMode::Relative;
         }
         WritePathMode::Absolute
     }

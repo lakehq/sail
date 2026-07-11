@@ -1,12 +1,12 @@
 use datafusion_common::DFSchemaRef;
-use datafusion_expr::{expr, BinaryExpr};
+use datafusion_expr::{BinaryExpr, expr};
 use datafusion_expr_common::operator::Operator;
 use sail_common::spec;
 
 use crate::error::PlanResult;
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     // TODO: Construct better names for the expression (e.g. a IN (b, c)) for all functions below.

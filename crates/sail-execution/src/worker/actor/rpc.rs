@@ -1,7 +1,7 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
+use sail_server::actor::ActorHandle;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
@@ -11,11 +11,11 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer};
+use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
 use crate::worker::event::WorkerStreamOwner;
-use crate::worker::gen::worker_service_server::WorkerServiceServer;
+use crate::worker::r#gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
-use crate::worker::WorkerEvent;
 
 struct WorkerTaskStreamFetcher {
     handle: ActorHandle<WorkerActor>,
@@ -69,7 +69,7 @@ impl WorkerActor {
             .await?;
 
         ServerBuilder::new("sail_worker", Default::default())
-            .add_service(service, Some(crate::worker::gen::FILE_DESCRIPTOR_SET))
+            .add_service(service, Some(crate::worker::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)
             .await

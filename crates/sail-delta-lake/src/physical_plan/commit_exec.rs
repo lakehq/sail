@@ -27,32 +27,31 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
-use crate::delta_log::{get_object_store_from_context, LogStoreRef, StorageConfig};
+use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::ExecCommitMeta;
-use crate::physical_plan::catalog_location::resolve_catalog_table_url;
-use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
+use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    commit_path, contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey,
-    CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode, StatValue, Stats,
-    StructField, StructType, TableFeature,
+    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
+    StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -378,12 +377,11 @@ impl DeltaCommitExec {
         if let Some(protocol) = actions.iter().find_map(|action| match action {
             CommitAction::Protocol(protocol) => Some(protocol),
             _ => None,
-        }) {
-            if protocol != snapshot.protocol() {
-                return Err(DataFusionError::Plan(
-                    "Delta table already exists with a different protocol".to_string(),
-                ));
-            }
+        }) && protocol != snapshot.protocol()
+        {
+            return Err(DataFusionError::Plan(
+                "Delta table already exists with a different protocol".to_string(),
+            ));
         }
 
         if let Some(metadata) = actions.iter().find_map(|action| match action {
@@ -572,8 +570,6 @@ impl ExecutionPlan for DeltaCommitExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
-            let table_url =
-                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             let mut total_rows = 0u64;
@@ -656,7 +652,7 @@ impl ExecutionPlan for DeltaCommitExec {
             log::trace!(
                 "final_actions_len: {}, final_action_kinds: {:?}",
                 final_actions.len(),
-                &kinds
+                kinds
             );
 
             if !has_commit_payload_actions(&final_actions) {
@@ -665,11 +661,13 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            let catalog_managed_table = match catalog_table.as_deref() {
-                Some(catalog_table) => {
+            let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
+                (Some(catalog_table), Some(lakehouse_table))
+                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit =>
+                {
                     Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
                 }
-                None => None,
+                _ => None,
             };
             // For new tables, always ensure Protocol + Metadata are present and use Create.
             // Even if the writer supplied an operation (e.g., Overwrite), the first commit
@@ -873,34 +871,46 @@ impl ExecutionPlan for DeltaCommitExec {
                             operation,
                             operation_metrics,
                         )
-                    } else if let Some(bootstrap_reference) =
-                        Self::existing_create_bootstrap_snapshot(&log_store, &bootstrap_actions)
-                            .await?
-                    {
-                        let operation =
-                            Self::write_operation_for_sink_mode(&partition_columns, &sink_mode);
-                        (
-                            Some(bootstrap_reference),
-                            commit_actions,
-                            operation,
-                            operation_metrics,
-                        )
                     } else {
-                        let bootstrap_commit = CommitBuilder::from(
-                            CommitProperties::default().with_user_metadata(user_metadata.clone()),
+                        match Self::existing_create_bootstrap_snapshot(
+                            &log_store,
+                            &bootstrap_actions,
                         )
-                        .with_actions(bootstrap_actions)
-                        .build(None, log_store.clone(), operation)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        let operation =
-                            Self::write_operation_for_sink_mode(&partition_columns, &sink_mode);
-                        (
-                            bootstrap_commit.snapshot,
-                            commit_actions,
-                            operation,
-                            operation_metrics,
-                        )
+                        .await?
+                        {
+                            Some(bootstrap_reference) => {
+                                let operation = Self::write_operation_for_sink_mode(
+                                    &partition_columns,
+                                    &sink_mode,
+                                );
+                                (
+                                    Some(bootstrap_reference),
+                                    commit_actions,
+                                    operation,
+                                    operation_metrics,
+                                )
+                            }
+                            _ => {
+                                let bootstrap_commit = CommitBuilder::from(
+                                    CommitProperties::default()
+                                        .with_user_metadata(user_metadata.clone()),
+                                )
+                                .with_actions(bootstrap_actions)
+                                .build(None, log_store.clone(), operation)
+                                .await
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                                let operation = Self::write_operation_for_sink_mode(
+                                    &partition_columns,
+                                    &sink_mode,
+                                );
+                                (
+                                    bootstrap_commit.snapshot,
+                                    commit_actions,
+                                    operation,
+                                    operation_metrics,
+                                )
+                            }
+                        }
                     }
                 } else {
                     (
