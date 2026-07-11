@@ -13,6 +13,7 @@ use sail_common_datafusion::datasource::{
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
+use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
 use crate::physical_plan::equality_delete_writer_exec::ensure_full_row_equality_delete_preflight;
 use crate::physical_plan::{
@@ -75,8 +76,7 @@ async fn plan_iceberg_merge(
         ensure_iceberg_merge_format_v2(table.metadata())?;
     }
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
-    let mut writer_options = resolve_row_level_writer_options(session_state, node)?;
-    writer_options.merge_intent = true;
+    let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
     let data_rows: Arc<dyn ExecutionPlan> =
         Arc::new(IcebergMergeDataRowsExec::try_new(write_plan)?);
@@ -116,6 +116,7 @@ async fn plan_iceberg_merge(
             Arc::new(CoalescePartitionsExec::new(commit_input)),
             table_url,
             writer_options.lakehouse_table.clone(),
+            SnapshotUpdateKind::RowDelta,
         )
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     ))
@@ -172,6 +173,7 @@ async fn plan_iceberg_delete(
             Arc::new(CoalescePartitionsExec::new(delete_writer)),
             table_url,
             writer_options.lakehouse_table.clone(),
+            SnapshotUpdateKind::RowDelta,
         )
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     ))

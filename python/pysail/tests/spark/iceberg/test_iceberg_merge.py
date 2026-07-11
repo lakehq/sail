@@ -621,6 +621,78 @@ def test_iceberg_merge_position_delete_round_trips_null_partition_value(spark, t
         _drop_table(spark, table_name)
 
 
+def test_iceberg_merge_row_delta_snapshot_operation_tracks_written_files(spark, tmp_path):
+    table_name = "iceberg_merge_row_delta_operation"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql(
+            """
+            INSERT INTO iceberg_merge_row_delta_operation VALUES
+              (1, 'keep'),
+              (2, 'delete')
+            """
+        )
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_row_delta_source AS
+            SELECT 3 AS id, 'insert' AS value
+            """
+        )
+
+        spark.sql(
+            """
+            MERGE INTO iceberg_merge_row_delta_operation AS t
+            USING iceberg_merge_row_delta_source AS s
+            ON t.id = s.id
+            WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+            """
+        ).collect()
+
+        insert_snapshot = _current_snapshot(_find_latest_metadata(table_path))
+        assert insert_snapshot["summary"]["operation"] == "append"
+
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_row_delta_source AS
+            SELECT 2 AS id, 'ignored' AS value
+            """
+        )
+        spark.sql(
+            """
+            MERGE INTO iceberg_merge_row_delta_operation AS t
+            USING iceberg_merge_row_delta_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN DELETE
+            """
+        ).collect()
+
+        delete_snapshot = _current_snapshot(_find_latest_metadata(table_path))
+        assert delete_snapshot["summary"]["operation"] == "delete"
+        rows = [
+            tuple(row)
+            for row in spark.sql("SELECT id, value FROM iceberg_merge_row_delta_operation ORDER BY id").collect()
+        ]
+        assert rows == [(1, "keep"), (3, "insert")]
+    finally:
+        _drop_table(spark, table_name)
+
+
 def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path):
     table_name = "iceberg_merge_noop_snapshot"
     table_path = tmp_path / table_name

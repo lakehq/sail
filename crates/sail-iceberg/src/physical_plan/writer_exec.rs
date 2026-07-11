@@ -528,13 +528,6 @@ impl ExecutionPlan for IcebergWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
-                operation: if options.merge_intent
-                    || matches!(sink_mode, PhysicalSinkMode::Overwrite)
-                {
-                    crate::spec::Operation::Overwrite
-                } else {
-                    crate::spec::Operation::Append
-                },
                 requirements: commit_requirements,
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,
@@ -546,7 +539,6 @@ impl ExecutionPlan for IcebergWriterExec {
                 } else {
                     None
                 },
-                merge_intent: options.merge_intent,
             };
 
             let schema = iceberg_action_schema()?;

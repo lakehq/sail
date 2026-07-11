@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
-    DataContentType, DataFile, DataFileFormat, Operation, PartitionSpec, Schema as IcebergSchema,
+    DataContentType, DataFile, DataFileFormat, PartitionSpec, Schema as IcebergSchema,
     TableRequirement,
 };
 
@@ -34,20 +34,17 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub table_uri: String,
     pub row_count: u64,
-    pub operation: Operation,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
-    pub merge_intent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitMetaAction {
     pub table_uri: String,
     pub row_count: u64,
-    pub operation: String,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
@@ -57,7 +54,6 @@ pub struct CommitMetaAction {
     pub schema_json: Option<String>,
     /// Optional PartitionSpec JSON (rare) to avoid huge Arrow schema.
     pub partition_spec_json: Option<String>,
-    pub merge_intent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,18 +217,6 @@ fn iceberg_action_fields() -> Result<&'static Vec<FieldRef>> {
 
 pub fn iceberg_action_schema() -> Result<SchemaRef> {
     Ok(Arc::clone(&*ACTION_SCHEMA))
-}
-
-fn parse_operation(s: &str) -> Result<Operation> {
-    match s {
-        "append" => Ok(Operation::Append),
-        "replace" => Ok(Operation::Replace),
-        "overwrite" => Ok(Operation::Overwrite),
-        "delete" => Ok(Operation::Delete),
-        other => Err(DataFusionError::Plan(format!(
-            "unknown iceberg operation '{other}'"
-        ))),
-    }
 }
 
 impl From<PrimitiveLiteral> for PartitionValue {
@@ -459,13 +443,11 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         action: ExecAction::CommitMeta(CommitMetaAction {
             table_uri: meta.table_uri,
             row_count: meta.row_count,
-            operation: meta.operation.as_str().to_string(),
             requirements_json,
             table_properties_json,
             lakehouse_table_json,
             schema_json,
             partition_spec_json,
-            merge_intent: meta.merge_intent,
         }),
     }];
     encode_actions(rows)
@@ -513,13 +495,11 @@ pub fn decode_actions_and_meta_from_batch(
                 meta = Some(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
-                    operation: parse_operation(&m.operation)?,
                     requirements,
                     table_properties,
                     lakehouse_table,
                     schema,
                     partition_spec,
-                    merge_intent: m.merge_intent,
                 });
             }
         }
@@ -566,13 +546,11 @@ mod tests {
         let meta = CommitMeta {
             table_uri: "s3://bucket/table".to_string(),
             row_count: 10,
-            operation: Operation::Append,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
             lakehouse_table: None,
             schema: None,
             partition_spec: None,
-            merge_intent: false,
         };
 
         let schema = iceberg_action_schema()?;

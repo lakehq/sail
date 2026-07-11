@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction};
+use crate::operations::{ActionCommit, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
@@ -59,21 +59,6 @@ pub enum NewTableMetadataStyle {
 pub struct BootstrapResult {
     pub table_metadata: TableMetadata,
     pub metadata_file: String,
-}
-
-/// Bootstrap operation for SnapshotProducer
-struct BootstrapOperation {
-    merge_intent: bool,
-}
-
-impl SnapshotProduceOperation for BootstrapOperation {
-    fn operation(&self) -> &'static str {
-        if self.merge_intent {
-            "overwrite"
-        } else {
-            "append"
-        }
-    }
 }
 
 pub(crate) async fn bootstrap_snapshot_action_commit(
@@ -125,14 +110,11 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
-    .with_merge_intent(commit_info.merge_intent)
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     producer
-        .commit(BootstrapOperation {
-            merge_intent: commit_info.merge_intent,
-        })
+        .commit(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)
 }
@@ -211,14 +193,11 @@ pub async fn bootstrap_new_table_with_style(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
-    .with_merge_intent(commit_info.merge_intent)
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
-        .commit(BootstrapOperation {
-            merge_intent: commit_info.merge_intent,
-        })
+        .commit(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)?;
 

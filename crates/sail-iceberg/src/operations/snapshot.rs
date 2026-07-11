@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use object_store::ObjectStoreExt;
+use serde::{Deserialize, Serialize};
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
@@ -200,8 +201,54 @@ async fn populate_retained_manifest_counts(
     Ok(())
 }
 
-pub trait SnapshotProduceOperation: Send + Sync {
-    fn operation(&self) -> &'static str;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotUpdateKind {
+    FastAppend,
+    FullOverwrite,
+    RowDelta,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SnapshotChanges {
+    added_data_files: usize,
+    added_delete_files: usize,
+}
+
+impl SnapshotChanges {
+    fn from_added_files(added_data_files: &[DataFile], added_delete_files: &[DataFile]) -> Self {
+        Self {
+            added_data_files: added_data_files.len(),
+            added_delete_files: added_delete_files.len(),
+        }
+    }
+
+    fn adds_data_files(self) -> bool {
+        self.added_data_files > 0
+    }
+
+    fn adds_delete_files(self) -> bool {
+        self.added_delete_files > 0
+    }
+}
+
+impl SnapshotUpdateKind {
+    fn summary_operation(self, changes: SnapshotChanges) -> Operation {
+        match self {
+            Self::FastAppend => Operation::Append,
+            Self::FullOverwrite => Operation::Overwrite,
+            Self::RowDelta if changes.adds_data_files() && !changes.adds_delete_files() => {
+                Operation::Append
+            }
+            Self::RowDelta if changes.adds_delete_files() && !changes.adds_data_files() => {
+                Operation::Delete
+            }
+            Self::RowDelta => Operation::Overwrite,
+        }
+    }
+
+    fn carries_parent_manifests(self) -> bool {
+        matches!(self, Self::FastAppend | Self::RowDelta)
+    }
 }
 
 pub struct SnapshotProducer<'a> {
@@ -215,7 +262,6 @@ pub struct SnapshotProducer<'a> {
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
-    pub merge_intent: bool,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -235,7 +281,6 @@ impl<'a> SnapshotProducer<'a> {
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
             row_lineage_start_row_id: None,
-            merge_intent: false,
         }
     }
 
@@ -256,11 +301,6 @@ impl<'a> SnapshotProducer<'a> {
         self
     }
 
-    pub fn with_merge_intent(mut self, merge_intent: bool) -> Self {
-        self.merge_intent = merge_intent;
-        self
-    }
-
     pub fn with_added_delete_files(mut self, delete_files: Vec<DataFile>) -> Self {
         self.added_delete_files = delete_files;
         self
@@ -276,15 +316,11 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
+    pub async fn commit(self, update_kind: SnapshotUpdateKind) -> Result<ActionCommit, String> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
-        let is_overwrite = op.operation() == Operation::Overwrite.as_str();
-        let is_row_delta = self.merge_intent || !self.added_delete_files.is_empty();
-        let operation = match op.operation() {
-            "overwrite" => Operation::Overwrite,
-            "delete" => Operation::Delete,
-            _ => Operation::Append,
-        };
+        let changes =
+            SnapshotChanges::from_added_files(&self.added_data_files, &self.added_delete_files);
+        let operation = update_kind.summary_operation(changes);
         let added_data_file_count = self.added_data_files.len();
         let added_records = self
             .added_data_files
@@ -380,7 +416,7 @@ impl<'a> SnapshotProducer<'a> {
         let mut parent_manifest_entries = Vec::new();
 
         if !self.is_bootstrap
-            && (!is_overwrite || is_row_delta)
+            && update_kind.carries_parent_manifests()
             && !parent_manifest_list_path_str.is_empty()
         {
             let (store_ref, manifest_list_path) = store_ctx
@@ -521,7 +557,7 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        if !is_overwrite || is_row_delta {
+        if update_kind.carries_parent_manifests() {
             summary = with_manifest_totals(
                 summary,
                 parent_snapshot.summary(),
@@ -811,13 +847,6 @@ mod tests {
     #[test]
     fn snapshot_producer_writes_historical_delete_manifests_and_table_sequence() {
         futures::executor::block_on(async {
-            struct RowDeltaOperation;
-            impl SnapshotProduceOperation for RowDeltaOperation {
-                fn operation(&self) -> &'static str {
-                    "overwrite"
-                }
-            }
-
             let table_url = url::Url::parse("file:///tmp/iceberg-table/").expect("table URL");
             let store: Arc<dyn object_store::ObjectStore> =
                 Arc::new(object_store::memory::InMemory::new());
@@ -890,7 +919,7 @@ mod tests {
             )
             .with_added_delete_files(vec![historical_delete, delete_file("delete-2.parquet", 2)])
             .with_partition_specs(vec![historical_spec, current_spec])
-            .commit(RowDeltaOperation)
+            .commit(SnapshotUpdateKind::RowDelta)
             .await
             .expect("row delta snapshot");
             let snapshot = action_commit

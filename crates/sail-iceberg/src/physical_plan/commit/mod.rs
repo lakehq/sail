@@ -15,7 +15,8 @@ pub mod commit_exec;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use serde::{Deserialize, Serialize};
 
-use crate::spec::{DataFile, Operation, PartitionSpec, Schema, TableRequirement, TableUpdate};
+use crate::operations::SnapshotUpdateKind;
+use crate::spec::{DataFile, PartitionSpec, Schema, TableRequirement, TableUpdate};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IcebergCommitInfo {
@@ -29,9 +30,7 @@ pub struct IcebergCommitInfo {
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub operation: Operation,
-    #[serde(default)]
-    pub merge_intent: bool,
+    pub snapshot_update_kind: SnapshotUpdateKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<Schema>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -920,6 +920,13 @@ message IcebergWriterExecNode {
   string lakehouse_table_json = 8;
 }
 
+enum IcebergSnapshotUpdateKind {
+  ICEBERG_SNAPSHOT_UPDATE_KIND_UNSPECIFIED = 0;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_FAST_APPEND = 1;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
+}
+
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -928,6 +935,7 @@ message IcebergCommitExecNode {
   bool validate_read_snapshot = 4;
   // Absent when validation is required and the target had no current snapshot.
   optional int64 expected_snapshot_id = 5;
+  IcebergSnapshotUpdateKind snapshot_update_kind = 6;
 }
 
 message IcebergManifestScanExecNode {

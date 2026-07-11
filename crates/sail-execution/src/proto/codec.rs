@@ -240,13 +240,13 @@ use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
 use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
-use sail_iceberg::IcebergWriterExecOptions;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeDataRowsExec,
     IcebergMergeMetadataExec, IcebergPositionDeleteWriterExec, IcebergScanByDataFilesExec,
     IcebergWriterExec,
 };
+use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -1284,14 +1284,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 lakehouse_table_json,
                 validate_read_snapshot,
                 expected_snapshot_id,
+                snapshot_update_kind,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                let snapshot_update_kind =
+                    Self::try_decode_iceberg_snapshot_update_kind(snapshot_update_kind)?;
 
                 Ok(Arc::new(
-                    IcebergCommitExec::new(input, table_url, lakehouse_table)
+                    IcebergCommitExec::new(input, table_url, lakehouse_table, snapshot_update_kind)
                         .with_expected_snapshot_id(
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         ),
@@ -2176,6 +2179,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .try_encode_lakehouse_table(iceberg_commit_exec.lakehouse_table())?,
                 validate_read_snapshot: expected_snapshot_id.is_some(),
                 expected_snapshot_id: expected_snapshot_id.flatten(),
+                snapshot_update_kind: Self::try_encode_iceberg_snapshot_update_kind(
+                    iceberg_commit_exec.snapshot_update_kind(),
+                ),
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -3697,6 +3703,29 @@ impl RemoteExecutionCodec {
             ColumnMappingMode::Name => r#gen::DeltaColumnMappingMode::Name,
             ColumnMappingMode::Id => r#gen::DeltaColumnMappingMode::Id,
         }) as i32)
+    }
+
+    fn try_decode_iceberg_snapshot_update_kind(kind: i32) -> Result<SnapshotUpdateKind> {
+        match r#gen::IcebergSnapshotUpdateKind::try_from(kind)
+            .map_err(|_| plan_datafusion_err!("invalid Iceberg snapshot update kind"))?
+        {
+            r#gen::IcebergSnapshotUpdateKind::FastAppend => Ok(SnapshotUpdateKind::FastAppend),
+            r#gen::IcebergSnapshotUpdateKind::FullOverwrite => {
+                Ok(SnapshotUpdateKind::FullOverwrite)
+            }
+            r#gen::IcebergSnapshotUpdateKind::RowDelta => Ok(SnapshotUpdateKind::RowDelta),
+            r#gen::IcebergSnapshotUpdateKind::Unspecified => {
+                plan_err!("Iceberg snapshot update kind is unspecified")
+            }
+        }
+    }
+
+    fn try_encode_iceberg_snapshot_update_kind(kind: SnapshotUpdateKind) -> i32 {
+        (match kind {
+            SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
+            SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
+            SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
+        }) as i32
     }
 
     fn try_decode_json<T: DeserializeOwned>(&self, value: &str, description: &str) -> Result<T> {

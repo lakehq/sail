@@ -16,9 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::{
-    ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
-};
+use super::{ActionCommit, SnapshotProducer, SnapshotUpdateKind, Transaction, TransactionAction};
 use crate::io::StoreContext;
 use crate::spec::DataFile;
 use crate::spec::manifest::ManifestMetadata;
@@ -118,13 +116,8 @@ impl TransactionAction for FastAppendAction {
             // TODO: validate duplicate files later
         }
 
-        struct FastAppendOperation;
-        impl SnapshotProduceOperation for FastAppendOperation {
-            fn operation(&self) -> &'static str {
-                "append"
-            }
-        }
-
-        snapshot_producer.commit(FastAppendOperation).await
+        snapshot_producer
+            .commit(SnapshotUpdateKind::FastAppend)
+            .await
     }
 }

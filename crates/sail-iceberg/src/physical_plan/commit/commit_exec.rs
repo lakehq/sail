@@ -42,7 +42,7 @@ use crate::operations::bootstrap::{
     bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
 };
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
+use crate::operations::{SnapshotUpdateKind, Transaction, TransactionAction};
 use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
@@ -82,6 +82,7 @@ pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    snapshot_update_kind: SnapshotUpdateKind,
     expected_snapshot_id: Option<Option<i64>>,
     cache: Arc<PlanProperties>,
 }
@@ -91,6 +92,7 @@ impl IcebergCommitExec {
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         lakehouse_table: Option<LakehouseExecutionContext>,
+        snapshot_update_kind: SnapshotUpdateKind,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -107,6 +109,7 @@ impl IcebergCommitExec {
             input,
             table_url,
             lakehouse_table,
+            snapshot_update_kind,
             expected_snapshot_id: None,
             cache,
         }
@@ -127,6 +130,10 @@ impl IcebergCommitExec {
 
     pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
         self.lakehouse_table.as_ref()
+    }
+
+    pub fn snapshot_update_kind(&self) -> SnapshotUpdateKind {
+        self.snapshot_update_kind
     }
 
     pub fn expected_snapshot_id(&self) -> Option<Option<i64>> {
@@ -401,6 +408,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 Arc::clone(&children[0]),
                 self.table_url.clone(),
                 self.lakehouse_table.clone(),
+                self.snapshot_update_kind,
             )
             .with_expected_snapshot_id(self.expected_snapshot_id),
         ))
@@ -426,6 +434,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
         let table_url = self.table_url.clone();
         let lakehouse_table = self.lakehouse_table.clone();
+        let snapshot_update_kind = self.snapshot_update_kind;
         let expected_snapshot_id = self.expected_snapshot_id;
         let schema = self.schema();
         let future = async move {
@@ -462,18 +471,6 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
-            let effective_operation = if commit_meta.merge_intent {
-                crate::spec::Operation::Overwrite
-            } else if !added_delete_files.is_empty() {
-                if added_data_files.is_empty() {
-                    crate::spec::Operation::Delete
-                } else {
-                    crate::spec::Operation::Overwrite
-                }
-            } else {
-                commit_meta.operation
-            };
-
             let mut commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
@@ -485,8 +482,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
-                operation: effective_operation,
-                merge_intent: commit_meta.merge_intent,
+                snapshot_update_kind,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
@@ -552,11 +548,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 catalog_commit_mode
             );
 
-            if latest_meta_res.is_err()
-                && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                    || matches!(commit_info.operation, crate::spec::Operation::Append)
-                    || matches!(commit_info.operation, crate::spec::Operation::Delete))
-            {
+            if latest_meta_res.is_err() {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     let bootstrap_result = bootstrap_new_table_with_style(
@@ -697,11 +689,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
                 // bootstrap the first snapshot as a normal metadata version.
-                if maybe_snapshot.is_none()
-                    && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                        || matches!(commit_info.operation, crate::spec::Operation::Append)
-                        || matches!(commit_info.operation, crate::spec::Operation::Delete))
-                {
+                if maybe_snapshot.is_none() {
                     let mut catalog_fallback_table = catalog_metadata_update_table;
                     if let Some(catalog_table) = catalog_commit_table {
                         let action_commit = bootstrap_snapshot_action_commit(
@@ -841,7 +829,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     continue;
                 }
 
-                // Build transaction and action based on operation
+                // Build transaction and action based on the snapshot update algorithm.
                 let tx = Transaction::new(
                     table_url.to_string(),
                     snapshot,
@@ -852,8 +840,8 @@ impl ExecutionPlan for IcebergCommitExec {
                     &partition_spec_for_commit,
                     table_meta.format_version,
                 );
-                let action_commit = match commit_info.operation {
-                    crate::spec::Operation::Append => {
+                let action_commit = match commit_info.snapshot_update_kind {
+                    SnapshotUpdateKind::FastAppend => {
                         let mut action = tx
                             .fast_append()
                             .with_store_context(store_ctx.clone())
@@ -867,29 +855,8 @@ impl ExecutionPlan for IcebergCommitExec {
                             .await
                             .map_err(DataFusionError::Execution)?
                     }
-                    crate::spec::Operation::Overwrite => {
-                        let producer = crate::operations::SnapshotProducer::new(
-                            &tx,
-                            commit_info.data_files.clone(),
-                            Some(store_ctx.clone()),
-                            Some(manifest_meta),
-                        )
-                        .with_added_delete_files(commit_info.delete_files.clone())
-                        .with_partition_specs(table_meta.partition_specs.clone())
-                        .with_merge_intent(commit_info.merge_intent)
-                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
-                        struct LocalOverwriteOperation;
-                        impl SnapshotProduceOperation for LocalOverwriteOperation {
-                            fn operation(&self) -> &'static str {
-                                "overwrite"
-                            }
-                        }
-                        producer
-                            .commit(LocalOverwriteOperation)
-                            .await
-                            .map_err(DataFusionError::Execution)?
-                    }
-                    crate::spec::Operation::Delete => {
+                    update_kind @ (SnapshotUpdateKind::FullOverwrite
+                    | SnapshotUpdateKind::RowDelta) => {
                         let producer = crate::operations::SnapshotProducer::new(
                             &tx,
                             commit_info.data_files.clone(),
@@ -899,21 +866,10 @@ impl ExecutionPlan for IcebergCommitExec {
                         .with_added_delete_files(commit_info.delete_files.clone())
                         .with_partition_specs(table_meta.partition_specs.clone())
                         .with_row_lineage_start_row_id(row_lineage_start_row_id);
-                        struct LocalDeleteOperation;
-                        impl SnapshotProduceOperation for LocalDeleteOperation {
-                            fn operation(&self) -> &'static str {
-                                "delete"
-                            }
-                        }
                         producer
-                            .commit(LocalDeleteOperation)
+                            .commit(update_kind)
                             .await
                             .map_err(DataFusionError::Execution)?
-                    }
-                    _ => {
-                        return Err(DataFusionError::NotImplemented(
-                            "Unsupported Iceberg operation in commit".to_string(),
-                        ));
                     }
                 };
 

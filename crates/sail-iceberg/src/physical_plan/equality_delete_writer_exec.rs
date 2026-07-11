@@ -26,9 +26,7 @@ use crate::physical_plan::action_schema::{
 };
 use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
 use crate::spec::types::{PrimitiveType, Type};
-use crate::spec::{
-    DataContentType, DataFile, MAIN_BRANCH, Operation, TableMetadata, TableRequirement,
-};
+use crate::spec::{DataContentType, DataFile, MAIN_BRANCH, TableMetadata, TableRequirement};
 
 #[derive(Debug, Clone)]
 pub struct IcebergEqualityDeleteWriterExec {
@@ -232,13 +230,11 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
-                operation: Operation::Delete,
                 requirements,
                 table_properties: writer_config.table_properties().to_vec(),
                 lakehouse_table,
                 schema: None,
                 partition_spec: None,
-                merge_intent: false,
             };
 
             let schema = iceberg_action_schema()?;
