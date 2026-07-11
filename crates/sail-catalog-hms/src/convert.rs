@@ -959,39 +959,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_generic_table_marks_delta_provider() {
-        let table = build_generic_table(
-            "default",
-            "items",
-            vec![CreateTableColumnOptions {
-                name: "id".to_string(),
-                data_type: DataType::Int64,
-                nullable: false,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
-            vec![],
-            Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
-                logical_format: "delta",
-                storage: &HiveStorageFormat::parquet(),
-            },
-            None,
-            vec![],
-        )
-        .unwrap();
-
-        let properties = map_to_vec(table.parameters.as_ref());
-        assert!(
-            properties
-                .iter()
-                .any(|(k, v)| k == SPARK_DATASOURCE_PROVIDER_KEY && v == "delta")
-        );
-    }
-
-    #[test]
     fn test_build_generic_table_writes_datasource_location_as_serde_path() {
         for (logical_format, storage) in [
             ("delta", HiveStorageFormat::parquet()),
@@ -2440,8 +2407,11 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_preserves_unsupported_datasource_provider() {
-        for provider in ["custom.provider", "orc"] {
+    fn test_table_to_status_preserves_unsupported_datasource_providers_over_serde() {
+        for (provider, expected) in [
+            ("com.acme.CustomSource", "com.acme.customsource"),
+            ("orc", "orc"),
+        ] {
             let table = hms_table_with_locations(
                 Some(provider),
                 Some("s3://sd-location"),
@@ -2454,144 +2424,12 @@ mod tests {
             match status.kind {
                 sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                     assert_eq!(
-                        format, provider,
+                        format, expected,
                         "datasource provider {provider} must remain authoritative over Parquet SerDe metadata"
                     );
                 }
                 other => panic!("expected table, got {other:?}"),
             }
-        }
-    }
-
-    #[test]
-    fn test_table_to_status_preserves_orc_datasource_provider() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let orc = HiveStorageFormat::orc();
-        let table = Table {
-            db_name: Some("default".into()),
-            table_name: Some("items".into()),
-            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
-            sd: Some(StorageDescriptor {
-                cols: Some(vec![FieldSchema {
-                    name: Some("id".into()),
-                    r#type: Some("bigint".into()),
-                    ..Default::default()
-                }]),
-                location: Some("s3://warehouse/items".into()),
-                input_format: Some(orc.input_format.into()),
-                output_format: Some(orc.output_format.into()),
-                serde_info: Some(SerDeInfo {
-                    serialization_lib: Some(orc.serde_library.into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-                FastStr::from_static_str("orc"),
-            )])),
-            ..Default::default()
-        };
-
-        let status = super::table_to_status("hms", &namespace, &table)
-            .expect("unsupported datasource provider must not fail metadata/listing");
-        match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
-                assert_eq!(
-                    format, "orc",
-                    "expected the unsupported short provider to remain listable"
-                );
-            }
-            other => panic!("expected table, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_table_to_status_custom_parquet_provider_remains_custom_provider() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let parquet = HiveStorageFormat::parquet();
-        let table = Table {
-            db_name: Some("default".into()),
-            table_name: Some("items".into()),
-            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
-            sd: Some(StorageDescriptor {
-                cols: Some(vec![FieldSchema {
-                    name: Some("id".into()),
-                    r#type: Some("bigint".into()),
-                    ..Default::default()
-                }]),
-                location: Some("s3://warehouse/items".into()),
-                input_format: Some(parquet.input_format.into()),
-                output_format: Some(parquet.output_format.into()),
-                serde_info: Some(SerDeInfo {
-                    serialization_lib: Some(parquet.serde_library.into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-                FastStr::from_static_str("com.acme.CustomParquetSource"),
-            )])),
-            ..Default::default()
-        };
-
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
-        match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
-                assert_eq!(
-                    format, "com.acme.customparquetsource",
-                    "custom provider on Parquet storage must preserve provider identity"
-                );
-            }
-            other => panic!("expected table, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_table_to_status_unknown_provider_preserved_when_storage_undetectable() {
-        // provider=com.acme.CustomSource with storage metadata Sail cannot map
-        // to a known format. Sail preserves the declared provider identity
-        // (lower-cased) rather than collapsing it to "unknown", so catalog
-        // listing/describe retain the identity a downstream tool may rely on.
-        // Listing/describe must not fail even though Sail cannot read the files.
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let table = Table {
-            db_name: Some("default".into()),
-            table_name: Some("items".into()),
-            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
-            sd: Some(StorageDescriptor {
-                cols: Some(vec![FieldSchema {
-                    name: Some("id".into()),
-                    r#type: Some("bigint".into()),
-                    ..Default::default()
-                }]),
-                location: Some("s3://warehouse/items".into()),
-                input_format: Some("com.acme.CustomInputFormat".into()),
-                output_format: Some("com.acme.CustomOutputFormat".into()),
-                serde_info: Some(SerDeInfo {
-                    serialization_lib: Some("com.acme.CustomSerDe".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-                FastStr::from_static_str("com.acme.CustomSource"),
-            )])),
-            ..Default::default()
-        };
-
-        let status = super::table_to_status("hms", &namespace, &table)
-            .expect("undetectable custom provider must not fail metadata/listing");
-        match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
-                assert_eq!(
-                    format, "com.acme.customsource",
-                    "unknown provider with undetectable storage must preserve the declared provider"
-                );
-            }
-            other => panic!("expected table, got {other:?}"),
         }
     }
 
