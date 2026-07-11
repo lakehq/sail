@@ -118,8 +118,6 @@ apache-avro = { version = "0.21.0" }
 rust_decimal = "1.42.0"
 wiremock = "0.6.5"
 testcontainers = "0.26.2"
-progenitor = "0.11.2"
-progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.27.0"
 readonly = "0.2.13"

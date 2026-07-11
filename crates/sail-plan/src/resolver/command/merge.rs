@@ -7,7 +7,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, TableFormatRegistry};
+use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -501,6 +501,41 @@ impl PlanResolver<'_> {
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+        // Handle path-based table access like `delta.`/path/to/table``
+        // where the first part is a registered table format name.
+        if let [format, path] = table.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if let Ok(table_format) = registry.get(&format) {
+                let location = path.as_ref().to_string();
+                let metadata = table_format
+                    .infer_metadata(
+                        &self.ctx.state(),
+                        SourceInfo {
+                            paths: vec![location.clone()],
+                            lakehouse_table: None,
+                            schema: None,
+                            constraints: Default::default(),
+                            partition_by: vec![],
+                            bucket_by: None,
+                            sort_order: vec![],
+                            options: vec![],
+                            read_case_sensitive: self.config.case_sensitive,
+                        },
+                    )
+                    .await?;
+                return Ok(MergeTargetInfo {
+                    table_name: table.clone().into(),
+                    format,
+                    location,
+                    partition_by: vec![],
+                    options: vec![OptionLayer::TablePropertyList {
+                        items: metadata.properties,
+                    }],
+                    lakehouse_table: None,
+                });
+            }
+        }
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager
             .get_table_or_view(table.parts())

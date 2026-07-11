@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
@@ -20,6 +21,7 @@ mod insert;
 mod merge;
 mod show;
 mod variable;
+mod with_relations;
 mod write;
 mod write_stream;
 mod write_v1;
@@ -27,6 +29,7 @@ mod write_v2;
 
 impl PlanResolver<'_> {
     /// Resolves a command plan into a logical plan.
+    #[async_recursion]
     pub(super) async fn resolve_command_plan(
         &self,
         plan: spec::CommandPlan,
@@ -37,6 +40,10 @@ impl PlanResolver<'_> {
         match plan.node {
             CommandNode::ShowString(show) => self.resolve_command_show_string(show, state).await,
             CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,
+            CommandNode::WithRelations { root, references } => {
+                self.resolve_command_with_relations(*root, references, state)
+                    .await
+            }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
