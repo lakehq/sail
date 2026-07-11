@@ -695,7 +695,7 @@ fn query_plan_with_table_modifier(
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
                 input: Box::new(plan),
-                grouping: vec![],
+                grouping: None,
                 aggregate,
                 columns,
                 values,

@@ -63,15 +63,15 @@ impl PlanResolver<'_> {
             check_valid_pivot_aggregate(&agg.expr, state)?;
         }
 
-        // For SQL pivots the grouping list is empty; the implicit grouping columns are
-        // all input columns not referenced by the pivot column or the aggregates.
-        let grouping = self
-            .resolve_named_expressions(grouping, &schema, state)
-            .await?;
-        let grouping = if grouping.is_empty() {
-            Self::implicit_pivot_grouping(&schema, &pivot_column, &aggregates, state)?
-        } else {
-            grouping
+        // For SQL pivots the grouping list is absent; the implicit grouping columns are
+        // all input columns not referenced by the pivot column or the aggregates. The
+        // DataFrame API always sets the list, and an empty one means grouping by nothing.
+        let grouping = match grouping {
+            Some(grouping) => {
+                self.resolve_named_expressions(grouping, &schema, state)
+                    .await?
+            }
+            None => Self::implicit_pivot_grouping(&schema, &pivot_column, &aggregates, state)?,
         };
 
         // Each pivot value becomes one output column per aggregate. Values may be
