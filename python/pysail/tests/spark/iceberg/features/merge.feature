@@ -1,5 +1,48 @@
 Feature: Iceberg MERGE
 
+  Rule: MERGE conditions must be deterministic
+
+    Scenario: A non-deterministic matched condition is rejected before writing
+      Given variable location for temporary directory iceberg_merge_nondeterministic
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_nondeterministic
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_nondeterministic (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_nondeterministic VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_nondeterministic_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_nondeterministic AS t
+        USING iceberg_merge_nondeterministic_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND rand() < 0.5 THEN UPDATE SET value = s.value
+        """
+      Then query error Non-deterministic expressions are not allowed in MERGE conditions
+      When query
+        """
+        SELECT id, value FROM iceberg_merge_nondeterministic
+        """
+      Then query result
+        | id | value |
+        | 1  | old   |
+
   Rule: Merge-on-read execution plans and metadata
 
     Scenario: EXPLAIN shows merge-on-read data and position-delete writers

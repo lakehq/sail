@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{JoinType, TableReference};
-use datafusion_expr::utils::{expr_to_columns, split_conjunction};
+use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, build_join_schema};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -102,6 +103,7 @@ impl PlanResolver<'_> {
         let on_condition = self
             .resolve_expression(on_condition_expr, &merge_schema, state)
             .await?;
+        validate_merge_condition(&on_condition)?;
         let (join_key_pairs, residual_predicates, target_only_predicates) =
             analyze_merge_join(&on_condition, &merge_schema, target_schema.clone());
 
@@ -482,20 +484,22 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<ExprWithSource>> {
         match expression {
-            Some(expr) => Ok(Some(ExprWithSource::new(
-                self.resolve_expression(
-                    merge_disambiguate_unqualified_plan_ids(
-                        expr.expr,
+            Some(expr) => {
+                let condition = self
+                    .resolve_expression(
+                        merge_disambiguate_unqualified_plan_ids(
+                            expr.expr,
+                            state,
+                            target_schema,
+                            source_schema,
+                        ),
+                        schema,
                         state,
-                        target_schema,
-                        source_schema,
-                    ),
-                    schema,
-                    state,
-                )
-                .await?,
-                expr.source,
-            ))),
+                    )
+                    .await?;
+                validate_merge_condition(&condition)?;
+                Ok(Some(ExprWithSource::new(condition, expr.source)))
+            }
             None => Ok(None),
         }
     }
@@ -575,6 +579,43 @@ impl PlanResolver<'_> {
             )),
         }
     }
+}
+
+fn validate_merge_condition(condition: &Expr) -> PlanResult<()> {
+    if condition.is_volatile() {
+        return Err(PlanError::AnalysisError(
+            "Non-deterministic expressions are not allowed in MERGE conditions".to_string(),
+        ));
+    }
+
+    let mut contains_subquery = false;
+    condition.apply(|expr| {
+        if matches!(
+            expr,
+            Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+        ) {
+            contains_subquery = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })?;
+    if contains_subquery {
+        return Err(PlanError::AnalysisError(
+            "Subqueries are not allowed in MERGE conditions".to_string(),
+        ));
+    }
+
+    if !find_aggregate_exprs([condition]).is_empty() {
+        return Err(PlanError::AnalysisError(
+            "Aggregate expressions are not allowed in MERGE conditions".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn merge_schema_has_column_name(

@@ -1,5 +1,43 @@
 Feature: Delta Lake Merge
 
+  Rule: MERGE conditions must be deterministic
+
+    Scenario: A non-deterministic matched condition is rejected before writing
+      Given variable location for temporary directory delta_merge_nondeterministic
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_nondeterministic
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_nondeterministic (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_nondeterministic VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_nondeterministic_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_nondeterministic AS t
+        USING delta_merge_nondeterministic_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND rand() < 0.5 THEN UPDATE SET value = s.value
+        """
+      Then query error Non-deterministic expressions are not allowed in MERGE conditions
+      When query
+        """
+        SELECT id, value FROM delta_merge_nondeterministic
+        """
+      Then query result
+        | id | value |
+        | 1  | old   |
+
   Rule: Internal MERGE columns cannot shadow table data
 
     Scenario: A target column using an internal operation name is rejected clearly
