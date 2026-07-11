@@ -84,22 +84,6 @@ fn trunc(date: Expr, part: Expr) -> Expr {
     )
 }
 
-fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (part, timestamp) = input.arguments.two()?;
-    let truncated =
-        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
-    let truncated = match truncated.get_type(input.function_context.schema)? {
-        DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
-        DataType::Timestamp(_, tz) => {
-            cast(truncated, DataType::Timestamp(TimeUnit::Microsecond, tz))
-        }
-        other => Err(PlanError::InternalError(format!(
-            "date_trunc expected a timestamp result, got {other:?}"
-        )))?,
-    };
-    Ok(truncated)
-}
-
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
     let (date, interval) = input.arguments.two()?;
 
@@ -1053,7 +1037,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::custom(date_trunc)),
+        ("date_trunc", F::udf(SparkDateTrunc::new())),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),

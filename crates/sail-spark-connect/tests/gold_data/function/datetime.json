@@ -854,7 +854,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: 'dd'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: 'mm'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year"
       }
     },
     {

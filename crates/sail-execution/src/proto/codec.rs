@@ -2551,6 +2551,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
+            "spark_date_trunc" | "date_trunc" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new())))
+            }
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
@@ -2570,7 +2573,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "date_part" | "datepart" | "extract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
             }
-            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))

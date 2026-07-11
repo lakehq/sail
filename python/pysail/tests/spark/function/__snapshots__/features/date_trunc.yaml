@@ -1,0 +1,59 @@
+# serializer version: 1
+---
+name: "test_explain_date_trunc_month_filter_on_parquet_shows_preimage_pushdown"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as ts]
+      ProjectionExec: expr=[ts@0 as #1]
+        FilterExec: ts@0 >= 1709251200000000 AND ts@0 < 1711929600000000
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_date_trunc_month/<id>_0.zst.parquet]]}, projection=[ts], file_type=parquet, predicate=ts@0 >= 1709251200000000 AND ts@0 < 1711929600000000, pruning_predicate=ts_null_count@1 != row_count@2 AND ts_max@0 >= 1709251200000000 AND ts_null_count@1 != row_count@2 AND ts_min@3 < 1711929600000000, required_guarantees=[]
+---
+name: "test_explain_date_trunc_with_nonboundary_literal_does_not_rewrite"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as ts]
+      ProjectionExec: expr=[ts@0 as #1]
+        FilterExec: spark_date_trunc(MONTH, ts@0) = 1710496800000000
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_date_trunc_unsat/<id>_0.zst.parquet]]}, projection=[ts], file_type=parquet, predicate=spark_date_trunc(MONTH, ts@0) = 1710496800000000
+---
+name: "test_explain_date_trunc_year_filter_on_parquet_shows_preimage_pushdown"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as ts]
+      ProjectionExec: expr=[ts@0 as #1]
+        FilterExec: ts@0 >= 1704067200000000 AND ts@0 < 1735689600000000
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_date_trunc_year/<id>_0.zst.parquet]]}, projection=[ts], file_type=parquet, predicate=ts@0 >= 1704067200000000 AND ts@0 < 1735689600000000, pruning_predicate=ts_null_count@1 != row_count@2 AND ts_max@0 >= 1704067200000000 AND ts_null_count@1 != row_count@2 AND ts_min@3 < 1735689600000000, required_guarantees=[]
+---
+name: "test_explain_literal_timestamp_filter_on_parquet__baseline"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as ts]
+      ProjectionExec: expr=[ts@0 as #1]
+        FilterExec: ts@0 >= 1704067200000000 AND ts@0 < 1735689600000000
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_date_trunc_baseline/<id>_0.zst.parquet]]}, projection=[ts], file_type=parquet, predicate=ts@0 >= 1704067200000000 AND ts@0 < 1735689600000000, pruning_predicate=ts_null_count@1 != row_count@2 AND ts_max@0 >= 1704067200000000 AND ts_null_count@1 != row_count@2 AND ts_min@3 < 1735689600000000, required_guarantees=[]
+---
+name: "test_explain_where_date_trunc_month_rewrites_to_month_range"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as ts]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: column1@0 >= 1709251200000000 AND column1@0 < 1711929600000000
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_where_date_trunc_year_rewrites_to_year_range"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as ts]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: column1@0 >= 1704067200000000 AND column1@0 < 1735689600000000
+          DataSourceExec: partitions=1, partition_sizes=[1]
