@@ -1296,6 +1296,7 @@ fn align_merge_value(
     value: Expr,
     target_field: &datafusion_common::arrow::datatypes::Field,
 ) -> Expr {
+    // TODO: Validate casts against spark.sql.storeAssignmentPolicy.
     cast(value, target_field.data_type().clone())
 }
 

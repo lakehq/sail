@@ -134,6 +134,7 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
+        // TODO: Resolve explicit DEFAULT values against their MERGE target columns.
         let default_column_exprs = self
             .resolve_merge_default_column_exprs(target_schema, &resolved_target_field_names, state)
             .await?;
