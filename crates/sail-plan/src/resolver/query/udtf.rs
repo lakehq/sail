@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                 "[TABLE_VALUED_FUNCTION_TOO_MANY_TABLE_ARGUMENTS] There are too many table \
                  arguments for table-valued function. It allows one table argument, but got: \
                  {table_argument_count}. If you want to allow it, please set \
-                 \"spark.sql.allowMultipleTableArguments.enabled\" to \"true\""
+                 \"spark.sql.tvf.allowMultipleTableArguments.enabled\" to \"true\""
             )));
         }
 
