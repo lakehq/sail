@@ -132,6 +132,29 @@ def _reference_table_properties(jvm_spark: SparkSession, database: str, table: s
     return properties
 
 
+def _set_hms_table_parameter(
+    reference_spark: SparkSession,
+    database: str,
+    table: str,
+    key: str,
+    value: str,
+) -> None:
+    """Update one table parameter directly so storage metadata stays unchanged."""
+    jvm = reference_spark._jvm  # noqa: SLF001
+    hadoop_conf = reference_spark._jsc.hadoopConfiguration()  # noqa: SLF001
+    hive_conf = jvm.org.apache.hadoop.hive.conf.HiveConf()
+    hive_conf.set("hive.metastore.uris", hadoop_conf.get("hive.metastore.uris"))
+    client = jvm.org.apache.hadoop.hive.metastore.HiveMetaStoreClient(hive_conf)
+    try:
+        hms_table = client.getTable(database, table)
+        hms_table.getParameters().put(key, value)
+        client.alter_table(database, table, hms_table)
+        actual = client.getTable(database, table).getParameters().get(key)
+        assert actual == value, f"expected raw HMS parameter {key}={value!r}, got {actual!r}"
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize("fmt", _SAIL_WRITE_FORMATS)
 def test_sail_creates_spark_reads_dsv2(
     spark: SparkSession,
@@ -434,17 +457,16 @@ def test_unsupported_datasource_provider_does_not_poison_database_listing(
 ) -> None:
     """An unsupported Spark datasource provider must not break database listing.
 
-    The JVM reference Spark creates two tables in the same HMS database: one
-    ``USING ORC`` (a provider Sail cannot scan today) and one ``USING
-    PARQUET``. Sail's ``SHOW TABLES IN <db>`` must enumerate both without
-    erroring, and ``DESCRIBE EXTENDED <db>.orc_t`` must surface the table
-    metadata with the ORC format classified from SerDe/storage metadata.
+    The JVM reference Spark creates ORC and Parquet datasource tables. The test
+    then changes a second Parquet table's provider marker to a custom provider
+    without changing its Parquet SerDe metadata. Sail must enumerate all three
+    and preserve both unsupported provider identities when describing them.
 
     Listing/describe must stay usable for any provider: ``list_tables`` maps
     every HMS table through ``table_to_status``, so an unsupported provider on
-    one table must not fail the whole listing. Sail classifies unsupported
-    providers from their storage metadata when it is concrete (e.g. ``orc``
-    from ORC SerDe), and otherwise preserves the declared provider string.
+    one table must not fail the whole listing. A datasource provider marker is
+    authoritative: Sail must not relabel ``com.acme.CustomSource`` as Parquet
+    merely because the provider uses Parquet storage metadata.
 
     Reading the ORC table is intentionally not asserted: Sail may still fail
     at the scan/read layer, which is acceptable as long as listing and describe
@@ -452,11 +474,22 @@ def test_unsupported_datasource_provider_does_not_poison_database_listing(
     """
     orc_table = "orc_t"
     parquet_table = "parquet_t"
+    custom_table = "custom_provider_t"
     orc_fqn = f"{hms_s3_database}.{orc_table}"
     parquet_fqn = f"{hms_s3_database}.{parquet_table}"
+    custom_fqn = f"{hms_s3_database}.{custom_table}"
+    custom_provider = "com.acme.CustomSource"
 
     jvm_spark.sql(f"CREATE TABLE {orc_fqn} (id INT, name STRING) USING ORC")
     jvm_spark.sql(f"CREATE TABLE {parquet_fqn} (id INT, name STRING) USING PARQUET")
+    jvm_spark.sql(f"CREATE TABLE {custom_fqn} (id INT, name STRING) USING PARQUET")
+    _set_hms_table_parameter(
+        jvm_spark,
+        hms_s3_database,
+        custom_table,
+        "spark.sql.sources.provider",
+        custom_provider,
+    )
 
     # JVM cross-engine sanity: the ORC table really is a datasource table with
     # provider=orc in HMS metadata (i.e. this test really exercises the
@@ -464,18 +497,21 @@ def test_unsupported_datasource_provider_does_not_poison_database_listing(
     _assert_jvm_spark_sees_datasource_provider(jvm_spark, hms_s3_database, orc_table, provider="orc")
 
     # Listing contract: both tables are visible through Sail's HMS catalog.
-    # An unsupported provider must not fail ``list_tables``; the ORC table is
-    # classified from its storage metadata rather than breaking the listing.
+    # An unsupported provider must not fail ``list_tables``.
     shown = {row.tableName for row in spark.sql(f"SHOW TABLES IN {hms_s3_database}").collect()}
     assert orc_table in shown, f"orc table missing from SHOW TABLES: {shown}"
     assert parquet_table in shown, f"parquet table missing from SHOW TABLES: {shown}"
+    assert custom_table in shown, f"custom-provider table missing from SHOW TABLES: {shown}"
 
-    # The ORC table's metadata is visible and reports the ORC format
-    # classified from SerDe/storage metadata (Sail has no ORC reader, but
-    # metadata-only access must still work).
+    # The ORC table's metadata is visible and preserves its provider (Sail has
+    # no ORC reader, but metadata-only access must still work).
     orc_properties = _describe_extended_properties(spark, orc_fqn)
     assert orc_properties.get("Provider", "").lower() == "orc", orc_properties
     assert orc_properties.get("Location"), orc_properties
+
+    custom_properties = _describe_extended_properties(spark, custom_fqn)
+    assert custom_properties.get("Provider", "").lower() == custom_provider.lower(), custom_properties
+    assert custom_properties.get("Location"), custom_properties
 
 
 # ---------------------------------------------------------------------------

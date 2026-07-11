@@ -25,7 +25,7 @@ The following areas are supported:
 The following areas are not implemented yet:
 
 - Hive ACID or transactional HMS APIs such as transaction heartbeats, locks, or write ID allocation.
-- ORC as a first-class engine format: ORC tables are detected at the HMS metadata layer (including Spark `USING ORC` tables, via SerDe fallback) but Sail has no ORC file reader, so an ORC table registered in HMS cannot be read by Sail today. ORC is intentionally excluded from the Spark datasource provider set in `sail_catalog_hms::convert`.
+- ORC as a first-class engine format: Sail preserves `orc` as the provider for Spark `USING ORC` tables, but has no ORC file reader, so an ORC table registered in HMS cannot be read by Sail today.
 - Delegation-token authentication.
 
 Hive Metastore can be configured using the following options:

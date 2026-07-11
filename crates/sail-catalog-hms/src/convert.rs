@@ -11,7 +11,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::iceberg::{
-    ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE, is_iceberg_table_properties,
+    ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE, is_iceberg_table_marker,
 };
 use sail_common_datafusion::catalog::{
     DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
@@ -204,7 +204,7 @@ pub(crate) fn build_generic_table(
     if let Some(provider) = spark_datasource_provider(format.logical_format) {
         table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-            FastStr::from_static_str(provider),
+            FastStr::from_string(provider),
         );
     } else if format
         .logical_format
@@ -316,10 +316,10 @@ pub(crate) fn inject_spark_metadata(
         }
     }
 
-    if spark_datasource_provider(format).is_some() {
+    if let Some(provider) = spark_datasource_provider(format) {
         parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-            FastStr::from_string(format.to_string()),
+            FastStr::from_string(provider),
         );
     }
 
@@ -471,43 +471,28 @@ fn is_spark_datasource_format(logical_format: &str) -> bool {
     spark_datasource_provider(logical_format).is_some()
 }
 
-// Logical formats Sail persists as Spark datasource tables. This helper gates
-// datasource-style writes in `build_generic_table`: it records the
-// `spark.sql.sources.provider` parameter and stores the table location as the
-// SerDe `path` parameter so that `table_location` can recover it on read.
-//
-// Hive's native `textfile` SerDe and catalog-managed Iceberg tables deliberately
-// do not get a SerDe path. ORC is intentionally excluded as well: Sail currently
-// supports ORC only as HMS metadata (read back via SerDe detection), not as a
-// registered Sail datasource `TableFormat`. `inject_spark_metadata` now also
-// gates its `spark.sql.sources.provider` insert on this helper so that
-// orc/textfile/iceberg do not receive a ghost datasource provider in the
-// metadata-injection path. Spark schema + partition metadata is still written
-// unconditionally for every format.
-fn spark_datasource_provider(logical_format: &str) -> Option<&'static str> {
-    match logical_format {
-        "delta" => Some("delta"),
-        "parquet" => Some("parquet"),
-        "csv" => Some("csv"),
-        "json" => Some("json"),
-        "avro" => Some("avro"),
-        _ => None,
+// Generic formats use Spark's datasource representation unless the catalog
+// contract explicitly selects Hive SerDe or Iceberg metadata. This decision is
+// independent of Sail's current execution support for the provider.
+fn spark_datasource_provider(logical_format: &str) -> Option<String> {
+    let provider = logical_format.trim().to_ascii_lowercase();
+    match provider.as_str() {
+        "textfile" | ICEBERG_TABLE_TYPE_VALUE => None,
+        "deltalake" => Some("delta".to_string()),
+        _ => Some(provider),
     }
 }
 
 pub(crate) fn table_location(table: &Table) -> Option<String> {
     let storage = table.sd.as_ref()?;
-    if extract_property(table.parameters.as_ref(), SPARK_DATASOURCE_PROVIDER_KEY).is_some()
-        && let Some(path) = storage
+    if extract_property(table.parameters.as_ref(), SPARK_DATASOURCE_PROVIDER_KEY).is_some() {
+        return storage
             .serde_info
             .as_ref()
             .and_then(|serde| {
                 get_case_insensitive(serde.parameters.as_ref(), SPARK_DATASOURCE_PATH_KEY)
             })
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-    {
-        return Some(path.to_string());
+            .map(ToString::to_string);
     }
     storage.location.as_ref().map(ToString::to_string)
 }
@@ -516,12 +501,9 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     let provider = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY)?;
     let provider = provider.trim().to_ascii_lowercase();
     match provider.as_str() {
-        "delta" | "deltalake" => Some("delta".to_string()),
-        "parquet" => Some("parquet".to_string()),
-        "csv" => Some("csv".to_string()),
-        "json" => Some("json".to_string()),
-        "avro" => Some("avro".to_string()),
-        _ => None,
+        "deltalake" => Some("delta".to_string()),
+        "" => Some("unknown".to_string()),
+        _ => Some(provider),
     }
 }
 
@@ -537,11 +519,9 @@ fn get_case_insensitive<'a>(
 
 fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
     parameters.is_some_and(|properties| {
-        is_iceberg_table_properties(
-            properties
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
+        properties
+            .iter()
+            .any(|(key, value)| is_iceberg_table_marker(key.as_str().trim(), value.as_str().trim()))
     })
 }
 
@@ -725,24 +705,11 @@ fn reorder_spark_columns(
 ///
 /// The domain model, in priority order:
 ///
-/// 1. A Spark datasource provider Sail reads natively (`delta`/`deltalake`,
-///    `parquet`, `csv`, `json`, `avro`) is normalized to its canonical short
-///    name.
-/// 2. Otherwise the table is classified from its HMS storage metadata
-///    (SerDe/InputFormat/OutputFormat). Concrete storage detection takes
-///    priority over a raw unknown provider string: a custom datasource built on
-///    Parquet files is more usefully reported to Sail as `parquet` than as the
-///    declared provider class, and Spark `USING ORC` (provider `orc`, which
-///    Sail does not register as a native reader) is detected as `orc` from its
-///    ORC SerDe.
-/// 3. If storage detection is inconclusive *and* the table declared a provider
-///    Sail does not read natively (e.g. a Python or custom datasource), the
-///    declared provider identity is preserved (lower-cased) instead of being
-///    collapsed to `unknown`. Catalog listing/describe must not lose provider
-///    identity that a user or downstream tool may rely on; the scan/read layer
-///    may still fail later, which is acceptable.
-/// 4. If neither a provider nor a detectable storage format is present, the
-///    format is `unknown`.
+/// 1. A Spark datasource provider is preserved after trimming and normalizing
+///    case. The explicit `deltalake` catalog alias is canonicalized to `delta`.
+/// 2. Only tables without a datasource marker are classified from their Hive
+///    SerDe/InputFormat/OutputFormat metadata.
+/// 3. If neither is present or detectable, the format is `unknown`.
 fn resolve_table_format(
     parameters: Option<&AHashMap<FastStr, FastStr>>,
     storage: Option<&StorageDescriptor>,
@@ -759,12 +726,6 @@ fn resolve_table_format(
     );
     if detected != HiveDetectedFormat::Unknown {
         return detected.as_str().to_string();
-    }
-    if let Some(provider) = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY) {
-        let provider = provider.trim();
-        if !provider.is_empty() {
-            return provider.to_ascii_lowercase();
-        }
     }
     "unknown".to_string()
 }
@@ -1040,6 +1001,7 @@ mod tests {
             ("csv", HiveStorageFormat::csv()),
             ("json", HiveStorageFormat::json()),
             ("avro", HiveStorageFormat::avro()),
+            ("orc", HiveStorageFormat::orc()),
         ] {
             let table = build_generic_table(
                 "default",
@@ -2480,12 +2442,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_falls_back_on_unsupported_datasource_provider() {
-        // Unknown datasource providers are classified from HMS storage metadata
-        // rather than from the raw provider string when storage detection is
-        // concrete. The helper below uses Parquet SerDe/storage metadata, so a
-        // custom provider (or `orc`) layered on Parquet storage is reported as
-        // "parquet": concrete storage detection beats the declared provider.
+    fn test_table_to_status_preserves_unsupported_datasource_provider() {
         for provider in ["custom.provider", "orc"] {
             let table = hms_table_with_locations(
                 Some(provider),
@@ -2499,8 +2456,8 @@ mod tests {
             match status.kind {
                 sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                     assert_eq!(
-                        format, "parquet",
-                        "unsupported provider {provider} must fall back to SerDe detection"
+                        format, provider,
+                        "datasource provider {provider} must remain authoritative over Parquet SerDe metadata"
                     );
                 }
                 other => panic!("expected table, got {other:?}"),
@@ -2509,14 +2466,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_falls_back_to_serde_for_unsupported_datasource_provider() {
-        // provider=orc is not a Sail-native datasource provider, but Spark
-        // `CREATE TABLE ... USING ORC` writes both `spark.sql.sources.provider=orc`
-        // and ORC SerDe/InputFormat/OutputFormat metadata. Sail classifies the
-        // table from that storage metadata and reports format "orc", and does
-        // not fail listing/describe even though Sail has no ORC reader
-        // (metadata-only access must still work). This pins the
-        // "provider=orc + ORC SerDe -> orc" case.
+    fn test_table_to_status_preserves_orc_datasource_provider() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let orc = HiveStorageFormat::orc();
         let table = Table {
@@ -2551,7 +2501,7 @@ mod tests {
             sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                 assert_eq!(
                     format, "orc",
-                    "expected SerDe fallback to detect ORC storage metadata"
+                    "expected the unsupported short provider to remain listable"
                 );
             }
             other => panic!("expected table, got {other:?}"),
@@ -2559,10 +2509,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_custom_parquet_provider_detected_as_parquet() {
-        // provider=com.acme.CustomParquetSource is not Sail-native, but the
-        // table's storage metadata is Parquet. Concrete storage detection wins
-        // over the raw custom provider string, so the format is "parquet".
+    fn test_table_to_status_custom_parquet_provider_remains_custom_provider() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let parquet = HiveStorageFormat::parquet();
         let table = Table {
@@ -2595,8 +2542,8 @@ mod tests {
         match status.kind {
             sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                 assert_eq!(
-                    format, "parquet",
-                    "custom provider on Parquet storage must be detected as parquet"
+                    format, "com.acme.customparquetsource",
+                    "custom provider on Parquet storage must preserve provider identity"
                 );
             }
             other => panic!("expected table, got {other:?}"),
@@ -2651,22 +2598,27 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_falls_back_to_sd_location_when_datasource_path_missing_or_empty() {
+    fn test_table_to_status_datasource_provider_without_path_has_no_location() {
         let missing = hms_table_with_locations(Some("delta"), Some("s3://sd-location"), None, None);
         assert_eq!(
             table_status_location(&missing).as_deref(),
-            Some("s3://sd-location")
+            None,
+            "datasource tables without a SerDe path must not fall back to sd.location"
         );
+    }
 
+    #[test]
+    fn test_table_to_status_preserves_empty_datasource_path() {
         let empty = hms_table_with_locations(
             Some("delta"),
             Some("s3://sd-location"),
             Some("path"),
-            Some("  "),
+            Some(""),
         );
         assert_eq!(
             table_status_location(&empty).as_deref(),
-            Some("s3://sd-location")
+            Some(""),
+            "a present empty datasource path must remain authoritative"
         );
     }
 
@@ -2688,7 +2640,7 @@ mod tests {
     #[test]
     fn test_table_to_status_reads_datasource_path_key_case_insensitively() {
         let table = hms_table_with_locations(
-            Some("delta"),
+            Some(" DeLtA "),
             Some("s3://wrong-or-sentinel"),
             Some("PATH"),
             Some("s3://actual-uppercase"),
@@ -2697,6 +2649,22 @@ mod tests {
         assert_eq!(
             table_status_location(&table).as_deref(),
             Some("s3://actual-uppercase")
+        );
+        assert_eq!(table_status_format(&table).as_deref(), Some("delta"));
+    }
+
+    #[test]
+    fn test_table_to_status_metadata_location_without_marker_is_not_iceberg() {
+        let mut table = hms_table_with_locations(None, Some("s3://warehouse/items"), None, None);
+        table.parameters = Some(AHashMap::from_iter([(
+            FastStr::from_static_str("metadata_location"),
+            FastStr::from_static_str("s3://warehouse/items/metadata/00001.json"),
+        )]));
+
+        assert_eq!(
+            table_status_format(&table).as_deref(),
+            Some("parquet"),
+            "metadata_location alone must not classify an HMS table as Iceberg"
         );
     }
 

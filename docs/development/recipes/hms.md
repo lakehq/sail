@@ -28,7 +28,7 @@ What maintainers should not infer from the current test suite:
 - Broad production readiness across HMS distributions and versions.
 - Support for Hive ACID or transactional HMS APIs.
 - Support for delegation tokens or TLS.
-- ORC engine support: ORC is detected at the HMS metadata layer (including Spark `USING ORC` tables, via SerDe fallback) but Sail has no ORC reader. A Sail catalog accepts `USING ORC` for metadata purposes but cannot read the files.
+- ORC engine support: Sail preserves `orc` as the provider for Spark `USING ORC` tables, but has no ORC reader. A Sail catalog accepts `USING ORC` for metadata purposes but cannot read the files.
 
 ## What Green Means
 
@@ -161,7 +161,7 @@ Supported contract:
 - metadata CRUD for databases, tables, and views
 - retried create/drop mutations normalize `AlreadyExists` and `NotFound` responses when the earlier attempt likely succeeded and only the response was lost
 - Spark datasource v2 table resolution: Sail recognizes Spark-registered datasource tables, resolves the Spark-recorded table location, and routes to the matching file-format reader (`parquet`, `csv`, `json`, `avro`, `delta`)
-- Unsupported Spark datasource providers do not fail metadata conversion. Sail classifies the table from its HMS storage metadata (SerDe/InputFormat/OutputFormat); when that detection is inconclusive, the declared provider string is preserved (lower-cased) rather than collapsed to `unknown`. Listing and describe therefore remain usable even when reading the files is unsupported
+- Unsupported Spark datasource providers do not fail metadata conversion. The declared provider remains authoritative even when its SerDe/InputFormat/OutputFormat describes a supported storage format. Listing and describe therefore preserve the provider identity; an operation that needs an unregistered table format fails later during planning
 - Iceberg-in-HMS table lifecycle: recognize HMS-registered Iceberg tables, resolve their current metadata file, read via the Iceberg table provider, and commit new snapshots under a per-table HMS lock with compare-and-swap precondition checking
 
 Security guarantees in this contract:
@@ -174,7 +174,7 @@ Out of scope for the current implementation:
 - transactional HMS methods such as `open_txns`, `lock`, `heartbeat`, `allocate_table_write_ids`, or compaction APIs
 - Hortonworks or other distribution-specific compatibility promises
 - automatic keytab management inside Sail
-- ORC as an engine format: ORC is detected at the HMS metadata layer but Sail has no ORC reader; `USING ORC` is accepted for metadata but the files cannot be read
+- ORC as an engine format: the `orc` provider is preserved in HMS metadata but Sail has no ORC reader; `USING ORC` is accepted for metadata but the files cannot be read
 
 ## Table Format & Metadata Contract
 
