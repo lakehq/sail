@@ -92,13 +92,17 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         row_index_column,
         &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
     )?;
+    // Iceberg consumes delete metadata from the write plan. RowLevelWriteNode still
+    // requires a touched-file input, so use an empty placeholder instead of planning
+    // cloned joins that would duplicate the source and target scans.
+    let placeholder_touched_plan = LogicalPlanBuilder::empty(false).build()?;
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
         raw_source,
         raw_input_schema,
         Arc::new(expansion.write_plan),
-        Arc::new(expansion.touched_files_plan),
-        expansion.row_index_delete_plan.map(Arc::new),
+        Arc::new(placeholder_touched_plan),
+        None,
         expansion.options,
         expansion.output_schema,
     )

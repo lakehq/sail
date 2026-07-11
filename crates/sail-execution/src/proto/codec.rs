@@ -242,9 +242,8 @@ use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_ki
 use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
-    IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeDataRowsExec,
-    IcebergMergeMetadataExec, IcebergPositionDeleteWriterExec, IcebergScanByDataFilesExec,
-    IcebergWriterExec,
+    IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
+    IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
@@ -1237,6 +1236,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 logical_input_schema,
                 lakehouse_table_json,
+                merge_row_intents,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let sink_mode = match sink_mode {
@@ -1268,15 +1268,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(Arc::new(try_decode_schema(&logical_input_schema)?))
                 };
 
-                Ok(Arc::new(IcebergWriterExec::new(
-                    input,
-                    table_url,
-                    partition_columns,
-                    sink_mode,
-                    table_exists,
-                    options,
-                    logical_input_schema,
-                )))
+                let writer = if merge_row_intents {
+                    IcebergWriterExec::new_merge(
+                        input,
+                        table_url,
+                        partition_columns,
+                        sink_mode,
+                        table_exists,
+                        options,
+                        logical_input_schema,
+                    )
+                } else {
+                    IcebergWriterExec::new(
+                        input,
+                        table_url,
+                        partition_columns,
+                        sink_mode,
+                        table_exists,
+                        options,
+                        logical_input_schema,
+                    )
+                };
+                Ok(Arc::new(writer))
             }
             NodeKind::IcebergCommit(r#gen::IcebergCommitExecNode {
                 input,
@@ -1367,10 +1380,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     iceberg_schema,
                 )))
             }
-            NodeKind::IcebergMergeDataRows(r#gen::IcebergMergeDataRowsExecNode { input }) => {
-                let input = try_decode_physical_plan(ctx, self, &input)?;
-                Ok(Arc::new(IcebergMergeDataRowsExec::try_new(input)?))
-            }
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
                 input,
                 data_file_path,
@@ -1409,30 +1418,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )?
                 };
                 Ok(Arc::new(merge_metadata))
-            }
-            NodeKind::IcebergPositionDeleteWriter(r#gen::IcebergPositionDeleteWriterExecNode {
-                input,
-                table_url,
-                table_properties_json,
-                write_data_path,
-                write_folder_storage_path,
-                file_column_name,
-                row_index_column_name,
-            }) => {
-                let input = try_decode_physical_plan(ctx, self, &input)?;
-                let table_url = Url::parse(&table_url)
-                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_properties =
-                    self.try_decode_json(&table_properties_json, "Iceberg table properties")?;
-                Ok(Arc::new(IcebergPositionDeleteWriterExec::new(
-                    input,
-                    table_url,
-                    table_properties,
-                    write_data_path,
-                    write_folder_storage_path,
-                    file_column_name,
-                    row_index_column_name,
-                )))
             }
             NodeKind::IcebergEqualityDeleteWriter(r#gen::IcebergEqualityDeleteWriterExecNode {
                 input,
@@ -2193,6 +2178,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 logical_input_schema,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
+                merge_row_intents: iceberg_writer_exec.reads_merge_row_intents(),
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = try_encode_physical_plan(self, iceberg_commit_exec.input().clone())?;
@@ -2249,9 +2235,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delete_apply.table_url().to_string(),
                 iceberg_schema_json,
             })
-        } else if let Some(merge_data_rows) = node.downcast_ref::<IcebergMergeDataRowsExec>() {
-            let input = try_encode_physical_plan(self, merge_data_rows.input().clone())?;
-            NodeKind::IcebergMergeDataRows(r#gen::IcebergMergeDataRowsExecNode { input })
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan(self, merge_metadata.input().clone())?;
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
@@ -2268,24 +2251,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 data_file_partition_json: merge_metadata
                     .data_file_partition_json()
                     .map(ToString::to_string),
-            })
-        } else if let Some(position_writer) = node.downcast_ref::<IcebergPositionDeleteWriterExec>()
-        {
-            let input = try_encode_physical_plan(self, position_writer.input().clone())?;
-            let table_properties_json = self.try_encode_json(
-                position_writer.table_properties(),
-                "Iceberg table properties",
-            )?;
-            NodeKind::IcebergPositionDeleteWriter(r#gen::IcebergPositionDeleteWriterExecNode {
-                input,
-                table_url: position_writer.table_url().to_string(),
-                table_properties_json,
-                write_data_path: position_writer.write_data_path().map(ToString::to_string),
-                write_folder_storage_path: position_writer
-                    .write_folder_storage_path()
-                    .map(ToString::to_string),
-                file_column_name: position_writer.file_column_name().to_string(),
-                row_index_column_name: position_writer.row_index_column_name().to_string(),
             })
         } else if let Some(equality_writer) = node.downcast_ref::<IcebergEqualityDeleteWriterExec>()
         {

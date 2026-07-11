@@ -5,10 +5,9 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelCommand,
+    MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelCommand,
 };
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
@@ -16,9 +15,9 @@ use sail_logical_plan::merge::RowLevelWriteNode;
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
 use crate::physical_plan::equality_delete_writer_exec::ensure_full_row_equality_delete_preflight;
+use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
-    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergMergeDataRowsExec,
-    IcebergPositionDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
+    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
 };
 use crate::spec::{FormatVersion, TableMetadata};
 use crate::table::Table;
@@ -52,12 +51,6 @@ async fn plan_iceberg_merge(
     if node.touched_files_plan().is_some() && physical_inputs.len() < 2 {
         return plan_err!("Iceberg MERGE missing touched-file plan input");
     }
-    let row_index_delete_plan = if node.row_index_delete_plan().is_some() {
-        physical_inputs.last().cloned()
-    } else {
-        None
-    };
-
     let table_url =
         IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
@@ -72,17 +65,20 @@ async fn plan_iceberg_merge(
     )
     .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Merge)?;
-    if row_index_delete_plan.is_some() {
+    if write_plan
+        .schema()
+        .field_with_name(MERGE_ROW_INDEX_COLUMN)
+        .is_ok()
+    {
         ensure_iceberg_merge_format_v2(table.metadata())?;
     }
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
-    let data_rows: Arc<dyn ExecutionPlan> =
-        Arc::new(IcebergMergeDataRowsExec::try_new(write_plan)?);
-    let data_rows_schema = data_rows.schema();
-    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(data_rows));
-    let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new(
+    let merge_projection = IcebergMergeRowProjection::try_new(write_plan.schema())?;
+    let data_rows_schema = merge_projection.data_schema();
+    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(write_plan));
+    let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
         writer_input,
         table_url.clone(),
         partition_columns,
@@ -92,26 +88,9 @@ async fn plan_iceberg_merge(
         Some(data_rows_schema),
     ));
 
-    let commit_input: Arc<dyn ExecutionPlan> = if let Some(row_index_delete_plan) =
-        row_index_delete_plan
-    {
-        let delete_writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergPositionDeleteWriterExec::new(
-            row_index_delete_plan,
-            table_url.clone(),
-            writer_options.table_properties.clone(),
-            writer_options.write_data_path.clone(),
-            writer_options.write_folder_storage_path.clone(),
-            MERGE_FILE_COLUMN,
-            MERGE_ROW_INDEX_COLUMN,
-        ));
-        UnionExec::try_new(vec![writer, delete_writer])?
-    } else {
-        writer
-    };
-
     Ok(Arc::new(
         IcebergCommitExec::new(
-            Arc::new(CoalescePartitionsExec::new(commit_input)),
+            Arc::new(CoalescePartitionsExec::new(writer)),
             table_url,
             writer_options.lakehouse_table.clone(),
             SnapshotUpdateKind::RowDelta,

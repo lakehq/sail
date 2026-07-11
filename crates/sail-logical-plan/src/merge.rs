@@ -1034,6 +1034,8 @@ fn build_default_merge_expansion(
     // rewritten rows. Targeted rewrite can drop matched-but-unchanged rows from
     // untouched files, and conditional inserts can drop source-only rows. Aggregate
     // first so only one metric row flows to the writer.
+    // TODO: Let format adapters omit source metrics and cloned side plans they do not
+    // consume without adding format-specific policy to this shared expansion layer.
     let source_metric_projected = build_source_metric_plan(
         source_plan.clone(),
         target_schema,
@@ -1436,6 +1438,24 @@ fn build_source_metric_plan(
         return plan_err!("MERGE source metric projection is missing required path column");
     };
     projections.push(path_expr);
+    if !row_delete_metadata_columns.is_empty() {
+        for metadata_column in row_index_column
+            .into_iter()
+            .chain(row_delete_metadata_columns.iter().copied())
+        {
+            let field = target_schema
+                .fields()
+                .iter()
+                .find(|field| field.name() == metadata_column)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "MERGE source metric projection is missing metadata column '{metadata_column}'"
+                    ))
+                })?;
+            let null_value = ScalarValue::try_new_null(field.data_type())?;
+            projections.push(lit(null_value).alias(metadata_column.to_string()));
+        }
+    }
     projections.push(lit(RowLevelOperationType::SourceMetric.as_i32()).alias(OPERATION_COLUMN));
     projections.push(col(MERGE_SOURCE_METRIC_COLUMN).alias(MERGE_SOURCE_METRIC_COLUMN));
 
@@ -1830,6 +1850,18 @@ fn build_merge_projection(
     // Preserve the file path column so downstream physical planning can implement
     // targeted rewrite (filter writer input to touched files, while keeping inserts).
     projections.push(col(path_column).alias(path_column.to_string()));
+    // A format that supplies delete metadata consumes row deletes from this projection,
+    // so keep the row identity next to that metadata for the downstream writer.
+    if !row_delete_metadata_columns.is_empty() {
+        if let Some(row_index_column) = row_index_column {
+            projections.push(col(row_index_column).alias(row_index_column.to_string()));
+        }
+        projections.extend(
+            row_delete_metadata_columns
+                .iter()
+                .map(|column| col(*column).alias((*column).to_string())),
+        );
+    }
 
     // Append the operation type column so downstream writers know per-row intent.
     // Delete rows are preserved as metric-only rows; sinks that rewrite data

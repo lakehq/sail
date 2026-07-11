@@ -295,7 +295,7 @@ Feature: Iceberg MERGE
 
   Rule: Merge-on-read execution plans and metadata
 
-    Scenario: EXPLAIN shows merge-on-read data and position-delete writers
+    Scenario: EXPLAIN shows one merge-on-read row-intent writer
       Given variable location for temporary directory iceberg_merge_plan
       Given final statement
         """
