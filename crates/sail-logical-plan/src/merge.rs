@@ -1463,6 +1463,35 @@ fn or_pred(existing: Option<Expr>, expr: Expr) -> Option<Expr> {
     })
 }
 
+fn first_matching_clause_predicates<'a>(
+    base_predicate: Expr,
+    conditions: impl IntoIterator<Item = Option<&'a ExprWithSource>>,
+) -> Vec<Expr> {
+    let mut prior_match: Option<Expr> = None;
+    conditions
+        .into_iter()
+        .map(|condition| {
+            let clause_match = base_predicate
+                .clone()
+                .and(
+                    condition
+                        .map(|condition| condition.expr.clone())
+                        .unwrap_or_else(|| lit(true)),
+                )
+                .is_true();
+            let selected = match &prior_match {
+                Some(prior_match) => clause_match.clone().and(not(prior_match.clone())),
+                None => clause_match.clone(),
+            };
+            prior_match = Some(match prior_match.take() {
+                Some(prior_match) => prior_match.or(clause_match),
+                None => clause_match,
+            });
+            selected
+        })
+        .collect()
+}
+
 fn build_merge_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
@@ -1470,6 +1499,37 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
+    let matched_base = col(TARGET_PRESENT_COLUMN)
+        .is_not_null()
+        .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
+    let matched_clause_predicates = first_matching_clause_predicates(
+        matched_base,
+        options
+            .matched_clauses
+            .iter()
+            .map(|clause| clause.condition.as_ref()),
+    );
+    let not_matched_by_source_base = col(TARGET_PRESENT_COLUMN)
+        .is_not_null()
+        .and(col(SOURCE_PRESENT_COLUMN).is_null());
+    let not_matched_by_source_clause_predicates = first_matching_clause_predicates(
+        not_matched_by_source_base,
+        options
+            .not_matched_by_source_clauses
+            .iter()
+            .map(|clause| clause.condition.as_ref()),
+    );
+    let not_matched_by_target_base = col(TARGET_PRESENT_COLUMN)
+        .is_null()
+        .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
+    let not_matched_by_target_clause_predicates = first_matching_clause_predicates(
+        not_matched_by_target_base,
+        options
+            .not_matched_by_target_clauses
+            .iter()
+            .map(|clause| clause.condition.as_ref()),
+    );
+
     let mut cases: HashMap<String, Vec<(Expr, Expr)>> = target_schema
         .fields()
         .iter()
@@ -1510,13 +1570,11 @@ fn build_merge_projection(
             .unwrap_or_else(|| lit(ScalarValue::Null))
     };
 
-    for clause in &options.matched_clauses {
-        let mut pred = col(TARGET_PRESENT_COLUMN)
-            .is_not_null()
-            .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
+    for (clause, pred) in options
+        .matched_clauses
+        .iter()
+        .zip(&matched_clause_predicates)
+    {
         match &clause.action {
             MergeMatchedAction::Delete => {}
             MergeMatchedAction::UpdateAll => {
@@ -1539,13 +1597,11 @@ fn build_merge_projection(
         }
     }
 
-    for clause in &options.not_matched_by_source_clauses {
-        let mut pred = col(TARGET_PRESENT_COLUMN)
-            .is_not_null()
-            .and(col(SOURCE_PRESENT_COLUMN).is_null());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
+    for (clause, pred) in options
+        .not_matched_by_source_clauses
+        .iter()
+        .zip(&not_matched_by_source_clause_predicates)
+    {
         match &clause.action {
             MergeNotMatchedBySourceAction::Delete => {}
             MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
@@ -1560,14 +1616,11 @@ fn build_merge_projection(
         }
     }
 
-    for clause in &options.not_matched_by_target_clauses {
-        let mut pred = col(TARGET_PRESENT_COLUMN)
-            .is_null()
-            .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-
+    for (clause, pred) in options
+        .not_matched_by_target_clauses
+        .iter()
+        .zip(&not_matched_by_target_clause_predicates)
+    {
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {
                 for field in target_schema.fields().iter() {
@@ -1624,46 +1677,6 @@ fn build_merge_projection(
     // targeted rewrite (filter writer input to touched files, while keeping inserts).
     projections.push(col(path_column).alias(path_column.to_string()));
 
-    let mut matched_update_pred: Option<Expr> = None;
-    let mut not_matched_by_source_update_pred: Option<Expr> = None;
-    let mut matched_delete_pred: Option<Expr> = None;
-    let mut not_matched_by_source_delete_pred: Option<Expr> = None;
-
-    for clause in &options.matched_clauses {
-        let mut pred = col(TARGET_PRESENT_COLUMN)
-            .is_not_null()
-            .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        match &clause.action {
-            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {
-                matched_update_pred = or_pred(matched_update_pred, pred);
-            }
-            MergeMatchedAction::Delete => {
-                matched_delete_pred = or_pred(matched_delete_pred, pred);
-            }
-        }
-    }
-    for clause in &options.not_matched_by_source_clauses {
-        let mut pred = col(TARGET_PRESENT_COLUMN)
-            .is_not_null()
-            .and(col(SOURCE_PRESENT_COLUMN).is_null());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        match &clause.action {
-            MergeNotMatchedBySourceAction::UpdateSet(_) => {
-                not_matched_by_source_update_pred =
-                    or_pred(not_matched_by_source_update_pred, pred);
-            }
-            MergeNotMatchedBySourceAction::Delete => {
-                not_matched_by_source_delete_pred =
-                    or_pred(not_matched_by_source_delete_pred, pred);
-            }
-        }
-    }
-
     // Append the operation type column so downstream writers know per-row intent.
     // Delete rows are preserved as metric-only rows; sinks that rewrite data
     // files must filter them after consuming the tag.
@@ -1672,30 +1685,45 @@ fn build_merge_projection(
     // each writer's local plan shape.
     let insert_op = lit(RowLevelOperationType::Insert.as_i32());
     let copy_op = lit(RowLevelOperationType::Copy.as_i32());
+    let mut operation_branches = vec![(
+        Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
+        Box::new(insert_op),
+    )];
+    operation_branches.extend(
+        options
+            .matched_clauses
+            .iter()
+            .zip(matched_clause_predicates)
+            .map(|(clause, predicate)| {
+                let operation = match &clause.action {
+                    MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {
+                        RowLevelOperationType::MatchedUpdate
+                    }
+                    MergeMatchedAction::Delete => RowLevelOperationType::MatchedDelete,
+                };
+                (Box::new(predicate), Box::new(lit(operation.as_i32())))
+            }),
+    );
+    operation_branches.extend(
+        options
+            .not_matched_by_source_clauses
+            .iter()
+            .zip(not_matched_by_source_clause_predicates)
+            .map(|(clause, predicate)| {
+                let operation = match &clause.action {
+                    MergeNotMatchedBySourceAction::UpdateSet(_) => {
+                        RowLevelOperationType::NotMatchedBySourceUpdate
+                    }
+                    MergeNotMatchedBySourceAction::Delete => {
+                        RowLevelOperationType::NotMatchedBySourceDelete
+                    }
+                };
+                (Box::new(predicate), Box::new(lit(operation.as_i32())))
+            }),
+    );
     let op_expr = Expr::Case(Case {
         expr: None,
-        when_then_expr: vec![
-            (
-                Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
-                Box::new(insert_op),
-            ),
-            (
-                Box::new(matched_update_pred.unwrap_or_else(|| lit(false))),
-                Box::new(lit(RowLevelOperationType::MatchedUpdate.as_i32())),
-            ),
-            (
-                Box::new(not_matched_by_source_update_pred.unwrap_or_else(|| lit(false))),
-                Box::new(lit(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32())),
-            ),
-            (
-                Box::new(matched_delete_pred.unwrap_or_else(|| lit(false))),
-                Box::new(lit(RowLevelOperationType::MatchedDelete.as_i32())),
-            ),
-            (
-                Box::new(not_matched_by_source_delete_pred.unwrap_or_else(|| lit(false))),
-                Box::new(lit(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())),
-            ),
-        ],
+        when_then_expr: operation_branches,
         else_expr: Some(Box::new(copy_op)),
     });
     projections.push(op_expr.alias(OPERATION_COLUMN));

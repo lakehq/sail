@@ -65,6 +65,69 @@ Feature: Delta Lake Merge
         | 2  | new   | update |
         | 4  | ins   | insert |
 
+  Rule: WHEN clauses use first-match semantics
+
+    Scenario: Overlapping matched and target-only clauses apply only their first action
+      Given variable location for temporary directory delta_merge_first_match
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_first_match
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_first_match (
+          id INT,
+          left_value STRING,
+          right_value STRING,
+          kind STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_first_match VALUES
+          (1, 'old-left', 'old-right', 'delete-update'),
+          (2, 'old-left', 'old-right', 'partial-update'),
+          (3, 'old-left', 'old-right', 'source-update-delete'),
+          (4, 'old-left', 'old-right', 'source-delete-update')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_first_match_source AS
+        SELECT * FROM VALUES
+          (1, 'new-left', 'new-right', 'delete-update'),
+          (2, 'new-left', 'new-right', 'partial-update')
+        AS src(id, left_value, right_value, kind)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_first_match AS t
+        USING delta_merge_first_match_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.kind = 'delete-update' THEN DELETE
+        WHEN MATCHED AND s.kind IN ('delete-update', 'partial-update') THEN
+          UPDATE SET left_value = s.left_value
+        WHEN MATCHED AND s.kind = 'partial-update' THEN
+          UPDATE SET right_value = s.right_value
+        WHEN MATCHED THEN DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.kind = 'source-delete-update' THEN DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.kind IN ('source-update-delete', 'source-delete-update') THEN
+          UPDATE SET left_value = 'source-left'
+        WHEN NOT MATCHED BY SOURCE AND t.kind = 'source-update-delete' THEN
+          UPDATE SET right_value = 'source-right'
+        WHEN NOT MATCHED BY SOURCE THEN DELETE
+        """
+      When query
+        """
+        SELECT id, left_value, right_value, kind
+        FROM delta_merge_first_match
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | left_value  | right_value | kind                 |
+        | 2  | new-left    | old-right   | partial-update       |
+        | 3  | source-left | old-right   | source-update-delete |
+
   Rule: Cardinality violation is rejected when multiple source rows match one target row
     Background:
       Given variable location for temporary directory merge_cardinality
