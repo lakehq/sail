@@ -100,6 +100,7 @@ impl PlanResolver<'_> {
             state,
             target_schema,
             source_schema,
+            self.config.case_sensitive,
         );
         let on_condition = self
             .resolve_expression(on_condition_expr, &merge_schema, state)
@@ -440,6 +441,7 @@ impl PlanResolver<'_> {
                 state,
                 &target_schema,
                 source_schema,
+                self.config.case_sensitive,
             );
             let resolved_value = self.resolve_expression(value, merge_schema, state).await?;
             out.push(MergeAssignment {
@@ -483,8 +485,13 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<Expr>> {
         let mut out = Vec::with_capacity(values.len());
         for value in values {
-            let value =
-                merge_disambiguate_unqualified_plan_ids(value, state, target_schema, source_schema);
+            let value = merge_disambiguate_unqualified_plan_ids(
+                value,
+                state,
+                target_schema,
+                source_schema,
+                self.config.case_sensitive,
+            );
             out.push(self.resolve_expression(value, merge_schema, state).await?);
         }
         Ok(out)
@@ -527,6 +534,7 @@ impl PlanResolver<'_> {
                             state,
                             target_schema,
                             source_schema,
+                            self.config.case_sensitive,
                         ),
                         schema,
                         state,
@@ -751,20 +759,27 @@ fn merge_schema_has_column_name(
     schema: &datafusion_common::DFSchemaRef,
     state: &PlanResolverState,
     name: &str,
+    case_sensitive: bool,
 ) -> bool {
     schema.iter().any(|(_qualifier, field)| {
-        state
-            .get_field_info(field.name())
-            .is_ok_and(|info| !info.is_hidden() && info.name().eq_ignore_ascii_case(name))
+        state.get_field_info(field.name()).is_ok_and(|info| {
+            !info.is_hidden()
+                && if case_sensitive {
+                    info.name() == name
+                } else {
+                    info.name().eq_ignore_ascii_case(name)
+                }
+        })
     })
 }
 
-/// Disambiguate column references in a generation expression for MERGE INSERT/UPDATE context.
+/// Disambiguate unqualified MERGE references against the target and source schemas.
 pub(super) fn merge_disambiguate_unqualified_plan_ids(
     expr: spec::Expr,
     state: &PlanResolverState,
     target_schema: &datafusion_common::DFSchemaRef,
     source_schema: &datafusion_common::DFSchemaRef,
+    case_sensitive: bool,
 ) -> spec::Expr {
     use spec::Expr;
 
@@ -778,8 +793,10 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
             // like `t.id` should be resolved using the qualifier.
             if let [part] = name.parts() {
                 let col = part.as_ref();
-                let in_target = merge_schema_has_column_name(target_schema, state, col);
-                let in_source = merge_schema_has_column_name(source_schema, state, col);
+                let in_target =
+                    merge_schema_has_column_name(target_schema, state, col, case_sensitive);
+                let in_source =
+                    merge_schema_has_column_name(source_schema, state, col, case_sensitive);
                 let plan_id = match (in_target, in_source) {
                     (true, false) => Some(MERGE_TARGET_DEFAULT_PLAN_ID),
                     (false, true) => Some(MERGE_SOURCE_DEFAULT_PLAN_ID),
@@ -807,7 +824,13 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 .arguments
                 .into_iter()
                 .map(|e| {
-                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                    merge_disambiguate_unqualified_plan_ids(
+                        e,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
                 })
                 .collect();
             Expr::UnresolvedFunction(f)
@@ -832,6 +855,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             name,
             metadata,
@@ -847,6 +871,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             cast_to_type,
             rename,
@@ -866,6 +891,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             ..sort
         }),
@@ -878,6 +904,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             arguments,
         },
@@ -890,6 +917,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             window,
         },
@@ -899,12 +927,14 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             extraction: Box::new(merge_disambiguate_unqualified_plan_ids(
                 *extraction,
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::UpdateFields {
@@ -917,6 +947,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             field_name,
             value_expression: value_expression.map(|v| {
@@ -925,6 +956,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                     state,
                     target_schema,
                     source_schema,
+                    case_sensitive,
                 ))
             }),
         },
@@ -938,7 +970,13 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
             arguments: arguments
                 .into_iter()
                 .map(|e| {
-                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                    merge_disambiguate_unqualified_plan_ids(
+                        e,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
                 })
                 .collect(),
         },
@@ -947,7 +985,13 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
             exprs
                 .into_iter()
                 .map(|e| {
-                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                    merge_disambiguate_unqualified_plan_ids(
+                        e,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
                 })
                 .collect(),
         ),
@@ -955,7 +999,13 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
             exprs
                 .into_iter()
                 .map(|e| {
-                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                    merge_disambiguate_unqualified_plan_ids(
+                        e,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
                 })
                 .collect(),
         ),
@@ -969,6 +1019,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                                 state,
                                 target_schema,
                                 source_schema,
+                                case_sensitive,
                             )
                         })
                         .collect()
@@ -985,6 +1036,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             subquery,
             negated,
@@ -1001,11 +1053,18 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             list: list
                 .into_iter()
                 .map(|e| {
-                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                    merge_disambiguate_unqualified_plan_ids(
+                        e,
+                        state,
+                        target_schema,
+                        source_schema,
+                        case_sensitive,
+                    )
                 })
                 .collect(),
             negated,
@@ -1015,46 +1074,59 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsNotFalse(e) => Expr::IsNotFalse(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsTrue(e) => Expr::IsTrue(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsNotTrue(e) => Expr::IsNotTrue(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsNull(e) => Expr::IsNull(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsNotNull(e) => Expr::IsNotNull(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
         Expr::IsUnknown(e) => Expr::IsUnknown(Box::new(merge_disambiguate_unqualified_plan_ids(
             *e,
             state,
             target_schema,
             source_schema,
+            case_sensitive,
         ))),
-        Expr::IsNotUnknown(e) => Expr::IsNotUnknown(Box::new(
-            merge_disambiguate_unqualified_plan_ids(*e, state, target_schema, source_schema),
-        )),
+        Expr::IsNotUnknown(e) => {
+            Expr::IsNotUnknown(Box::new(merge_disambiguate_unqualified_plan_ids(
+                *e,
+                state,
+                target_schema,
+                source_schema,
+                case_sensitive,
+            )))
+        }
         Expr::Between {
             expr,
             negated,
@@ -1066,6 +1138,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             negated,
             low: Box::new(merge_disambiguate_unqualified_plan_ids(
@@ -1073,12 +1146,14 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             high: Box::new(merge_disambiguate_unqualified_plan_ids(
                 *high,
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::IsDistinctFrom { left, right } => Expr::IsDistinctFrom {
@@ -1087,12 +1162,14 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             right: Box::new(merge_disambiguate_unqualified_plan_ids(
                 *right,
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::IsNotDistinctFrom { left, right } => Expr::IsNotDistinctFrom {
@@ -1101,12 +1178,14 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             right: Box::new(merge_disambiguate_unqualified_plan_ids(
                 *right,
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::SimilarTo {
@@ -1121,12 +1200,14 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             pattern: Box::new(merge_disambiguate_unqualified_plan_ids(
                 *pattern,
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
             negated,
             escape_char,
@@ -1138,6 +1219,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::UnresolvedDate { .. } => expr,
@@ -1148,6 +1230,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
         Expr::Subquery {
@@ -1166,6 +1249,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                         state,
                         target_schema,
                         source_schema,
+                        case_sensitive,
                     )
                 })
                 .collect(),
@@ -1179,6 +1263,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 state,
                 target_schema,
                 source_schema,
+                case_sensitive,
             )),
         },
     }

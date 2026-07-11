@@ -250,6 +250,49 @@ Feature: Iceberg MERGE
         """
       Then query error Cannot resolve source column `A` for MERGE \* action without schema evolution
 
+    Scenario: Unqualified MERGE columns honor case-sensitive resolution
+      Given config spark.sql.caseSensitive = true
+      Given variable location for temporary directory iceberg_merge_unqualified_case_sensitive
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_unqualified_case_sensitive
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_unqualified_case_sensitive (`A` INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_unqualified_case_sensitive VALUES (1)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_unqualified_case_sensitive_source AS
+        SELECT 2 AS a
+        """
+      Given statement
+        """
+        MERGE INTO iceberg_merge_unqualified_case_sensitive AS t
+        USING iceberg_merge_unqualified_case_sensitive_source AS s
+        ON `A` = a
+        WHEN MATCHED THEN UPDATE SET `A` = s.a
+        WHEN NOT MATCHED THEN INSERT (`A`) VALUES (s.a)
+        """
+      When query
+        """
+        SELECT `A` FROM iceberg_merge_unqualified_case_sensitive ORDER BY `A`
+        """
+      Then query result ordered
+        | A |
+        | 1 |
+        | 2 |
+
   Rule: Merge-on-read execution plans and metadata
 
     Scenario: EXPLAIN shows merge-on-read data and position-delete writers
