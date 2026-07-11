@@ -215,6 +215,8 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
         let include_row_index = self.row_index_column_name.is_some();
 
         let stream = try_stream! {
+            // TODO: Derive positions from Parquet metadata; stream-local offsets are wrong
+            // after file splitting or row-group reordering.
             let mut row_offset = 0i64;
             let mut current_file_path: Option<String> = None;
             let mut stream = child;

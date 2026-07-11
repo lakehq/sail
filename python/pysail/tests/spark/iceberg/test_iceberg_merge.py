@@ -579,6 +579,89 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
         _drop_table(spark, table_name)
 
 
+@pytest.mark.skip(
+    reason="Known bug: MERGE uses stream-local positions after Parquet file splitting or row-group reordering"
+)
+def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(spark, tmp_path):
+    table_name = "iceberg_merge_split_file_position"
+    table_path = tmp_path / table_name
+    target_id = 1_100_000
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql(
+            f"""
+            INSERT INTO {table_name}
+            SELECT id, sha2(CAST(id AS STRING), 256) AS value
+            FROM range(1200000)
+            """
+        )
+
+        data_files = sorted(table_path / path for path in _parquet_file_paths(table_path))
+        assert len(data_files) == 1
+        data_file = data_files[0]
+        parquet_file = pq.ParquetFile(data_file)
+        assert data_file.stat().st_size > 10 * 1024 * 1024
+        assert parquet_file.metadata.num_row_groups >= 2  # noqa: PLR2004
+        expected_position = None
+        row_offset = 0
+        for batch in parquet_file.iter_batches(columns=["id"]):
+            ids = batch.column("id").to_pylist()
+            if target_id in ids:
+                expected_position = row_offset + ids.index(target_id)
+                break
+            row_offset += batch.num_rows
+        assert expected_position is not None
+        assert expected_position >= parquet_file.metadata.row_group(0).num_rows
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_split_file_source AS
+            SELECT {target_id}L AS id, 'updated' AS value
+            """
+        )
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_split_file_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            """
+        ).collect()
+
+        rows = [
+            tuple(row)
+            for row in spark.sql(f"SELECT id, value FROM {table_name} WHERE id = {target_id}").collect()
+        ]
+        assert rows == [(target_id, "updated")]
+
+        delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
+        positions = sorted(
+            position
+            for entry in delete_entries
+            for position in pq.read_table(_local_file_path(entry.data_file.file_path), columns=["pos"])
+            .column("pos")
+            .to_pylist()
+        )
+        assert positions == [expected_position]
+    finally:
+        _drop_table(spark, table_name)
+
+
 def test_iceberg_merge_metadata_as_data_read_preserves_row_level_metadata(spark, tmp_path):
     table_name = "iceberg_merge_metadata_as_data"
     table_path = tmp_path / table_name
