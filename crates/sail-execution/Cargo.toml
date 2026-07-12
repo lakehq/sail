@@ -47,6 +47,11 @@ url = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
+bytes = { workspace = true }
+fs2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

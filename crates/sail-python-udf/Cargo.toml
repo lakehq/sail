@@ -27,6 +27,10 @@ num-bigint = { workspace = true }
 object_store = { workspace = true }
 sha2 = { workspace = true }
 url = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+tempfile = { workspace = true }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
