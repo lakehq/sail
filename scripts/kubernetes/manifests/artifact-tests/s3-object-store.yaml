@@ -119,6 +119,9 @@ spec:
               value: "/tmp/sail-driver-artifacts"
             - name: SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES
               value: "0"
+            # Bound worker shutdown and artifact cleanup within the test deadline.
+            - name: SAIL_SPARK__ARTIFACT_TRANSFER_TIMEOUT_SECS
+              value: "10"
             - name: SAIL_SPARK__ARTIFACT_STORE_URI
               value: "s3://${SAIL_K8S_MINIO_BUCKET}/artifacts"
             - name: SAIL_SPARK__ARTIFACT_CLEANUP_JOURNAL_ROOT

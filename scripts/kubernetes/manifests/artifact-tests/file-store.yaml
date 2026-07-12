@@ -63,6 +63,9 @@ spec:
               value: /tmp/sail/artifact-root
             - name: SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES
               value: "32"
+            # Bound worker shutdown and artifact cleanup within the test deadline.
+            - name: SAIL_SPARK__ARTIFACT_TRANSFER_TIMEOUT_SECS
+              value: "10"
             - name: SAIL_SPARK__ARTIFACT_STORE_URI
               value: file:///tmp/sail/artifact-store
             - name: SAIL_SPARK__ARTIFACT_CLEANUP_JOURNAL_ROOT
