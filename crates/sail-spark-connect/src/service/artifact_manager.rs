@@ -940,6 +940,24 @@ async fn artifact_transport(
         });
     }
 
+    if let Some(existing) = artifacts.artifacts()?.into_iter().find(|artifact| {
+        artifact.sha256 == sha256 && artifact.size == size as u64 && artifact.uri.is_some()
+    }) {
+        let uri = existing.uri.ok_or_else(|| {
+            SparkError::internal("committed artifact content did not have an object-store URI")
+        })?;
+        if !artifacts.has_artifact_uri(&uri)? {
+            return Err(SparkError::internal(
+                "committed artifact content lost ownership of its object-store URI",
+            ));
+        }
+        return Ok(ArtifactTransport {
+            data: None,
+            uri: Some(uri),
+            object_upload: None,
+        });
+    }
+
     let options = artifacts.options();
     if size <= options.inline_max_bytes && artifacts.can_inline_artifact(name, size)? {
         let data = spawn_blocking_artifact("read inline artifact", move || {
