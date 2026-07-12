@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use fastrace::prelude::SpanContext;
-use log::{error, warn};
+use log::error;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
@@ -93,6 +93,18 @@ impl<T: Actor> ActorContext<T> {
                     error!("failed to join task spawned by actor: {e}");
                     continue;
                 }
+            }
+        }
+    }
+
+    /// Abort and join every task spawned by this actor.
+    pub async fn shutdown_tasks(&mut self) {
+        self.tasks.abort_all();
+        while let Some(result) = self.tasks.join_next().await {
+            match result {
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => error!("failed to join task spawned by actor: {error}"),
             }
         }
     }
@@ -222,13 +234,9 @@ impl<T: Actor> ActorRunner<T> {
         // But here we explicitly close the receiver so that the other end knows sooner
         // that the actor is no longer running, since the actor may take some time to stop.
         self.receiver.close();
+        while self.receiver.try_recv().is_ok() {}
         self.actor.stop(&mut self.ctx).await;
-        self.ctx.reap();
-        // The remaining tasks will be aborted when the `ActorContext` is dropped.
-        let n = self.ctx.tasks.len();
-        if n > 0 {
-            warn!("aborting {n} task(s) for {}", T::name());
-        }
+        self.ctx.shutdown_tasks().await;
     }
 }
 
@@ -241,6 +249,8 @@ struct MessageEnvelop<M> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use tokio::sync::oneshot;
 
@@ -319,5 +329,31 @@ mod tests {
         let result = handle.send(TestMessage::Stop).await;
         assert!(matches!(result, Ok(())));
         system.join().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_tasks_waits_for_spawned_future_ownership_to_drop() {
+        struct DropMarker(Arc<AtomicBool>);
+
+        impl Drop for DropMarker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let (tx, _rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
+        let handle = ActorHandle { sender: tx };
+        let mut ctx = ActorContext::<TestActor>::new(&handle);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let marker = DropMarker(Arc::clone(&dropped));
+        ctx.spawn(async move {
+            let _marker = marker;
+            std::future::pending::<()>().await;
+        });
+
+        ctx.shutdown_tasks().await;
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(ctx.tasks.is_empty());
     }
 }

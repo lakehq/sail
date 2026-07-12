@@ -19,7 +19,7 @@ use crate::error::{SessionError, SessionResult};
 use crate::session_factory::ServerSessionInfo;
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
-use crate::session_manager::session::{ServerSession, ServerSessionState};
+use crate::session_manager::session::{ServerSession, ServerSessionState, SessionKey};
 
 impl SessionManagerActor {
     pub(super) fn handle_get_or_create_session(
@@ -29,38 +29,54 @@ impl SessionManagerActor {
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        let context = if let Some(session) = self.sessions.get(&session_id) {
+        let session_key = SessionKey::new(session_id, user_id);
+        let context = if let Some(session) = self.sessions.get(&session_key) {
             if let ServerSessionState::Running { context } = &session.state {
                 Ok(context.clone())
             } else {
                 Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
+                    "session {} for user {} is not running",
+                    session_key.session_id(),
+                    session_key.user_id()
                 )))
             }
+        } else if self.shutting_down {
+            Err(SessionError::invalid(
+                "cannot create session: session manager is shutting down",
+            ))
+        } else if !self.make_room_for_session() {
+            Err(SessionError::invalid(format!(
+                "cannot create session {} for user {}: maximum number of sessions ({}) reached",
+                session_key.session_id(),
+                session_key.user_id(),
+                self.options.max_sessions
+            )))
         } else {
-            let session_id = session_id.clone();
-            info!("creating session {session_id}");
+            info!(
+                "creating session {} for user {}",
+                session_key.session_id(),
+                session_key.user_id()
+            );
             let span = Span::root(
                 "SessionManagerActor::create_session_context",
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
             let info = ServerSessionInfo {
-                session_id: session_id.clone(),
-                user_id: user_id.clone(),
+                session_id: session_key.session_id().clone(),
+                user_id: session_key.user_id().clone(),
                 session_manager: ctx.handle().clone(),
             };
             match self.factory.create(info) {
                 Ok(context) => {
                     let session = ServerSession {
-                        user_id,
                         created_at: Utc::now(),
                         deleted_at: None,
                         state: ServerSessionState::Running {
                             context: context.clone(),
                         },
                     };
-                    self.sessions.insert(session_id, session);
+                    self.sessions.insert(session_key.clone(), session);
                     Ok(context)
                 }
                 Err(e) => Err(e.into()),
@@ -73,7 +89,7 @@ impl SessionManagerActor {
         {
             ctx.send_with_delay(
                 SessionManagerEvent::ProbeIdleSession {
-                    session_id,
+                    session_key,
                     instant: active_at,
                 },
                 self.options.session_timeout,
@@ -83,22 +99,58 @@ impl SessionManagerActor {
         ActorAction::Continue
     }
 
+    fn make_room_for_session(&mut self) -> bool {
+        if self.options.max_sessions == 0 {
+            return false;
+        }
+        while self.sessions.len() >= self.options.max_sessions {
+            let Some(index) = self.sessions.iter().position(|(_, session)| {
+                matches!(
+                    &session.state,
+                    ServerSessionState::Deleted { .. } | ServerSessionState::Failed
+                )
+            }) else {
+                return false;
+            };
+            if let Some((session_key, _)) = self.sessions.shift_remove_index(index) {
+                info!(
+                    "evicting terminal session {} for user {}",
+                    session_key.session_id(),
+                    session_key.user_id()
+                );
+            }
+        }
+        true
+    }
+
     pub(super) fn handle_probe_idle_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        session_id: String,
+        session_key: SessionKey,
         instant: Instant,
     ) -> ActorAction {
-        let session = self.sessions.get_mut(&session_id);
+        let session = self.sessions.get_mut(&session_key);
         if let Some(session) = session
             && let ServerSessionState::Running { context } = &mut session.state
             && let Ok(tracker) = context.extension::<ActivityTracker>()
             && tracker.active_at().is_ok_and(|x| x <= instant)
         {
-            info!("removing idle session {session_id}");
-            Self::delete_session(ctx, session_id, context);
+            info!(
+                "removing idle session {} for user {}",
+                session_key.session_id(),
+                session_key.user_id()
+            );
+            let retained_context = context.clone();
+            let shutdown_started =
+                Self::request_session_job_shutdown(ctx, session_key, &retained_context);
             session.deleted_at = Some(Utc::now());
-            session.state = ServerSessionState::Deleting;
+            session.state = if shutdown_started {
+                ServerSessionState::Deleting {
+                    context: retained_context,
+                }
+            } else {
+                ServerSessionState::Failed
+            };
         }
         ActorAction::Continue
     }
@@ -107,24 +159,42 @@ impl SessionManagerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         session_id: String,
+        user_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     ) -> ActorAction {
-        let session = self.sessions.get_mut(&session_id);
+        let session_key = SessionKey::new(session_id, user_id);
+        let session = self.sessions.get_mut(&session_key);
         let output = if let Some(session) = session {
             if let ServerSessionState::Running { context } = &mut session.state {
-                info!("removing session {session_id}");
-                Self::delete_session(ctx, session_id, context);
+                info!(
+                    "removing session {} for user {}",
+                    session_key.session_id(),
+                    session_key.user_id()
+                );
+                let retained_context = context.clone();
+                let shutdown_started =
+                    Self::request_session_job_shutdown(ctx, session_key, &retained_context);
                 session.deleted_at = Some(Utc::now());
-                session.state = ServerSessionState::Deleting;
+                session.state = if shutdown_started {
+                    ServerSessionState::Deleting {
+                        context: retained_context,
+                    }
+                } else {
+                    ServerSessionState::Failed
+                };
                 Ok(())
             } else {
                 Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
+                    "session {} for user {} is not running",
+                    session_key.session_id(),
+                    session_key.user_id()
                 )))
             }
         } else {
             Err(SessionError::invalid(format!(
-                "session not found: {session_id}"
+                "session {} not found for user {}",
+                session_key.session_id(),
+                session_key.user_id()
             )))
         };
         let _ = result.send(output);
@@ -134,34 +204,101 @@ impl SessionManagerActor {
     pub(super) fn handle_set_session_history(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        session_id: String,
+        session_key: SessionKey,
         history: SessionHistory,
     ) -> ActorAction {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            warn!("session not found: {session_id}");
-            return ActorAction::Continue;
+        let Some(session) = self.sessions.get_mut(&session_key) else {
+            warn!(
+                "session {} not found for user {}",
+                session_key.session_id(),
+                session_key.user_id()
+            );
+            return self.shutdown_action();
         };
-        if matches!(session.state, ServerSessionState::Deleting) {
+        if matches!(session.state, ServerSessionState::Deleting { .. }) {
             session.state = ServerSessionState::Deleted {
                 history: Arc::new(history),
             };
         } else {
-            warn!("session is not being deleted: {session_id}");
+            warn!(
+                "session {} for user {} is not being deleted",
+                session_key.session_id(),
+                session_key.user_id()
+            );
         }
-        ActorAction::Continue
+        self.shutdown_action()
     }
 
     pub(super) fn handle_set_session_failure(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        session_id: String,
+        session_key: SessionKey,
     ) -> ActorAction {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            warn!("session not found: {session_id}");
-            return ActorAction::Continue;
+        let Some(session) = self.sessions.get_mut(&session_key) else {
+            warn!(
+                "session {} not found for user {}",
+                session_key.session_id(),
+                session_key.user_id()
+            );
+            return self.shutdown_action();
         };
         session.state = ServerSessionState::Failed;
-        ActorAction::Continue
+        self.shutdown_action()
+    }
+
+    pub(super) fn handle_shutdown(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<SessionResult<()>>,
+    ) -> ActorAction {
+        self.shutdown_results.push(result);
+        if !self.shutting_down {
+            self.shutting_down = true;
+            let shutdown_contexts = &mut self.shutdown_contexts;
+            for (session_key, session) in &mut self.sessions {
+                let context = match &mut session.state {
+                    ServerSessionState::Running { context } => context,
+                    ServerSessionState::Deleting { context } => {
+                        shutdown_contexts.push(context.clone());
+                        continue;
+                    }
+                    ServerSessionState::Deleted { .. } | ServerSessionState::Failed => continue,
+                };
+                info!(
+                    "shutting down session {} for user {}",
+                    session_key.session_id(),
+                    session_key.user_id()
+                );
+                let retained_context = context.clone();
+                shutdown_contexts.push(retained_context.clone());
+                let shutdown_started =
+                    Self::request_session_job_shutdown(ctx, session_key.clone(), &retained_context);
+                session.deleted_at = Some(Utc::now());
+                session.state = if shutdown_started {
+                    ServerSessionState::Deleting {
+                        context: retained_context,
+                    }
+                } else {
+                    ServerSessionState::Failed
+                };
+            }
+        }
+        self.shutdown_action()
+    }
+
+    fn shutdown_action(&self) -> ActorAction {
+        if self.shutting_down
+            && self.sessions.values().all(|session| {
+                matches!(
+                    &session.state,
+                    ServerSessionState::Deleted { .. } | ServerSessionState::Failed
+                )
+            })
+        {
+            ActorAction::Stop
+        } else {
+            ActorAction::Continue
+        }
     }
 
     pub(super) fn handle_observe_state(
@@ -181,10 +318,10 @@ impl SessionManagerActor {
                     .iter()
                     .predicate_filter_async_flat_map(
                         session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Jobs {
-                                session_id: k.clone(),
+                        |&(session_key, _)| session_key.session_id(),
+                        |(session_key, session)| {
+                            session.observe_job_runner(|tx| JobRunnerObserver::Jobs {
+                                session_id: session_key.session_id().clone(),
                                 job_id: job_id.clone(),
                                 fetch,
                                 result: tx,
@@ -207,10 +344,10 @@ impl SessionManagerActor {
                     .iter()
                     .predicate_filter_async_flat_map(
                         session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Stages {
-                                session_id: k.clone(),
+                        |&(session_key, _)| session_key.session_id(),
+                        |(session_key, session)| {
+                            session.observe_job_runner(|tx| JobRunnerObserver::Stages {
+                                session_id: session_key.session_id().clone(),
                                 job_id: job_id.clone(),
                                 fetch,
                                 result: tx,
@@ -233,10 +370,10 @@ impl SessionManagerActor {
                     .iter()
                     .predicate_filter_async_flat_map(
                         session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Tasks {
-                                session_id: k.clone(),
+                        |&(session_key, _)| session_key.session_id(),
+                        |(session_key, session)| {
+                            session.observe_job_runner(|tx| JobRunnerObserver::Tasks {
+                                session_id: session_key.session_id().clone(),
                                 job_id: job_id.clone(),
                                 fetch,
                                 result: tx,
@@ -258,13 +395,13 @@ impl SessionManagerActor {
                     .iter()
                     .predicate_filter_map(
                         session_id,
-                        |&(k, _)| k,
-                        |(k, v)| SessionRow {
-                            session_id: k.clone(),
-                            user_id: v.user_id.clone(),
-                            status: v.state.status().to_string(),
-                            created_at: v.created_at,
-                            deleted_at: v.deleted_at,
+                        |&(session_key, _)| session_key.session_id(),
+                        |(session_key, session)| SessionRow {
+                            session_id: session_key.session_id().clone(),
+                            user_id: session_key.user_id().clone(),
+                            status: session.state.status().to_string(),
+                            created_at: session.created_at,
+                            deleted_at: session.deleted_at,
                         },
                     )
                     .fetch(fetch)
@@ -282,10 +419,10 @@ impl SessionManagerActor {
                     .iter()
                     .predicate_filter_async_flat_map(
                         session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Workers {
-                                session_id: k.clone(),
+                        |&(session_key, _)| session_key.session_id(),
+                        |(session_key, session)| {
+                            session.observe_job_runner(|tx| JobRunnerObserver::Workers {
+                                session_id: session_key.session_id().clone(),
                                 worker_id: worker_id.clone(),
                                 fetch,
                                 result: tx,
@@ -318,10 +455,18 @@ impl SessionManagerActor {
         ActorAction::Continue
     }
 
-    fn delete_session(ctx: &mut ActorContext<Self>, session_id: String, context: &SessionContext) {
+    fn request_session_job_shutdown(
+        ctx: &mut ActorContext<Self>,
+        session_key: SessionKey,
+        context: &SessionContext,
+    ) -> bool {
         let Ok(service) = context.extension::<JobService>() else {
-            warn!("job service not found for session {session_id}");
-            return;
+            warn!(
+                "job service not found for session {} for user {}",
+                session_key.session_id(),
+                session_key.user_id()
+            );
+            return false;
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
@@ -329,12 +474,13 @@ impl SessionManagerActor {
             service.runner().stop(tx).await;
             let message = match rx.await {
                 Ok(x) => SessionManagerEvent::SetSessionHistory {
-                    session_id,
+                    session_key,
                     history: SessionHistory { job_runner: x },
                 },
-                Err(_) => SessionManagerEvent::SetSessionFailure { session_id },
+                Err(_) => SessionManagerEvent::SetSessionFailure { session_key },
             };
             let _ = handle.send(message).await;
         });
+        true
     }
 }
