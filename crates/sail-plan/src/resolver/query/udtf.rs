@@ -87,6 +87,19 @@ impl PlanResolver<'_> {
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
 
+        let table_argument_count = argument_is_tables
+            .iter()
+            .filter(|is_table| **is_table)
+            .count();
+        if table_argument_count > 1 && !self.config.tvf_allow_multiple_table_arguments {
+            return Err(PlanError::analysis(format!(
+                "[TABLE_VALUED_FUNCTION_TOO_MANY_TABLE_ARGUMENTS] There are too many table \
+                 arguments for table-valued function. It allows one table argument, but got: \
+                 {table_argument_count}. If you want to allow it, please set \
+                 \"spark.sql.tvf.allowMultipleTableArguments.enabled\" to \"true\""
+            )));
+        }
+
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
             spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
