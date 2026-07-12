@@ -764,6 +764,14 @@
     If the server does not receive any requests from the client after this duration,
     the session will be removed from the server.
 
+- key: spark.session_max_count
+  type: number
+  default: "1024"
+  description: |
+    The maximum number of Spark Connect sessions retained by one server process.
+    New session creation is rejected when this limit is reached.
+  experimental: true
+
 - key: spark.execution_heartbeat_interval_secs
   type: number
   default: "15"
@@ -785,11 +793,105 @@
 
 - key: spark.artifact_inline_max_bytes
   type: number
-  default: "1048576"
+  default: "16777216"
   description: |
     The maximum artifact size, in bytes, that Sail sends directly in task control messages.
-    Larger Python, file, and archive artifacts require spark.artifact_store_uri so that
-    cluster workers can fetch them without depending on the driver's local filesystem.
+    Local and local-cluster modes automatically use a private temporary artifact store for
+    larger Python, file, and archive artifacts. Kubernetes mode requires an explicit
+    spark.artifact_store_uri so workers do not depend on the driver's local filesystem.
+  experimental: true
+
+- key: spark.artifact_max_bytes
+  type: number
+  default: "67108864"
+  description: |
+    The maximum observed size, in bytes, of one Spark Connect artifact upload.
+    Even if this value is configured above 67108864, artifacts selected for
+    object-store transport have a fixed 67108864-byte single-PUT limit.
+  experimental: true
+
+- key: spark.artifact_max_chunks
+  type: number
+  default: "4096"
+  description: |
+    The maximum number of chunks allowed for one Spark Connect artifact upload.
+  experimental: true
+
+- key: spark.artifact_rpc_max_artifacts
+  type: number
+  default: "256"
+  description: |
+    The maximum number of artifacts accepted by one AddArtifacts RPC.
+  experimental: true
+
+- key: spark.artifact_rpc_max_chunks
+  type: number
+  default: "8192"
+  description: |
+    The maximum number of artifact chunks accepted by one AddArtifacts RPC.
+  experimental: true
+
+- key: spark.artifact_rpc_max_bytes
+  type: number
+  default: "134217728"
+  description: |
+    The maximum observed artifact payload size, in bytes, accepted by one AddArtifacts RPC.
+  experimental: true
+
+- key: spark.artifact_session_max_artifacts
+  type: number
+  default: "1024"
+  description: |
+    The maximum number of distinct artifacts retained by one Spark Connect session.
+  experimental: true
+
+- key: spark.artifact_session_max_bytes
+  type: number
+  default: "536870912"
+  description: |
+    The maximum total size, in bytes, of distinct artifacts retained by one Spark Connect session.
+  experimental: true
+
+- key: spark.artifact_process_max_artifacts
+  type: number
+  default: "4096"
+  description: |
+    The maximum number of distinct Spark Connect artifacts retained by one server process.
+  experimental: true
+
+- key: spark.artifact_process_max_bytes
+  type: number
+  default: "2147483648"
+  description: |
+    The maximum total size, in bytes, of distinct Spark Connect artifacts retained by one server process.
+  experimental: true
+
+- key: spark.artifact_process_inline_max_bytes
+  type: number
+  default: "536870912"
+  description: |
+    The maximum total size, in bytes, of inline Spark Connect artifacts retained in memory by one server process.
+  experimental: true
+
+- key: spark.artifact_rpc_timeout_secs
+  type: number
+  default: "300"
+  description: |
+    The total time allowed for one AddArtifacts RPC.
+  experimental: true
+
+- key: spark.artifact_chunk_timeout_secs
+  type: number
+  default: "30"
+  description: |
+    The idle time allowed while waiting for the next AddArtifacts stream message.
+  experimental: true
+
+- key: spark.artifact_transfer_timeout_secs
+  type: number
+  default: "300"
+  description: |
+    The time allowed to stage or materialize task resources through the artifact object store.
   experimental: true
 
 - key: spark.artifact_store_uri
@@ -798,7 +900,21 @@
   description: |
     Optional object-store URI prefix used for Spark Connect artifacts larger than
     spark.artifact_inline_max_bytes. Examples include file:///shared/sail-artifacts
-    for local development or s3://bucket/prefix for Kubernetes deployments.
+    for local development or s3://bucket/prefix for Kubernetes deployments. When empty,
+    local and local-cluster modes create a private temporary file store for the server lifetime;
+    Kubernetes mode leaves the store unconfigured.
+  experimental: true
+
+- key: spark.artifact_cleanup_journal_root
+  type: string
+  default: ""
+  description: |
+    Optional process-wide root directory for durable Spark artifact cleanup journals.
+    The server and execution engine use separate subdirectories below this root. In
+    Kubernetes mode with spark.artifact_store_uri configured, this must be an absolute
+    path backed by persistent storage that survives pod and node replacement. When empty
+    in other modes, Sail uses a private directory below the operating system temporary
+    directory. Conflicting values in one process are rejected.
   experimental: true
 
 - key: flight.session_timeout_secs
