@@ -33,7 +33,7 @@ Aliases:
 Environment:
   SAIL_K8S_CLUSTER       kind cluster name, default: ${SAIL_K8S_CLUSTER}
   SAIL_K8S_IMAGE         Sail image tag, default: ${SAIL_K8S_IMAGE}
-  SAIL_K8S_PYTHON        client Python version for uv, default: ${SAIL_K8S_PYTHON}
+  SAIL_K8S_PYTHON        client Python version for uv; must match the Sail image, default: ${SAIL_K8S_PYTHON}
   SAIL_K8S_BUILD_IMAGE   set to 0 to skip Docker build, default: ${SAIL_K8S_BUILD_IMAGE}
   SAIL_K8S_KEEP          set to 1 to keep Kubernetes resources, default: ${SAIL_K8S_KEEP}
 
@@ -70,7 +70,7 @@ run_file_store() {
   local port_forward_pid
   local status
 
-  run_id="$(git -C "${ROOT}" rev-parse --short HEAD)-$(date +%s)"
+  run_id="$(git -C "${ROOT}" rev-parse --short HEAD)-$(date +%s)-$$-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')"
   namespace="${SAIL_K8S_FILE_NAMESPACE:-${SAIL_K8S_FILE_NAMESPACE_PREFIX:-sail-artifacts-file}-${run_id}}"
   port="${SAIL_K8S_FILE_PORT:-$(sail_k8s_free_port)}"
   manifest="${TARGET_DIR}/file-store-${run_id}.yaml"
@@ -79,6 +79,10 @@ run_file_store() {
   mkdir -p "${TARGET_DIR}"
   sail_k8s_register_namespace "${namespace}"
   export SAIL_K8S_NAMESPACE="${namespace}"
+  export SAIL_K8S_HOST_PATH="/tmp/sail/artifact-runs/${run_id}"
+  export SAIL_K8S_PYTEST_HOST_PATH="/private/tmp/sail/artifact-runs/${run_id}"
+  sail_k8s_register_host_path "${SAIL_K8S_HOST_PATH}"
+  sail_k8s_register_host_path "${SAIL_K8S_PYTEST_HOST_PATH}"
   export SAIL_K8S_IMAGE
   sail_k8s_render_template "${MANIFEST_DIR}/file-store.yaml" "${manifest}"
 
@@ -104,13 +108,14 @@ run_file_store() {
   status="$?"
   set -e
 
-  sail_k8s_stop_process "${port_forward_pid}"
+  sail_k8s_stop_registered_process "${port_forward_pid}"
   cleanup_namespace "${namespace}"
   return "${status}"
 }
 
 run_s3_object_store() {
-  local namespace="${SAIL_K8S_S3_NAMESPACE:-${SAIL_K8S_S3_NAMESPACE_PREFIX:-sail-artifacts-s3}-$(date +%s)}"
+  local run_id
+  local namespace
   local manifest
   local minio_port
   local sail_port
@@ -119,6 +124,9 @@ run_s3_object_store() {
   local minio_port_forward_pid
   local sail_port_forward_pid
   local status
+
+  run_id="$(git -C "${ROOT}" rev-parse --short HEAD)-$(date +%s)-$$-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')"
+  namespace="${SAIL_K8S_S3_NAMESPACE:-${SAIL_K8S_S3_NAMESPACE_PREFIX:-sail-artifacts-s3}-${run_id}}"
 
   manifest="${TARGET_DIR}/s3-object-store-${namespace}.yaml"
   minio_port="$(sail_k8s_free_port)"
@@ -134,6 +142,8 @@ run_s3_object_store() {
   mkdir -p "${TARGET_DIR}"
   sail_k8s_register_namespace "${namespace}"
   export SAIL_K8S_NAMESPACE="${namespace}"
+  export SAIL_K8S_HOST_PATH="/tmp/sail/artifact-runs/${run_id}"
+  sail_k8s_register_host_path "${SAIL_K8S_HOST_PATH}"
   export SAIL_K8S_IMAGE
   export SAIL_K8S_MINIO_IMAGE
   export SAIL_K8S_MINIO_BUCKET
@@ -171,8 +181,8 @@ run_s3_object_store() {
   status="$?"
   set -e
 
-  sail_k8s_stop_process "${sail_port_forward_pid}"
-  sail_k8s_stop_process "${minio_port_forward_pid}"
+  sail_k8s_stop_registered_process "${sail_port_forward_pid}"
+  sail_k8s_stop_registered_process "${minio_port_forward_pid}"
   cleanup_namespace "${namespace}"
   return "${status}"
 }

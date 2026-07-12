@@ -71,6 +71,13 @@ spec:
         app.kubernetes.io/component: spark-server
     spec:
       serviceAccountName: sail-user
+      volumes:
+        # This hostPath is test-only and survives server Pod recreation on the kind node.
+        # Production deployments must use a PVC that also survives node replacement.
+        - name: cleanup-journal
+          hostPath:
+            path: ${SAIL_K8S_HOST_PATH}
+            type: DirectoryOrCreate
       containers:
         - name: server
           image: ${SAIL_K8S_IMAGE}
@@ -79,6 +86,9 @@ spec:
           args: ["spark", "server", "--ip", "0.0.0.0", "--port", "50051"]
           ports:
             - containerPort: 50051
+          volumeMounts:
+            - name: cleanup-journal
+              mountPath: /tmp/sail
           env:
             - name: RUST_LOG
               value: info
@@ -104,13 +114,15 @@ spec:
               value: sail-user
             - name: SAIL_KUBERNETES__WORKER_POD_TEMPLATE
               value: >-
-                {"metadata":{"labels":{"custom-label":"sail-artifact-s3-worker","app.kubernetes.io/component":"worker"}},"spec":{"containers":[{"name":"worker","env":[{"name":"AWS_ACCESS_KEY_ID","value":"${SAIL_K8S_MINIO_USER}"},{"name":"AWS_SECRET_ACCESS_KEY","value":"${SAIL_K8S_MINIO_PASSWORD}"},{"name":"AWS_REGION","value":"us-east-1"},{"name":"AWS_ENDPOINT","value":"http://minio:9000"},{"name":"AWS_VIRTUAL_HOSTED_STYLE_REQUEST","value":"false"},{"name":"AWS_ALLOW_HTTP","value":"true"}]}]}}
+                {"metadata":{"labels":{"custom-label":"sail-artifact-s3-worker","app.kubernetes.io/component":"worker"}},"spec":{"containers":[{"name":"worker","env":[{"name":"SAIL_K8S_WORKER_POD_NAME","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}},{"name":"AWS_ACCESS_KEY_ID","value":"${SAIL_K8S_MINIO_USER}"},{"name":"AWS_SECRET_ACCESS_KEY","value":"${SAIL_K8S_MINIO_PASSWORD}"},{"name":"AWS_REGION","value":"us-east-1"},{"name":"AWS_ENDPOINT","value":"http://minio:9000"},{"name":"AWS_VIRTUAL_HOSTED_STYLE_REQUEST","value":"false"},{"name":"AWS_ALLOW_HTTP","value":"true"}]}]}}
             - name: SAIL_SPARK__ARTIFACT_ROOT
               value: "/tmp/sail-driver-artifacts"
             - name: SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES
               value: "0"
             - name: SAIL_SPARK__ARTIFACT_STORE_URI
               value: "s3://${SAIL_K8S_MINIO_BUCKET}/artifacts"
+            - name: SAIL_SPARK__ARTIFACT_CLEANUP_JOURNAL_ROOT
+              value: "/tmp/sail/artifact-cleanup-journal"
             - name: AWS_ACCESS_KEY_ID
               value: "${SAIL_K8S_MINIO_USER}"
             - name: AWS_SECRET_ACCESS_KEY

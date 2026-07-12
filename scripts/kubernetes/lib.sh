@@ -2,6 +2,7 @@
 
 SAIL_K8S_CLEANUP_PIDS=()
 SAIL_K8S_CLEANUP_NAMESPACES=()
+SAIL_K8S_CLEANUP_HOST_PATHS=()
 
 sail_k8s_repo_root() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
@@ -60,14 +61,53 @@ sail_k8s_register_process() {
   SAIL_K8S_CLEANUP_PIDS+=("$1")
 }
 
+sail_k8s_unregister_process() {
+  local pid="$1"
+  local registered_pid
+  local remaining_pids=()
+
+  for registered_pid in "${SAIL_K8S_CLEANUP_PIDS[@]}"; do
+    if [[ "${registered_pid}" != "${pid}" ]]; then
+      remaining_pids+=("${registered_pid}")
+    fi
+  done
+  if [[ "${#remaining_pids[@]}" -eq 0 ]]; then
+    SAIL_K8S_CLEANUP_PIDS=()
+  else
+    SAIL_K8S_CLEANUP_PIDS=("${remaining_pids[@]}")
+  fi
+}
+
 sail_k8s_register_namespace() {
   SAIL_K8S_CLEANUP_NAMESPACES+=("$1")
+}
+
+sail_k8s_register_host_path() {
+  local path="$1"
+
+  case "${path}/" in
+    *//*|*/./*|*/../*)
+      echo "refusing to register Kubernetes cleanup path containing an empty, '.', or '..' component: ${path}" >&2
+      return 1
+      ;;
+  esac
+
+  case "${path}" in
+    /tmp/sail/artifact-runs/?*|/private/tmp/sail/artifact-runs/?*)
+      SAIL_K8S_CLEANUP_HOST_PATHS+=("${path}")
+      ;;
+    *)
+      echo "refusing to register Kubernetes cleanup path outside the run-scoped Sail artifact roots: ${path}" >&2
+      return 1
+      ;;
+  esac
 }
 
 sail_k8s_cleanup() {
   local status="$?"
   local pid
   local namespace
+  local path
 
   trap - EXIT INT TERM
   if [[ "${#SAIL_K8S_CLEANUP_PIDS[@]}" -gt 0 ]]; then
@@ -83,6 +123,11 @@ sail_k8s_cleanup() {
         else
           kubectl delete namespace "${namespace}" --ignore-not-found=true || true
         fi
+      done
+    fi
+    if [[ "${#SAIL_K8S_CLEANUP_HOST_PATHS[@]}" -gt 0 ]]; then
+      for path in "${SAIL_K8S_CLEANUP_HOST_PATHS[@]}"; do
+        rm -rf -- "${path}"
       done
     fi
   fi
@@ -126,4 +171,10 @@ sail_k8s_stop_process() {
   local pid="$1"
   kill "${pid}" 2>/dev/null || true
   wait "${pid}" 2>/dev/null || true
+}
+
+sail_k8s_stop_registered_process() {
+  local pid="$1"
+  sail_k8s_unregister_process "${pid}"
+  sail_k8s_stop_process "${pid}"
 }

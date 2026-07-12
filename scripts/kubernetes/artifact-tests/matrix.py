@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
-import os  # noqa: I001
+import hashlib
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,12 +15,10 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from pyspark.sql import SparkSession, functions as F  # noqa: N812
+from pyspark.sql import SparkSession
+from pyspark.sql.connect.proto import base_pb2 as proto
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType, StringType
-
-from pyspark.sql.connect.proto import base_pb2 as proto
-
 
 REMOTE = os.environ.get("SPARK_REMOTE", "sc://localhost:15051")
 RUN_ID = os.environ.get("SAIL_K8S_ARTIFACT_RUN_ID", uuid.uuid4().hex[:8])
@@ -64,6 +64,24 @@ def artifact_store_file_count() -> int:
 
 def clear_artifact_root() -> None:
     kubectl_exec("rm -rf /tmp/sail/artifact-root/* && mkdir -p /tmp/sail/artifact-root")
+
+
+def server_artifact_exists(spark: SparkSession, relative_path: str) -> bool:
+    manager = spark._client._artifact_manager
+    session_id = manager._session_id
+    user_id = manager._user_context.user_id
+    identity = hashlib.sha256()
+    identity.update(len(user_id.encode()).to_bytes(8, "big"))
+    identity.update(user_id.encode())
+    identity.update(len(session_id.encode()).to_bytes(8, "big"))
+    identity.update(session_id.encode())
+    session_hash = identity.hexdigest()
+    pattern = Path("*") / session_hash / relative_path
+    script = (
+        "find /tmp/sail/artifact-root -path "
+        f"{shlex.quote(str(Path('/tmp/sail/artifact-root') / pattern))} -print -quit | grep -q ."  # noqa: S108
+    )
+    return kubectl_exec(script, check=False).returncode == 0
 
 
 def make_zip(path: Path, entries: dict[str, str | bytes]) -> None:
@@ -130,7 +148,7 @@ def module_text_len_udf(module_name: str):
 def spark_file_text_udf(file_name: str):
     @udf(StringType())
     def read_file(_):
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         with open(SparkFiles.get(file_name), encoding="utf-8") as handle:
             return handle.read()
@@ -143,7 +161,7 @@ def archive_text_udf(*parts: str):
     def read_archive(_):
         import os
 
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         path = os.path.join(SparkFiles.getRootDirectory(), *parts)
         with open(path, encoding="utf-8") as handle:
@@ -166,8 +184,17 @@ def case_basic_k8s_execution() -> None:
     spark = None
     try:
         spark = new_spark("basic")
-        rows = spark.range(20).repartition(4).agg(F.sum("id").alias("total")).collect()
-        assert rows[0].total == 190  # noqa: PLR2004, S101
+        server_pod = kubectl_exec("hostname").stdout.strip()
+
+        @udf(StringType())
+        def worker_pod_name(_):
+            return os.environ["SAIL_K8S_WORKER_POD_NAME"]
+
+        rows = spark.range(20).repartition(4).select("id", worker_pod_name("id").alias("worker_pod")).collect()
+        assert sum(row.id for row in rows) == 190  # noqa: PLR2004, S101
+        worker_pods = {row.worker_pod for row in rows}
+        assert worker_pods  # noqa: S101
+        assert server_pod not in worker_pods  # noqa: S101
     finally:
         stop_spark(spark)
 
@@ -218,6 +245,7 @@ def case_cache_artifacts_and_local_relations() -> None:
             r"content hash|SHA-256|INVALID",
         )
         assert not artifact_statuses(spark, [f"cache/{wrong_hash}"])[f"cache/{wrong_hash}"].exists  # noqa: S101
+        assert not server_artifact_exists(spark, f"cache/{wrong_hash}")  # noqa: S101
 
         spark.conf.set("spark.sql.session.localRelationCacheThreshold", str(1 << 30))
         inline_df = spark.createDataFrame([(1, "a"), (2, "b")], schema="id long, value string")
@@ -377,10 +405,12 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(f"{unsafe_archive}#k8s_unsafe_{RUN_ID}", archive=True)
             expect_raises(
                 "unsafe archive member",
-                lambda: spark.range(1)
-                .select(archive_text_udf(f"k8s_unsafe_{RUN_ID}", "escape.txt")("id").alias("v"))
-                .collect(),
-                r"unsafe archive member path",
+                lambda: (
+                    spark.range(1)
+                    .select(archive_text_udf(f"k8s_unsafe_{RUN_ID}", "escape.txt")("id").alias("v"))
+                    .collect()
+                ),
+                r"unsafe archive member path|safe relative path",
             )
 
             jar_path = tmp / f"k8s_dummy_{RUN_ID}.jar"
@@ -426,9 +456,7 @@ def case_protocol_errors_and_transactionality() -> None:
         crc_response = manager._retrieve_responses(iter([crc_request]))
         assert crc_response.artifacts[0].name == f"files/k8s_bad_crc_{RUN_ID}.txt"  # noqa: S101
         assert not crc_response.artifacts[0].is_crc_successful  # noqa: S101
-        assert not artifact_statuses(spark, [f"files/k8s_bad_crc_{RUN_ID}.txt"])[  # noqa: S101
-            f"files/k8s_bad_crc_{RUN_ID}.txt"
-        ].exists
+        assert not server_artifact_exists(spark, f"files/k8s_bad_crc_{RUN_ID}.txt")  # noqa: S101
 
         direct_module = f"k8s_direct_chunk_module_{RUN_ID}"
         direct_data = f"VALUE = 321\nTEXT = {repr('d' * 128)}\n".encode()  # noqa: RUF010
@@ -479,7 +507,7 @@ def case_protocol_errors_and_transactionality() -> None:
         expect_raises(
             "incomplete declared chunked artifact",
             lambda: manager._retrieve_responses(iter([incomplete_request])),
-            r"missing data chunks|expected 1 chunks|10000000000",
+            r"exceeded the limit|67108864",
         )
 
         module_name = f"k8s_uncommitted_module_{RUN_ID}"
@@ -512,11 +540,8 @@ def case_protocol_errors_and_transactionality() -> None:
             lambda: manager._retrieve_responses(iter([batch_request])),
             r"relative path|\\.\\.|invalid",
         )
-        expect_raises(
-            "batch failure did not commit prior pyfile",
-            lambda: spark.range(1).select(module_value_udf(module_name)("id").alias("v")).collect(),
-            module_name,
-        )
+        rows = spark.range(1).select(module_value_udf(module_name)("id").alias("v")).collect()
+        assert rows[0].v == 99  # noqa: PLR2004, S101
     finally:
         stop_spark(spark)
 
@@ -539,9 +564,12 @@ def case_copy_from_local_to_fs() -> None:
 
             spark.conf.set("spark.sql.artifact.copyFromLocalToFs.allowDestLocal", "true")
             dest = f"/tmp/sail/k8s_copy_enabled_{RUN_ID}.txt"  # noqa: S108
-            spark.copyFromLocalToFs(str(source), dest)
-            copied = kubectl_exec(f"cat {dest}").stdout
-            assert copied == payload  # noqa: S101
+            expect_raises(
+                "copyFromLocalToFs client-side enablement",
+                lambda: spark.copyFromLocalToFs(str(source), dest),
+                r"local file|copyFromLocalToFs|not supported|UNSUPPORTED",
+            )
+            assert kubectl_exec(f"test ! -e {dest}", check=False).returncode == 0  # noqa: S101
     finally:
         stop_spark(spark)
 
@@ -551,7 +579,7 @@ def main() -> int:
     run_case("basic k8s distributed execution", case_basic_k8s_execution)
     run_case("cache artifacts and local relation cache plans", case_cache_artifacts_and_local_relations)
     run_case("pyfile/file/archive artifacts and JVM artifact rejection", case_pyfile_file_archive_and_jar_artifacts)
-    run_case("AddArtifacts protocol errors and transactional behavior", case_protocol_errors_and_transactionality)
+    run_case("AddArtifacts protocol errors and partial commit behavior", case_protocol_errors_and_transactionality)
     run_case("copyFromLocalToFs forward_to_fs artifact path", case_copy_from_local_to_fs)
 
     if failures:

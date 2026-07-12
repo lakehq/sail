@@ -25,13 +25,15 @@ spec:
     spec:
       serviceAccountName: sail-user
       volumes:
+        # This hostPath is test-only and survives server Pod recreation on the kind node.
+        # Production deployments must use a PVC that also survives node replacement.
         - name: data
           hostPath:
-            path: /tmp/sail
+            path: ${SAIL_K8S_HOST_PATH}
             type: DirectoryOrCreate
         - name: pytest-data
           hostPath:
-            path: /private/tmp/sail
+            path: ${SAIL_K8S_PYTEST_HOST_PATH}
             type: DirectoryOrCreate
       containers:
         - name: server
@@ -63,6 +65,8 @@ spec:
               value: "32"
             - name: SAIL_SPARK__ARTIFACT_STORE_URI
               value: file:///tmp/sail/artifact-store
+            - name: SAIL_SPARK__ARTIFACT_CLEANUP_JOURNAL_ROOT
+              value: /tmp/sail/artifact-cleanup-journal
             - name: SAIL_KUBERNETES__IMAGE
               value: ${SAIL_K8S_IMAGE}
             - name: SAIL_KUBERNETES__IMAGE_PULL_POLICY
@@ -90,14 +94,14 @@ spec:
                       {
                         "name": "data",
                         "hostPath": {
-                          "path": "/tmp/sail",
+                          "path": "${SAIL_K8S_HOST_PATH}",
                           "type": "DirectoryOrCreate"
                         }
                       },
                       {
                         "name": "pytest-data",
                         "hostPath": {
-                          "path": "/private/tmp/sail",
+                          "path": "${SAIL_K8S_PYTEST_HOST_PATH}",
                           "type": "DirectoryOrCreate"
                         }
                       }
@@ -105,6 +109,16 @@ spec:
                     "containers": [
                       {
                         "name": "worker",
+                        "env": [
+                          {
+                            "name": "SAIL_K8S_WORKER_POD_NAME",
+                            "valueFrom": {
+                              "fieldRef": {
+                                "fieldPath": "metadata.name"
+                              }
+                            }
+                          }
+                        ],
                         "volumeMounts": [
                           {
                             "name": "data",

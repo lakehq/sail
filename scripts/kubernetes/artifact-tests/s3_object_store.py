@@ -83,7 +83,7 @@ def wait_for_empty_bucket(client) -> None:
 def run_spark_probe(client) -> None:
     from pyspark.sql import SparkSession
     from pyspark.sql.functions import udf
-    from pyspark.sql.types import IntegerType
+    from pyspark.sql.types import IntegerType, StringType
 
     spark = SparkSession.builder.appName("sail-k8s-artifact-s3-validation").remote(REMOTE).getOrCreate()
     try:
@@ -123,7 +123,7 @@ def run_spark_probe(client) -> None:
 
             @udf(IntegerType())
             def binary_sum(x: int) -> int:
-                from pyspark.core.files import SparkFiles
+                from pyspark import SparkFiles
 
                 with open(SparkFiles.get("k8s_numbers.bin"), "rb") as file:
                     data = file.read()
@@ -132,7 +132,7 @@ def run_spark_probe(client) -> None:
 
             @udf(IntegerType())
             def json_score(x: int) -> int:
-                from pyspark.core.files import SparkFiles
+                from pyspark import SparkFiles
 
                 with open(SparkFiles.get("k8s_weights.json"), encoding="utf-8") as file:
                     config = json.load(file)
@@ -146,7 +146,7 @@ def run_spark_probe(client) -> None:
 
             @udf(IntegerType())
             def archive_score(x: int) -> int:
-                from pyspark.core.files import SparkFiles
+                from pyspark import SparkFiles
 
                 root = SparkFiles.getRootDirectory()
                 bundle = os.path.join(root, "calc_bundle", "bundle")
@@ -155,6 +155,10 @@ def run_spark_probe(client) -> None:
                 with open(os.path.join(bundle, "lookup.csv"), encoding="utf-8") as file:
                     total = sum(int(row["value"]) for row in csv.DictReader(file))
                 return total + int(config["multiplier"]) * int(x)
+
+            @udf(StringType())
+            def worker_pod_name(_):
+                return os.environ["SAIL_K8S_WORKER_POD_NAME"]
 
             rows = (
                 spark.range(6)
@@ -165,6 +169,7 @@ def run_spark_probe(client) -> None:
                     json_score("id").alias("json_score"),
                     pyfile_score("id").alias("pyfile_score"),
                     archive_score("id").alias("archive_score"),
+                    worker_pod_name("id").alias("worker_pod"),
                 )
                 .sort("id")
                 .collect()
@@ -191,6 +196,14 @@ def run_spark_probe(client) -> None:
             ]
             print(f"Computed artifact UDF rows: {actual}")  # noqa: T201
             assert actual == expected  # noqa: S101
+            server_pod = (
+                kubectl_capture(["-n", NAMESPACE, "exec", "deployment/sail-spark-server", "--", "hostname"])
+                .strip()
+                .splitlines()[-1]
+            )
+            worker_pods = {row.worker_pod for row in rows}
+            assert worker_pods  # noqa: S101
+            assert server_pod not in worker_pods  # noqa: S101
     finally:
         spark.stop()
     wait_for_empty_bucket(client)
