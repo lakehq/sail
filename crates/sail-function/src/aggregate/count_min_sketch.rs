@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, AsArray, BinaryArray};
-use arrow::datatypes::{DataType, Field, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
