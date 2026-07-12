@@ -301,10 +301,19 @@ pub fn initialize_task_resource_cleanup_journal(journal_root: &Path) -> Executio
 }
 
 fn task_resource_cleanup_journal_root() -> ExecutionResult<PathBuf> {
+    resolve_default_task_resource_cleanup_journal_root(&TASK_RESOURCE_CLEANUP_JOURNAL_ROOT)
+}
+
+fn resolve_default_task_resource_cleanup_journal_root(
+    journal_root_slot: &OnceLock<PathBuf>,
+) -> ExecutionResult<PathBuf> {
+    if let Some(journal_root) = journal_root_slot.get() {
+        return Ok(journal_root.clone());
+    }
     let default_root = std::env::temp_dir()
         .join(DEFAULT_ARTIFACT_CLEANUP_JOURNAL_DIRECTORY)
         .join("execution");
-    resolve_task_resource_cleanup_journal_root(&default_root, &TASK_RESOURCE_CLEANUP_JOURNAL_ROOT)
+    resolve_task_resource_cleanup_journal_root(&default_root, journal_root_slot)
 }
 
 fn resolve_task_resource_cleanup_journal_root(
@@ -2522,6 +2531,10 @@ mod tests {
         assert_eq!(resolved, configured.canonicalize().unwrap());
         assert_eq!(
             resolve_task_resource_cleanup_journal_root(&configured, &journal_root_slot).unwrap(),
+            resolved
+        );
+        assert_eq!(
+            resolve_default_task_resource_cleanup_journal_root(&journal_root_slot).unwrap(),
             resolved
         );
         let error = resolve_task_resource_cleanup_journal_root(&conflicting, &journal_root_slot)
