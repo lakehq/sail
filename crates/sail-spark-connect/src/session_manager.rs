@@ -250,6 +250,11 @@ fn resolve_artifact_cleanup_journal_root(
             "spark.artifact_cleanup_journal_root must be configured when Kubernetes mode uses spark.artifact_store_uri",
         ));
     }
+    if configured_root.is_none()
+        && let Some(journal_root) = journal_root_slot.get()
+    {
+        return Ok(journal_root.clone());
+    }
     let requested_root = configured_root.map_or_else(
         || std::env::temp_dir().join(DEFAULT_ARTIFACT_CLEANUP_JOURNAL_DIRECTORY),
         Path::to_path_buf,
@@ -763,6 +768,10 @@ mod tests {
         assert_eq!(configured, first.canonicalize()?);
         assert_eq!(
             resolve_artifact_cleanup_journal_root(Some(&first), true, &journal_root_slot,)?,
+            configured
+        );
+        assert_eq!(
+            resolve_artifact_cleanup_journal_root(None, false, &journal_root_slot)?,
             configured
         );
         let error = resolve_artifact_cleanup_journal_root(Some(&second), true, &journal_root_slot)
