@@ -27,6 +27,7 @@ pub struct DriverOptions {
     pub task_max_attempts: usize,
     pub artifact_inline_max_bytes: usize,
     pub artifact_store_uri: Option<String>,
+    pub artifact_transfer_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
@@ -68,6 +69,9 @@ impl DriverOptions {
             } else {
                 Some(config.spark.artifact_store_uri.clone())
             },
+            artifact_transfer_timeout: Duration::from_secs(
+                config.spark.artifact_transfer_timeout_secs,
+            ),
             runtime,
             worker_manager,
         }

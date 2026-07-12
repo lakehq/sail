@@ -25,6 +25,7 @@ message PySparkPythonArtifact {
   string sha256 = 5;
   uint64 size = 6;
   PySparkArtifactKind kind = 7;
+  string scope_id = 8;
 }
 
 message LocalRelationResource {

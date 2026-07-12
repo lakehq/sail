@@ -8,8 +8,6 @@ use crate::driver::DriverOptions;
 pub struct JobSchedulerOptions {
     pub task_launch_timeout: Duration,
     pub task_max_attempts: usize,
-    pub artifact_inline_max_bytes: usize,
-    pub artifact_store_uri: Option<String>,
 }
 
 impl From<&DriverOptions> for JobSchedulerOptions {
@@ -17,8 +15,6 @@ impl From<&DriverOptions> for JobSchedulerOptions {
         Self {
             task_launch_timeout: options.task_launch_timeout,
             task_max_attempts: options.task_max_attempts,
-            artifact_inline_max_bytes: options.artifact_inline_max_bytes,
-            artifact_store_uri: options.artifact_store_uri.clone(),
         }
     }
 }

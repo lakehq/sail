@@ -21,7 +21,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::{RemoteExecutionCodec, decode_remote_physical_plan};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
@@ -48,28 +48,50 @@ impl TaskRunner {
     ) where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let stream = match self.execute_plan(ctx, &key, definition, launch_context, context) {
-            Ok(x) => x,
-            Err(e) => {
-                let event = T::Message::report_task_status(
-                    key,
-                    TaskStatus::Failed,
-                    Some(format!("failed to execute plan: {e}")),
-                    Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                );
-                ctx.send(event);
-                return;
-            }
-        };
+        let (stream, resource_memory_reservations) =
+            match self.execute_plan(ctx, &key, definition, launch_context, context) {
+                Ok(x) => x,
+                Err(e) => {
+                    let event = T::Message::report_task_status(
+                        key,
+                        TaskStatus::Failed,
+                        Some(format!("failed to execute plan: {e}")),
+                        Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                    );
+                    ctx.send(event);
+                    return;
+                }
+            };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         self.signals.insert(key.clone(), tx);
         let monitor = TaskMonitor::new(handle, key, stream, rx);
-        ctx.spawn(monitor.run());
+        ctx.spawn(async move {
+            monitor.run().await;
+            drop(resource_memory_reservations);
+        });
     }
 
     pub fn stop_task(&mut self, key: &TaskKey) {
         if let Some(signal) = self.signals.remove(key) {
+            let _ = signal.send(());
+        }
+    }
+
+    pub fn stop_job(&mut self, job_id: JobId, stage: Option<usize>) {
+        let keys = self
+            .signals
+            .keys()
+            .filter(|key| key.job_id == job_id && stage.is_none_or(|stage| key.stage == stage))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.stop_task(&key);
+        }
+    }
+
+    pub fn stop_all(&mut self) {
+        for (_, signal) in self.signals.drain() {
             let _ = signal.send(());
         }
     }
@@ -82,7 +104,10 @@ impl TaskRunner {
         definition: TaskDefinition,
         launch_context: TaskLaunchContext,
         context: Arc<TaskContext>,
-    ) -> ExecutionResult<SendableRecordBatchStream>
+    ) -> ExecutionResult<(
+        SendableRecordBatchStream,
+        Vec<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    )>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
@@ -97,6 +122,7 @@ impl TaskRunner {
                     python_artifacts,
                     local_relation_resources,
                 },
+            resource_memory_reservations,
         } = launch_context;
         let codec = RemoteExecutionCodec::for_task(python_artifacts, local_relation_resources);
         let plan = decode_remote_physical_plan(&context, &codec, plan.as_ref())?;
@@ -116,7 +142,7 @@ impl TaskRunner {
         };
         let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(key.partition, context)?;
-        Ok(stream)
+        Ok((stream, resource_memory_reservations))
     }
 
     fn rewrite_file_scans(

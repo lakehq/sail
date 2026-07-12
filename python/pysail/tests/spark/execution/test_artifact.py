@@ -14,6 +14,10 @@ from pysail.testing.spark.session import spark_connect_server, spark_session_fac
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+requires_server_artifact_root_control = pytest.mark.skipif(
+    bool(os.environ.get("SPARK_REMOTE")),
+    reason="test must remove the configured server artifact root",
+)
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +62,7 @@ def _make_zip(path, module_name, code):
         zf.writestr(module_name, code)
 
 
+@requires_server_artifact_root_control
 def test_add_artifact_zip_materializes_when_shared_path_is_missing(spark, artifact_root, tmp_path):
     zip_path = tmp_path / "sail_cluster_artifact.zip"
     _make_zip(zip_path, "sail_cluster_artifact.py", "VALUE = 123\n")
@@ -75,6 +80,7 @@ def test_add_artifact_zip_materializes_when_shared_path_is_missing(spark, artifa
     assert {row.value for row in rows} == {123}
 
 
+@requires_server_artifact_root_control
 def test_add_artifact_file_is_available_via_spark_files(spark, artifact_root, tmp_path):
     file_path = tmp_path / "sail_file_artifact.txt"
     payload = "file artifact payload " * 4
@@ -94,6 +100,7 @@ def test_add_artifact_file_is_available_via_spark_files(spark, artifact_root, tm
     assert {row.value for row in rows} == {payload}
 
 
+@requires_server_artifact_root_control
 def test_map_in_pandas_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path):
     file_path = tmp_path / "sail_map_iter_artifact.txt"
     payload = "map iterator artifact payload"
@@ -103,7 +110,7 @@ def test_map_in_pandas_keeps_artifact_context_for_iterator(spark, artifact_root,
     shutil.rmtree(artifact_root, ignore_errors=True)
 
     def read_file_artifact(iterator):
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         for pdf in iterator:
             with open(SparkFiles.get("sail_map_iter_artifact.txt"), encoding="utf-8") as file:
@@ -118,6 +125,7 @@ def test_map_in_pandas_keeps_artifact_context_for_iterator(spark, artifact_root,
     pyspark_version() < (4,),
     reason="Python UDTF artifact test requires PySpark 4+",
 )
+@requires_server_artifact_root_control
 def test_udtf_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path):
     from pyspark.sql.functions import lit, udtf
 
@@ -131,7 +139,7 @@ def test_udtf_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path
     @udtf(returnType="value: string")
     class ReadArtifactUDTF:
         def eval(self, _):
-            from pyspark.core.files import SparkFiles
+            from pyspark import SparkFiles
 
             with open(SparkFiles.get("sail_udtf_artifact.txt"), encoding="utf-8") as file:
                 yield (file.read(),)
@@ -140,6 +148,7 @@ def test_udtf_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path
     assert {row.value for row in rows} == {payload}
 
 
+@requires_server_artifact_root_control
 def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, artifact_root, tmp_path):
     archive_dir = tmp_path / "archive_payload"
     archive_dir.mkdir()
@@ -158,7 +167,7 @@ def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, artifact
     def read_archive_artifact(_):
         import os
 
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         path = os.path.join(
             SparkFiles.getRootDirectory(),
@@ -173,6 +182,7 @@ def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, artifact
     assert {row.value for row in rows} == {"archive artifact payload"}
 
 
+@requires_server_artifact_root_control
 def test_add_artifact_archive_uses_default_directory_without_fragment(spark, artifact_root, tmp_path):
     archive_dir = tmp_path / "default_archive_payload"
     archive_dir.mkdir()
@@ -191,7 +201,7 @@ def test_add_artifact_archive_uses_default_directory_without_fragment(spark, art
     def read_default_archive_artifact(_):
         import os
 
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         path = os.path.join(
             SparkFiles.getRootDirectory(),
@@ -239,7 +249,7 @@ def test_artifact_store_hash_mismatch_fails_closed(tmp_path):
 
             @udf(StringType())
             def read_corrupt_artifact(_):
-                from pyspark.core.files import SparkFiles
+                from pyspark import SparkFiles
 
                 with open(SparkFiles.get("sail_corrupt_artifact.txt"), encoding="utf-8") as file:
                     return file.read()
@@ -260,9 +270,9 @@ def test_add_artifact_rejects_unsafe_archive_member(spark, tmp_path):
 
     @udf(StringType())
     def trigger_archive_unpack(_):
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         return SparkFiles.getRootDirectory()
 
-    with pytest.raises(Exception, match="unsafe archive member path"):
+    with pytest.raises(Exception, match=r"unsafe archive member path|safe relative path"):
         spark.range(1).select(trigger_archive_unpack("id").alias("value")).collect()

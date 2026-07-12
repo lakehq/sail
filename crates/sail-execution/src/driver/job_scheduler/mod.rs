@@ -4,6 +4,9 @@ mod options;
 mod state;
 mod topology;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::SchemaRef;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
@@ -13,7 +16,8 @@ pub use state::TaskState;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
-use crate::proto::{RemoteExecutionCodec, RemoteExecutionCodecConfig};
+use crate::proto::RemoteExecutionCodec;
+use crate::task::definition::{TaskOutput, TaskResources};
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
@@ -21,19 +25,25 @@ pub struct JobScheduler {
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
     codec: RemoteExecutionCodec,
+    stage_task_templates: HashMap<(JobId, usize), StageTaskTemplate>,
+}
+
+#[derive(Clone)]
+struct StageTaskTemplate {
+    plan: Arc<[u8]>,
+    resources: TaskResources,
+    output: TaskOutput,
 }
 
 impl JobScheduler {
     pub fn new(options: JobSchedulerOptions) -> Self {
-        let codec = RemoteExecutionCodec::for_driver(RemoteExecutionCodecConfig {
-            local_relation_inline_max_bytes: options.artifact_inline_max_bytes,
-            local_relation_store_uri: options.artifact_store_uri.clone(),
-        });
+        let codec = RemoteExecutionCodec::for_driver();
         Self {
             options,
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec,
+            stage_task_templates: HashMap::new(),
         }
     }
 }

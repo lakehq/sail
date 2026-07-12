@@ -106,14 +106,17 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
+        let (result, completed) = tokio::sync::oneshot::channel();
         let event = WorkerEvent::CleanUpJob {
             job_id: job_id.into(),
             stage: stage.map(|x| x as usize),
+            result,
         };
         self.handle
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
+        completed.await.map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
@@ -126,10 +129,12 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
+        let (result, completed) = tokio::sync::oneshot::channel();
         self.handle
-            .send(WorkerEvent::Shutdown)
+            .send(WorkerEvent::StopWorker { result })
             .await
             .map_err(ExecutionError::from)?;
+        completed.await.map_err(ExecutionError::from)?;
         let response = StopWorkerResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))

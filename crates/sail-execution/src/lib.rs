@@ -16,3 +16,4 @@ mod worker;
 pub mod worker_manager;
 
 pub use worker::entrypoint::run_worker;
+pub use worker::launch_context::initialize_task_resource_cleanup_journal;

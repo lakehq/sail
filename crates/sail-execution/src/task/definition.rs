@@ -5,6 +5,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use sail_python_udf::config::PySparkPythonArtifact;
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -23,6 +24,7 @@ pub struct TaskDefinition {
 #[derive(Debug, Clone, Default)]
 pub struct TaskLaunchContext {
     pub resources: TaskResources,
+    pub(crate) resource_memory_reservations: Vec<Arc<OwnedSemaphorePermit>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -34,7 +36,7 @@ pub struct TaskResources {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRelationResource {
     pub key: String,
-    pub data: Option<Vec<u8>>,
+    pub data: Option<Arc<[u8]>>,
     pub uri: Option<String>,
     pub sha256: String,
     pub size: u64,

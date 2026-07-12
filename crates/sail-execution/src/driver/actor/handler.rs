@@ -19,13 +19,16 @@ use tokio::time::Instant;
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
+use crate::driver::worker_pool::{CompletedTaskResourceStaging, TaskResourceStagingId};
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use crate::worker::launch_context::materialize_driver_task_launch_context;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -163,6 +166,16 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_worker_stop_finished(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        result: ExecutionResult<()>,
+    ) -> ActorAction {
+        self.worker_pool.finish_worker_stop(ctx, worker_id, result);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_execute_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -286,6 +299,147 @@ impl DriverActor {
                     cause: Some(cause),
                     sequence: None,
                 })
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_task_resources_staged(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        staging_id: TaskResourceStagingId,
+        result: ExecutionResult<crate::worker::launch_context::StagedTaskLaunchContext>,
+    ) -> ActorAction {
+        let Some(completed) = self
+            .worker_pool
+            .finish_task_resource_staging(job_id, staging_id, result)
+        else {
+            return ActorAction::Continue;
+        };
+        match completed {
+            CompletedTaskResourceStaging::Ready {
+                pending,
+                launch_context,
+            } => {
+                for task in pending {
+                    let assigned = matches!(
+                        TaskAssignmentGetter::get(&self.task_assigner, &task.key),
+                        Some(TaskAssignment::Worker {
+                            worker_id: assigned_worker,
+                            slot: _,
+                        }) if *assigned_worker == task.worker_id
+                    );
+                    let scheduled = self
+                        .job_scheduler
+                        .get_task_state(&task.key)
+                        .is_some_and(|state| matches!(state, TaskState::Scheduled));
+                    if assigned
+                        && scheduled
+                        && self.worker_pool.accepts_job_requests(task.key.job_id)
+                    {
+                        self.worker_pool.run_task(
+                            ctx,
+                            task.worker_id,
+                            task.key,
+                            task.definition,
+                            launch_context.clone(),
+                        );
+                    }
+                }
+            }
+            CompletedTaskResourceStaging::Failed { pending, error } => {
+                for task in pending {
+                    let assigned = matches!(
+                        TaskAssignmentGetter::get(&self.task_assigner, &task.key),
+                        Some(TaskAssignment::Worker {
+                            worker_id: assigned_worker,
+                            slot: _,
+                        }) if *assigned_worker == task.worker_id
+                    );
+                    let scheduled = self
+                        .job_scheduler
+                        .get_task_state(&task.key)
+                        .is_some_and(|state| matches!(state, TaskState::Scheduled));
+                    if assigned
+                        && scheduled
+                        && self.worker_pool.accepts_job_requests(task.key.job_id)
+                    {
+                        ctx.send(DriverEvent::UpdateTask {
+                            key: task.key,
+                            status: TaskStatus::Failed,
+                            message: Some(format!("failed to stage task resources: {error}")),
+                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                            sequence: None,
+                        });
+                    }
+                }
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_worker_job_request_finished(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+    ) -> ActorAction {
+        self.worker_pool.finish_job_request(ctx, job_id);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_job_resource_cleanup_finished(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        result: ExecutionResult<Vec<String>>,
+    ) -> ActorAction {
+        self.worker_pool
+            .finish_job_resource_cleanup(ctx, job_id, result);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_retry_job_resource_cleanup(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+    ) -> ActorAction {
+        self.worker_pool.retry_job_resource_cleanup(ctx, job_id);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_driver_task_resources_materialized(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskKey,
+        definition: TaskDefinition,
+        context: Arc<TaskContext>,
+        result: ExecutionResult<TaskLaunchContext>,
+    ) -> ActorAction {
+        let assigned = matches!(
+            TaskAssignmentGetter::get(&self.task_assigner, &key),
+            Some(TaskAssignment::Driver)
+        );
+        let scheduled = self
+            .job_scheduler
+            .get_task_state(&key)
+            .is_some_and(|state| matches!(state, TaskState::Scheduled));
+        if !assigned || !scheduled {
+            return ActorAction::Continue;
+        }
+        match result {
+            Ok(launch_context) => {
+                self.task_runner
+                    .run_task(ctx, key, definition, launch_context, context);
+            }
+            Err(error) => {
+                ctx.send(DriverEvent::UpdateTask {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(format!("failed to materialize task resources: {error}")),
+                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                    sequence: None,
+                });
             }
         }
         ActorAction::Continue
@@ -523,9 +677,14 @@ impl DriverActor {
                             self.stream_manager.remove_local_streams(job_id, stage);
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
-                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage)
+                            if stage.is_some() {
+                                self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                            }
                         }
                     }
+                }
+                if stage.is_none() {
+                    self.worker_pool.request_job_resource_cleanup(ctx, job_id);
                 }
             }
         }
@@ -562,20 +721,40 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(&entry.key, TaskState::Scheduled, None, None);
                 match assignment.assignment {
-                    TaskAssignment::Driver => self.task_runner.run_task(
-                        ctx,
-                        entry.key,
-                        definition,
-                        launch_context,
-                        context,
-                    ),
-                    TaskAssignment::Worker { worker_id, slot: _ } => self.worker_pool.run_task(
-                        ctx,
-                        worker_id,
-                        entry.key,
-                        definition,
-                        launch_context,
-                    ),
+                    TaskAssignment::Driver => {
+                        let key = entry.key;
+                        let handle = ctx.handle().clone();
+                        let timeout = self.options.artifact_transfer_timeout;
+                        ctx.spawn(async move {
+                            let result = tokio::time::timeout(
+                                timeout,
+                                materialize_driver_task_launch_context(launch_context),
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(crate::error::ExecutionError::InvalidArgument(
+                                    "timed out materializing driver task resources".to_string(),
+                                ))
+                            });
+                            let _ = handle
+                                .send(DriverEvent::DriverTaskResourcesMaterialized {
+                                    key,
+                                    definition,
+                                    context,
+                                    result,
+                                })
+                                .await;
+                        });
+                    }
+                    TaskAssignment::Worker { worker_id, slot: _ } => {
+                        self.worker_pool.stage_task_resources(
+                            ctx,
+                            worker_id,
+                            entry.key,
+                            definition,
+                            launch_context,
+                        )
+                    }
                 }
             }
         }

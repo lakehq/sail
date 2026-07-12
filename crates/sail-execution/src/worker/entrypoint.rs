@@ -40,5 +40,6 @@ pub async fn run_worker(
         system.spawn::<WorkerActor>(options)
     };
     system.join().await;
+    tokio::task::spawn_blocking(sail_python_udf::shutdown_python_artifact_cache).await??;
     Ok(())
 }
