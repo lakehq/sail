@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use sail_common::spec;
@@ -18,42 +20,76 @@ pub struct CachedLocalRelationData {
     pub schema: Option<spec::Schema>,
 }
 
+pub type LocalRelationCacheFuture<'a, T> = Pin<Box<dyn Future<Output = PlanResult<T>> + Send + 'a>>;
+
 pub trait LocalRelationCache: Debug + Send + Sync {
-    fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData>;
+    fn read_cached_local_relation<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, CachedLocalRelationData>;
 
-    fn cached_local_relation_block_size(&self, hash: &str) -> PlanResult<usize>;
+    fn cached_local_relation_block_size<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, usize>;
 
-    fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>>;
+    fn read_chunked_cached_local_relation_data<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, Vec<u8>>;
 
-    fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema>;
+    fn read_chunked_cached_local_relation_schema<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, spec::Schema>;
 }
 
 #[derive(Debug)]
 struct EmptyLocalRelationCache;
 
 impl LocalRelationCache for EmptyLocalRelationCache {
-    fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData> {
-        Err(PlanError::invalid(format!(
-            "cached local relation not found: {hash}"
-        )))
+    fn read_cached_local_relation<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, CachedLocalRelationData> {
+        Box::pin(async move {
+            Err(PlanError::invalid(format!(
+                "cached local relation not found: {hash}"
+            )))
+        })
     }
 
-    fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>> {
-        Err(PlanError::invalid(format!(
-            "chunked cached local relation data block not found: {hash}"
-        )))
+    fn read_chunked_cached_local_relation_data<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            Err(PlanError::invalid(format!(
+                "chunked cached local relation data block not found: {hash}"
+            )))
+        })
     }
 
-    fn cached_local_relation_block_size(&self, hash: &str) -> PlanResult<usize> {
-        Err(PlanError::invalid(format!(
-            "cached local relation block not found: {hash}"
-        )))
+    fn cached_local_relation_block_size<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, usize> {
+        Box::pin(async move {
+            Err(PlanError::invalid(format!(
+                "cached local relation block not found: {hash}"
+            )))
+        })
     }
 
-    fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema> {
-        Err(PlanError::invalid(format!(
-            "chunked cached local relation schema block not found: {hash}"
-        )))
+    fn read_chunked_cached_local_relation_schema<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> LocalRelationCacheFuture<'a, spec::Schema> {
+        Box::pin(async move {
+            Err(PlanError::invalid(format!(
+                "chunked cached local relation schema block not found: {hash}"
+            )))
+        })
     }
 }
 

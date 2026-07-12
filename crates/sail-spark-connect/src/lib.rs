@@ -9,6 +9,7 @@ mod schema;
 pub mod server;
 mod service;
 mod session;
+mod session_admission;
 mod session_manager;
 mod streaming;
 

@@ -1,6 +1,18 @@
 [
   {
     "module": "pyspark.sql.session.SparkSession",
+    "function": "addArtifact",
+    "status": "partially supported",
+    "note": "Python pyfile, file, and archive artifacts are supported. JVM JAR and class artifacts are not supported."
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
+    "function": "addArtifacts",
+    "status": "partially supported",
+    "note": "Python pyfile, file, and archive artifacts are supported. JVM JAR and class artifacts are not supported."
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
     "function": "createDataFrame",
     "status": "supported"
   },

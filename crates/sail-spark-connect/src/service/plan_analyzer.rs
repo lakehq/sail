@@ -91,23 +91,35 @@ pub(crate) async fn handle_analyze_tree_string(
 }
 
 pub(crate) async fn handle_analyze_is_local(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     request: IsLocalRequest,
 ) -> SparkResult<IsLocalResponse> {
     let IsLocalRequest { plan } = request;
     let plan = plan.required("plan")?;
+    validate_analyzed_query(ctx, &plan).await?;
     let is_local = analyze_is_local(plan)?;
     Ok(IsLocalResponse { is_local })
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     request: IsStreamingRequest,
 ) -> SparkResult<IsStreamingResponse> {
     let IsStreamingRequest { plan } = request;
     let plan = plan.required("plan")?;
+    validate_analyzed_query(ctx, &plan).await?;
     let is_streaming = analyze_is_streaming(plan)?;
     Ok(IsStreamingResponse { is_streaming })
+}
+
+async fn validate_analyzed_query(ctx: &SessionContext, plan: &sc::Plan) -> SparkResult<()> {
+    if let Some(plan::OpType::Root(relation)) = &plan.op_type {
+        let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
+        resolver
+            .resolve_named_plan(spec::Plan::Query(relation.clone().try_into()?))
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn handle_analyze_input_files(
