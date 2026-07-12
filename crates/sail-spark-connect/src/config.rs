@@ -16,7 +16,7 @@ use crate::spark::config::{
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_PIVOT_MAX_VALUES,
     SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT, SPARK_SQL_SESSION_LOCAL_RELATION_SIZE_LIMIT,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
-    SPARK_SQL_WAREHOUSE_DIR,
+    SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED, SPARK_SQL_WAREHOUSE_DIR,
 };
 use crate::spark::connect;
 
@@ -341,6 +341,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         if let Some(value) = config.get(SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT)? {
             output.local_relation_chunk_size_limit =
                 parse_bytes_config(SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT, value)?;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.tvf_allow_multiple_table_arguments = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
