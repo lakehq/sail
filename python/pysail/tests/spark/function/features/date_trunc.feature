@@ -258,6 +258,53 @@ Feature: DATE_TRUNC always returns a timestamp
       | result |
       | NULL   |
 
+  Rule: the unit is resolved per row when it comes from a column
+
+    # The unit is not required to be a literal: Spark resolves it row by row, so each row is
+    # truncated by its own unit and an unrecognized or NULL unit nullifies only that row.
+
+    Scenario: date_trunc with the unit coming from a column
+      When query
+      """
+      SELECT date_trunc(u, TIMESTAMP '2026-02-02 10:11:12') AS result FROM VALUES ('YEAR'), ('MONTH') AS t(u)
+      """
+      Then query result ordered
+      | result              |
+      | 2026-01-01 00:00:00 |
+      | 2026-02-01 00:00:00 |
+
+    Scenario: an unrecognized unit in a column nullifies only its own row
+      When query
+      """
+      SELECT date_trunc(u, TIMESTAMP '2026-02-02 10:11:12') AS result FROM VALUES ('YEAR'), ('INVALID') AS t(u)
+      """
+      Then query result ordered
+      | result              |
+      | 2026-01-01 00:00:00 |
+      | NULL                |
+
+    Scenario: a null unit in a column nullifies only its own row
+      When query
+      """
+      SELECT date_trunc(u, TIMESTAMP '2026-02-02 10:11:12') AS result FROM VALUES ('YEAR'), (NULL) AS t(u)
+      """
+      Then query result ordered
+      | result              |
+      | 2026-01-01 00:00:00 |
+      | NULL                |
+
+    Scenario: units in a column keep their aliases and are case insensitive
+      When query
+      """
+      SELECT date_trunc(u, TIMESTAMP '2026-02-02 10:11:12') AS result FROM VALUES ('yyyy'), ('MM'), ('Day'), ('hour') AS t(u)
+      """
+      Then query result ordered
+      | result              |
+      | 2026-01-01 00:00:00 |
+      | 2026-02-01 00:00:00 |
+      | 2026-02-02 00:00:00 |
+      | 2026-02-02 10:00:00 |
+
   Rule: null value returns null
 
     Scenario: date_trunc on a null date returns null

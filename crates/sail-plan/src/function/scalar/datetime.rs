@@ -99,7 +99,7 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
         e if is_null_arg(e) => return Ok(null_timestamp()),
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _)
-        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => {
+        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _)
             if !matches!(
                 s.to_lowercase().as_str(),
                 "year"
@@ -117,9 +117,9 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     | "second"
                     | "millisecond"
                     | "microsecond"
-            ) {
-                return Ok(null_timestamp());
-            }
+            ) =>
+        {
+            return Ok(null_timestamp());
         }
         _ => {}
     }
