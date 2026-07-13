@@ -73,6 +73,7 @@ use datafusion_spark::function::math::hex::SparkHex;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
+use datafusion_spark::function::string::length::SparkLengthFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
@@ -213,6 +214,7 @@ use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
@@ -2460,8 +2462,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
+            "length" => Ok(Arc::new(ScalarUDF::from(SparkLengthFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
+            "spark_bit_length" => Ok(Arc::new(ScalarUDF::from(SparkBitLength::new()))),
+            "spark_octet_length" => Ok(Arc::new(ScalarUDF::from(SparkOctetLength::new()))),
             "map_entries" => Ok(Arc::new(ScalarUDF::from(SparkMapEntries::new()))),
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
@@ -2644,6 +2649,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<StGeomFromWKB>()
             || node_inner.is::<StGeogFromWKB>()
             || node_inner.is::<MakeValidUtf8>()
+            || node_inner.is::<SparkLengthFunc>()
+            || node_inner.is::<SparkBitLength>()
+            || node_inner.is::<SparkOctetLength>()
             || node_inner.is::<SparkMapEntries>()
             || node_inner.is::<MapFromArrays>()
             || node_inner.is::<MapFromEntries>()
