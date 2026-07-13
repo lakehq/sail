@@ -83,6 +83,16 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+
+    /// A glob applied to file names to select which files compose the dataset,
+    /// e.g. the binary format's `pathGlobFilter`. `None` includes every listed file.
+    ///
+    /// This is intentionally name-only. A filter that cannot be expressed as a
+    /// name glob (e.g. `modifiedBefore`/`modifiedAfter`) would need this replaced
+    /// by a general `fn include_file(&self, meta: &ObjectMeta) -> bool` predicate.
+    fn input_file_name_glob(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug)]

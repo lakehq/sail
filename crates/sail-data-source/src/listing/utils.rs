@@ -14,6 +14,7 @@ use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::ListingFileSample;
@@ -225,11 +226,33 @@ pub async fn list_all_files<'a>(
     Ok(list
         .try_filter(move |meta| {
             let path = &meta.location;
-            let glob_match = url.contains(path, ignore_subdirectory);
-            futures::future::ready(glob_match)
+            let included =
+                url.contains(path, ignore_subdirectory) && !has_hidden_path_component(url, path);
+            futures::future::ready(included)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
+}
+
+/// Returns `true` if the file is hidden per Spark's file index, considering every
+/// path component below the listing prefix as well as the file's own name (so that
+/// `_SUCCESS` markers, `.crc` checksums, files under hidden directories, and
+/// explicitly targeted hidden files are excluded, while a hidden listing root is
+/// left untouched).
+///
+/// The per-name rule mirrors `InMemoryFileIndex.shouldFilterOut` in Spark: a name is
+/// hidden when it starts with `_` (unless it contains `=`, i.e. a partition
+/// directory) or with `.`, except for the Parquet summary files `_metadata` and
+/// `_common_metadata`.
+pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
+    let is_hidden = |name: &str| {
+        let exclude = (name.starts_with('_') && !name.contains('=')) || name.starts_with('.');
+        let keep = name.starts_with("_common_metadata") || name.starts_with("_metadata");
+        exclude && !keep
+    };
+    url.strip_prefix(location)
+        .is_some_and(|mut segments| segments.any(is_hidden))
+        || location.filename().is_some_and(is_hidden)
 }
 
 pub fn can_be_evaluated_for_partition_pruning(
@@ -237,4 +260,46 @@ pub fn can_be_evaluated_for_partition_pruning(
     expr: &Expr,
 ) -> bool {
     !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_hidden_path_component() {
+        let dir = ListingTableUrl::parse("file:///data/").unwrap();
+        let hidden = |path: &str| has_hidden_path_component(&dir, &Path::from(path));
+
+        // Data files and partition directories are kept.
+        assert!(!hidden("data/part-0.parquet"));
+        assert!(!hidden("data/year=2020/part-0.parquet"));
+
+        // Hidden markers and hidden directories are excluded.
+        assert!(hidden("data/_SUCCESS"));
+        assert!(hidden("data/.hidden.json"));
+        assert!(hidden("data/_temporary/0/part-0.parquet"));
+        assert!(hidden("data/visible/_hidden/bad.json"));
+
+        // Spark keeps the Parquet summary files.
+        assert!(!hidden("data/_metadata"));
+        assert!(!hidden("data/_common_metadata"));
+
+        // Spark keeps `_`-prefixed partition directories (they contain `=`).
+        assert!(!hidden("data/_part=1/part-0.parquet"));
+
+        // A hidden listing root is not itself filtered.
+        let hidden_root = ListingTableUrl::parse("file:///_root/").unwrap();
+        assert!(!has_hidden_path_component(
+            &hidden_root,
+            &Path::from("_root/part-0.parquet")
+        ));
+
+        // An explicitly targeted hidden file is excluded.
+        let file = ListingTableUrl::parse("file:///data/_data.json").unwrap();
+        assert!(has_hidden_path_component(
+            &file,
+            &Path::from("data/_data.json")
+        ));
+    }
 }
