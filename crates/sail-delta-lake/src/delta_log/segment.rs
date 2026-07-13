@@ -7,11 +7,11 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
 use crate::delta_log::LogStore;
-use crate::snapshot::{catalog_managed_commit_path, CatalogManagedCommitSet};
+use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_path};
 use crate::spec::{
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
-    Transaction, VersionChecksum,
+    parse_compacted_json_versions,
 };
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
@@ -113,11 +113,11 @@ impl<'a> LogSegmentResolver<'a> {
         let version = self.target_version;
 
         let store = self.log_store.object_store(None);
-        if !self.has_catalog_managed_commits_in_range(0, version) {
-            if let Some(header) = try_read_checksum_header(store.clone(), version).await {
-                debug!("crc-header: exact checksum hit target_version={version}");
-                return Ok(ResolvedLogSegment::ExactChecksum { header });
-            }
+        if !self.has_catalog_managed_commits_in_range(0, version)
+            && let Some(header) = try_read_checksum_header(store.clone(), version).await
+        {
+            debug!("crc-header: exact checksum hit target_version={version}");
+            return Ok(ResolvedLogSegment::ExactChecksum { header });
         }
 
         let lower_bound = {
@@ -417,22 +417,22 @@ pub(crate) async fn list_log_files(
             Some(f) => f,
             None => continue,
         };
-        if let Some(v) = parse_checkpoint_version(filename) {
-            if v <= max_version {
-                checkpoint_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checkpoint_version(filename)
+            && v <= max_version
+        {
+            checkpoint_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_commit_version(filename) {
-            if v <= max_version {
-                commit_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_commit_version(filename)
+            && v <= max_version
+        {
+            commit_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_checksum_version(filename) {
-            if v <= max_version {
-                checksum_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checksum_version(filename)
+            && v <= max_version
+        {
+            checksum_candidates.push((v, meta));
             continue;
         }
         if let Some(versions) = parse_compacted_json_versions(filename) {
@@ -559,10 +559,10 @@ fn resolve_compactions(
 
     for ((start, end), meta) in compaction_files {
         // Skip if this compaction overlaps with an already-selected one.
-        if let Some(boundary) = covered_up_to {
-            if end >= boundary {
-                continue;
-            }
+        if let Some(boundary) = covered_up_to
+            && end >= boundary
+        {
+            continue;
         }
         selected_compactions.push(((start, end), meta));
         covered_up_to = Some(start);

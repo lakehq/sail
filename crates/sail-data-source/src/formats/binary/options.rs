@@ -3,7 +3,7 @@ use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
 use crate::formats::binary::TableBinaryOptions;
-use crate::options::gen::{BinaryReadOptions, BinaryReadPartialOptions};
+use crate::options::r#gen::{BinaryReadOptions, BinaryReadPartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 
 impl BinaryReadOptions {
@@ -27,8 +27,8 @@ impl ResolveOptions for BinaryReadOptions {
 mod tests {
     use datafusion::prelude::SessionContext;
 
-    use crate::options::gen::BinaryReadOptions;
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::BinaryReadOptions;
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_binary_read_options() -> datafusion_common::Result<()> {

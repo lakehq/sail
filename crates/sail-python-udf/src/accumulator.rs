@@ -1,12 +1,12 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_empty_array, ArrayRef, AsArray, ListArray};
+use datafusion::arrow::array::{ArrayRef, AsArray, ListArray, new_empty_array};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::Accumulator;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 

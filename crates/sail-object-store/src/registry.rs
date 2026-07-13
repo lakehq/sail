@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use datafusion::execution::object_store::ObjectStoreRegistry;
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use log::debug;
@@ -178,7 +178,7 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                         source: Box::new(plan_datafusion_err!(
                             "unsupported object store URL: {url} for {other:?}"
                         )),
-                    })
+                    });
                 }
             };
             store
@@ -218,8 +218,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::object_store::ObjectStoreRegistry;
-    use object_store::memory::InMemory;
     use object_store::ObjectStore;
+    use object_store::memory::InMemory;
     use sail_common::runtime::RuntimeHandle;
     use tokio::runtime::Handle;
     use url::Url;

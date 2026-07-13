@@ -7,7 +7,7 @@ use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     ParquetReadOptions, ParquetReadPartialOptions, ParquetWriteOptions, ParquetWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -312,8 +312,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
 
-    use crate::options::gen::{ParquetReadOptions, ParquetWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {

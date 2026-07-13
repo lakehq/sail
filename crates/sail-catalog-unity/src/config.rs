@@ -282,15 +282,13 @@ impl UnityCatalogConfig {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 let key = key.trim();
-                if key.to_ascii_uppercase().starts_with("UNITY_")
+                if (key.to_ascii_uppercase().starts_with("UNITY_")
                     || key.to_ascii_uppercase().starts_with("DATABRICKS_")
-                    || key.to_ascii_uppercase().starts_with("UC_")
-                {
-                    if let Ok(config_key) =
+                    || key.to_ascii_uppercase().starts_with("UC_"))
+                    && let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        self.set_option(config_key, value.to_string())?;
-                    }
+                {
+                    self.set_option(config_key, value.to_string())?;
                 }
             }
         }
@@ -354,19 +352,21 @@ impl UnityCatalogConfig {
             ));
         }
 
-        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
-            if let Some(authority_id) = &self.authority_id {
-                return Some(CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(ClientSecretOAuthProvider::new(
-                        client_id,
-                        client_secret.expose_secret(),
-                        authority_id,
-                        self.authority_host.as_ref(),
-                    )),
-                ));
-            }
+        if let (Some(client_id), Some(client_secret), Some(authority_id)) =
+            (&self.client_id, &self.client_secret, &self.authority_id)
+        {
+            return Some(CredentialProvider::TokenCredential(
+                TokenCache::default(),
+                Box::new(ClientSecretOAuthProvider::new(
+                    client_id,
+                    client_secret.expose_secret(),
+                    authority_id,
+                    self.authority_host.as_ref(),
+                )),
+            ));
+        }
 
+        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
                 Box::new(WorkspaceOAuthProvider::new(

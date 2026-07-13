@@ -39,14 +39,14 @@ mod write_exec;
 pub use commit_exec::PythonDataSourceWriteCommitExec;
 pub use datasource::PythonDataSource;
 pub use discovery::{
-    discover_data_sources, validate_datasource_class, DataSourceEntry, PythonDataSourceRegistry,
-    DATA_SOURCE_REGISTRY,
+    DATA_SOURCE_REGISTRY, DataSourceEntry, PythonDataSourceRegistry, discover_data_sources,
+    validate_datasource_class,
 };
 pub use error::PythonDataSourceError;
 pub use exec::PythonDataSourceExec;
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
-pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
-pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
+pub use filter::{ColumnPath, FilterValue, PythonFilter, exprs_to_python_filters};
+pub use stream::{DEFAULT_BATCH_SIZE, PythonDataSourceStream, RowBatchCollector};
 pub use table_format::{PythonPhysicalPlanner, PythonTableFormat};
 pub use table_provider::PythonTableProvider;
 pub use write_exec::PythonDataSourceWriteExec;

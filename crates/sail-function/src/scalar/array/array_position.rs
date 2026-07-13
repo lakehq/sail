@@ -8,9 +8,9 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
-use datafusion::common::{exec_err, DataFusionError, Result as DataFusionResult, ScalarValue};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -214,12 +214,12 @@ where
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_val = element_typed.value(row_index);
         for i in start..end {
             if !values_typed.is_null(i) && values_typed.value(i) == search_val {
@@ -248,12 +248,12 @@ where
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_val = element_typed.value(row_index);
         let search_is_nan = search_val.is_nan();
         for i in start..end {
@@ -289,12 +289,12 @@ fn position_boolean<O: OffsetSizeTrait>(
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_val = element_typed.value(row_index);
         for i in start..end {
             if !values_typed.is_null(i) && values_typed.value(i) == search_val {
@@ -320,12 +320,12 @@ fn position_string<O: OffsetSizeTrait, S: OffsetSizeTrait>(
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_val = element_typed.value(row_index);
         for i in start..end {
             if !values_typed.is_null(i) && values_typed.value(i) == search_val {
@@ -350,12 +350,12 @@ fn position_string_view<O: OffsetSizeTrait>(
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_val = element_typed.value(row_index);
         for i in start..end {
             if !values_typed.is_null(i) && values_typed.value(i) == search_val {
@@ -379,12 +379,12 @@ fn position_fallback<O: OffsetSizeTrait>(
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
 
-    for (row_index, w) in offsets.windows(2).enumerate() {
+    for (row_index, &[start, end]) in offsets.array_windows::<2>().enumerate() {
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             continue;
         }
-        let start = w[0].as_usize();
-        let end = w[1].as_usize();
+        let start = start.as_usize();
+        let end = end.as_usize();
         let search_scalar = ScalarValue::try_from_array(element, row_index)?;
         for i in start..end {
             if !values.is_null(i) {

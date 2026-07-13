@@ -16,9 +16,9 @@ use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    contains_timestampntz, contains_variant, ColumnMappingMode, ColumnMetadataKey,
-    DeltaError as DeltaTableError, DeltaResult, Metadata, MetadataValue, Protocol, StructField,
-    StructType, TableFeature, TableProperties,
+    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
+    MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+    contains_timestampntz, contains_variant,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.

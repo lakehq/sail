@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    cast, expr, lit, try_cast, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
@@ -425,7 +425,11 @@ fn eulers_constant() -> Expr {
 }
 
 fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let ansi_mode = function_context.plan_config.ansi_mode;
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
@@ -487,9 +491,9 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
         arguments
     };
     let func = if matches!(name.to_lowercase().trim(), "ceil") {
-        Arc::new(ScalarUDF::from(SparkCeil::new()))
+        Arc::new(ScalarUDF::from(SparkCeil::new(ansi_mode)))
     } else {
-        Arc::new(ScalarUDF::from(SparkFloor::new()))
+        Arc::new(ScalarUDF::from(SparkFloor::new(ansi_mode)))
     };
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func,

@@ -755,14 +755,14 @@ impl GSSAPI {
     pub unsafe fn new<P>(path: P) -> Result<Self, ::libloading::Error>
     where
         P: AsRef<::std::ffi::OsStr>,
-    {
+    { unsafe {
         let library = ::libloading::Library::new(path)?;
         Self::from_library(library)
-    }
+    }}
     pub unsafe fn from_library<L>(library: L) -> Result<Self, ::libloading::Error>
     where
         L: Into<::libloading::Library>,
-    {
+    { unsafe {
         let __library = library.into();
         let GSS_C_NT_USER_NAME = __library
             .get::<*mut gss_OID>(b"GSS_C_NT_USER_NAME\0")
@@ -937,7 +937,7 @@ impl GSSAPI {
             gss_krb5_free_lucid_sec_context,
             gss_krb5_ui,
         })
-    }
+    }}
     pub unsafe fn GSS_C_NT_USER_NAME(&self) -> *mut gss_OID {
         *self
             .GSS_C_NT_USER_NAME
@@ -990,24 +990,24 @@ impl GSSAPI {
         arg6: *mut gss_cred_id_t,
         arg7: *mut gss_OID_set,
         arg8: *mut OM_uint32,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_acquire_cred
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8,
         )
-    }
+    }}
     pub unsafe fn gss_release_cred(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_cred_id_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_release_cred
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_init_sec_context(
         &self,
         arg1: *mut OM_uint32,
@@ -1023,14 +1023,14 @@ impl GSSAPI {
         arg11: gss_buffer_t,
         arg12: *mut OM_uint32,
         arg13: *mut OM_uint32,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_init_sec_context
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
         )
-    }
+    }}
     pub unsafe fn gss_accept_sec_context(
         &self,
         arg1: *mut OM_uint32,
@@ -1044,47 +1044,47 @@ impl GSSAPI {
         arg9: *mut OM_uint32,
         arg10: *mut OM_uint32,
         arg11: *mut gss_cred_id_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_accept_sec_context
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
         )
-    }
+    }}
     pub unsafe fn gss_process_context_token(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_ctx_id_t,
         arg3: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_process_context_token
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_delete_sec_context(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_ctx_id_t,
         arg3: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_delete_sec_context
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_context_time(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_ctx_id_t,
         arg3: *mut OM_uint32,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_context_time
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_get_mic(
         &self,
         arg1: *mut OM_uint32,
@@ -1092,12 +1092,12 @@ impl GSSAPI {
         arg3: gss_qop_t,
         arg4: gss_buffer_t,
         arg5: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_get_mic
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5)
-    }
+    }}
     pub unsafe fn gss_verify_mic(
         &self,
         arg1: *mut OM_uint32,
@@ -1105,12 +1105,12 @@ impl GSSAPI {
         arg3: gss_buffer_t,
         arg4: gss_buffer_t,
         arg5: *mut gss_qop_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_verify_mic
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5)
-    }
+    }}
     pub unsafe fn gss_wrap(
         &self,
         arg1: *mut OM_uint32,
@@ -1120,14 +1120,14 @@ impl GSSAPI {
         arg5: gss_buffer_t,
         arg6: *mut ::std::os::raw::c_int,
         arg7: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_wrap
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7
         )
-    }
+    }}
     pub unsafe fn gss_unwrap(
         &self,
         arg1: *mut OM_uint32,
@@ -1136,12 +1136,12 @@ impl GSSAPI {
         arg4: gss_buffer_t,
         arg5: *mut ::std::os::raw::c_int,
         arg6: *mut gss_qop_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_unwrap
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5, arg6)
-    }
+    }}
     pub unsafe fn gss_display_status(
         &self,
         arg1: *mut OM_uint32,
@@ -1150,84 +1150,84 @@ impl GSSAPI {
         arg4: gss_OID,
         arg5: *mut OM_uint32,
         arg6: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_display_status
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5, arg6)
-    }
+    }}
     pub unsafe fn gss_indicate_mechs(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_indicate_mechs
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_compare_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: gss_name_t,
         arg4: *mut ::std::os::raw::c_int,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_compare_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn gss_display_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: gss_buffer_t,
         arg4: *mut gss_OID,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_display_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn gss_import_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_buffer_t,
         arg3: gss_OID,
         arg4: *mut gss_name_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_import_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn gss_release_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_name_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_release_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
-    pub unsafe fn gss_release_buffer(&self, arg1: *mut OM_uint32, arg2: gss_buffer_t) -> OM_uint32 {
+    }}
+    pub unsafe fn gss_release_buffer(&self, arg1: *mut OM_uint32, arg2: gss_buffer_t) -> OM_uint32 { unsafe {
         (self
             .gss_release_buffer
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_release_oid_set(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_release_oid_set
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_inquire_cred(
         &self,
         arg1: *mut OM_uint32,
@@ -1236,12 +1236,12 @@ impl GSSAPI {
         arg4: *mut OM_uint32,
         arg5: *mut gss_cred_usage_t,
         arg6: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_inquire_cred
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5, arg6)
-    }
+    }}
     pub unsafe fn gss_inquire_context(
         &self,
         arg1: *mut OM_uint32,
@@ -1253,14 +1253,14 @@ impl GSSAPI {
         arg7: *mut OM_uint32,
         arg8: *mut ::std::os::raw::c_int,
         arg9: *mut ::std::os::raw::c_int,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_inquire_context
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9,
         )
-    }
+    }}
     pub unsafe fn gss_wrap_size_limit(
         &self,
         arg1: *mut OM_uint32,
@@ -1269,24 +1269,24 @@ impl GSSAPI {
         arg4: gss_qop_t,
         arg5: OM_uint32,
         arg6: *mut OM_uint32,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_wrap_size_limit
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5, arg6)
-    }
+    }}
     pub unsafe fn gss_export_name_object(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: gss_OID,
         arg4: *mut *mut ::std::os::raw::c_void,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_export_name_object
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn gss_add_cred(
         &self,
         arg1: *mut OM_uint32,
@@ -1300,14 +1300,14 @@ impl GSSAPI {
         arg9: *mut gss_OID_set,
         arg10: *mut OM_uint32,
         arg11: *mut OM_uint32,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_add_cred
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
         )
-    }
+    }}
     pub unsafe fn gss_inquire_cred_by_mech(
         &self,
         arg1: *mut OM_uint32,
@@ -1317,119 +1317,119 @@ impl GSSAPI {
         arg5: *mut OM_uint32,
         arg6: *mut OM_uint32,
         arg7: *mut gss_cred_usage_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_inquire_cred_by_mech
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7
         )
-    }
+    }}
     pub unsafe fn gss_export_sec_context(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_ctx_id_t,
         arg3: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_export_sec_context
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_import_sec_context(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_buffer_t,
         arg3: *mut gss_ctx_id_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_import_sec_context
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
-    pub unsafe fn gss_release_oid(&self, arg1: *mut OM_uint32, arg2: *mut gss_OID) -> OM_uint32 {
+    }}
+    pub unsafe fn gss_release_oid(&self, arg1: *mut OM_uint32, arg2: *mut gss_OID) -> OM_uint32 { unsafe {
         (self
             .gss_release_oid
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_create_empty_oid_set(
         &self,
         arg1: *mut OM_uint32,
         arg2: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_create_empty_oid_set
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
     pub unsafe fn gss_add_oid_set_member(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_OID,
         arg3: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_add_oid_set_member
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_test_oid_set_member(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_OID,
         arg3: gss_OID_set,
         arg4: *mut ::std::os::raw::c_int,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_test_oid_set_member
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn gss_str_to_oid(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_buffer_t,
         arg3: *mut gss_OID,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_str_to_oid
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_oid_to_str(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_OID,
         arg3: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_oid_to_str
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_inquire_names_for_mech(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_OID,
         arg3: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_inquire_names_for_mech
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_inquire_mechs_for_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: *mut gss_OID_set,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_inquire_mechs_for_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_sign(
         &self,
         arg1: *mut OM_uint32,
@@ -1437,12 +1437,12 @@ impl GSSAPI {
         arg3: ::std::os::raw::c_int,
         arg4: gss_buffer_t,
         arg5: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_sign
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5)
-    }
+    }}
     pub unsafe fn gss_verify(
         &self,
         arg1: *mut OM_uint32,
@@ -1450,12 +1450,12 @@ impl GSSAPI {
         arg3: gss_buffer_t,
         arg4: gss_buffer_t,
         arg5: *mut ::std::os::raw::c_int,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_verify
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5)
-    }
+    }}
     pub unsafe fn gss_seal(
         &self,
         arg1: *mut OM_uint32,
@@ -1465,14 +1465,14 @@ impl GSSAPI {
         arg5: gss_buffer_t,
         arg6: *mut ::std::os::raw::c_int,
         arg7: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_seal
             .as_ref()
             .expect("Expected function, got error."))(
             arg1, arg2, arg3, arg4, arg5, arg6, arg7
         )
-    }
+    }}
     pub unsafe fn gss_unseal(
         &self,
         arg1: *mut OM_uint32,
@@ -1481,46 +1481,46 @@ impl GSSAPI {
         arg4: gss_buffer_t,
         arg5: *mut ::std::os::raw::c_int,
         arg6: *mut ::std::os::raw::c_int,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_unseal
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4, arg5, arg6)
-    }
+    }}
     pub unsafe fn gss_export_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: gss_buffer_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_export_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_duplicate_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: *mut gss_name_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_duplicate_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3)
-    }
+    }}
     pub unsafe fn gss_canonicalize_name(
         &self,
         arg1: *mut OM_uint32,
         arg2: gss_name_t,
         arg3: gss_OID,
         arg4: *mut gss_name_t,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_canonicalize_name
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2, arg3, arg4)
-    }
+    }}
     pub unsafe fn GSS_KRB5_NT_PRINCIPAL_NAME(&self) -> *mut *const gss_OID_desc {
         *self
             .GSS_KRB5_NT_PRINCIPAL_NAME
@@ -1574,76 +1574,76 @@ impl GSSAPI {
         minor_status: *mut OM_uint32,
         context_handle: gss_ctx_id_t,
         ticket_flags: *mut krb5_flags,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_get_tkt_flags
             .as_ref()
             .expect("Expected function, got error."))(
             minor_status, context_handle, ticket_flags
         )
-    }
+    }}
     pub unsafe fn gss_krb5_copy_ccache(
         &self,
         minor_status: *mut OM_uint32,
         cred_handle: gss_cred_id_t,
         out_ccache: krb5_ccache,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_copy_ccache
             .as_ref()
             .expect("Expected function, got error."))(minor_status, cred_handle, out_ccache)
-    }
+    }}
     pub unsafe fn gss_krb5_ccache_name(
         &self,
         minor_status: *mut OM_uint32,
         name: *const ::std::os::raw::c_char,
         out_name: *mut *const ::std::os::raw::c_char,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_ccache_name
             .as_ref()
             .expect("Expected function, got error."))(minor_status, name, out_name)
-    }
+    }}
     pub unsafe fn gss_krb5_set_allowable_enctypes(
         &self,
         minor_status: *mut OM_uint32,
         cred: gss_cred_id_t,
         num_ktypes: OM_uint32,
         ktypes: *mut krb5_enctype,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_set_allowable_enctypes
             .as_ref()
             .expect("Expected function, got error."))(minor_status, cred, num_ktypes, ktypes)
-    }
+    }}
     pub unsafe fn gss_krb5_export_lucid_sec_context(
         &self,
         minor_status: *mut OM_uint32,
         context_handle: *mut gss_ctx_id_t,
         version: OM_uint32,
         kctx: *mut *mut ::std::os::raw::c_void,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_export_lucid_sec_context
             .as_ref()
             .expect("Expected function, got error."))(
             minor_status, context_handle, version, kctx
         )
-    }
+    }}
     pub unsafe fn gss_krb5_free_lucid_sec_context(
         &self,
         minor_status: *mut OM_uint32,
         kctx: *mut ::std::os::raw::c_void,
-    ) -> OM_uint32 {
+    ) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_free_lucid_sec_context
             .as_ref()
             .expect("Expected function, got error."))(minor_status, kctx)
-    }
-    pub unsafe fn gss_krb5_ui(&self, arg1: *mut OM_uint32, arg2: OM_uint32) -> OM_uint32 {
+    }}
+    pub unsafe fn gss_krb5_ui(&self, arg1: *mut OM_uint32, arg2: OM_uint32) -> OM_uint32 { unsafe {
         (self
             .gss_krb5_ui
             .as_ref()
             .expect("Expected function, got error."))(arg1, arg2)
-    }
+    }}
 }

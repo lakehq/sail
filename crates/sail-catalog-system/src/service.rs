@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{internal_datafusion_err, Result};
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtension;

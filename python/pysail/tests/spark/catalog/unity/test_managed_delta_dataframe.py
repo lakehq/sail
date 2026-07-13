@@ -6,6 +6,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.tests.spark.catalog.unity.conftest import _unity_delta_commit_info, _unity_table_info
 
 if TYPE_CHECKING:
@@ -122,6 +125,53 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
             "name": _expected_struct_field("name", "string"),
             "extra": _expected_struct_field("extra", "string"),
         }
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="DataFrame arguments in spark.sql() require Spark 4+",
+)
+def test_spark_sql_merge_dataframe_source_is_unity_managed(
+    spark: SparkSession,
+    unity_rest_url: str,
+) -> None:
+    database = "unity_dataframe_sql_args_test"
+    table = "managed_delta_sql_args_merge_t"
+    table_fqn = f"{database}.{table}"
+
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
+            f"""
+            CREATE TABLE {table_fqn}
+            USING delta
+            AS SELECT * FROM VALUES
+              (1, 'old'),
+              (2, 'keep')
+            AS t(id, name)
+            """
+        )
+
+        source_df = spark.createDataFrame([(1, "new"), (3, "insert")], schema="id INT, name STRING")
+        spark.sql(
+            f"""
+            MERGE INTO {table_fqn} AS tgt
+            USING {{src_df}} AS src
+            ON tgt.id = src.id
+            WHEN MATCHED THEN UPDATE SET name = src.name
+            WHEN NOT MATCHED THEN INSERT *
+            """,
+            src_df=source_df,
+        )
+
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        assert [(row.id, row.name) for row in rows] == [(1, "new"), (2, "keep"), (3, "insert")]
+
+        assert _unity_delta_commit_info(unity_rest_url, table_fqn, 2)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")

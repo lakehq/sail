@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_largestring_array, as_string_array, new_null_array, Array, ArrayRef, AsArray,
-    PrimitiveArray, StringArray, StringBuilder,
+    Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder, as_largestring_array,
+    as_string_array, new_null_array,
 };
 use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type};
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};

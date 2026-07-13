@@ -6,16 +6,16 @@ use std::task::Poll;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::error::ArrowError;
 use datafusion::physical_expr::projection::ProjectionExprs;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_datasource::decoder::{deserialize_stream, Decoder, DecoderDeserializer};
+use datafusion_datasource::decoder::{Decoder, DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation, TableSchema};
+use datafusion_datasource::{PartitionedFile, RangeCalculation, TableSchema, calculate_range};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -206,7 +206,7 @@ impl FileOpener for TextOpener {
                 RangeCalculation::Range(None) => None,
                 RangeCalculation::Range(Some(range)) => Some(range.into()),
                 RangeCalculation::TerminateEarly => {
-                    return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed())
+                    return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
                 }
             };
             let options = GetOptions {

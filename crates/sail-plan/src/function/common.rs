@@ -6,8 +6,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    cast, expr, lit, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
-    WindowFrame, WindowFunctionDefinition, WindowUDF,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
+    WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
@@ -398,7 +398,7 @@ pub(crate) fn get_arguments_and_null_treatment(
             _ => {
                 return Err(PlanError::invalid(
                     "requires a boolean literal as the second argument",
-                ))
+                ));
             }
         };
         Ok((vec![expr], null_treatment))

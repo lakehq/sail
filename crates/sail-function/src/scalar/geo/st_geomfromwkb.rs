@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::cast::as_binary_array;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -85,10 +85,10 @@ impl ScalarUDFImpl for StGeomFromWKB {
             ColumnarValue::Array(array) => {
                 let binary_array = as_binary_array(array)?;
                 for (i, opt) in binary_array.iter().enumerate() {
-                    if let Some(b) = opt {
-                        if let Err(e) = validate_geometry(b) {
-                            return exec_err!("Invalid WKB at index {}: {}", i, e);
-                        }
+                    if let Some(b) = opt
+                        && let Err(e) = validate_geometry(b)
+                    {
+                        return exec_err!("Invalid WKB at index {}: {}", i, e);
                     }
                 }
                 Ok(ColumnarValue::Array(array.clone()))

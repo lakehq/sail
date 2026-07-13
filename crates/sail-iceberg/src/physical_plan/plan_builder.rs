@@ -128,13 +128,14 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(sort_exprs) = self.sort_order.clone() {
-            let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
-            })?;
-            Ok(Arc::new(SortExec::new(lex, input)))
-        } else {
-            Ok(input)
+        match self.sort_order.clone() {
+            Some(sort_exprs) => {
+                let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
+                })?;
+                Ok(Arc::new(SortExec::new(lex, input)))
+            }
+            _ => Ok(input),
         }
     }
 

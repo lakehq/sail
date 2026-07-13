@@ -137,10 +137,10 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value {
-                            if let Some(new_value) = new_value {
-                                self.group_values[group_index].push(new_value)
-                            }
+                        if let Some(true) = filter_value
+                            && let Some(new_value) = new_value
+                        {
+                            self.group_values[group_index].push(new_value)
                         }
                     })
             }

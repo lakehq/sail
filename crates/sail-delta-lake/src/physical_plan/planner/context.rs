@@ -22,15 +22,15 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
-use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
-use crate::options::gen::DeltaWriteOptions;
+use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
+use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
-    prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
+    DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions, prepare_delta_write_context,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    catalog_managed_commit_context, create_delta_table_with_object_store,
-    load_catalog_managed_commits_for_snapshot, DeltaSnapshot, DeltaTable,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 
 /// Configuration shared by all Delta planners.

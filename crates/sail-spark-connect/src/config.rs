@@ -15,7 +15,7 @@ use crate::spark::config::{
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_PIVOT_MAX_VALUES,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
-    SPARK_SQL_WAREHOUSE_DIR,
+    SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED, SPARK_SQL_WAREHOUSE_DIR,
 };
 use crate::spark::connect;
 
@@ -55,12 +55,13 @@ impl SparkRuntimeConfig {
     }
 
     fn validate_removed_key(key: &str, value: &str) -> SparkResult<()> {
-        if let Some(entry) = SPARK_CONFIG.get(key) {
-            if entry.removed.is_some() && entry.default_value != Some(value) {
-                return Err(SparkError::invalid(format!(
-                    "configuration has been removed: {key}"
-                )));
-            }
+        if let Some(entry) = SPARK_CONFIG.get(key)
+            && entry.removed.is_some()
+            && entry.default_value != Some(value)
+        {
+            return Err(SparkError::invalid(format!(
+                "configuration has been removed: {key}"
+            )));
         }
         Ok(())
     }
@@ -208,9 +209,9 @@ fn get_pyspark_major_version() -> Option<u64> {
 }
 
 pub(crate) fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::Python;
     use pyo3::prelude::PyAnyMethods;
     use pyo3::types::PyModule;
-    use pyo3::Python;
 
     Python::attach(|py| {
         let module = PyModule::import(py, "pyspark")?;
@@ -295,6 +296,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.pivot_max_values = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.tvf_allow_multiple_table_arguments = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);

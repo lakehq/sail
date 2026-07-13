@@ -1,16 +1,16 @@
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ident, Expr, Extension, LogicalPlan};
+use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
+use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 pub(crate) struct MonotonicIdRewriter<'s> {
     plan: LogicalPlan,

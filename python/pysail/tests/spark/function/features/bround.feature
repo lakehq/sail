@@ -81,35 +81,38 @@ Feature: bround comprehensive tests
         | result |
         | 1.4    |
 
-  Rule: Float32 path
-    # Pre-existing bug (NOT caused by the binary-kernel perf refactor, which
-    # preserves the Float32Array output). `return_type` maps a FLOAT/Float32
-    # input to Float64, but the Float32 execution branch yields a Float32Array,
-    # so execution fails with a planning-vs-runtime type mismatch
-    # ("type 'Float32' ... expected: 'Float64'"). Spark returns FLOAT here.
-    # Fix path (separate PR): make return_type return Float32 for Float32 input
-    # (or coerce the arg/result to Float64). Kept perf-only in this PR.
-
-    @sail-bug
-    Scenario: bround FLOAT 2.5 rounds to even
-      When query
-        """
-        SELECT bround(CAST(2.5 AS FLOAT), 0) AS result
-        """
-      Then query result
-        | result |
-        | 2.0    |
-
-    @sail-bug
-    Scenario: bround FLOAT 3.5 rounds to even
-      When query
-        """
-        SELECT bround(CAST(3.5 AS FLOAT), 0) AS result
-        """
-      Then query result
-        | result |
-        | 4.0    |
-
+  # FIXME: The type mismatch assertion is only active in debug builds,
+  #   so the following tests would fail with XPASS in release builds.
+  #
+  #   Rule: Float32 path
+  #     # Pre-existing bug (NOT caused by the binary-kernel perf refactor, which
+  #     # preserves the Float32Array output). `return_type` maps a FLOAT/Float32
+  #     # input to Float64, but the Float32 execution branch yields a Float32Array,
+  #     # so execution fails with a planning-vs-runtime type mismatch
+  #     # ("type 'Float32' ... expected: 'Float64'"). Spark returns FLOAT here.
+  #     # Fix path (separate PR): make return_type return Float32 for Float32 input
+  #     # (or coerce the arg/result to Float64). Kept perf-only in this PR.
+  #
+  #     @sail-bug
+  #     Scenario: bround FLOAT 2.5 rounds to even
+  #       When query
+  #         """
+  #         SELECT bround(CAST(2.5 AS FLOAT), 0) AS result
+  #         """
+  #       Then query result
+  #         | result |
+  #         | 2.0    |
+  #
+  #     @sail-bug
+  #     Scenario: bround FLOAT 3.5 rounds to even
+  #       When query
+  #         """
+  #         SELECT bround(CAST(3.5 AS FLOAT), 0) AS result
+  #         """
+  #       Then query result
+  #         | result |
+  #         | 4.0    |
+  #
   Rule: Integer paths with negative scale preserve input type
 
     Scenario: bround INT 25 scale -1
