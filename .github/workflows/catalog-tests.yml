@@ -75,5 +75,5 @@ jobs:
           files: coverage-catalog-it.info
           flags: catalog-integration-tests
           name: catalog-integration-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS

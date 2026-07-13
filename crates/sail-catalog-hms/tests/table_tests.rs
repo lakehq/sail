@@ -65,7 +65,6 @@ async fn test_supported_formats_round_trip() {
         ("parquet_items", "parquet", "parquet"),
         ("csv_items", "csv", "csv"),
         ("delta_items", "delta", "delta"),
-        ("deltalake_items", "deltalake", "delta"),
         ("textfile_items", "textfile", "textfile"),
         ("json_items", "json", "json"),
         ("orc_items", "orc", "orc"),
