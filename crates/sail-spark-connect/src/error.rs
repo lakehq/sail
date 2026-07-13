@@ -46,6 +46,13 @@ pub enum SparkError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("{message}")]
+    SparkRuntimeError {
+        condition: &'static str,
+        sql_state: &'static str,
+        message: String,
+        message_parameters: HashMap<String, String>,
+    },
 }
 
 impl SparkError {
@@ -67,6 +74,33 @@ impl SparkError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         SparkError::InternalError(message.into())
+    }
+
+    pub fn invalid_artifact_path(name: &str) -> Self {
+        let message = format!(
+            "[INVALID_ARTIFACT_PATH] Artifact with name {name} is invalid. The name must be a relative path and cannot reference parent/sibling/nephew directories. SQLSTATE: 22023"
+        );
+        SparkError::SparkRuntimeError {
+            condition: "INVALID_ARTIFACT_PATH",
+            sql_state: "22023",
+            message,
+            message_parameters: HashMap::from([("name".to_string(), name.to_string())]),
+        }
+    }
+
+    pub fn artifact_already_exists(path: &str) -> Self {
+        let message = format!(
+            "[ARTIFACT_ALREADY_EXISTS] The artifact {path} already exists. Please choose a different name for the new artifact because it cannot be overwritten. SQLSTATE: 42713"
+        );
+        SparkError::SparkRuntimeError {
+            condition: "ARTIFACT_ALREADY_EXISTS",
+            sql_state: "42713",
+            message,
+            message_parameters: HashMap::from([(
+                "normalizedRemoteRelativePath".to_string(),
+                path.to_string(),
+            )]),
+        }
     }
 }
 
@@ -342,6 +376,27 @@ impl From<SparkThrowable> for Status {
     }
 }
 
+fn spark_runtime_status(
+    condition: &'static str,
+    sql_state: &'static str,
+    message: String,
+    message_parameters: HashMap<String, String>,
+) -> Status {
+    let class = "org.apache.spark.SparkRuntimeException";
+    let mut metadata = HashMap::new();
+    metadata.insert("classes".into(), format!("[\"{class}\"]"));
+    metadata.insert("errorClass".into(), condition.to_string());
+    metadata.insert("sqlState".into(), sql_state.to_string());
+    metadata.insert(
+        "messageParameters".into(),
+        serde_json::to_string(&message_parameters).unwrap_or_default(),
+    );
+
+    let mut details = ErrorDetails::new();
+    details.set_error_info(class, "org.apache.spark", metadata);
+    Status::with_error_details(Code::Internal, truncate_grpc_message(&message), details)
+}
+
 impl From<CommonErrorCause> for SparkThrowable {
     fn from(value: CommonErrorCause) -> Self {
         match value {
@@ -450,6 +505,12 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
+            SparkError::SparkRuntimeError {
+                condition,
+                sql_state,
+                message,
+                message_parameters,
+            } => spark_runtime_status(condition, sql_state, message, message_parameters),
             e @ SparkError::SendError(_) => {
                 Status::cancelled(truncate_grpc_message(&e.to_string()))
             }

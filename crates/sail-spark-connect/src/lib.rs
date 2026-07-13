@@ -1,3 +1,4 @@
+mod artifact;
 mod config;
 mod debug;
 pub mod entrypoint;

@@ -773,6 +773,34 @@
     the session active.
   experimental: true
 
+- key: spark.artifact.max_artifact_bytes
+  type: number
+  default: "33554432"
+  description: |
+    Maximum encoded size in bytes of one Spark Connect artifact.
+  experimental: true
+
+- key: spark.artifact.max_session_bytes
+  type: number
+  default: "67108864"
+  description: |
+    Maximum encoded size in bytes of all artifacts owned by one Spark session.
+  experimental: true
+
+- key: spark.artifact.max_artifacts
+  type: number
+  default: "1024"
+  description: |
+    Maximum number of artifacts owned by one Spark session.
+  experimental: true
+
+- key: spark.artifact.max_chunks
+  type: number
+  default: "4096"
+  description: |
+    Maximum number of chunks accepted for one Spark Connect artifact.
+  experimental: true
+
 - key: flight.session_timeout_secs
   type: number
   default: "3600"

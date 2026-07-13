@@ -8,7 +8,11 @@ use datafusion::logical_expr::StringifiedPlan;
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
+use uuid::Uuid;
 
+#[cfg(test)]
+use crate::artifact::Artifact;
+use crate::artifact::{ArtifactLimits, SessionArtifacts};
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
@@ -21,6 +25,7 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    pub artifact_limits: ArtifactLimits,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -28,8 +33,10 @@ pub(crate) struct SparkSessionOptions {
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
     session_id: String,
+    server_side_session_id: String,
     user_id: String,
     options: SparkSessionOptions,
+    artifacts: SessionArtifacts,
     state: Mutex<SparkSessionState>,
 }
 
@@ -57,7 +64,9 @@ impl SparkSession {
     ) -> SparkResult<Self> {
         let extension = Self {
             session_id,
+            server_side_session_id: Uuid::new_v4().to_string(),
             user_id,
+            artifacts: SessionArtifacts::new(options.artifact_limits)?,
             options,
             state: Mutex::new(SparkSessionState::new()),
         };
@@ -74,6 +83,19 @@ impl SparkSession {
 
     pub(crate) fn user_id(&self) -> &str {
         &self.user_id
+    }
+
+    pub(crate) fn server_side_session_id(&self) -> &str {
+        &self.server_side_session_id
+    }
+
+    pub(crate) fn artifacts(&self) -> &SessionArtifacts {
+        &self.artifacts
+    }
+
+    #[cfg(test)]
+    pub(crate) fn artifact(&self, name: &str) -> SparkResult<Option<Artifact>> {
+        self.artifacts.get(name)
     }
 
     pub(crate) fn options(&self) -> &SparkSessionOptions {

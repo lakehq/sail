@@ -1,6 +1,7 @@
 use async_stream;
 use datafusion::prelude::SessionContext;
 use log::debug;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
@@ -10,6 +11,7 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
+use crate::session::SparkSession;
 use crate::spark::connect::analyze_plan_request::Analyze;
 use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
 use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
@@ -32,6 +34,27 @@ impl SparkConnectServer {
     pub fn new(session_manager: SessionManager) -> Self {
         Self { session_manager }
     }
+}
+
+fn validate_artifact_session(
+    ctx: &SessionContext,
+    user_id: &str,
+    observed_server_side_session_id: Option<&str>,
+) -> SparkResult<std::sync::Arc<SparkSession>> {
+    let spark = ctx.extension::<SparkSession>()?;
+    if spark.user_id() != user_id {
+        return Err(SparkError::invalid(
+            "user ID does not match the existing Spark session",
+        ));
+    }
+    if let Some(observed) = observed_server_side_session_id
+        && observed != spark.server_side_session_id()
+    {
+        return Err(SparkError::invalid(
+            "client-observed server-side session ID does not match the Spark session",
+        ));
+    }
+    Ok(spark)
 }
 
 fn is_reattachable(
@@ -297,34 +320,60 @@ impl SparkConnectService for SparkConnectServer {
                 ));
             }
         };
-        debug!("{first:?}");
+        debug!("received first AddArtifacts request");
         let session_id = first.session_id.clone();
-        let user_id = first.user_context.map(|u| u.user_id).unwrap_or_default();
+        let user_id = first
+            .user_context
+            .as_ref()
+            .map(|u| u.user_id.clone())
+            .unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_id.clone(), user_id)
+            .get_or_create_session_context(session_id.clone(), user_id.clone())
             .await
             .map_err(SparkError::from)?;
+        let spark = validate_artifact_session(
+            &ctx,
+            &user_id,
+            first.client_observed_server_side_session_id.as_deref(),
+        )?;
+        let server_side_session_id = spark.server_side_session_id().to_string();
+        let expected_server_side_session_id = server_side_session_id.clone();
         let payload = first.payload;
         let stream = async_stream::try_stream! {
-            if let Some(payload) = payload {
-                yield payload;
-            }
+            yield payload.ok_or_else(|| SparkError::invalid("artifact request payload is required"))?;
             while let Some(item) = request.next().await {
-                let item = item?;
-                debug!("{item:?}");
+                let item = item.map_err(|error| {
+                    SparkError::invalid(format!("failed to read artifact request: {error}"))
+                })?;
+                debug!("received subsequent AddArtifacts request");
                 if item.session_id != session_id {
-                    Err(Status::invalid_argument("session ID must be consistent"))?;
+                    Err(SparkError::invalid("session ID must be consistent"))?;
                 }
-                if let Some(payload) = item.payload {
-                    yield payload;
+                let item_user_id = item
+                    .user_context
+                    .as_ref()
+                    .map(|context| context.user_id.as_str())
+                    .unwrap_or_default();
+                if item_user_id != user_id {
+                    Err(SparkError::invalid("user ID must be consistent"))?;
                 }
+                if let Some(observed) = item.client_observed_server_side_session_id.as_deref()
+                    && observed != expected_server_side_session_id
+                {
+                    Err(SparkError::invalid(
+                        "client-observed server-side session ID must be consistent",
+                    ))?;
+                }
+                yield item
+                    .payload
+                    .ok_or_else(|| SparkError::invalid("artifact request payload is required"))?;
             }
         };
         let artifacts = service::handle_add_artifacts(&ctx, stream).await?;
         let response = AddArtifactsResponse {
             session_id: first.session_id.clone(),
-            server_side_session_id: first.session_id,
+            server_side_session_id,
             artifacts,
         };
         debug!("{response:?}");
@@ -336,18 +385,27 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ArtifactStatusesRequest>,
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
         let request = request.into_inner();
-        debug!("{request:?}");
+        debug!("received ArtifactStatus request");
         let session_id = request.session_id.clone();
-        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let user_id = request
+            .user_context
+            .as_ref()
+            .map(|u| u.user_id.clone())
+            .unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_id, user_id)
+            .get_or_create_session_context(session_id, user_id.clone())
             .await
             .map_err(SparkError::from)?;
+        let spark = validate_artifact_session(
+            &ctx,
+            &user_id,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
         let response = ArtifactStatusesResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id: spark.server_side_session_id().to_string(),
             statuses,
         };
         debug!("{response:?}");

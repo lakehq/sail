@@ -17,6 +17,7 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
+use crate::artifact::ArtifactLimits;
 use crate::error::{SparkError, SparkResult};
 use crate::session::{SparkSession, SparkSessionOptions};
 
@@ -41,6 +42,12 @@ impl ServerSessionMutator for SparkSessionMutator {
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
                 ),
+                artifact_limits: ArtifactLimits {
+                    max_artifact_bytes: self.config.spark.artifact.max_artifact_bytes,
+                    max_session_bytes: self.config.spark.artifact.max_session_bytes,
+                    max_artifacts: self.config.spark.artifact.max_artifacts,
+                    max_chunks: self.config.spark.artifact.max_chunks,
+                },
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;
