@@ -7,6 +7,7 @@ use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
 
+use crate::artifact::activate_session_artifacts;
 use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
@@ -35,6 +36,7 @@ use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
+    let (_, _artifact_activation) = activate_session_artifacts(ctx).await?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
@@ -69,6 +71,7 @@ pub(crate) async fn handle_analyze_explain(
     let explain_mode = ExplainMode::try_from(explain_mode)?;
     let spec_mode = explain_mode.try_into()?;
     let options = ExplainOptions::from_mode(spec_mode);
+    let (_, _artifact_activation) = activate_session_artifacts(ctx).await?;
     let explain = explain_string(
         ctx,
         spark.plan_config()?,

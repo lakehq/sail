@@ -121,6 +121,7 @@ wiremock = "0.6.5"
 testcontainers = "0.26.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.27.0"
+zip = { version = "8.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 readonly = "0.2.13"
 toml = "0.8"
 bitflags = "2.12.1"

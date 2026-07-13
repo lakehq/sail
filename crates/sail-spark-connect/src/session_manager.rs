@@ -10,6 +10,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::artifact::CachedLocalRelationService;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_execution::artifact::{ArtifactRuntime, ArtifactRuntimeOptions};
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_server::actor::ActorSystem;
@@ -57,9 +58,14 @@ impl ServerSessionMutator for SparkSessionMutator {
         let cached_local_relations = CachedLocalRelationService::new(Arc::new(
             SparkCachedLocalRelationLoader::new(spark.clone()),
         ));
+        let artifact_runtime = ArtifactRuntime::try_new(ArtifactRuntimeOptions {
+            max_archive_entries: self.config.spark.artifact.max_archive_entries,
+            max_archive_expanded_bytes: self.config.spark.artifact.max_archive_expanded_bytes,
+        })?;
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(Arc::new(cached_local_relations))
+            .with_extension(Arc::new(artifact_runtime))
             .with_extension(spark))
     }
 

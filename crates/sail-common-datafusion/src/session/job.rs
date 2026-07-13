@@ -8,6 +8,7 @@ use datafusion::prelude::SessionContext;
 use tokio::sync::oneshot;
 
 use crate::extension::SessionExtension;
+use crate::session::artifact::ArtifactManifest;
 use crate::system::catalog::{JobRow, StageRow, TaskRow, WorkerRow};
 use crate::system::observable::{JobRunnerObserver, StateObservable};
 use crate::system::predicate::PredicateExt;
@@ -20,6 +21,7 @@ pub trait JobRunner: StateObservable<JobRunnerObserver> + Send + Sync + 'static 
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
+        artifacts: ArtifactManifest,
     ) -> Result<SendableRecordBatchStream>;
 
     /// Returns an execution-mode-specific plan for EXPLAIN output.

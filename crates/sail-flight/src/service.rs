@@ -16,6 +16,7 @@ use log::{debug, info};
 use prost::Message;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::config::PlanConfig;
 use sail_plan::resolve_and_execute_plan;
@@ -113,7 +114,7 @@ impl FlightSqlService for SailFlightSqlService {
             .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
         let stream = service
             .runner()
-            .execute(&ctx, plan)
+            .execute(&ctx, plan, ArtifactManifest::default())
             .await
             .map_err(|e| Status::internal(format!("execution error: {e}")))?;
 

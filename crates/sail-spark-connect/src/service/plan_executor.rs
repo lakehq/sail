@@ -16,6 +16,7 @@ use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
+use crate::artifact::activate_session_artifacts;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
     Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput, ExecutorOutputStream, read_stream,
@@ -126,10 +127,16 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
+    let (artifacts, planning_activation) = activate_session_artifacts(ctx).await?;
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    drop(planning_activation);
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
-        service.runner().execute(ctx, plan).in_span(span).await?
+        service
+            .runner()
+            .execute(ctx, plan, artifacts)
+            .in_span(span)
+            .await?
     };
     let rx = match mode {
         ExecutePlanMode::Lazy => {
@@ -247,8 +254,10 @@ pub(crate) async fn handle_execute_sql_command(
     let relation = match plan {
         spec::Plan::Query(_) => relation,
         command @ spec::Plan::Command(_) => {
+            let (artifacts, planning_activation) = activate_session_artifacts(ctx).await?;
             let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
-            let stream = service.runner().execute(ctx, plan).await?;
+            drop(planning_activation);
+            let stream = service.runner().execute(ctx, plan, artifacts).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
             let data = concat_batches(&schema, data.iter())?;
@@ -286,8 +295,10 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
+    let (artifacts, planning_activation) = activate_session_artifacts(ctx).await?;
     let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = service.runner().execute(ctx, plan).await?;
+    drop(planning_activation);
+    let stream = service.runner().execute(ctx, plan, artifacts).await?;
     let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
         query_id: Some(id.into()),

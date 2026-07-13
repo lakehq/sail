@@ -618,6 +618,8 @@ pub struct SparkArtifactConfig {
     pub max_session_bytes: usize,
     pub max_artifacts: usize,
     pub max_chunks: usize,
+    pub max_archive_entries: usize,
+    pub max_archive_expanded_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -801,6 +801,20 @@
     Maximum number of chunks accepted for one Spark Connect artifact.
   experimental: true
 
+- key: spark.artifact.max_archive_entries
+  type: number
+  default: "4096"
+  description: |
+    Maximum number of entries extracted from one Spark archive artifact.
+  experimental: true
+
+- key: spark.artifact.max_archive_expanded_bytes
+  type: number
+  default: "67108864"
+  description: |
+    Maximum expanded size in bytes of one Spark archive artifact.
+  experimental: true
+
 - key: flight.session_timeout_secs
   type: number
   default: "3600"

@@ -5,6 +5,35 @@ use sail_common::spec;
 
 use crate::extension::SessionExtension;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeArtifactKind {
+    PythonFile,
+    File,
+    Archive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeArtifact {
+    pub name: String,
+    pub kind: RuntimeArtifactKind,
+    pub archive_name: Option<String>,
+    pub digest: [u8; 32],
+    pub data: Arc<[u8]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArtifactManifest {
+    pub set_id: String,
+    pub fingerprint: [u8; 32],
+    pub artifacts: Vec<RuntimeArtifact>,
+}
+
+impl ArtifactManifest {
+    pub fn is_empty(&self) -> bool {
+        self.artifacts.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CachedLocalRelationData {
     pub data: Vec<Arc<[u8]>>,

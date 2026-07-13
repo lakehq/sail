@@ -7,6 +7,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_plan::config::PlanConfig;
 use uuid::Uuid;
 
@@ -93,6 +94,10 @@ impl SparkSession {
 
     pub(crate) fn artifact(&self, name: &str) -> SparkResult<Option<Artifact>> {
         self.artifacts.get(name)
+    }
+
+    pub(crate) fn artifact_manifest(&self) -> SparkResult<ArtifactManifest> {
+        self.artifacts.manifest(&self.server_side_session_id)
     }
 
     pub(crate) fn options(&self) -> &SparkSessionOptions {

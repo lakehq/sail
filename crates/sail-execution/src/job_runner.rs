@@ -5,6 +5,8 @@ use datafusion::common::{DataFusionError, Result, internal_datafusion_err, inter
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::{ActorHandle, ActorSystem};
@@ -13,6 +15,7 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
+use crate::artifact::{ArtifactRuntime, hold_artifact_activation};
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::job_graph::JobGraph;
 
@@ -49,6 +52,7 @@ impl JobRunner for LocalJobRunner {
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
+        artifacts: ArtifactManifest,
     ) -> Result<SendableRecordBatchStream> {
         if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
@@ -62,7 +66,16 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        if artifacts.is_empty() {
+            Ok(execute_stream(plan, ctx.task_ctx())?)
+        } else {
+            let activation = ctx
+                .extension::<ArtifactRuntime>()?
+                .activate(&artifacts)
+                .await?;
+            let stream = execute_stream(plan, ctx.task_ctx())?;
+            Ok(hold_artifact_activation(stream, activation))
+        }
     }
 
     async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
@@ -115,6 +128,7 @@ impl JobRunner for ClusterJobRunner {
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
+        _artifacts: ArtifactManifest,
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver

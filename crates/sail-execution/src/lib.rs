@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod driver;
 pub mod error;
 mod id;

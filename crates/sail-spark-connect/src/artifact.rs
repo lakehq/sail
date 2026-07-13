@@ -2,11 +2,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
+use datafusion::prelude::SessionContext;
 use prost::Message;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::artifact::{
-    CachedLocalRelationData, CachedLocalRelationLoader,
+    ArtifactManifest, CachedLocalRelationData, CachedLocalRelationLoader, RuntimeArtifact,
+    RuntimeArtifactKind,
 };
+use sail_execution::artifact::{ArtifactActivationGuard, ArtifactRuntime};
 use sha2::{Digest, Sha256};
 
 use crate::error::{SparkError, SparkResult};
@@ -33,7 +37,6 @@ pub(crate) enum ArtifactAddOutcome {
 pub(crate) struct Artifact {
     name: String,
     kind: ArtifactKind,
-    #[expect(dead_code)]
     archive_name: Option<String>,
     digest: [u8; 32],
     data: Arc<[u8]>,
@@ -82,6 +85,7 @@ pub(crate) struct SessionArtifacts {
 #[derive(Debug, Default)]
 struct SessionArtifactState {
     entries: HashMap<String, Artifact>,
+    runtime_order: Vec<String>,
     total_bytes: usize,
 }
 
@@ -131,6 +135,7 @@ impl SessionArtifacts {
         }
 
         let mut state = self.state.write()?;
+        let is_new = !state.entries.contains_key(&artifact.name);
         if let Some(existing) = state.entries.get(&artifact.name) {
             if artifact.kind != ArtifactKind::Cache {
                 if existing.data.as_ref() == artifact.data.as_ref() {
@@ -162,6 +167,9 @@ impl SessionArtifacts {
             )));
         }
 
+        if is_new && artifact.kind != ArtifactKind::Cache {
+            state.runtime_order.push(artifact.name.clone());
+        }
         state.total_bytes = total_bytes;
         state.entries.insert(artifact.name.clone(), artifact);
         Ok(ArtifactAddOutcome::Added)
@@ -177,6 +185,71 @@ impl SessionArtifacts {
         }
         Ok(self.state.read()?.entries.contains_key(name))
     }
+
+    pub(crate) fn manifest(&self, set_id: &str) -> SparkResult<ArtifactManifest> {
+        let state = self.state.read()?;
+        let artifacts = state
+            .runtime_order
+            .iter()
+            .map(|name| {
+                state.entries.get(name).ok_or_else(|| {
+                    SparkError::internal(format!(
+                        "runtime artifact order references missing entry: {name}"
+                    ))
+                })
+            })
+            .map(|artifact| {
+                let artifact = artifact?;
+                let kind = match artifact.kind {
+                    ArtifactKind::PythonFile => RuntimeArtifactKind::PythonFile,
+                    ArtifactKind::File => RuntimeArtifactKind::File,
+                    ArtifactKind::Archive => RuntimeArtifactKind::Archive,
+                    ArtifactKind::Cache => {
+                        return Err(SparkError::internal(
+                            "cache artifact appeared in runtime artifact order",
+                        ));
+                    }
+                };
+                Ok(RuntimeArtifact {
+                    name: artifact.name.clone(),
+                    kind,
+                    archive_name: artifact.archive_name.clone(),
+                    digest: artifact.digest,
+                    data: artifact.data.clone(),
+                })
+            })
+            .collect::<SparkResult<Vec<_>>>()?;
+
+        let mut hasher = Sha256::new();
+        for artifact in &artifacts {
+            let kind = match artifact.kind {
+                RuntimeArtifactKind::PythonFile => 1u8,
+                RuntimeArtifactKind::File => 2u8,
+                RuntimeArtifactKind::Archive => 3u8,
+            };
+            hasher.update([kind]);
+            update_fingerprint_field(&mut hasher, artifact.name.as_bytes());
+            update_fingerprint_field(
+                &mut hasher,
+                artifact
+                    .archive_name
+                    .as_deref()
+                    .unwrap_or_default()
+                    .as_bytes(),
+            );
+            hasher.update(artifact.digest);
+        }
+        Ok(ArtifactManifest {
+            set_id: set_id.to_string(),
+            fingerprint: hasher.finalize().into(),
+            artifacts,
+        })
+    }
+}
+
+fn update_fingerprint_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 fn sha256_hex(digest: &[u8; 32]) -> String {
@@ -187,6 +260,23 @@ fn sha256_hex(digest: &[u8; 32]) -> String {
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+pub(crate) async fn activate_session_artifacts(
+    ctx: &SessionContext,
+) -> SparkResult<(ArtifactManifest, Option<ArtifactActivationGuard>)> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let manifest = spark.artifact_manifest()?;
+    let activation = if manifest.is_empty() {
+        None
+    } else {
+        Some(
+            ctx.extension::<ArtifactRuntime>()?
+                .activate(&manifest)
+                .await?,
+        )
+    };
+    Ok((manifest, activation))
 }
 
 pub(crate) struct SparkCachedLocalRelationLoader {
@@ -384,6 +474,59 @@ mod tests {
             b"two".to_vec(),
         ));
         assert!(matches!(result, Err(SparkError::InvalidArgument(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_manifest_preserves_upload_order_and_excludes_cache() -> SparkResult<()> {
+        let registry = SessionArtifacts::new(ArtifactLimits {
+            max_artifact_bytes: 64,
+            max_session_bytes: 256,
+            max_artifacts: 8,
+            max_chunks: 4,
+        })?;
+        let cache_data = b"cached".to_vec();
+        registry.add(Artifact::new(
+            cache_name(&cache_data),
+            ArtifactKind::Cache,
+            None,
+            cache_data,
+        ))?;
+        registry.add(Artifact::new(
+            "files/config.txt".to_string(),
+            ArtifactKind::File,
+            None,
+            b"config".to_vec(),
+        ))?;
+        registry.add(Artifact::new(
+            "pyfiles/package.zip".to_string(),
+            ArtifactKind::PythonFile,
+            None,
+            b"package".to_vec(),
+        ))?;
+        registry.add(Artifact::new(
+            "archives/data.zip".to_string(),
+            ArtifactKind::Archive,
+            Some("data".to_string()),
+            b"archive".to_vec(),
+        ))?;
+
+        let manifest = registry.manifest("session-1")?;
+        assert_eq!(manifest.set_id, "session-1");
+        assert_eq!(
+            manifest
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "files/config.txt",
+                "pyfiles/package.zip",
+                "archives/data.zip"
+            ]
+        );
+        assert_eq!(manifest.artifacts[2].archive_name.as_deref(), Some("data"));
+        assert_eq!(manifest, registry.manifest("session-1")?);
         Ok(())
     }
 
