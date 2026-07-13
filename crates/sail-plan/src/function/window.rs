@@ -13,9 +13,9 @@ use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf,
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
-    cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition,
+    AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition, cast, expr, lit, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -39,13 +39,13 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::window::spark_ntile_udwf;
+use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
-    hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg, WinFunction, WinFunctionInput,
+    WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
+    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -136,8 +136,15 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
+    // DataFusion physical proto drops IGNORE NULLS for WindowUDFExpr, so use a
+    // Sail UDWF with the null treatment encoded in the function state.
+    let fun = if matches!(null_treatment, Some(NullTreatment::IgnoreNulls)) {
+        WindowFunctionDefinition::WindowUDF(spark_first_value_udwf(true))
+    } else {
+        WindowFunctionDefinition::WindowUDF(first_value_udwf())
+    };
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+        fun,
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -161,8 +168,13 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
+    let fun = if matches!(null_treatment, Some(NullTreatment::IgnoreNulls)) {
+        WindowFunctionDefinition::WindowUDF(spark_last_value_udwf(true))
+    } else {
+        WindowFunctionDefinition::WindowUDF(last_value_udwf())
+    };
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(last_value_udwf()),
+        fun,
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -430,18 +442,19 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     match arguments.len() {
         1 => {
-            let filter = arguments
+            let predicate = arguments
                 .first()
                 .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
                 .clone();
+            let arg = when(predicate, lit(0)).otherwise(lit(ScalarValue::Int32(None)))?;
             Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
                 params: WindowFunctionParams {
-                    args: vec![lit(0)],
+                    args: vec![arg],
                     partition_by,
                     order_by,
                     window_frame,
-                    filter: Some(Box::new(filter)),
+                    filter: None,
                     null_treatment: get_null_treatment(ignore_nulls),
                     distinct,
                 },
@@ -475,7 +488,7 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             order_by,
             window_frame,
             filter: null_filter,
-            null_treatment: None,
+            null_treatment: get_null_treatment(Some(true)),
             distinct: true,
         },
     })))
@@ -809,4 +822,8 @@ pub(crate) fn get_built_in_window_function(name: &str) -> PlanResult<WinFunction
         .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown window function: {name}")))?
         .clone())
+}
+
+pub(crate) fn list_built_in_window_function_names() -> impl Iterator<Item = &'static str> {
+    BUILT_IN_WINDOW_FUNCTIONS.keys().copied()
 }

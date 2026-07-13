@@ -12,11 +12,13 @@
 
 use std::collections::HashMap;
 
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    contains_timestampntz, contains_variant, ColumnMappingMode, ColumnMetadataKey,
-    DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, StructType, TableFeature,
-    TableProperties,
+    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
+    MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+    contains_timestampntz, contains_variant,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.
@@ -55,6 +57,111 @@ pub fn schema_has_identity_columns(schema: &StructType) -> bool {
             && f.get_config_value(&ColumnMetadataKey::IdentityAllowExplicitInsert)
                 .is_some()
     })
+}
+
+fn inject_string_column_metadata(
+    schema: StructType,
+    expressions: &HashMap<String, String>,
+    key: ColumnMetadataKey,
+) -> StructType {
+    let metadata_key = key.as_ref();
+    let fields = schema.into_fields().map(|field| {
+        let Some(expr) = expressions.get(&field.name) else {
+            return field;
+        };
+        if matches!(
+            field.metadata.get(metadata_key),
+            Some(MetadataValue::String(existing)) if existing == expr
+        ) {
+            return field;
+        }
+        let StructField {
+            name,
+            data_type,
+            nullable,
+            mut metadata,
+        } = field;
+        metadata.insert(
+            metadata_key.to_string(),
+            MetadataValue::String(expr.clone()),
+        );
+        StructField {
+            name,
+            data_type,
+            nullable,
+            metadata,
+        }
+    });
+    StructType::new_unchecked(fields)
+}
+
+pub(crate) fn inject_generation_expressions(
+    schema: StructType,
+    generation_expressions: &HashMap<String, String>,
+) -> StructType {
+    inject_string_column_metadata(
+        schema,
+        generation_expressions,
+        ColumnMetadataKey::GenerationExpression,
+    )
+}
+
+pub(crate) fn inject_default_expressions(
+    schema: StructType,
+    default_expressions: &HashMap<String, String>,
+) -> StructType {
+    inject_string_column_metadata(
+        schema,
+        default_expressions,
+        ColumnMetadataKey::CurrentDefault,
+    )
+}
+
+pub(crate) fn inject_identity_columns(
+    schema: StructType,
+    identity_columns: &HashMap<String, CatalogTableColumnIdentity>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(identity) = identity_columns.get(&field.name) {
+            let StructField {
+                name,
+                data_type,
+                nullable,
+                mut metadata,
+            } = field;
+            metadata.insert(
+                ColumnMetadataKey::IdentityStart.as_ref().to_string(),
+                MetadataValue::Number(identity.start),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityStep.as_ref().to_string(),
+                MetadataValue::Number(identity.step),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityAllowExplicitInsert
+                    .as_ref()
+                    .to_string(),
+                MetadataValue::Boolean(identity.allow_explicit_insert),
+            );
+            if let Some(high_water_mark) = identity.high_water_mark {
+                metadata.insert(
+                    ColumnMetadataKey::IdentityHighWaterMark
+                        .as_ref()
+                        .to_string(),
+                    MetadataValue::Number(high_water_mark),
+                );
+            }
+            StructField {
+                name,
+                data_type,
+                nullable,
+                metadata,
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
 }
 
 /// Evolve table schema and update metadata according to column mapping mode.

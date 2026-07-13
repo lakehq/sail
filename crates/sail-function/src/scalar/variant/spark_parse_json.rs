@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
-use arrow::array::{new_null_array, Array, ArrayRef, StringViewArray, StructArray};
+use arrow::array::{Array, ArrayRef, StringViewArray, StructArray, new_null_array};
 use arrow::compute::cast;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::exec_datafusion_err;
@@ -13,8 +13,7 @@ use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
-    variant_metadata_field, VARIANT_METADATA_FIELD_NAME, VARIANT_METADATA_MARKER_KEY,
-    VARIANT_METADATA_MARKER_VALUE,
+    VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME, variant_metadata_field,
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -188,8 +187,8 @@ impl ScalarUDFImpl for SparkParseJson {
         // internally and convert to Binary only at the Spark Connect serialization
         // layer, but that requires a broader refactor of the serialization path.
         Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
             variant_metadata_field(DataType::Binary, false),
-            Field::new("value", DataType::Binary, false),
         ])))
     }
 
@@ -211,13 +210,14 @@ impl ScalarUDFImpl for SparkParseJson {
         // without parsing any rows. Placed after coerce_types has validated the
         // string arg type; the JSON parse itself is per-row, so there is no
         // batch-level validation that this short-circuit could silence.
-        if let Some(ColumnarValue::Array(arr)) = args.args.first() {
-            if !arr.is_empty() && arr.null_count() == arr.len() {
-                return Ok(ColumnarValue::Array(new_null_array(
-                    args.return_field.data_type(),
-                    arr.len(),
-                )));
-            }
+        if let Some(ColumnarValue::Array(arr)) = args.args.first()
+            && !arr.is_empty()
+            && arr.null_count() == arr.len()
+        {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_field.data_type(),
+                arr.len(),
+            )));
         }
 
         let safe = self.safe;
@@ -269,7 +269,7 @@ fn parse_json_kernel(args: &[ArrayRef], safe: bool, name: &str) -> Result<ArrayR
                 builder.append_null();
             }
             let struct_array: StructArray = builder.build().into();
-            let struct_array = convert_binaryview_to_binary(struct_array)?;
+            let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
             Ok(Arc::new(struct_array) as ArrayRef)
         }
         other => Err(unsupported_data_type_exec_err(name, "string", other)),
@@ -305,7 +305,7 @@ pub(crate) fn from_utf8view_arr(arr: &ArrayRef, safe: bool) -> Result<ArrayRef> 
     }
 
     let variant_array: StructArray = builder.build().into();
-    let variant_array = convert_binaryview_to_binary(variant_array)?;
+    let variant_array = convert_variant_binaryview_to_binary(variant_array)?;
     Ok(Arc::new(variant_array) as ArrayRef)
 }
 
@@ -315,17 +315,13 @@ pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<
         .fields()
         .iter()
         .map(|f| {
-            let field = if f.name() == VARIANT_METADATA_FIELD_NAME {
-                let mut metadata = f.metadata().clone();
-                metadata.insert(
-                    VARIANT_METADATA_MARKER_KEY.to_string(),
-                    VARIANT_METADATA_MARKER_VALUE.to_string(),
-                );
-                variant_metadata_field(DataType::Binary, f.is_nullable()).with_metadata(metadata)
-            } else {
+            if matches!(f.data_type(), DataType::Binary) {
+                return f.clone();
+            }
+            Arc::new(
                 Field::new(f.name(), DataType::Binary, f.is_nullable())
-            };
-            Arc::new(field)
+                    .with_metadata(f.metadata().clone()),
+            )
         })
         .collect();
 
@@ -333,6 +329,9 @@ pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<
         .columns()
         .iter()
         .map(|col| {
+            if matches!(col.data_type(), DataType::Binary) {
+                return Ok(col.clone());
+            }
             cast(col, &DataType::Binary)
                 .map_err(|e| exec_datafusion_err!("Failed to cast BinaryView to Binary: {e}"))
         })
@@ -345,14 +344,94 @@ pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<
     ))
 }
 
+pub(crate) fn convert_variant_binaryview_to_binary(
+    struct_array: StructArray,
+) -> Result<StructArray> {
+    let struct_array = convert_binaryview_to_binary(struct_array)?;
+    let (value_index, value_field) = struct_array
+        .fields()
+        .find(VARIANT_VALUE_FIELD_NAME)
+        .ok_or_else(|| exec_datafusion_err!("missing variant field: {VARIANT_VALUE_FIELD_NAME}"))?;
+    let (metadata_index, metadata_field) = struct_array
+        .fields()
+        .find(VARIANT_METADATA_FIELD_NAME)
+        .ok_or_else(|| {
+            exec_datafusion_err!("missing variant field: {VARIANT_METADATA_FIELD_NAME}")
+        })?;
+    let value_column = struct_array.column(value_index);
+    let metadata_column = struct_array.column(metadata_index);
+
+    let field = variant_metadata_field(DataType::Binary, metadata_field.is_nullable());
+    let mut metadata = metadata_field.metadata().clone();
+    metadata.extend(field.metadata().clone());
+
+    Ok(StructArray::new(
+        Fields::from(vec![
+            value_field.clone(),
+            Arc::new(field.with_metadata(metadata)),
+        ]),
+        vec![value_column.clone(), metadata_column.clone()],
+        struct_array.nulls().cloned(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::logical_expr::{ReturnFieldArgs, ScalarFunctionArgs};
-    use datafusion_common::{exec_err, ScalarValue};
+    use datafusion_common::{ScalarValue, exec_err};
     use parquet_variant::{Variant, VariantBuilder};
     use parquet_variant_compute::VariantArray;
+    use sail_common_datafusion::variant::is_variant_metadata_field;
 
     use super::*;
+
+    #[test]
+    fn test_variant_builder_output_is_marked_by_variant_binary_conversion() -> Result<()> {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::from("x"));
+        let struct_array: StructArray = builder.build().into();
+
+        let names = struct_array
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME]
+        );
+        assert!(!is_variant_metadata_field(
+            struct_array.fields()[0].as_ref()
+        ));
+
+        let generic_array = convert_binaryview_to_binary(struct_array.clone())?;
+        let names = generic_array
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME]
+        );
+        assert!(!is_variant_metadata_field(
+            generic_array.fields()[0].as_ref()
+        ));
+
+        let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
+        let names = struct_array
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![VARIANT_VALUE_FIELD_NAME, VARIANT_METADATA_FIELD_NAME]
+        );
+        assert!(is_variant_metadata_field(struct_array.fields()[1].as_ref()));
+
+        Ok(())
+    }
 
     #[test]
     fn test_json_to_variant_udf_scalar_none() -> Result<()> {

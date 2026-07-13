@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{new_null_array, ArrayRef, StringArray, StructArray};
+use datafusion::arrow::array::{ArrayRef, StringArray, StructArray, new_null_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
@@ -15,7 +15,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
@@ -83,10 +83,10 @@ impl DeltaMetadataStatsExec {
     fn parse_stats_array(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         // Priority 1: if the batch already has a typed `stats_parsed` struct column
         // (e.g. read from a checkpoint that persists stats in struct form), use it directly.
-        if let Some(existing) = batch.column_by_name(FIELD_NAME_STATS_PARSED) {
-            if matches!(existing.data_type(), DataType::Struct(_)) {
-                return Ok(Arc::clone(existing));
-            }
+        if let Some(existing) = batch.column_by_name(FIELD_NAME_STATS_PARSED)
+            && matches!(existing.data_type(), DataType::Struct(_))
+        {
+            return Ok(Arc::clone(existing));
         }
 
         // Priority 2: parse from the replay pipeline's `stats_json` column.

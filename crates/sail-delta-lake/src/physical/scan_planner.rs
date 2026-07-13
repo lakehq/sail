@@ -5,10 +5,10 @@ use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -16,10 +16,11 @@ use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_data_source::options::ResolveOptions;
 
 use crate::datasource::scan::{
-    build_file_scan_config, file_scan_projection_for_schema, FileScanParams, TableStatsMode,
+    FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
 };
-use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::gen::DeltaWriteOptions;
+use crate::datasource::{DeltaScanConfig, df_logical_schema, simplify_expr};
+use crate::delta_log::LogStoreRef;
+use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -28,7 +29,6 @@ use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
@@ -78,11 +78,11 @@ pub(crate) async fn plan_delta_scan(
         }
         // Ensure all partition columns are included in logical schema
         for partition_col in table_partition_cols.iter() {
-            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
-                if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col)
-                {
-                    fields.push(full_logical_schema.field(idx).to_owned());
-                }
+            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str())
+                && !used_columns.contains(&idx)
+                && !fields.iter().any(|f| f.name() == partition_col)
+            {
+                fields.push(full_logical_schema.field(idx).to_owned());
             }
         }
         Arc::new(ArrowSchema::new(fields))
@@ -102,10 +102,10 @@ pub(crate) async fn plan_delta_scan(
             }
         }
         for partition_col in table_partition_cols.iter() {
-            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
-                if !scan_projection.contains(&idx) {
-                    scan_projection.push(idx);
-                }
+            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str())
+                && !scan_projection.contains(&idx)
+            {
+                scan_projection.push(idx);
             }
         }
         (Some(scan_projection), Some(used_columns.len()))
@@ -367,6 +367,7 @@ pub(crate) async fn plan_delta_scan(
             limit,
             pushdown_filter,
             None,
+            snapshot.load_config().catalog_managed_commits.clone(),
         )
         .with_table_statistics(snapshot.datafusion_table_statistics(None)),
     );

@@ -2,13 +2,17 @@ use std::iter::Peekable;
 use std::str::Chars;
 use std::sync::Arc;
 
+use chrono::{NaiveDate, NaiveTime};
+use chrono_tz::Tz;
 use datafusion::arrow::array::{
-    downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+    Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
@@ -63,24 +67,25 @@ impl SparkSchemaOfJson {
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
-                match map_field.data_type() {
-                    DataType::Struct(fields) => {
-                        let key = fields[0].clone();
-                        let value = fields[1].clone();
-                        if !key.data_type().is_string() || !value.data_type().is_string() {
-                            return Err(DataFusionError::Plan(format!(
-                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                                Self::SCHEMA_OF_JSON_NAME,
-                                key.data_type(),
-                                value.data_type(),
-                            )));
-                        }
-                        Ok(())
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(map_field, _),
+            ] => match map_field.data_type() {
+                DataType::Struct(fields) => {
+                    let key = fields[0].clone();
+                    let value = fields[1].clone();
+                    if !key.data_type().is_string() || !value.data_type().is_string() {
+                        return Err(DataFusionError::Plan(format!(
+                            "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
+                            Self::SCHEMA_OF_JSON_NAME,
+                            key.data_type(),
+                            value.data_type(),
+                        )));
                     }
-                    _ => unreachable!(),
+                    Ok(())
                 }
-            }
+                _ => unreachable!(),
+            },
             _ => plan_err!(
                 "For function `{:?}` found invalid arg types: {:?}",
                 Self::SCHEMA_OF_JSON_NAME,
@@ -103,8 +108,16 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Ok(DataType::Utf8)
     }
 
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `schema_of_json` only accepts a foldable, non-null input and always
+        // produces a DDL string, so the result is never null. Spark marks the
+        // output of a successful foldable call as non-nullable.
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, false)))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        Self::validate_args_len(&args.args)?;
+        // Arity is validated in `coerce_types` (planning) and defensively in
+        // `schema_of_json_inner` (execution), so no arg-count check here.
         Self::validate_args_are_literal(&args.args)?;
         let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
         make_scalar_function(schema_of_json_inner, hints)(&args.args)
@@ -146,6 +159,13 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Err(DataFusionError::Execution(
             "No value passed into input".to_string(),
         ));
+    } else if rows.is_null(0) {
+        // Spark rejects a null `json` argument with a DATATYPE_MISMATCH at
+        // analysis time, since the input must be a foldable, non-null value.
+        return plan_err!(
+            "For function `{}`, the json must not be null",
+            SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+        );
     } else if rows.value(0).is_empty() {
         "STRING".to_string()
     } else {
@@ -192,6 +212,9 @@ enum InferredType {
     Decimal(u8, u8),
     Double,
     String,
+    /// A string inferred as a timestamp when the `inferTimestamp` option is
+    /// enabled and the value matches a recognized timestamp/date pattern.
+    Timestamp,
     Array(Box<InferredType>),
     /// Fields are sorted by name and duplicate names are preserved, matching
     /// Spark's `JsonInferSchema`.
@@ -247,20 +270,20 @@ impl<'a> JsonSchemaParser<'a> {
             Some('{') => self.parse_object(),
             Some('[') => self.parse_array(),
             Some('"') => {
-                self.parse_string('"')?;
-                Ok(InferredType::String)
+                let value = self.parse_string('"')?;
+                Ok(self.infer_string_type(&value))
             }
             Some('\'') if self.options.allow_single_quotes => {
-                self.parse_string('\'')?;
-                Ok(InferredType::String)
+                let value = self.parse_string('\'')?;
+                Ok(self.infer_string_type(&value))
             }
             Some('t') => {
                 self.expect_literal("true")?;
-                Ok(InferredType::Boolean)
+                Ok(self.as_primitive(InferredType::Boolean))
             }
             Some('f') => {
                 self.expect_literal("false")?;
-                Ok(InferredType::Boolean)
+                Ok(self.as_primitive(InferredType::Boolean))
             }
             Some('n') => {
                 self.expect_literal("null")?;
@@ -268,26 +291,53 @@ impl<'a> JsonSchemaParser<'a> {
             }
             Some('N') if self.options.allow_non_numeric_numbers => {
                 self.expect_literal("NaN")?;
-                Ok(InferredType::Double)
+                Ok(self.as_primitive(InferredType::Double))
             }
             Some('I') if self.options.allow_non_numeric_numbers => {
                 self.expect_literal("Infinity")?;
-                Ok(InferredType::Double)
+                Ok(self.as_primitive(InferredType::Double))
             }
             Some(sign @ ('-' | '+')) => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'I') && self.options.allow_non_numeric_numbers {
                     self.expect_literal("Infinity")?;
-                    Ok(InferredType::Double)
+                    Ok(self.as_primitive(InferredType::Double))
                 } else if sign == '-' {
-                    self.parse_number(true)
+                    let number = self.parse_number(true)?;
+                    Ok(self.as_primitive(number))
                 } else {
                     // A `+` sign is only valid before `Infinity`.
                     exec_err!("unexpected character `+` when parsing a JSON value")
                 }
             }
-            Some(c) if c.is_ascii_digit() => self.parse_number(false),
+            Some(c) if c.is_ascii_digit() => {
+                let number = self.parse_number(false)?;
+                Ok(self.as_primitive(number))
+            }
             Some(c) => exec_err!("unexpected character `{c}` when parsing a JSON value"),
+        }
+    }
+
+    /// Coerces a scalar primitive to `STRING` when the `primitivesAsString`
+    /// option is enabled, matching Spark's `JsonInferSchema`. Strings, structs,
+    /// and arrays are unaffected.
+    fn as_primitive(&self, inferred: InferredType) -> InferredType {
+        if self.options.primitives_as_string {
+            InferredType::String
+        } else {
+            inferred
+        }
+    }
+
+    /// Infers the type of a parsed JSON string: `TIMESTAMP` when the
+    /// `inferTimestamp` option is enabled and the value matches a recognized
+    /// timestamp/date pattern, otherwise `STRING`. Spark infers timestamps from
+    /// strings independently of `primitivesAsString`.
+    fn infer_string_type(&self, value: &str) -> InferredType {
+        if self.options.infer_timestamp && is_timestamp_string(value) {
+            InferredType::Timestamp
+        } else {
+            InferredType::String
         }
     }
 
@@ -308,7 +358,7 @@ impl<'a> JsonSchemaParser<'a> {
                     self.parse_unquoted_name()
                 }
                 Some(c) => {
-                    return exec_err!("unexpected character `{c}` when parsing a field name")
+                    return exec_err!("unexpected character `{c}` when parsing a field name");
                 }
                 None => return exec_err!("unexpected end of input when parsing a field name"),
             };
@@ -364,7 +414,7 @@ impl<'a> JsonSchemaParser<'a> {
                 Some(c) if c == quote => return Ok(value),
                 Some('\\') => value.push(self.parse_escape(quote)?),
                 Some(c) if (c as u32) < 0x20 => {
-                    return exec_err!("unescaped control character in a string")
+                    return exec_err!("unescaped control character in a string");
                 }
                 Some(c) => value.push(c),
             }
@@ -535,6 +585,249 @@ fn is_unquoted_name_char(c: char) -> bool {
         || !c.is_ascii()
 }
 
+/// The parsed pieces of a timestamp string: nine integer segments
+/// (year, month, day, hour, minute, second, microsecond, and two spare zone
+/// segments), an optional timezone string, and whether only a time was given.
+struct ParsedTimestamp {
+    segments: [i64; 9],
+    timezone: Option<String>,
+    just_time: bool,
+}
+
+/// Mirrors Spark's `isValidDigits`: the year segment allows 4-6 digits, the
+/// microsecond segment any number of digits, the zone segment 0-2 digits, and
+/// every other segment 1-2 digits.
+fn is_valid_timestamp_digits(segment: usize, digits: usize) -> bool {
+    const MAX_DIGITS_YEAR: usize = 6;
+    segment == 6
+        || (segment == 0 && (4..=MAX_DIGITS_YEAR).contains(&digits))
+        || (segment == 7 && digits <= 2)
+        || (segment != 0 && segment != 6 && segment != 7 && (1..=2).contains(&digits))
+}
+
+/// Spark trims leading/trailing whitespace and ISO control characters.
+fn is_whitespace_or_iso_control(b: u8) -> bool {
+    b <= b' ' || b == 0x7f
+}
+
+/// A faithful port of Spark's `SparkDateTimeUtils.parseTimestampString`. Splits
+/// the input into timestamp segments using Spark's exact delimiter rules, or
+/// returns `None` if the string is not shaped like a timestamp.
+fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
+    let bytes = s.as_bytes();
+    let mut segments: [i64; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
+    let mut i: usize = 0;
+    let mut current_value: i64 = 0;
+    let mut current_digits: usize = 0;
+
+    let mut start = 0;
+    while start < bytes.len() && is_whitespace_or_iso_control(bytes[start]) {
+        start += 1;
+    }
+    let mut str_end = bytes.len();
+    while str_end > start && is_whitespace_or_iso_control(bytes[str_end - 1]) {
+        str_end -= 1;
+    }
+    if start == str_end {
+        return None;
+    }
+
+    let mut digits_milli = 0usize;
+    let mut just_time = false;
+    let mut timezone: Option<String> = None;
+    let mut year_sign: Option<i64> = None;
+    let mut j = start;
+    if bytes[j] == b'-' || bytes[j] == b'+' {
+        year_sign = Some(if bytes[j] == b'-' { -1 } else { 1 });
+        j += 1;
+    }
+
+    while j < str_end {
+        let b = bytes[j];
+        if b.is_ascii_digit() {
+            let parsed = i64::from(b - b'0');
+            if i == 6 {
+                digits_milli += 1;
+            }
+            // Truncate the fractional part beyond six digits, matching Spark.
+            if i != 6 || current_digits < 6 {
+                current_value = current_value * 10 + parsed;
+            }
+            current_digits += 1;
+        } else if j == 0 && b == b'T' {
+            just_time = true;
+            i += 3;
+        } else if i < 2 {
+            if b == b'-' {
+                if !is_valid_timestamp_digits(i, current_digits) {
+                    return None;
+                }
+                segments[i] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i += 1;
+            } else if i == 0 && b == b':' && year_sign.is_none() {
+                just_time = true;
+                if !is_valid_timestamp_digits(3, current_digits) {
+                    return None;
+                }
+                segments[3] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i = 4;
+            } else {
+                return None;
+            }
+        } else if i == 2 {
+            if b == b' ' || b == b'T' {
+                if !is_valid_timestamp_digits(i, current_digits) {
+                    return None;
+                }
+                segments[i] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i += 1;
+            } else {
+                return None;
+            }
+        } else if i == 3 || i == 4 {
+            if b == b':' {
+                if !is_valid_timestamp_digits(i, current_digits) {
+                    return None;
+                }
+                segments[i] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i += 1;
+            } else {
+                return None;
+            }
+        } else if i == 5 || i == 6 {
+            if b == b'.' && i == 5 {
+                if !is_valid_timestamp_digits(i, current_digits) {
+                    return None;
+                }
+                segments[i] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i += 1;
+            } else {
+                if !is_valid_timestamp_digits(i, current_digits) {
+                    return None;
+                }
+                segments[i] = current_value;
+                current_value = 0;
+                current_digits = 0;
+                i += 1;
+                timezone = Some(String::from_utf8_lossy(&bytes[j..str_end]).into_owned());
+                j = str_end - 1;
+            }
+            if i == 6 && b != b'.' {
+                i += 1;
+            }
+        } else if i < segments.len() && (b == b':' || b == b' ') {
+            if !is_valid_timestamp_digits(i, current_digits) {
+                return None;
+            }
+            segments[i] = current_value;
+            current_value = 0;
+            current_digits = 0;
+            i += 1;
+        } else {
+            return None;
+        }
+        j += 1;
+    }
+
+    if i >= segments.len() || !is_valid_timestamp_digits(i, current_digits) {
+        return None;
+    }
+    segments[i] = current_value;
+
+    while digits_milli < 6 {
+        segments[6] *= 10;
+        digits_milli += 1;
+    }
+
+    segments[0] *= year_sign.unwrap_or(1);
+    Some(ParsedTimestamp {
+        segments,
+        timezone,
+        just_time,
+    })
+}
+
+/// Validates a timezone string the way Spark's `getZoneId` does for the cases
+/// that appear in JSON: `Z`, numeric offsets (`+02:00`, `-0800`), and IANA
+/// region IDs (`America/Los_Angeles`).
+fn is_valid_timezone(tz: &str) -> bool {
+    let tz = tz.trim();
+    if tz.is_empty() {
+        return false;
+    }
+    if tz == "Z" || tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("GMT") {
+        return true;
+    }
+    if let Some(offset) = tz.strip_prefix(['+', '-']) {
+        let digits: String = offset.chars().filter(|c| *c != ':').collect();
+        if digits.len() != offset.len() - offset.matches(':').count()
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return false;
+        }
+        let parse2 = |s: &str| s.parse::<u32>().ok();
+        let (hours, minutes) = match digits.len() {
+            2 => (parse2(&digits), Some(0)),
+            4 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
+            6 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
+            _ => (None, None),
+        };
+        return match (hours, minutes) {
+            (Some(h), Some(m)) => h <= 18 && m < 60,
+            _ => false,
+        };
+    }
+    tz.parse::<Tz>().is_ok()
+}
+
+/// Returns true if the string matches a timestamp/date that Spark's
+/// `inferTimestamp` option would promote to `TIMESTAMP`. This is a faithful
+/// port of Spark's `SparkDateTimeUtils.stringToTimestamp` (used for the default
+/// `TIMESTAMP_LTZ` type), including year-only and time-only forms, fractional
+/// seconds, and timezone suffixes, with range validation via `chrono`.
+fn is_timestamp_string(s: &str) -> bool {
+    let Some(parsed) = parse_timestamp_string(s) else {
+        return false;
+    };
+    let (Ok(hour), Ok(minute), Ok(second)) = (
+        u32::try_from(parsed.segments[3]),
+        u32::try_from(parsed.segments[4]),
+        u32::try_from(parsed.segments[5]),
+    ) else {
+        return false;
+    };
+    let micros = u32::try_from(parsed.segments[6]).unwrap_or(u32::MAX);
+    if NaiveTime::from_hms_nano_opt(hour, minute, second, micros.saturating_mul(1000)).is_none() {
+        return false;
+    }
+    if !parsed.just_time {
+        let (Ok(year), Ok(month), Ok(day)) = (
+            i32::try_from(parsed.segments[0]),
+            u32::try_from(parsed.segments[1]),
+            u32::try_from(parsed.segments[2]),
+        ) else {
+            return false;
+        };
+        if NaiveDate::from_ymd_opt(year, month, day).is_none() {
+            return false;
+        }
+    }
+    match &parsed.timezone {
+        Some(tz) => is_valid_timezone(tz),
+        None => true,
+    }
+}
+
 /// Returns the most specific type that both types can be promoted to,
 /// mirroring Spark's `JsonInferSchema.compatibleType`.
 fn merge_types(left: InferredType, right: InferredType) -> InferredType {
@@ -598,6 +891,7 @@ fn canonicalize_ddl(t: &InferredType) -> Option<String> {
         InferredType::Decimal(p, s) => Some(format!("DECIMAL({p},{s})")),
         InferredType::Double => Some("DOUBLE".to_string()),
         InferredType::String => Some("STRING".to_string()),
+        InferredType::Timestamp => Some("TIMESTAMP".to_string()),
         InferredType::Array(element) => canonicalize_ddl(element).map(|e| format!("ARRAY<{e}>")),
         InferredType::Struct(fields) => {
             let fields = fields
@@ -642,12 +936,14 @@ enum ModeOptions {
 }
 
 impl ModeOptions {
-    fn from_str(value: String) -> Result<Self, DataFusionError> {
-        match value.as_str() {
-            "PERMISSIVE" => Ok(ModeOptions::Permissive),
-            "FAILFAST" => Ok(ModeOptions::FailFast),
-            "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
-            other => plan_err!("Invalid mode option: {other}"),
+    /// Mirrors Spark's `ParseMode.fromString`: the value is matched
+    /// case-insensitively and an unrecognized mode falls back to `PERMISSIVE`
+    /// instead of erroring.
+    fn from_str(value: &str) -> Self {
+        match value.to_uppercase().as_str() {
+            "FAILFAST" => ModeOptions::FailFast,
+            "DROPMALFORMED" => ModeOptions::DropMalformed,
+            _ => ModeOptions::Permissive,
         }
     }
 }
@@ -660,6 +956,8 @@ struct SparkSchemaOfJsonOptions {
     allow_non_numeric_numbers: bool,
     prefers_decimal: bool,
     allow_numeric_leading_zeros: bool,
+    primitives_as_string: bool,
+    infer_timestamp: bool,
 }
 
 impl Default for SparkSchemaOfJsonOptions {
@@ -673,6 +971,8 @@ impl Default for SparkSchemaOfJsonOptions {
             allow_non_numeric_numbers: true,
             prefers_decimal: false,
             allow_numeric_leading_zeros: false,
+            primitives_as_string: false,
+            infer_timestamp: false,
         }
     }
 }
@@ -687,7 +987,7 @@ impl SparkSchemaOfJsonOptions {
             let (key, value) = Self::unwrap_or_key_value(key, value)?;
             // Spark reads JSON options through a case-insensitive map.
             match key.to_lowercase().as_str() {
-                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
+                "mode" => self.mode = ModeOptions::from_str(value),
                 "allowunquotedfieldnames" => {
                     self.allow_unquoted_field_names = Self::parse_boolean_option(key, value)?;
                 }
@@ -703,6 +1003,12 @@ impl SparkSchemaOfJsonOptions {
                 "allownumericleadingzeros" => {
                     self.allow_numeric_leading_zeros = Self::parse_boolean_option(key, value)?;
                 }
+                "primitivesasstring" => {
+                    self.primitives_as_string = Self::parse_boolean_option(key, value)?;
+                }
+                "infertimestamp" => {
+                    self.infer_timestamp = Self::parse_boolean_option(key, value)?;
+                }
                 // TODO: support the remaining Spark JSON options below
                 //
                 // These options change the inferred schema or the set of
@@ -710,12 +1016,10 @@ impl SparkSchemaOfJsonOptions {
                 // producing a result that diverges from Spark. They all
                 // default to false in Spark, so an explicit false is a no-op
                 // and falls through to the ignored-options arm below.
-                "primitivesasstring"
-                | "allowcomments"
+                "allowcomments"
                 | "allowbackslashescapinganycharacter"
                 | "allowunquotedcontrolchars"
                 | "dropfieldifallnull"
-                | "infertimestamp"
                     if Self::parse_boolean_option(key, value)? =>
                 {
                     return Err(DataFusionError::NotImplemented(format!(
@@ -758,16 +1062,15 @@ impl SparkSchemaOfJsonOptions {
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
-                        key_type,
-                        value_type
-                    )))
+                        key_type, value_type
+                    )));
                 }
-            },
+            }
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "Should be unreachable: options should be a map with an inner struct but instead got {:?}",
                     other
-                )))
+                )));
             }
         };
         Ok((keys, values))
@@ -783,6 +1086,61 @@ impl SparkSchemaOfJsonOptions {
                 "Unexpected options key value pair: {:?}: {:?}",
                 key, value
             ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_timestamp_string;
+
+    #[test]
+    fn timestamp_inference_matches_spark() {
+        // (input, expected) pairs verified against Spark 4.1.1 JVM
+        // (`schema_of_json(..., map('inferTimestamp','true'))`).
+        let cases: &[(&str, bool)] = &[
+            ("2024", true),
+            ("2024-01", true),
+            ("2024-01-02", true),
+            ("2024-1-2", true),
+            ("2024-01-02 03", true),
+            ("2024-01-02 03:04", true),
+            ("2024-01-02 03:04:05", true),
+            ("2024-01-02T03:04:05", true),
+            ("2024-01-02T03:04:05.1", true),
+            ("2024-01-02 03:04:05.123", true),
+            ("2024-01-02 03:04:05.123456789", true),
+            ("2024-01-02T03:04:05.123456", true),
+            ("2024-01-02T03:04:05Z", true),
+            ("2024-01-02 03:04:05+02:00", true),
+            ("2024-01-02 03:04:05-0800", true),
+            ("2024-01-02 03:04:05 America/Los_Angeles", true),
+            ("03:04:05", true),
+            ("03:04", true),
+            ("3:4:5", true),
+            ("T03:04:05", true),
+            (" 2024-01-02 03:04:05 ", true),
+            ("-2024-01-02", true),
+            ("2024-01-02 03:04:05.", true),
+            // Rejected by Spark (inferred as STRING):
+            ("2024-13-02", false),
+            ("2024-01-32", false),
+            ("2024/01/02", false),
+            ("20240102", false),
+            ("2024-01-02x", false),
+            ("2024-01-02  03:04:05", false),
+            ("2024-01-02 25:00:00", false),
+            ("not-a-date", false),
+            ("hello", false),
+            ("", false),
+            ("2024-01-02 03:04:05 Foo/Bar", false),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                is_timestamp_string(input),
+                *expected,
+                "mismatch for input {input:?}"
+            );
         }
     }
 }

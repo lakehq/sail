@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder};
 
 #[derive(Debug, Default)]

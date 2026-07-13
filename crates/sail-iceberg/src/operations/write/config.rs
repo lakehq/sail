@@ -17,8 +17,8 @@ use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 pub use sail_common_datafusion::variant::VariantShreddingConfig;
 
-use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::Schema as IcebergSchema;
+use crate::spec::partition::UnboundPartitionSpec;
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {

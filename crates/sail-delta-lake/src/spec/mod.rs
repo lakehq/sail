@@ -21,32 +21,33 @@ pub use actions::{
     Action, Add, CheckpointMetadata, CommitAction, CommitInfo, DeletionVectorDescriptor,
     DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
 };
+pub(crate) use actions::{LogicalFileKey, logical_file_key};
 pub use checkpoint::{CheckpointActionRow, LastCheckpointHint};
 pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
 pub use log::{
-    checkpoint_path, checksum_path, commit_path, compacted_json_path, delta_log_file_path,
-    delta_log_prefix_path, delta_log_root_path, is_compacted_json_filename,
-    is_json_checkpoint_filename, is_uuid_checkpoint_filename, last_checkpoint_path,
-    parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, parse_version_prefix, sidecar_file_path, sidecars_dir_path,
-    staged_commit_path, temp_commit_path, uuid_checkpoint_path, DELTA_LOG_DIR,
-    LAST_CHECKPOINT_FILE, SIDECARS_DIR,
+    DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR, checkpoint_path, checksum_path, commit_path,
+    compacted_json_path, delta_log_file_path, delta_log_prefix_path, delta_log_root_path,
+    is_compacted_json_filename, is_json_checkpoint_filename, is_uuid_checkpoint_filename,
+    last_checkpoint_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
+    parse_compacted_json_versions, parse_version_prefix, sidecar_file_name, sidecar_file_path,
+    sidecar_log_path, sidecars_dir_path, staged_commit_path, temp_commit_path,
+    uuid_checkpoint_path,
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use properties::{
-    canonicalize_and_validate_table_properties, route_table_property_key,
     DataSkippingNumIndexedCols, IsolationLevel, TableProperties,
+    canonicalize_and_validate_table_properties, route_table_property_key,
 };
 pub use protocol::{Protocol, TableFeature};
 pub use schema::{
     ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataType, DecimalType, MapType,
     MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
-pub(crate) use statistics::{parse_stats_json_array, stats_schema};
 pub use statistics::{ColumnCountStat, ColumnValueStat, MaxStat, MinStat, StatValue, Stats};
+pub(crate) use statistics::{parse_stats_json_array, stats_schema};
 pub(crate) use utils::{
     contains_timestampntz, contains_timestampntz_arrow, contains_variant, contains_variant_arrow,
 };

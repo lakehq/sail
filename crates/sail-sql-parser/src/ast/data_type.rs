@@ -4,9 +4,9 @@ use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
     Any, Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
     Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Geography, Geometry, Hour, Int,
-    Int16, Int32, Int64, Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null,
+    Int8, Int16, Int32, Int64, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null,
     Numeric, Real, Second, Short, Smallint, Struct, Text, Time, Timestamp, TimestampLtz,
-    TimestampNtz, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Variant, Void,
+    TimestampNtz, Tinyint, To, Uint8, Uint16, Uint32, Uint64, Unsigned, Varchar, Variant, Void,
     With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};

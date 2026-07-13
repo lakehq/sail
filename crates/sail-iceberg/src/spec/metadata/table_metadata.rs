@@ -27,7 +27,7 @@ use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::statistic_file::{PartitionStatisticsFile, StatisticsFile};
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema;
-use crate::spec::snapshots::{Snapshot, SnapshotReference, MAIN_BRANCH};
+use crate::spec::snapshots::{MAIN_BRANCH, Snapshot, SnapshotReference};
 use crate::spec::sort::SortOrder;
 
 /// Iceberg table metadata

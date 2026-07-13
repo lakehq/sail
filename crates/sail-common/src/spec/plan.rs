@@ -290,6 +290,13 @@ pub enum CommandNode {
     HtmlString(HtmlString),
     // TODO: add all the "analyze" requests
     // TODO: should streaming query request be added here?
+    /// A command wrapped with referenced subquery plans (similar to QueryNode::WithRelations).
+    /// This is used when a command references DataFrames passed as named arguments
+    /// (e.g., `spark.sql("MERGE INTO t USING {df}", df=dataframe)`).
+    WithRelations {
+        root: Box<CommandPlan>,
+        references: Vec<QueryPlan>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -309,6 +316,12 @@ pub enum CommandNode {
     ShowTableExtended {
         database: Option<ObjectName>,
         pattern: String,
+    },
+    ShowFunctions {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -765,9 +778,9 @@ pub struct ShowString {
 #[serde(rename_all = "camelCase")]
 pub struct Pivot {
     pub input: Box<QueryPlan>,
-    /// The group-by columns for the pivot operation (only supported in the DataFrame API).
-    /// When the list is empty (for SQL statements), all the remaining columns are included.
-    pub grouping: Vec<Expr>,
+    /// The group-by columns for the pivot operation, set for the DataFrame API (possibly
+    /// empty). When `None` (for SQL statements), all the remaining columns are included.
+    pub grouping: Option<Vec<Expr>>,
     pub aggregate: Vec<Expr>,
     pub columns: Vec<Expr>,
     pub values: Vec<PivotValue>,
@@ -776,7 +789,10 @@ pub struct Pivot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PivotValue {
-    pub values: Vec<Literal>,
+    /// The value expressions for a single pivot output column. Each is a foldable expression
+    /// (a literal, typed literal such as `DATE'...'`, or a cast) that the resolver evaluates to a
+    /// scalar. A single-element list is the common case; multiple elements form a struct pivot.
+    pub values: Vec<Expr>,
     pub alias: Option<Identifier>,
 }
 
@@ -890,10 +906,33 @@ pub struct TableDefinition {
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
-    pub if_not_exists: bool,
-    pub replace: bool,
+    pub mode: CreateTableMode,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateTableMode {
+    #[default]
+    Create,
+    CreateIfNotExists,
+    CreateOrReplace,
+    Replace,
+}
+
+impl CreateTableMode {
+    pub fn ignore_if_exists(self) -> bool {
+        matches!(self, Self::CreateIfNotExists)
+    }
+
+    pub fn is_replace(self) -> bool {
+        matches!(self, Self::CreateOrReplace | Self::Replace)
+    }
+
+    pub fn replace_requires_existing(self) -> bool {
+        matches!(self, Self::Replace)
+    }
 }
 
 /// Returns whether a non-empty path or location is specified,

@@ -13,8 +13,8 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(in super::super) async fn resolve_catalog_create_table(
@@ -35,8 +35,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
@@ -86,8 +85,7 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                if_not_exists,
-                replace,
+                mode,
                 properties,
                 is_external,
                 is_write_precondition: false,
@@ -116,8 +114,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
@@ -185,14 +182,15 @@ impl PlanResolver<'_> {
         }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
-        let write_mode = if replace {
-            WriteMode::Replace {
+        let write_mode = match mode {
+            spec::CreateTableMode::Create => WriteMode::ErrorIfExists,
+            spec::CreateTableMode::CreateIfNotExists => WriteMode::IgnoreIfExists,
+            spec::CreateTableMode::CreateOrReplace => WriteMode::Replace {
                 error_if_absent: false,
-            }
-        } else if if_not_exists {
-            WriteMode::IgnoreIfExists
-        } else {
-            WriteMode::ErrorIfExists
+            },
+            spec::CreateTableMode::Replace => WriteMode::Replace {
+                error_if_absent: true,
+            },
         };
         let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()

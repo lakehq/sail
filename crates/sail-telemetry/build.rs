@@ -148,7 +148,7 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(syn::Error::new(
                         proc_macro2::Span::call_site(),
                         format!("invalid metric: {t:?} {vt:?}"),
-                    ))
+                    ));
                 }
             };
             let debug = if metric.debug {
@@ -246,7 +246,7 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(syn::Error::new(
                         proc_macro2::Span::call_site(),
                         format!("invalid metric: {t:?} {vt:?}"),
-                    ))
+                    ));
                 }
             };
             let debug = if metric.debug {

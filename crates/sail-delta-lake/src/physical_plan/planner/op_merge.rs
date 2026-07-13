@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::common::{internal_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::reset_plan_states;
@@ -24,7 +24,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_common::{not_impl_err, JoinType, NullEquality};
+use datafusion_common::{JoinType, NullEquality, not_impl_err};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{OptionLayer, PhysicalSinkMode, RowLevelCommand};
@@ -37,8 +37,8 @@ use super::commit::{
 use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::{DeltaOperation, MergePredicate};
-use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
+use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec, prepare_delta_write_context};
+use crate::spec::{DeltaOperation, MergePredicate};
 
 /// Target table information shared by Delta row-level operations.
 #[derive(Debug, Clone)]

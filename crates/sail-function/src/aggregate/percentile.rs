@@ -5,8 +5,8 @@ use std::sync::Arc;
 use datafusion::arrow;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
+use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -102,54 +102,57 @@ impl AggregateUDFImpl for PercentileFunction {
         })?;
 
         // Try to extract as array of percentiles first
-        if let Ok(percentiles) = extract_percentiles_array(expr) {
-            // Multiple percentiles - create MultiPercentileAccumulator
-            // Validate all percentiles are within [0.0, 1.0]
-            for percentile in &percentiles {
-                if !(0.0..=1.0).contains(percentile) {
+        match extract_percentiles_array(expr) {
+            Ok(percentiles) => {
+                // Multiple percentiles - create MultiPercentileAccumulator
+                // Validate all percentiles are within [0.0, 1.0]
+                for percentile in &percentiles {
+                    if !(0.0..=1.0).contains(percentile) {
+                        return Err(DataFusionError::Execution(format!(
+                            "Percentile value {} is out of range [0.0, 1.0]",
+                            percentile
+                        )));
+                    }
+                }
+
+                match data_type {
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
+                        MultiStringPercentileAccumulator::new(percentiles, data_type.clone()),
+                    )),
+                    DataType::Interval(_) | DataType::Duration(_) => Ok(Box::new(
+                        MultiIntervalPercentileAccumulator::new(percentiles, data_type.clone()),
+                    )),
+                    _ => Ok(Box::new(MultiNumericPercentileAccumulator::new(
+                        percentiles,
+                    ))),
+                }
+            }
+            _ => {
+                // Single percentile - existing behavior
+                let percentile: f64 = extract_literal(expr).map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Failed to extract percentile value in percentile(): {}",
+                        e
+                    ))
+                })?;
+
+                // Validate that percentile is within [0.0, 1.0]
+                if !(0.0..=1.0).contains(&percentile) {
                     return Err(DataFusionError::Execution(format!(
                         "Percentile value {} is out of range [0.0, 1.0]",
                         percentile
                     )));
                 }
-            }
 
-            match data_type {
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
-                    MultiStringPercentileAccumulator::new(percentiles, data_type.clone()),
-                )),
-                DataType::Interval(_) | DataType::Duration(_) => Ok(Box::new(
-                    MultiIntervalPercentileAccumulator::new(percentiles, data_type.clone()),
-                )),
-                _ => Ok(Box::new(MultiNumericPercentileAccumulator::new(
-                    percentiles,
-                ))),
-            }
-        } else {
-            // Single percentile - existing behavior
-            let percentile: f64 = extract_literal(expr).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to extract percentile value in percentile(): {}",
-                    e
-                ))
-            })?;
-
-            // Validate that percentile is within [0.0, 1.0]
-            if !(0.0..=1.0).contains(&percentile) {
-                return Err(DataFusionError::Execution(format!(
-                    "Percentile value {} is out of range [0.0, 1.0]",
-                    percentile
-                )));
-            }
-
-            match data_type {
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
-                    StringPercentileAccumulator::new(percentile, data_type.clone()),
-                )),
-                DataType::Interval(_) | DataType::Duration(_) => Ok(Box::new(
-                    IntervalPercentileAccumulator::new(percentile, data_type.clone()),
-                )),
-                _ => Ok(Box::new(NumericPercentileAccumulator::new(percentile))),
+                match data_type {
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
+                        StringPercentileAccumulator::new(percentile, data_type.clone()),
+                    )),
+                    DataType::Interval(_) | DataType::Duration(_) => Ok(Box::new(
+                        IntervalPercentileAccumulator::new(percentile, data_type.clone()),
+                    )),
+                    _ => Ok(Box::new(NumericPercentileAccumulator::new(percentile))),
+                }
             }
         }
     }
@@ -1362,7 +1365,7 @@ impl Accumulator for MultiIntervalPercentileAccumulator {
                         return Err(DataFusionError::Execution(format!(
                             "Unexpected data type for interval percentile: {:?}",
                             self.data_type
-                        )))
+                        )));
                     }
                 };
 
@@ -1416,7 +1419,7 @@ impl Accumulator for MultiIntervalPercentileAccumulator {
                         return Err(DataFusionError::Execution(format!(
                             "Unexpected data type: {:?}",
                             self.data_type
-                        )))
+                        )));
                     }
                 };
                 results.push(null_scalar);
@@ -1532,7 +1535,7 @@ impl Accumulator for MultiIntervalPercentileAccumulator {
                         return Err(DataFusionError::Execution(format!(
                             "Unexpected data type for interval percentile: {:?}",
                             self.data_type
-                        )))
+                        )));
                     }
                 };
 
@@ -1658,7 +1661,7 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64, DataFusionError
             return Err(DataFusionError::Execution(format!(
                 "Cannot convert percentile literal {:?} to f64",
                 scalar
-            )))
+            )));
         }
     };
     Ok(percentile)

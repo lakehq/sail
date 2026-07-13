@@ -33,6 +33,13 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    /// The maximum number of distinct values collected for a pivot without an explicit
+    /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
+    pub pivot_max_values: usize,
+    /// Whether a table-valued function may receive more than one `TABLE (...)` argument
+    /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
+    /// arguments produce the cartesian product of their rows.
+    pub tvf_allow_multiple_table_arguments: bool,
 }
 
 impl PlanConfig {
@@ -57,6 +64,8 @@ impl Default for PlanConfig {
             ansi_mode: true,
             cross_join_enabled: true,
             case_sensitive: false,
+            pivot_max_values: 10000,
+            tvf_allow_multiple_table_arguments: false,
         }
     }
 }

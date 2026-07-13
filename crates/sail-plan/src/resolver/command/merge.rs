@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use datafusion_common::{JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
-use datafusion_expr::{build_join_schema, Expr, LogicalPlan, SubqueryAlias};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, build_join_schema};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, TableFormatRegistry};
+use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -17,8 +17,8 @@ use sail_logical_plan::merge::{
 };
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 // When we receive an unqualified attribute with `plan_id=None`, we need:
 // - if it exists only in target -> treat as target
@@ -501,6 +501,41 @@ impl PlanResolver<'_> {
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+        // Handle path-based table access like `delta.`/path/to/table``
+        // where the first part is a registered table format name.
+        if let [format, path] = table.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if let Ok(table_format) = registry.get(&format) {
+                let location = path.as_ref().to_string();
+                let metadata = table_format
+                    .infer_metadata(
+                        &self.ctx.state(),
+                        SourceInfo {
+                            paths: vec![location.clone()],
+                            lakehouse_table: None,
+                            schema: None,
+                            constraints: Default::default(),
+                            partition_by: vec![],
+                            bucket_by: None,
+                            sort_order: vec![],
+                            options: vec![],
+                            read_case_sensitive: self.config.case_sensitive,
+                        },
+                    )
+                    .await?;
+                return Ok(MergeTargetInfo {
+                    table_name: table.clone().into(),
+                    format,
+                    location,
+                    partition_by: vec![],
+                    options: vec![OptionLayer::TablePropertyList {
+                        items: metadata.properties,
+                    }],
+                    lakehouse_table: None,
+                });
+            }
+        }
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager
             .get_table_or_view(table.parts())
@@ -1001,14 +1036,17 @@ fn classify_expr_domain(
         return ExprColumnDomain::Mixed;
     }
     for col in cols.into_iter() {
-        if let Ok(idx) = merge_schema.index_of_column(&col) {
-            if idx < target_len {
-                seen_target = true;
-            } else {
-                seen_source = true;
+        match merge_schema.index_of_column(&col) {
+            Ok(idx) => {
+                if idx < target_len {
+                    seen_target = true;
+                } else {
+                    seen_source = true;
+                }
             }
-        } else {
-            return ExprColumnDomain::Mixed;
+            _ => {
+                return ExprColumnDomain::Mixed;
+            }
         }
     }
     match (seen_target, seen_source) {
@@ -1033,21 +1071,21 @@ fn analyze_merge_join(
     let target_len = target_schema.fields().len();
 
     for predicate in split_conjunction(on_condition) {
-        if let Expr::BinaryExpr(be) = predicate {
-            if be.op == datafusion_expr::Operator::Eq {
-                let left_domain = classify_expr_domain(&be.left, merge_schema, target_len);
-                let right_domain = classify_expr_domain(&be.right, merge_schema, target_len);
-                match (left_domain, right_domain) {
-                    (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
-                        join_key_pairs.push(((*be.left).clone(), (*be.right).clone()));
-                        continue;
-                    }
-                    (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
-                        join_key_pairs.push(((*be.right).clone(), (*be.left).clone()));
-                        continue;
-                    }
-                    _ => {}
+        if let Expr::BinaryExpr(be) = predicate
+            && be.op == datafusion_expr::Operator::Eq
+        {
+            let left_domain = classify_expr_domain(&be.left, merge_schema, target_len);
+            let right_domain = classify_expr_domain(&be.right, merge_schema, target_len);
+            match (left_domain, right_domain) {
+                (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
+                    join_key_pairs.push(((*be.left).clone(), (*be.right).clone()));
+                    continue;
                 }
+                (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
+                    join_key_pairs.push(((*be.right).clone(), (*be.left).clone()));
+                    continue;
+                }
+                _ => {}
             }
         }
 

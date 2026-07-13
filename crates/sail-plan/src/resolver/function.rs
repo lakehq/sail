@@ -3,8 +3,8 @@ use datafusion_common::plan_err;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 pub(super) struct PythonUdf {
     pub python_version: String,

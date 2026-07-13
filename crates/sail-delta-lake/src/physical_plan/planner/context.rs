@@ -22,15 +22,15 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
-use crate::kernel::DeltaSnapshotConfig;
-use crate::options::gen::DeltaWriteOptions;
+use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
+use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
-    prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
+    DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions, prepare_delta_write_context,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
-    DeltaTable,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 
 /// Configuration shared by all Delta planners.
@@ -235,7 +235,7 @@ impl<'a> PlannerContext<'a> {
         &self,
         input_schema: &SchemaRef,
         sink_mode: &PhysicalSinkMode,
-        operation_override: Option<crate::kernel::DeltaOperation>,
+        operation_override: Option<crate::spec::DeltaOperation>,
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone())
@@ -318,7 +318,9 @@ impl<'a> PlannerContext<'a> {
         } else {
             let log_store = self.log_store()?;
             let mut table_config = table_config;
-            if let Some(lakehouse_table) = &self.config.lakehouse_table {
+            if let Some(lakehouse_table) =
+                catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
+            {
                 table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
                     &self.session,
                     lakehouse_table,

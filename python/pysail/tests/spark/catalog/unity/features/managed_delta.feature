@@ -266,6 +266,34 @@ Feature: Unity Catalog managed Delta table operations
     Then staged Delta commit for version 1 exists in location without published backfill
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_unpublished_latest_t version 2 references staged Delta commit in location
 
+  Scenario: DELETE on managed Delta table uses Unity latest version when prior commit is unpublished
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_delete_unpublished_latest_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one'),
+        (2, 'two'),
+        (3, 'three')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_delete_unpublished_latest_t
+    Given published Delta commit for version 1 in location is removed
+    Given statement
+      """
+      DELETE FROM unity_table_test.managed_delta_delete_unpublished_latest_t WHERE id = 2
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_delete_unpublished_latest_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | one   |
+      | 3  | three |
+    Then staged Delta commit for version 1 exists in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_unpublished_latest_t version 2 references staged Delta commit in location
+
   Scenario: Managed Delta named-table reads use Unity ratified commit when published commit is corrupted
     Given statement
       """
@@ -305,6 +333,102 @@ Feature: Unity Catalog managed Delta table operations
       | id | name |
       | 1  | one  |
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_future_published_t version 1 exists
+
+  Scenario: INSERT OVERWRITE on managed Delta table uses Unity ratified commit when published commit is corrupted
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_overwrite_corrupt_published_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'old'),
+        (2, 'old')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_overwrite_corrupt_published_t
+    Given published Delta commit for version 1 in location is invalid JSON
+    Given statement
+      """
+      INSERT OVERWRITE TABLE unity_table_test.managed_delta_overwrite_corrupt_published_t VALUES
+        (3, 'new'),
+        (4, 'new')
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_overwrite_corrupt_published_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 3  | new  |
+      | 4  | new  |
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_overwrite_corrupt_published_t version 2 references staged Delta commit in location
+
+  Scenario: DELETE on managed Delta table uses Unity ratified commit when published commit is corrupted
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_delete_corrupt_published_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one'),
+        (2, 'two'),
+        (3, 'three')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_delete_corrupt_published_t
+    Given published Delta commit for version 1 in location is invalid JSON
+    Given statement
+      """
+      DELETE FROM unity_table_test.managed_delta_delete_corrupt_published_t WHERE id = 2
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_delete_corrupt_published_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | one   |
+      | 3  | three |
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_corrupt_published_t version 2 references staged Delta commit in location
+
+  Scenario: MERGE on managed Delta table uses Unity ratified commit when published commit is corrupted
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_merge_corrupt_published_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one'),
+        (2, 'two')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_merge_corrupt_published_t
+    Given published Delta commit for version 1 in location is invalid JSON
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW managed_delta_merge_corrupt_src AS
+      SELECT * FROM VALUES
+        (2, 'two updated'),
+        (3, 'three')
+      AS s(id, name)
+      """
+    Given statement
+      """
+      MERGE INTO unity_table_test.managed_delta_merge_corrupt_published_t AS t
+      USING managed_delta_merge_corrupt_src AS s
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET name = s.name
+      WHEN NOT MATCHED THEN
+        INSERT *
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_merge_corrupt_published_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name        |
+      | 1  | one         |
+      | 2  | two updated |
+      | 3  | three       |
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_merge_corrupt_published_t version 2 references staged Delta commit in location
 
   Scenario: Managed Delta write succeeds when publish backfill fails after Unity ratification
     Given statement

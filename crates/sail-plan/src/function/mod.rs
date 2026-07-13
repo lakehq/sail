@@ -5,6 +5,7 @@ use datafusion::catalog::TableFunction;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
+use sail_common_datafusion::catalog::FunctionStatus;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::ScalarFunction;
@@ -12,6 +13,7 @@ use crate::function::common::ScalarFunction;
 mod aggregate;
 pub(crate) mod common;
 mod generator;
+mod metadata;
 mod scalar;
 mod table;
 mod window;
@@ -28,6 +30,8 @@ lazy_static! {
     pub static ref BUILT_IN_TABLE_FUNCTIONS: HashMap<&'static str, Arc<TableFunction>> =
         HashMap::from_iter(table::list_built_in_table_functions());
 }
+
+const BUILT_IN_OPERATOR_FUNCTION_NAMES: &[&str] = &["<>", "between", "||"];
 
 pub fn get_built_in_function(name: &str) -> PlanResult<ScalarFunction> {
     Ok(BUILT_IN_SCALAR_FUNCTIONS
@@ -48,6 +52,28 @@ pub fn is_built_in_generator_function(name: &str) -> bool {
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
 }
 
+fn list_built_in_function_names() -> Vec<&'static str> {
+    let mut names = BUILT_IN_SCALAR_FUNCTIONS
+        .keys()
+        .chain(BUILT_IN_GENERATOR_FUNCTIONS.keys())
+        .chain(BUILT_IN_TABLE_FUNCTIONS.keys())
+        .copied()
+        .chain(aggregate::list_built_in_aggregate_function_names())
+        .chain(window::list_built_in_window_function_names())
+        .chain(BUILT_IN_OPERATOR_FUNCTION_NAMES.iter().copied())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
+    list_built_in_function_names()
+        .into_iter()
+        .filter_map(metadata::built_in_public_function_status)
+        .collect()
+}
+
 pub use generator::get_outer_built_in_generator_functions;
 
 /// This function is temporary and should ONLY be used for COUNT(*).
@@ -61,10 +87,12 @@ pub use generator::get_outer_built_in_generator_functions;
 pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
     match arguments.as_slice() {
         #[expect(deprecated)]
-        [Expr::Wildcard {
-            qualifier: None,
-            options: _,
-        }] => {
+        [
+            Expr::Wildcard {
+                qualifier: None,
+                options: _,
+            },
+        ] => {
             vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
         }
         _ => arguments,

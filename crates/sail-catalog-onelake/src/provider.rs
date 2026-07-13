@@ -1,133 +1,57 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use reqwest::Client;
-use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+use sail_catalog::credentials::CatalogCredentials;
+use sail_catalog::error::CatalogResult;
+use sail_catalog::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
 };
-use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
-use serde::Deserialize;
+use sail_catalog::provider::{
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
+};
+use sail_catalog_iceberg::{
+    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
+};
+use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
+use url::Url;
 
-const ONELAKE_TABLE_API_BASE: &str = "https://onelake.table.fabric.microsoft.com/delta";
+use crate::credentials::OneLakeCredentials;
 
-/// Fetches Azure access token using Azure CLI
-async fn get_azure_cli_token() -> CatalogResult<String> {
-    // On Windows, az is a batch file (.cmd) and must be run through cmd.exe
-    // See: https://doc.rust-lang.org/nightly/std/process/struct.Command.html
-    let (program, extra_args): (&str, &[&str]) = if cfg!(target_os = "windows") {
-        ("cmd", &["/C", "az"])
-    } else {
-        ("az", &[])
-    };
-
-    let output = tokio::process::Command::new(program)
-        .args(extra_args)
-        .args([
-            "account",
-            "get-access-token",
-            "--resource",
-            "https://storage.azure.com/",
-            "--query",
-            "accessToken",
-            "-o",
-            "tsv",
-        ])
-        .output()
-        .await
-        .map_err(|e| CatalogError::External(format!("Failed to run az cli: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CatalogError::External(format!(
-            "Azure CLI failed: {stderr}"
-        )));
-    }
-
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() {
-        return Err(CatalogError::External(
-            "Azure CLI returned empty token".to_string(),
-        ));
-    }
-
-    Ok(token)
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum OneLakeApiKind {
+    Delta,
+    Iceberg,
 }
 
-/// Converts OneLake https:// URL to abfss:// URL for Delta Lake access
-/// From: https://onelake.dfs.fabric.microsoft.com/workspace/item.ItemType/Tables/schema/table
-/// To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema/table
-fn convert_to_abfss_url(https_url: &str) -> Option<String> {
-    let url = https_url.strip_prefix("https://onelake.dfs.fabric.microsoft.com/")?;
-    let (workspace, rest) = url.split_once('/')?;
-    Some(format!(
-        "abfss://{}@onelake.dfs.fabric.microsoft.com/{}",
-        workspace, rest
-    ))
-}
+const ONE_LAKE_DELTA_ENDPOINT: &str = "https://onelake.table.fabric.microsoft.com/delta";
+const ONE_LAKE_ICEBERG_ENDPOINT: &str = "https://onelake.table.fabric.microsoft.com/iceberg";
 
-/// Response from list schemas API
-#[derive(Debug, Deserialize)]
-struct ListSchemasResponse {
-    schemas: Vec<SchemaInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SchemaInfo {
-    name: Option<String>,
-    #[expect(dead_code)]
-    catalog_name: Option<String>,
-    comment: Option<String>,
-}
-
-/// Response from list tables API
-#[derive(Debug, Deserialize)]
-struct ListTablesResponse {
-    tables: Vec<TableInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TableInfo {
-    name: Option<String>,
-    #[expect(dead_code)]
-    catalog_name: Option<String>,
-    schema_name: Option<String>,
-    #[expect(dead_code)]
-    table_type: Option<String>,
-    data_source_format: Option<String>,
-    storage_location: Option<String>,
-    columns: Option<Vec<ColumnInfo>>,
-    comment: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ColumnInfo {
-    name: Option<String>,
-    type_name: Option<String>,
-    type_text: Option<String>,
-    nullable: Option<bool>,
-    comment: Option<String>,
-}
-
-/// Configuration for OneLake catalog
+/// Configuration for OneLake catalog.
 #[derive(Debug, Clone)]
 pub struct OneLakeCatalogConfig {
+    #[expect(unused)]
     pub workspace: String,
     pub item_name: String,
-    pub item_type: String,
-    pub bearer_token: Option<String>,
+    pub item_type: Option<String>,
+    pub api: OneLakeApiKind,
 }
 
 /// Provider for Microsoft Fabric OneLake catalog.
 ///
-/// This catalog uses the OneLake Table APIs to list schemas and tables,
-/// and returns Delta table locations that can be read/written via abfss://.
+/// This catalog uses the OneLake Table APIs and delegates protocol-specific catalog
+/// behavior to the Iceberg REST or Unity Catalog providers.
 pub struct OneLakeCatalogProvider {
     name: String,
     config: OneLakeCatalogConfig,
-    client: OnceCell<Arc<Client>>,
+    inner: Arc<dyn CatalogProvider>,
 }
 
 impl OneLakeCatalogProvider {
@@ -135,191 +59,169 @@ impl OneLakeCatalogProvider {
         name: String,
         workspace: String,
         item_name: String,
-        item_type: String,
+        item_type: Option<String>,
+        api: OneLakeApiKind,
         bearer_token: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> CatalogResult<Self> {
+        let credentials = match bearer_token {
+            Some(bearer_token) => OneLakeCredentials::Static { bearer_token },
+            None => OneLakeCredentials::Dynamic {
+                workspace: workspace.clone(),
+                provider: OnceCell::new(),
+            },
+        };
+        let credentials = Arc::new(credentials) as Arc<dyn CatalogCredentials>;
+        // `<workspace>/<item>.<type>` for friendly names, or
+        // `<workspaceId>/<itemId>`(no type segment) for GUIDs
+        let item_path = onelake_item_path(&workspace, &item_name, item_type.as_deref());
+        let inner: Arc<dyn CatalogProvider> = match api {
+            OneLakeApiKind::Delta => {
+                let uri = format!(
+                    "{}/{}/api/2.1/unity-catalog",
+                    ONE_LAKE_DELTA_ENDPOINT, item_path
+                );
+                let catalog_name = onelake_catalog_name(&item_name, item_type.as_deref());
+                Arc::new(UnityCatalogProvider::new(
+                    name.clone(),
+                    UnityCatalogOptions {
+                        default_catalog: catalog_name,
+                        uri,
+                        credentials,
+                        quote_object_name: false,
+                    },
+                )?)
+            }
+            OneLakeApiKind::Iceberg => {
+                let uri = ONE_LAKE_ICEBERG_ENDPOINT.to_string();
+                let mut properties = HashMap::new();
+                properties.insert(REST_CATALOG_PROP_URI.to_string(), uri);
+                properties.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), item_path.clone());
+                properties.insert(REST_CATALOG_PROP_PREFIX.to_string(), item_path);
+                Arc::new(IcebergRestCatalogProvider::new(
+                    name.clone(),
+                    IcebergRestCatalogOptions {
+                        credentials,
+                        properties,
+                    },
+                ))
+            }
+        };
+
+        Ok(Self {
             name,
             config: OneLakeCatalogConfig {
                 workspace,
                 item_name,
                 item_type,
-                bearer_token,
+                api,
             },
-            client: OnceCell::new(),
-        }
-    }
-
-    fn base_url(&self) -> String {
-        format!(
-            "{}/{}/{}.{}",
-            ONELAKE_TABLE_API_BASE,
-            self.config.workspace,
-            self.config.item_name,
-            self.config.item_type
-        )
-    }
-
-    fn schema_name(database: &Namespace) -> CatalogResult<String> {
-        if database.tail.is_empty() {
-            Ok(database.head.to_string())
-        } else {
-            Err(CatalogError::InvalidArgument(format!(
-                "OneLake catalog does not support multi-level namespaces: {}",
-                quote_namespace_if_needed(database)
-            )))
-        }
+            inner,
+        })
     }
 
     fn catalog_name(&self) -> String {
-        format!("{}.{}", self.config.item_name, self.config.item_type)
+        onelake_catalog_name(&self.config.item_name, self.config.item_type.as_deref())
     }
 
-    async fn get_client(&self) -> CatalogResult<&Arc<Client>> {
-        self.client
-            .get_or_try_init(|| async {
-                // Priority: 1) config token, 2) env var, 3) Azure CLI
-                let token = if let Some(token) = &self.config.bearer_token {
-                    token.clone()
-                } else if let Ok(token) = std::env::var("AZURE_STORAGE_TOKEN") {
-                    token
-                } else if let Ok(token) = std::env::var("AZURE_ACCESS_TOKEN") {
-                    token
-                } else {
-                    // Fall back to Azure CLI
-                    get_azure_cli_token().await?
-                };
-
-                let mut headers = reqwest::header::HeaderMap::new();
-                let header_value = reqwest::header::HeaderValue::from_str(&format!(
-                    "Bearer {token}"
-                ))
-                .map_err(|e| CatalogError::External(format!("Invalid bearer token: {e}")))?;
-                headers.insert(reqwest::header::AUTHORIZATION, header_value);
-
-                let client = Client::builder()
-                    .default_headers(headers)
-                    .build()
-                    .map_err(|e| {
-                        CatalogError::External(format!("Failed to build HTTP client: {e}"))
-                    })?;
-
-                Ok(Arc::new(client))
-            })
-            .await
+    fn normalize_database_status(&self, mut status: DatabaseStatus) -> DatabaseStatus {
+        if matches!(self.config.api, OneLakeApiKind::Delta) {
+            status.database = self.normalize_delta_database(status.database);
+        }
+        // OneLake's Iceberg REST API returns the namespace `location` as a workspace-relative
+        // path (e.g. `workspace/item.Type/Tables/schema`). `resolve_default_table_location` then
+        // seems to append the table name and hand the result to the Iceberg writer, which seems
+        // to reject any non-absolute location, so convert it to an absolute `abfss://` URL.
+        if let Some(location) = status.location.take() {
+            status.location = Some(normalize_onelake_location(&location).unwrap_or(location));
+        }
+        // Keep the mirrored `location` table property consistent with the field above
+        // (DESCRIBE DATABASE EXTENDED surfaces both).
+        for (key, value) in status.properties.iter_mut() {
+            if key.eq_ignore_ascii_case("location")
+                && let Some(abfss) = normalize_onelake_location(value)
+            {
+                *value = abfss;
+            }
+        }
+        status
     }
 
-    fn schema_info_to_database_status(&self, info: SchemaInfo) -> DatabaseStatus {
-        let schema_name = info.name.unwrap_or_else(|| "dbo".to_string());
-        DatabaseStatus {
-            catalog: self.name.clone(),
-            database: vec![schema_name],
-            comment: info.comment,
-            location: None,
-            properties: vec![],
+    fn normalize_table_status(&self, mut status: TableStatus) -> TableStatus {
+        if matches!(self.config.api, OneLakeApiKind::Delta) {
+            status.database = self.normalize_delta_database(status.database);
+            if let TableKind::Table { location, .. } = &mut status.kind
+                && let Some(url) = location.take()
+            {
+                *location = Some(normalize_onelake_location(&url).unwrap_or(url));
+            }
+        }
+        status
+    }
+
+    fn normalize_delta_database(&self, database: Vec<String>) -> Vec<String> {
+        if database.first().is_some_and(|x| x == &self.catalog_name()) {
+            database.into_iter().skip(1).collect()
+        } else {
+            database
         }
     }
 
-    fn table_info_to_table_status(&self, info: TableInfo) -> CatalogResult<TableStatus> {
-        let name = info.name.unwrap_or_default();
-        let schema_name = info.schema_name.unwrap_or_else(|| "dbo".to_string());
-        let format = info
-            .data_source_format
-            .map(|f| f.to_lowercase())
-            .unwrap_or_else(|| "delta".to_string());
-
-        // Convert https:// URL to abfss:// for Delta Lake access
-        let location = info
-            .storage_location
-            .and_then(|url| convert_to_abfss_url(&url).or(Some(url)));
-
-        let columns = info
-            .columns
-            .unwrap_or_default()
+    fn normalize_database_statuses(&self, statuses: Vec<DatabaseStatus>) -> Vec<DatabaseStatus> {
+        statuses
             .into_iter()
-            .map(|col| {
-                // Prefer type_name over type_text (OneLake API often returns type_text as null)
-                let type_str = col
-                    .type_name
-                    .or(col.type_text)
-                    .unwrap_or_else(|| "string".to_string());
-                let data_type = parse_type_text(&type_str);
-                TableColumnStatus {
-                    name: col.name.unwrap_or_default(),
-                    data_type,
-                    nullable: col.nullable.unwrap_or(true),
-                    comment: col.comment,
-                    default: None,
-                    generated_always_as: None,
-                    identity: None,
-                    is_partition: false,
-                    is_bucket: false,
-                    is_cluster: false,
-                }
-            })
-            .collect();
+            .map(|status| self.normalize_database_status(status))
+            .collect()
+    }
 
-        Ok(TableStatus {
-            catalog: Some(self.name.clone()),
-            database: vec![schema_name],
-            name,
-            kind: TableKind::Table {
-                columns,
-                comment: info.comment,
-                constraints: vec![],
-                location,
-                format,
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                properties: vec![],
-                is_external: true,
-            },
-        })
+    fn normalize_table_statuses(&self, statuses: Vec<TableStatus>) -> Vec<TableStatus> {
+        statuses
+            .into_iter()
+            .map(|status| self.normalize_table_status(status))
+            .collect()
     }
 }
 
-/// Simple type text parser - converts Unity Catalog type strings to Arrow DataType
-// TODO: Add support for complex types (array, map, struct) if OneLake returns them in JSON format.
-fn parse_type_text(type_text: &str) -> arrow::datatypes::DataType {
-    use arrow::datatypes::DataType;
-
-    let lower = type_text.to_lowercase();
-
-    // Handle decimal(precision, scale) format
-    if lower.starts_with("decimal") {
-        if let Some(params) = lower
-            .strip_prefix("decimal(")
-            .and_then(|s| s.strip_suffix(')'))
+// OneLake reports locations in different forms depending on the API:
+// - Delta (Unity) returns an absolute `https://` URL:
+//   From: https://onelake.dfs.fabric.microsoft.com/workspace/item.ItemType/Tables/schema/table
+//   To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema/table
+// - Iceberg (REST) returns the namespace `location` as a workspace-relative path:
+//   From: workspace/item.ItemType/Tables/schema
+//   To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema
+fn normalize_onelake_location(location: &str) -> Option<String> {
+    let trimmed = location.trim();
+    let relative =
+        if let Some(rest) = trimmed.strip_prefix("https://onelake.dfs.fabric.microsoft.com/") {
+            // OneLake `https://` form.
+            rest
+        } else if Url::parse(trimmed)
+            .ok()
+            .is_some_and(|url| url.scheme().len() > 1)
         {
-            let parts: Vec<&str> = params.split(',').collect();
-            if parts.len() == 2 {
-                if let (Ok(precision), Ok(scale)) =
-                    (parts[0].trim().parse::<u8>(), parts[1].trim().parse::<i8>())
-                {
-                    return DataType::Decimal128(precision, scale);
-                }
-            }
-        }
-        // Default decimal if parsing fails
-        return DataType::Decimal128(38, 18);
-    }
+            // Already absolute with another scheme (e.g., `abfss://`, `file://`, ...).
+            return None;
+        } else {
+            // Workspace-relative form (Iceberg namespace location).
+            trimmed
+        };
+    let (workspace, rest) = relative.split_once('/')?;
+    (!workspace.is_empty() && !rest.is_empty())
+        .then(|| format!("abfss://{workspace}@onelake.dfs.fabric.microsoft.com/{rest}"))
+}
 
-    match lower.as_str() {
-        "boolean" | "bool" => DataType::Boolean,
-        "byte" | "tinyint" => DataType::Int8,
-        "short" | "smallint" => DataType::Int16,
-        "int" | "integer" => DataType::Int32,
-        "long" | "bigint" => DataType::Int64,
-        "float" | "real" => DataType::Float32,
-        "double" => DataType::Float64,
-        "string" | "varchar" | "text" => DataType::Utf8,
-        "binary" => DataType::Binary,
-        "date" => DataType::Date32,
-        "timestamp" | "timestamp_ntz" => {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
-        }
-        _ => DataType::Utf8, // Default to string for unknown types
+// `<workspace>/<item>.<type>` for friendly names, or `<workspaceId>/<itemId>` for GUIDs.
+fn onelake_item_path(workspace: &str, item_name: &str, item_type: Option<&str>) -> String {
+    match item_type {
+        Some(item_type) => format!("{workspace}/{item_name}.{item_type}"),
+        None => format!("{workspace}/{item_name}"),
+    }
+}
+
+// `<item>.<type>` for friendly names, or `<itemId>` for GUIDs.
+fn onelake_catalog_name(item_name: &str, item_type: Option<&str>) -> String {
+    match item_type {
+        Some(item_type) => format!("{item_name}.{item_type}"),
+        None => item_name.to_string(),
     }
 }
 
@@ -331,238 +233,211 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
     async fn create_database(
         &self,
-        _database: &Namespace,
-        _options: CreateDatabaseOptions,
+        database: &Namespace,
+        options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support creating databases".to_string(),
-        ))
+        let status = self.inner.create_database(database, options).await?;
+        Ok(self.normalize_database_status(status))
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let schema_name = Self::schema_name(database)?;
-        let client = self.get_client().await?;
-
-        // OneLake API requires full qualified schema name: catalog.schema
-        let full_schema_name = format!("{}.{}", self.catalog_name(), schema_name);
-        let url = format!(
-            "{}/api/2.1/unity-catalog/schemas/{}",
-            self.base_url(),
-            full_schema_name
-        );
-
-        let response = client
-            .head(&url)
-            .send()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to check schema: {e}")))?;
-
-        if response.status().is_success() {
-            Ok(DatabaseStatus {
-                catalog: self.name.clone(),
-                database: vec![schema_name],
-                comment: None,
-                location: None,
-                properties: vec![],
-            })
-        } else if response.status().as_u16() == 404 {
-            Err(CatalogError::NotFound(CatalogObject::Schema, schema_name))
-        } else {
-            Err(CatalogError::External(format!(
-                "Failed to get schema: HTTP {}",
-                response.status()
-            )))
-        }
+        let status = self.inner.get_database(database).await?;
+        Ok(self.normalize_database_status(status))
     }
 
     async fn list_databases(
         &self,
-        _prefix: Option<&Namespace>,
+        prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
-        let client = self.get_client().await?;
-
-        // TODO: Use Url methods to construct URLs in case catalog/schema/table names contain special characters.
-        let url = format!(
-            "{}/api/2.1/unity-catalog/schemas?catalog_name={}",
-            self.base_url(),
-            self.catalog_name()
-        );
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to list schemas: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(CatalogError::External(format!(
-                "Failed to list schemas: HTTP {}",
-                response.status()
-            )));
-        }
-
-        let list_response: ListSchemasResponse = response.json().await.map_err(|e| {
-            CatalogError::External(format!("Failed to parse schemas response: {e}"))
-        })?;
-
-        Ok(list_response
-            .schemas
-            .into_iter()
-            .map(|s| self.schema_info_to_database_status(s))
-            .collect())
+        let statuses = self.inner.list_databases(prefix).await?;
+        Ok(self.normalize_database_statuses(statuses))
     }
 
     async fn drop_database(
         &self,
-        _database: &Namespace,
-        _options: DropDatabaseOptions,
+        database: &Namespace,
+        options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support dropping databases".to_string(),
-        ))
+        self.inner.drop_database(database, options).await
     }
 
     async fn create_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: CreateTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support creating tables via API".to_string(),
-        ))
+        let status = self.inner.create_table(database, table, options).await?;
+        Ok(self.normalize_table_status(status))
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        self.inner.create_table_metadata_requirement(options)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        self.inner.lakehouse_capabilities()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        self.inner
+            .plan_lakehouse_create(database, table, request)
+            .await
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        self.inner
+            .begin_table_access(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        self.inner
+            .plan_lakehouse_scan(database, table, request)
+            .await
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        self.inner
+            .commit_lakehouse_table(database, table, request)
+            .await
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        self.inner
+            .get_delta_ratified_commits(database, table, request)
+            .await
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let schema_name = Self::schema_name(database)?;
-        let client = self.get_client().await?;
-
-        let full_table_name = format!("{}.{}.{}", self.catalog_name(), schema_name, table);
-        let url = format!(
-            "{}/api/2.1/unity-catalog/tables/{}",
-            self.base_url(),
-            full_table_name
-        );
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to get table: {e}")))?;
-
-        if response.status().as_u16() == 404 {
-            return Err(CatalogError::NotFound(
-                CatalogObject::Table,
-                table.to_string(),
-            ));
-        }
-
-        if !response.status().is_success() {
-            return Err(CatalogError::External(format!(
-                "Failed to get table: HTTP {}",
-                response.status()
-            )));
-        }
-
-        let table_info: TableInfo = response
-            .json()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to parse table response: {e}")))?;
-
-        self.table_info_to_table_status(table_info)
+        let status = self.inner.get_table(database, table).await?;
+        Ok(self.normalize_table_status(status))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let schema_name = Self::schema_name(database)?;
-        let client = self.get_client().await?;
-
-        let url = format!(
-            "{}/api/2.1/unity-catalog/tables?catalog_name={}&schema_name={}",
-            self.base_url(),
-            self.catalog_name(),
-            schema_name
-        );
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(CatalogError::External(format!(
-                "Failed to list tables: HTTP {}",
-                response.status()
-            )));
-        }
-
-        let list_response: ListTablesResponse = response
-            .json()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to parse tables response: {e}")))?;
-
-        list_response
-            .tables
-            .into_iter()
-            .map(|t| self.table_info_to_table_status(t))
-            .collect()
+        let statuses = self.inner.list_tables(database).await?;
+        Ok(self.normalize_table_statuses(statuses))
     }
 
     async fn drop_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: DropTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: DropTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support dropping tables via API".to_string(),
-        ))
+        self.inner.drop_table(database, table, options).await
     }
 
     async fn alter_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: AlterTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        // OneLake tables commonly use Delta storage, and property updates may already
-        // be committed at the storage layer before the catalog provider is called.
-        // Until OneLake REST propagation is implemented, treat this as a no-op so we
-        // do not report a failure after the underlying table has already been altered.
-        Ok(())
+        self.inner.alter_table(database, table, options).await
     }
 
     async fn create_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: CreateViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support views".to_string(),
-        ))
+        let status = self.inner.create_view(database, view, options).await?;
+        Ok(self.normalize_table_status(status))
     }
 
-    async fn get_view(&self, _database: &Namespace, _view: &str) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support views".to_string(),
-        ))
+    async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
+        let status = self.inner.get_view(database, view).await?;
+        Ok(self.normalize_table_status(status))
     }
 
-    async fn list_views(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support views".to_string(),
-        ))
+    async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let statuses = self.inner.list_views(database).await?;
+        Ok(self.normalize_table_statuses(statuses))
     }
 
     async fn drop_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: DropViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: DropViewOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "OneLake catalog does not support views".to_string(),
-        ))
+        self.inner.drop_view(database, view, options).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_onelake_location;
+
+    #[test]
+    fn normalize_onelake_location_handles_each_form() {
+        // Iceberg: workspace-relative namespace location -> abfss (the reported bug).
+        assert_eq!(
+            normalize_onelake_location("OneLake_LakeSail_Testing/LakeSail.Lakehouse/Tables/dbo")
+                .as_deref(),
+            Some(
+                "abfss://OneLake_LakeSail_Testing@onelake.dfs.fabric.microsoft.com/LakeSail.Lakehouse/Tables/dbo"
+            ),
+        );
+        // Delta/Unity: absolute https OneLake URL -> abfss (unchanged from before).
+        assert_eq!(
+            normalize_onelake_location(
+                "https://onelake.dfs.fabric.microsoft.com/ws/item.Lakehouse/Tables/dbo/t",
+            )
+            .as_deref(),
+            Some("abfss://ws@onelake.dfs.fabric.microsoft.com/item.Lakehouse/Tables/dbo/t"),
+        );
+        // Already absolute -> None so the caller keeps the original (never double-convert).
+        assert_eq!(
+            normalize_onelake_location("abfss://ws@onelake.dfs.fabric.microsoft.com/x"),
+            None,
+        );
+        assert_eq!(normalize_onelake_location("s3://bucket/x"), None);
+        // Single-slash scheme: `Url::parse` should detect it.
+        assert_eq!(normalize_onelake_location("file:/tmp/onelake"), None);
+        // Degenerate inputs -> no conversion.
+        assert_eq!(normalize_onelake_location("single-segment"), None);
+        assert_eq!(normalize_onelake_location("ws/"), None);
     }
 }

@@ -21,7 +21,7 @@ use url::Url;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
-use crate::options::gen::IcebergReadOptions;
+use crate::options::r#gen::IcebergReadOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
@@ -44,7 +44,11 @@ impl Table {
         table_url: Url,
         metadata_location: Option<String>,
     ) -> Result<Self> {
-        log::trace!("Loading Iceberg table: {}", table_url);
+        log::trace!(
+            "Loading Iceberg table: table_url={}, metadata_location={:?}",
+            table_url,
+            metadata_location,
+        );
         let object_store = ctx
             .runtime_env()
             .object_store_registry

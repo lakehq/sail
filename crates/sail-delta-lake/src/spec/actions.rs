@@ -23,8 +23,8 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::statistics::Stats;
@@ -103,6 +103,24 @@ impl DeletionVectorDescriptor {
             }
         }
     }
+}
+
+/// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
+///
+/// The Delta protocol identifies a logical file by the data-file path combined
+/// with the `uniqueId` of its deletion vector, when one is present.
+pub(crate) type LogicalFileKey = (String, Option<String>);
+
+/// Compute the logical file key for an `Add` or `Remove` action.
+#[inline]
+pub(crate) fn logical_file_key(
+    path: &str,
+    deletion_vector: Option<&DeletionVectorDescriptor>,
+) -> LogicalFileKey {
+    (
+        path.to_string(),
+        deletion_vector.map(DeletionVectorDescriptor::unique_id),
+    )
 }
 
 /// Delta Lake action envelope.
@@ -418,11 +436,9 @@ impl TryFrom<Action> for CommitAction {
             Action::Txn(t) => Ok(Self::Txn(t)),
             Action::CommitInfo(c) => Ok(Self::CommitInfo(c)),
             Action::DomainMetadata(d) => Ok(Self::DomainMetadata(d)),
-            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(
-                DeltaTableError::generic(
-                    "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
-                ),
-            ),
+            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(DeltaTableError::generic(
+                "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
+            )),
         }
     }
 }

@@ -14,7 +14,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::Stream;
 
 /// A physical plan node for Spark-style coalesce without a shuffle.
@@ -202,7 +202,7 @@ mod tests {
     use datafusion_common::Result;
     use futures::StreamExt;
 
-    use super::{coalesced_input_range, CoalesceExec};
+    use super::{CoalesceExec, coalesced_input_range};
 
     fn test_plan(partitions: Vec<Vec<RecordBatch>>) -> Arc<dyn ExecutionPlan> {
         let schema = if let Some(batch) = partitions.iter().flatten().next() {

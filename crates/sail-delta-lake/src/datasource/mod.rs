@@ -29,8 +29,8 @@ pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::SnapshotPruningStats;
-use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategy};
+use crate::options::{DeltaLogReplayStrategy, default_delta_log_replay_hash_threshold};
+use crate::snapshot::SnapshotPruningStats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
@@ -45,9 +45,9 @@ pub mod schema;
 // Re-exports
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
-    collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
+    PredicateProperties, collect_physical_columns, get_pushdown_filters, simplify_expr,
 };
-pub use pruning::{prune_files, PruningResult};
+pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 

@@ -6,9 +6,9 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_rollup(

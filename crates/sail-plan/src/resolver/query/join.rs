@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
 use datafusion_functions::expr_fn::coalesce;
 use sail_common::spec;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
 /// This matches Spark SQL's `ExtractPythonUDFFromJoinCondition` optimizer rule
@@ -39,8 +39,7 @@ fn join_type_name(join_type: JoinType) -> &'static str {
     }
 }
 
-const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str =
-    "Detected implicit cartesian product for INNER join between logical plans. \
+const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str = "Detected implicit cartesian product for INNER join between logical plans. \
     Join condition is missing or trivial. \
     Either: use the CROSS JOIN syntax to allow cartesian products between \
     these relations, or: enable implicit cartesian products by setting the \

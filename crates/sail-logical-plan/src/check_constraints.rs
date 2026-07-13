@@ -1,5 +1,5 @@
 use datafusion_common::Result;
-use datafusion_expr::{lit, when, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, lit, when};
 pub use sail_common_datafusion::datasource::{DeltaCheckConstraintExpr, DeltaConstraintViolation};
 use sail_function::scalar::misc::raise_error::RaiseError;
 

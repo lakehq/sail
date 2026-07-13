@@ -679,17 +679,14 @@ fn query_plan_with_table_modifier(
                             .collect::<SqlResult<Vec<_>>>()?,
                         _ => vec![from_ast_expression(expr)?],
                     };
-                    let values = expr
-                        .into_iter()
-                        .map(|x| match x {
-                            spec::Expr::Literal(literal) => Ok(literal),
-                            _ => Err(SqlError::invalid("non-literal value in PIVOT")),
-                        })
-                        .collect::<SqlResult<Vec<_>>>()?;
+                    // Pivot values are foldable expressions (literals, typed literals such as
+                    // `DATE'...'`, or casts); the resolver evaluates each to a scalar. Passing the
+                    // expressions through here lets all of those forms work, matching Spark.
+                    let values = expr;
                     let alias = match alias {
                         Some((_, Either::Left(x))) => Some(x.value.into()),
                         Some((_, Either::Right(IdentList { .. }))) => {
-                            return Err(SqlError::invalid("multiple alias for pivot value"))
+                            return Err(SqlError::invalid("multiple alias for pivot value"));
                         }
                         None => None,
                     };
@@ -698,7 +695,7 @@ fn query_plan_with_table_modifier(
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
                 input: Box::new(plan),
-                grouping: vec![],
+                grouping: None,
                 aggregate,
                 columns,
                 values,

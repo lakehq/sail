@@ -9,8 +9,8 @@ use datafusion::common::{
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
 use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{Expr, Operator};
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::filter::FilterExec;
 
 use crate::datasource::simplify_expr;
 use crate::physical_plan::DeltaMetadataStatsExec;
@@ -19,7 +19,7 @@ use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
-use crate::spec::{stats_schema, StructType};
+use crate::spec::{StructType, stats_schema};
 use crate::table::DeltaSnapshot;
 
 pub(crate) fn predicate_requires_stats(expr: &Expr, partition_columns: &[String]) -> bool {

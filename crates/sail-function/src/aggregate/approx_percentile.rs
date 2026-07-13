@@ -9,8 +9,8 @@ use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
     DurationNanosecondType, DurationSecondType, Field, FieldRef, Float16Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, IntervalYearMonthType,
-    TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalUnit, IntervalYearMonthType,
+    TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -217,12 +217,14 @@ impl AggregateUDFImpl for SparkApproxPercentile {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let input_type = args.input_fields[0].data_type().clone();
         let field = Field::new_list_field(input_type, true);
-        Ok(vec![Field::new(
-            format_state_name(args.name, "approx_percentile"),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "approx_percentile"),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -305,7 +307,7 @@ impl<T: ArrowNumericType> Accumulator for ApproxPercentileAccumulator<T> {
             );
             Ok(ScalarValue::List(Arc::new(list_array)))
         } else {
-            let value = calculate_percentile_disc::<T>(values, self.percentiles[0]);
+            let value = calculate_percentile_disc::<T>(values, self.percentiles[0], false);
             ScalarValue::new_primitive::<T>(value, &self.data_type)
         }
     }

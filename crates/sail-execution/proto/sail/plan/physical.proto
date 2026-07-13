@@ -64,6 +64,9 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
+    NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
+    ParquetExecNode parquet = 54;
   }
 }
 
@@ -97,8 +100,21 @@ message HigherOrderUdfExprNode {
 message HigherOrderUdf {
   oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
   }
 }
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -115,6 +131,21 @@ message SparkArrayFilterUdf {
   // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
   // `index_first` rewrite and this field can be removed.
   bool index_first = 1;
+}
+
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
+}
+
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {
@@ -150,6 +181,9 @@ message ExtendedScalarUdf {
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
     SparkNegativeUdf spark_negative = 31;
+    SparkFromXmlUdf spark_from_xml = 32;
+    SparkCeilUdf spark_ceil = 33;
+    SparkFloorUdf spark_floor = 34;
   }
 }
 
@@ -166,7 +200,12 @@ message ExtendedAggregateUdf {
     PySparkGroupAggUdaf py_spark_group_agg = 2;
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
+    PercentileDiscUdaf percentile_disc = 5;
   }
+}
+
+message PercentileDiscUdaf {
+  bool ansi_mode = 1;
 }
 
 message StandardUdf {}
@@ -210,6 +249,10 @@ message SparkToXmlUdf {
     string session_timezone = 1;
 }
 
+message SparkFromXmlUdf {
+  string session_timezone = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -234,6 +277,7 @@ message TimestampNowUdf {
 message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
+  bool ansi_mode = 3;
 }
 
 message SparkDateUdf {
@@ -242,6 +286,14 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+}
+
+message SparkCeilUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkFloorUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkNextDayUdf {
@@ -317,10 +369,16 @@ message StandardUdaf {}
 message ExtendedWindowUdf {
   oneof UdwfKind {
     StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
   }
 }
 
 message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
@@ -541,6 +599,17 @@ message NdJsonExecNode {
   CompressionTypeVariant file_compression_type = 2;
 }
 
+message CsvExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+}
+
+message ParquetExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+  optional bytes predicate = 3;
+}
+
 message ArrowExecNode {
   bytes base_config = 1;
 }
@@ -676,6 +745,7 @@ message DeltaScanByAddsExecNode {
   int64 version = 9;
   optional bytes statistics = 10;
   string lakehouse_table_json = 11;
+  string catalog_managed_commits_json = 12;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -700,6 +770,10 @@ message DeltaRemoveActionsExecNode {
 }
 
 message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message NoopSinkExecNode {
   bytes input = 1;
 }
 

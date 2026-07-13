@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
