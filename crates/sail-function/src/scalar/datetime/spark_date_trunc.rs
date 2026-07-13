@@ -64,56 +64,62 @@ impl SparkDateTrunc {
         let ColumnarValue::Array(unit) = unit else {
             return internal_err!("`date_trunc` expected an array of units");
         };
-        let units = unit_strings(&unit)?;
+        // Resolve every row's granularity in a single pass. Spark matches the unit
+        // case-insensitively, and the planner's `CASE` only rewrites the aliases (`mm`, `yy`,
+        // `dd`), so a column still carries the user's own casing. A row whose unit is NULL or
+        // unrecognized has no granularity, and Spark nullifies it.
+        let granularity_of_row = unit_strings(&unit)?
+            .into_iter()
+            .map(|unit| {
+                unit.and_then(|unit| {
+                    GRANULARITIES
+                        .iter()
+                        .position(|granularity| unit.eq_ignore_ascii_case(granularity))
+                })
+            })
+            .collect::<Vec<_>>();
 
-        // Spark matches the unit case-insensitively, and the planner's `CASE` only rewrites the
-        // aliases (`mm`, `yy`, `dd`), so a column still carries the user's own casing.
-        let truncated_by_unit = GRANULARITIES
-            .iter()
-            .filter(|granularity| {
-                units
-                    .iter()
-                    .flatten()
-                    .any(|unit| unit.eq_ignore_ascii_case(granularity))
-            })
-            .map(|granularity| {
-                let args = ScalarFunctionArgs {
-                    args: vec![
-                        ColumnarValue::Scalar(ScalarValue::from(*granularity)),
-                        timestamp.clone(),
-                    ],
-                    arg_fields: vec![
-                        Arc::new(Field::new("granularity", DataType::Utf8, false)),
-                        Arc::clone(&timestamp_field),
-                    ],
-                    number_rows,
-                    return_field: Arc::clone(&return_field),
-                    config_options: Arc::clone(&config_options),
-                };
-                let truncated = self.inner.invoke_with_args(args)?.to_array(number_rows)?;
-                Ok((*granularity, truncated))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Truncate once per DISTINCT granularity the column actually uses, over the whole
+        // timestamp array, and remember which source array each one landed in.
+        let mut source_of_granularity = [None; GRANULARITIES.len()];
+        let mut truncated = Vec::new();
+        for granularity in granularity_of_row.iter().flatten() {
+            if source_of_granularity[*granularity].is_some() {
+                continue;
+            }
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from(GRANULARITIES[*granularity])),
+                    timestamp.clone(),
+                ],
+                arg_fields: vec![
+                    Arc::new(Field::new("granularity", DataType::Utf8, false)),
+                    Arc::clone(&timestamp_field),
+                ],
+                number_rows,
+                return_field: Arc::clone(&return_field),
+                config_options: Arc::clone(&config_options),
+            };
+            source_of_granularity[*granularity] = Some(truncated.len());
+            truncated.push(self.inner.invoke_with_args(args)?.to_array(number_rows)?);
+        }
 
         // The last source is the NULL row every unrecognized or NULL unit points at.
         let nulls = new_null_array(return_field.data_type(), 1);
-        let sources = truncated_by_unit
+        let null_source = truncated.len();
+        let sources = truncated
             .iter()
-            .map(|(_, array)| array.as_ref())
+            .map(|array| array.as_ref())
             .chain(std::iter::once(nulls.as_ref()))
             .collect::<Vec<_>>();
-        let null_source = truncated_by_unit.len();
 
-        let indices = units
+        let indices = granularity_of_row
             .iter()
             .enumerate()
-            .map(|(row, unit)| {
-                unit.and_then(|unit| {
-                    truncated_by_unit
-                        .iter()
-                        .position(|(granularity, _)| unit.eq_ignore_ascii_case(granularity))
-                })
-                .map_or((null_source, 0), |source| (source, row))
+            .map(|(row, granularity)| {
+                granularity
+                    .and_then(|granularity| source_of_granularity[granularity])
+                    .map_or((null_source, 0), |source| (source, row))
             })
             .collect::<Vec<_>>();
 
@@ -157,11 +163,27 @@ impl ScalarUDFImpl for SparkDateTrunc {
         Ok(Arc::new(field.as_ref().clone().with_nullable(true)))
     }
 
+    /// Spark yields NULL for a unit it does not recognize, and for a NULL unit, whereas
+    /// DataFusion errors. Resolve that here rather than in the planner, so the behavior does
+    /// not depend on whether the unit reached the function as a literal or as a column.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args.first() {
-            Some(ColumnarValue::Array(_)) => self.invoke_with_unit_array(args),
-            _ => self.inner.invoke_with_args(args),
+            Some(ColumnarValue::Array(_)) => return self.invoke_with_unit_array(args),
+            Some(ColumnarValue::Scalar(unit)) => {
+                let recognized = unit.try_as_str().flatten().is_some_and(|unit| {
+                    GRANULARITIES
+                        .iter()
+                        .any(|granularity| unit.eq_ignore_ascii_case(granularity))
+                });
+                if !recognized {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+                        args.return_field.data_type(),
+                    )?));
+                }
+            }
+            None => {}
         }
+        self.inner.invoke_with_args(args)
     }
 
     fn aliases(&self) -> &[String] {

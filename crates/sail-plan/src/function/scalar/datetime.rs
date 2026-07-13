@@ -86,57 +86,42 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
     let (part, timestamp) = input.arguments.two()?;
-    // Spark returns NULL (not an error) when the unit is NULL or unrecognized, whereas
-    // DataFusion's date_trunc errors. Short-circuit those cases to a typed-NULL timestamp.
-    let null_timestamp = || {
-        lit(ScalarValue::TimestampMicrosecond(
-            None,
-            Some(session_tz.clone()),
-        ))
-    };
-    match &part {
-        e if is_null_arg(e) => return Ok(null_timestamp()),
-        Expr::Literal(ScalarValue::Utf8(Some(s)), _)
-        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _)
-        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _)
-            if !matches!(
-                s.to_lowercase().as_str(),
-                "year"
-                    | "yyyy"
-                    | "yy"
-                    | "quarter"
-                    | "month"
-                    | "mon"
-                    | "mm"
-                    | "week"
-                    | "day"
-                    | "dd"
-                    | "hour"
-                    | "minute"
-                    | "second"
-                    | "millisecond"
-                    | "microsecond"
-            ) =>
-        {
-            return Ok(null_timestamp());
+    // A string that is not a timestamp errors under ANSI, and is NULL when ANSI is off.
+    let to_timestamp = |expr: Expr| {
+        let timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone()));
+        if ansi_mode {
+            cast(expr, timestamp)
+        } else {
+            try_cast(expr, timestamp)
         }
-        _ => {}
-    }
+    };
     // Spark's date_trunc coerces its value argument to TimestampType and always returns
     // TimestampType, whether the input is DATE, TIMESTAMP, TIMESTAMP_NTZ, or a string.
     // Leave other types untouched so they are rejected like Spark instead of silently coerced.
     let timestamp = match timestamp.get_type(input.function_context.schema)? {
-        DataType::Date32
+        DataType::Null
+        | DataType::Date32
         | DataType::Date64
         | DataType::Timestamp(_, _)
         | DataType::Utf8
         | DataType::LargeUtf8
-        | DataType::Utf8View => cast(
-            timestamp,
-            DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone())),
-        ),
-        _ => timestamp,
+        | DataType::Utf8View => to_timestamp(timestamp),
+        // Spark rejects the value for its type when it analyzes the query, so the rejection
+        // must not depend on the unit: an unrecognized or NULL unit does not turn it into NULL.
+        other => {
+            return Err(PlanError::invalid(format!(
+                "`date_trunc` does not support {other} input"
+            )));
+        }
+    };
+    // Spark coerces a non-string unit to its string form, which then matches no granularity and
+    // yields NULL, rather than rejecting it. `SparkDateTrunc` resolves the unrecognized and NULL
+    // units, per row, so nothing here depends on the unit being a literal.
+    let part = match part.get_type(input.function_context.schema)? {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => part,
+        _ => cast(part, DataType::Utf8),
     };
     let truncated =
         ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
@@ -496,16 +481,6 @@ fn timestamp_null(input: &ScalarFunctionInput, timestamp_ntz: bool) -> Expr {
 
 fn is_null_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(value, _) if value.is_null())
-}
-
-/// Like [`is_null_literal`] but also sees through a `CAST(NULL AS ...)` wrapper,
-/// which is not folded to a bare literal at plan time.
-fn is_null_arg(expr: &Expr) -> bool {
-    match expr {
-        Expr::Cast(cast) => is_null_arg(&cast.expr),
-        Expr::TryCast(cast) => is_null_arg(&cast.expr),
-        other => is_null_literal(other),
-    }
 }
 
 fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {

@@ -325,7 +325,87 @@ Feature: DATE_TRUNC always returns a timestamp
       | result |
       | NULL   |
 
+    Scenario: date_trunc on an untyped null value returns a null timestamp
+      When query
+      """
+      SELECT date_trunc('DAY', NULL) AS result
+      """
+      Then query schema
+      """
+      root
+       |-- result: timestamp (nullable = true)
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+  Rule: a non-string unit is measured as its string form
+
+    Scenario: an integer unit matches no granularity and returns null
+      When query
+      """
+      SELECT date_trunc(1, TIMESTAMP '2024-05-15 13:45:30') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+  Rule: an unparseable string value under ANSI on errors
+
+    Scenario: an unparseable string value errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+      """
+      SELECT date_trunc('DAY', 'not a date') AS result
+      """
+      Then query error .*
+
+    Scenario: an empty string value errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+      """
+      SELECT date_trunc('DAY', '') AS result
+      """
+      Then query error .*
+
+  Rule: an unparseable string value under ANSI off returns NULL
+
+    Scenario: an unparseable string value returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT date_trunc('DAY', 'not a date') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: an empty string value returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT date_trunc('DAY', '') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: an unparseable string value nulls only its own row under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT date_trunc('DAY', s) AS result FROM VALUES ('2024-05-15'), ('not a date'), (NULL) AS t(s)
+      """
+      Then query result ordered
+      | result              |
+      | 2024-05-15 00:00:00 |
+      | NULL                |
+      | NULL                |
+
   Rule: date_trunc rejects non-date input types
+
+    # The value is rejected for its TYPE, whatever the unit is: an unrecognized or NULL unit
+    # does not turn the rejection into a NULL.
 
     Scenario: date_trunc rejects a time value
       When query
@@ -338,6 +418,34 @@ Feature: DATE_TRUNC always returns a timestamp
       When query
       """
       SELECT date_trunc('DAY', 1) AS result
+      """
+      Then query error .*
+
+    Scenario: date_trunc rejects an integer value even when the unit is unrecognized
+      When query
+      """
+      SELECT date_trunc('INVALID', 1) AS result
+      """
+      Then query error .*
+
+    Scenario: date_trunc rejects an integer value even when the unit is null
+      When query
+      """
+      SELECT date_trunc(CAST(NULL AS STRING), 1) AS result
+      """
+      Then query error .*
+
+    Scenario: date_trunc rejects a boolean value even when the unit is unrecognized
+      When query
+      """
+      SELECT date_trunc('INVALID', true) AS result
+      """
+      Then query error .*
+
+    Scenario: date_trunc rejects a time value even when the unit is null
+      When query
+      """
+      SELECT date_trunc(NULL, TIME '12:30:00') AS result
       """
       Then query error .*
 
