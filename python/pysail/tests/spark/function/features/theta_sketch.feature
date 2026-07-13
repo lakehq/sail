@@ -157,14 +157,14 @@ Feature: Theta sketch functions
         """
         SELECT theta_sketch_estimate(theta_intersection_agg(NULL)) AS result
         """
-      Then query error .*
+      Then query error (infinite set|without any non-null input sketches)
 
     Scenario: theta_intersection_agg rejects typed null sketch inputs
       When query
         """
         SELECT theta_sketch_estimate(theta_intersection_agg(CAST(NULL AS BINARY))) AS result
         """
-      Then query error .*
+      Then query error (infinite set|without any non-null input sketches)
 
     Scenario: theta_intersection_agg rejects empty inputs
       When query
@@ -173,7 +173,7 @@ Feature: Theta sketch functions
         FROM VALUES (CAST(NULL AS BINARY)) AS tab(col)
         WHERE false
         """
-      Then query error .*
+      Then query error (infinite set|without any non-null input sketches)
 
     Scenario: theta_intersection_agg skips null-only partial sketch states
       When query
@@ -294,7 +294,7 @@ Feature: Theta sketch functions
         """
         SELECT theta_sketch_agg(CAST(c AS DECIMAL(10,2))) FROM VALUES (1.0) AS tab(c)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|does not support input type)
 
     Scenario: theta_sketch_agg accepts the valid lgNomEntries boundaries
       When query
@@ -313,11 +313,11 @@ Feature: Theta sketch functions
         """
         SELECT theta_sketch_agg(col, 3) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (THETA_INVALID_LG_NOM_ENTRIES|lgNomEntries between 4 and 26)
 
     Scenario: theta_sketch_agg rejects lgNomEntries above the valid range
       When query
         """
         SELECT theta_sketch_agg(col, 27) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (THETA_INVALID_LG_NOM_ENTRIES|lgNomEntries between 4 and 26)

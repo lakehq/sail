@@ -76,7 +76,7 @@ Feature: DataSketches functions
         SELECT hll_sketch_estimate(hll_union(hll_union_agg(NULL), hll_sketch_agg(col, 21), false)) AS result
         FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (HLL_UNION_DIFFERENT_LG_K|different lgConfigK)
 
     Scenario: hll_union_agg skips null-only partial sketch states
       When query
@@ -195,70 +195,70 @@ Feature: DataSketches functions
         """
         SELECT hll_sketch_agg(col, 3) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (HLL_INVALID_LG_K|lgConfigK between 4 and 21)
 
     Scenario: hll_sketch_agg rejects lgConfigK above the valid range
       When query
         """
         SELECT hll_sketch_agg(col, 22) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (HLL_INVALID_LG_K|lgConfigK between 4 and 21)
 
     Scenario: hll_sketch_agg rejects double input
       When query
         """
         SELECT hll_sketch_agg(CAST(col AS DOUBLE)) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|does not support input type)
 
     Scenario: count_min_sketch rejects non-positive eps
       When query
         """
         SELECT count_min_sketch(col, 0.0d, 0.9d, 1) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (VALUE_OUT_OF_RANGE|eps to be positive)
 
     Scenario: count_min_sketch rejects confidence outside the open unit interval
       When query
         """
         SELECT count_min_sketch(col, 0.1d, 1.0d, 1) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (VALUE_OUT_OF_RANGE|confidence to be in the range)
 
     Scenario: count_min_sketch rejects a null seed
       When query
         """
         SELECT count_min_sketch(col, 0.1d, 0.9d, NULL) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_NULL|integer seed argument)
 
     Scenario: count_min_sketch rejects decimal eps and confidence like Spark
       When query
         """
         SELECT count_min_sketch(col, 0.5, 0.5, 1) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|double eps argument)
 
     Scenario: count_min_sketch rejects float eps like Spark
       When query
         """
         SELECT count_min_sketch(col, CAST(0.5 AS FLOAT), 0.9d, 1) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|double eps argument)
 
     Scenario: count_min_sketch rejects integer confidence like Spark
       When query
         """
         SELECT count_min_sketch(col, 0.1d, 1, 1) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|double confidence argument)
 
     Scenario: count_min_sketch rejects decimal seed like Spark
       When query
         """
         SELECT count_min_sketch(col, 0.1d, 0.9d, CAST(1 AS DECIMAL(3,0))) FROM VALUES (1) AS tab(col)
         """
-      Then query error .*
+      Then query error (UNEXPECTED_INPUT_TYPE|integer seed argument)
 
   Rule: HLL sketches are not byte-identical to Spark
 
