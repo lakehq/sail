@@ -370,20 +370,6 @@ impl<'a> OpenApiGenerator<'a> {
                 identifier,
                 rename,
                 is_required,
-                flatten: false,
-                rust_type,
-            });
-        }
-        if !output.is_empty()
-            && let Some(rust_type) =
-                self.map_type_with_inline(schema, inline, in_module, "AdditionalPropertiesValue")?
-        {
-            output.push(SchemaField {
-                name: "additional_properties".to_owned(),
-                identifier: value_name("additional_properties"),
-                rename: None,
-                is_required: true,
-                flatten: true,
                 rust_type,
             });
         }
@@ -747,7 +733,6 @@ struct SchemaField {
     identifier: RustName,
     rename: Option<String>,
     is_required: bool,
-    flatten: bool,
     rust_type: RustType,
 }
 
@@ -962,7 +947,6 @@ fn generate_schema_field(field: &SchemaField) -> TokenStream {
 fn generate_field(field: &SchemaField, visibility: TokenStream) -> TokenStream {
     let name = &field.identifier;
     let rust_type = &field.rust_type;
-    let flatten = field.flatten.then(|| quote! { #[serde(flatten)] });
     let rename = field
         .rename
         .as_ref()
@@ -970,7 +954,6 @@ fn generate_field(field: &SchemaField, visibility: TokenStream) -> TokenStream {
     let optional = (!field.is_required && field.rust_type.is_option())
         .then(|| quote! { #[serde(default, skip_serializing_if = "Option::is_none")] });
     quote! {
-        #flatten
         #rename
         #optional
         #visibility #name: #rust_type,
