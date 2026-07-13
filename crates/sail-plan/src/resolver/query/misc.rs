@@ -7,9 +7,11 @@ use datafusion_expr::{EmptyRelation, Expr, Extension, LogicalPlan, UNNAMED_TABLE
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, read_record_batches,
+    cast_record_batch_positionally, read_record_batch_streams,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::session::artifact::CachedLocalRelationService;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
@@ -109,15 +111,12 @@ impl PlanResolver<'_> {
 
     pub(super) async fn resolve_query_local_relation(
         &self,
-        data: Option<Vec<u8>>,
+        data: Vec<Arc<[u8]>>,
         schema: Option<spec::Schema>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let batches = if let Some(data) = data {
-            read_record_batches(&data)?
-        } else {
-            vec![]
-        };
+        let (ipc_schema, batches) =
+            read_record_batch_streams(data.iter().map(|data| data.as_ref()))?;
         let (schema, batches) = if let Some(schema) = schema {
             let schema = Arc::new(self.resolve_schema(schema, state)?);
             let batches = batches
@@ -125,8 +124,8 @@ impl PlanResolver<'_> {
                 .map(|b| Ok(cast_record_batch_positionally(b, schema.clone())?))
                 .collect::<PlanResult<_>>()?;
             (schema, batches)
-        } else if let [batch, ..] = batches.as_slice() {
-            (batch.schema(), batches)
+        } else if let Some(schema) = ipc_schema {
+            (schema, batches)
         } else {
             return Err(PlanError::invalid("missing schema for local relation"));
         };
@@ -139,6 +138,29 @@ impl PlanResolver<'_> {
             None,
             state,
         )
+    }
+
+    pub(super) async fn resolve_query_cached_local_relation(
+        &self,
+        hash: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let service = self.ctx.extension::<CachedLocalRelationService>()?;
+        let relation = service.load_legacy(&hash)?;
+        self.resolve_query_local_relation(relation.data, relation.schema, state)
+            .await
+    }
+
+    pub(super) async fn resolve_query_chunked_cached_local_relation(
+        &self,
+        data_hashes: Vec<String>,
+        schema_hash: Option<String>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let service = self.ctx.extension::<CachedLocalRelationService>()?;
+        let relation = service.load_chunked(&data_hashes, schema_hash.as_deref())?;
+        self.resolve_query_local_relation(relation.data, relation.schema, state)
+            .await
     }
 
     pub(super) async fn resolve_query_hint(

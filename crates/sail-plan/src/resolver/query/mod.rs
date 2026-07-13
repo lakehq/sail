@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_recursion::async_recursion;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
@@ -115,8 +117,12 @@ impl PlanResolver<'_> {
                 .await?
             }
             QueryNode::LocalRelation { data, schema } => {
-                self.resolve_query_local_relation(data, schema, state)
-                    .await?
+                self.resolve_query_local_relation(
+                    data.into_iter().map(Arc::<[u8]>::from).collect(),
+                    schema,
+                    state,
+                )
+                .await?
             }
             QueryNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
             QueryNode::TableSample { input, sample } => {
@@ -224,8 +230,16 @@ impl PlanResolver<'_> {
                 self.resolve_query_apply_in_pandas_with_state(apply, state)
                     .await?
             }
-            QueryNode::CachedLocalRelation { .. } => {
-                return Err(PlanError::todo("cached local relation"));
+            QueryNode::CachedLocalRelation { hash } => {
+                self.resolve_query_cached_local_relation(hash, state)
+                    .await?
+            }
+            QueryNode::ChunkedCachedLocalRelation {
+                data_hashes,
+                schema_hash,
+            } => {
+                self.resolve_query_chunked_cached_local_relation(data_hashes, schema_hash, state)
+                    .await?
             }
             QueryNode::CachedRemoteRelation { .. } => {
                 return Err(PlanError::todo("cached remote relation"));

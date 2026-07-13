@@ -43,6 +43,7 @@ futures = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
 crc32fast = { workspace = true }
+sha2 = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

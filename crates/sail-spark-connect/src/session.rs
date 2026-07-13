@@ -10,9 +10,7 @@ use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
 use uuid::Uuid;
 
-#[cfg(test)]
-use crate::artifact::Artifact;
-use crate::artifact::{ArtifactLimits, SessionArtifacts};
+use crate::artifact::{Artifact, ArtifactLimits, SessionArtifacts};
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
@@ -93,7 +91,6 @@ impl SparkSession {
         &self.artifacts
     }
 
-    #[cfg(test)]
     pub(crate) fn artifact(&self, name: &str) -> SparkResult<Option<Artifact>> {
         self.artifacts.get(name)
     }

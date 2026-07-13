@@ -8112,6 +8112,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "syn 2.0.118",
  "thiserror 2.0.18",
  "tokio",

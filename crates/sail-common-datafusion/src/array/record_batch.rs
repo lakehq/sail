@@ -21,6 +21,13 @@ pub fn cast_record_batch_positionally(
 ) -> Result<RecordBatch> {
     let fields = schema.fields();
     let columns = batch.columns();
+    if fields.len() != columns.len() {
+        return Err(DataFusionError::Plan(format!(
+            "record batch column count mismatch: expected {} columns but found {} columns",
+            fields.len(),
+            columns.len()
+        )));
+    }
     let columns = fields
         .iter()
         .zip(columns)
@@ -353,13 +360,33 @@ fn cast_map_array_positionally(
 }
 
 pub fn read_record_batches(data: &[u8]) -> Result<Vec<RecordBatch>> {
-    let cursor = Cursor::new(data);
-    let reader = StreamReader::try_new(cursor, None)?;
-    let mut batches = Vec::new();
-    for batch in reader {
-        batches.push(batch?);
-    }
+    let (_, batches) = read_record_batch_streams([data])?;
     Ok(batches)
+}
+
+pub fn read_record_batch_streams<'a>(
+    streams: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<(Option<SchemaRef>, Vec<RecordBatch>)> {
+    let mut schema: Option<SchemaRef> = None;
+    let mut batches = Vec::new();
+    for data in streams {
+        let cursor = Cursor::new(data);
+        let reader = StreamReader::try_new(cursor, None)?;
+        let stream_schema = reader.schema();
+        if let Some(schema) = &schema {
+            if schema.as_ref() != stream_schema.as_ref() {
+                return Err(DataFusionError::Plan(
+                    "Arrow IPC streams have different schemas".to_string(),
+                ));
+            }
+        } else {
+            schema = Some(stream_schema);
+        }
+        for batch in reader {
+            batches.push(batch?);
+        }
+    }
+    Ok((schema, batches))
 }
 
 pub fn write_record_batches(batches: &[RecordBatch], schema: &Schema) -> Result<Vec<u8>> {
@@ -497,5 +524,74 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(b_cast.null_count(), b_cast.len());
+    }
+
+    #[test]
+    fn read_multiple_ipc_streams_preserves_order_and_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let first =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])
+                .unwrap();
+        let second =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 4]))])
+                .unwrap();
+        let first_stream = write_record_batches(&[first], schema.as_ref()).unwrap();
+        let second_stream = write_record_batches(&[second], schema.as_ref()).unwrap();
+
+        let (actual_schema, batches) =
+            read_record_batch_streams([first_stream.as_slice(), second_stream.as_slice()]).unwrap();
+        assert_eq!(actual_schema.as_deref(), Some(schema.as_ref()));
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn read_schema_only_ipc_stream_retains_schema() {
+        let schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+        let stream = write_record_batches(&[], &schema).unwrap();
+        let (actual_schema, batches) = read_record_batch_streams([stream.as_slice()]).unwrap();
+        assert_eq!(actual_schema.as_deref(), Some(&schema));
+        assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn read_ipc_streams_rejects_different_schemas() {
+        let left = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+        let right = Schema::new(vec![Field::new("other", DataType::Int32, false)]);
+        let left_stream = write_record_batches(&[], &left).unwrap();
+        let right_stream = write_record_batches(&[], &right).unwrap();
+        let result = read_record_batch_streams([left_stream.as_slice(), right_stream.as_slice()]);
+        assert!(matches!(result, Err(DataFusionError::Plan(_))));
+    }
+
+    #[test]
+    fn positional_cast_rejects_different_column_counts() {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(input_schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])
+                .unwrap();
+        let target_schema = Arc::new(Schema::empty());
+        let result = cast_record_batch_positionally(batch, target_schema);
+        assert!(matches!(result, Err(DataFusionError::Plan(_))));
     }
 }

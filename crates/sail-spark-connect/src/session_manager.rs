@@ -8,6 +8,7 @@ use datafusion::prelude::SessionConfig;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+use sail_common_datafusion::session::artifact::CachedLocalRelationService;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
@@ -17,7 +18,7 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
-use crate::artifact::ArtifactLimits;
+use crate::artifact::{ArtifactLimits, SparkCachedLocalRelationLoader};
 use crate::error::{SparkError, SparkResult};
 use crate::session::{SparkSession, SparkSessionOptions};
 
@@ -35,25 +36,31 @@ impl ServerSessionMutator for SparkSessionMutator {
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
         );
-        let spark = SparkSession::try_new(
-            info.session_id.clone(),
-            info.user_id.clone(),
-            SparkSessionOptions {
-                execution_heartbeat_interval: Duration::from_secs(
-                    self.config.spark.execution_heartbeat_interval_secs,
-                ),
-                artifact_limits: ArtifactLimits {
-                    max_artifact_bytes: self.config.spark.artifact.max_artifact_bytes,
-                    max_session_bytes: self.config.spark.artifact.max_session_bytes,
-                    max_artifacts: self.config.spark.artifact.max_artifacts,
-                    max_chunks: self.config.spark.artifact.max_chunks,
+        let spark = Arc::new(
+            SparkSession::try_new(
+                info.session_id.clone(),
+                info.user_id.clone(),
+                SparkSessionOptions {
+                    execution_heartbeat_interval: Duration::from_secs(
+                        self.config.spark.execution_heartbeat_interval_secs,
+                    ),
+                    artifact_limits: ArtifactLimits {
+                        max_artifact_bytes: self.config.spark.artifact.max_artifact_bytes,
+                        max_session_bytes: self.config.spark.artifact.max_session_bytes,
+                        max_artifacts: self.config.spark.artifact.max_artifacts,
+                        max_chunks: self.config.spark.artifact.max_chunks,
+                    },
                 },
-            },
-        )
-        .map_err(|e| internal_datafusion_err!("{e}"))?;
+            )
+            .map_err(|e| internal_datafusion_err!("{e}"))?,
+        );
+        let cached_local_relations = CachedLocalRelationService::new(Arc::new(
+            SparkCachedLocalRelationLoader::new(spark.clone()),
+        ));
         Ok(config
             .with_extension(Arc::new(plan_service))
-            .with_extension(Arc::new(spark)))
+            .with_extension(Arc::new(cached_local_relations))
+            .with_extension(spark))
     }
 
     fn mutate_state(

@@ -432,6 +432,7 @@ mod tests {
 
     use datafusion::prelude::{SessionConfig, SessionContext};
     use futures::stream;
+    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::session::SparkSessionOptions;
@@ -472,6 +473,14 @@ mod tests {
         })
     }
 
+    fn cache_name(data: &[u8]) -> String {
+        let hash = Sha256::digest(data)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!("cache/{hash}")
+    }
+
     #[tokio::test]
     async fn bad_crc_is_reported_and_discarded() -> SparkResult<()> {
         let ctx = context()?;
@@ -497,24 +506,26 @@ mod tests {
     #[tokio::test]
     async fn one_chunk_begin_is_complete() -> SparkResult<()> {
         let ctx = context()?;
+        let name = cache_name(b"data");
         let payload = Payload::BeginChunk(BeginChunkedArtifact {
-            name: "cache/hash".to_string(),
+            name: name.clone(),
             total_bytes: 4,
             num_chunks: 1,
             initial_chunk: Some(chunk(b"data")),
         });
         handle_add_artifacts(&ctx, stream::iter([Ok(payload)])).await?;
         let spark = ctx.extension::<SparkSession>()?;
-        assert!(spark.artifacts().cache_exists("cache/hash")?);
+        assert!(spark.artifacts().cache_exists(&name)?);
         Ok(())
     }
 
     #[tokio::test]
     async fn batch_can_interleave_with_chunked_artifact() -> SparkResult<()> {
         let ctx = context()?;
+        let name = cache_name(b"data");
         let payloads = [
             Payload::BeginChunk(BeginChunkedArtifact {
-                name: "cache/hash".to_string(),
+                name: name.clone(),
                 total_bytes: 4,
                 num_chunks: 2,
                 initial_chunk: Some(chunk(b"da")),
@@ -524,7 +535,7 @@ mod tests {
         ];
         handle_add_artifacts(&ctx, stream::iter(payloads.map(Ok))).await?;
         let spark = ctx.extension::<SparkSession>()?;
-        assert!(spark.artifact("cache/hash")?.is_some());
+        assert!(spark.artifact(&name)?.is_some());
         assert!(spark.artifact("files/item")?.is_some());
         Ok(())
     }

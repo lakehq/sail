@@ -1152,8 +1152,17 @@ impl TryFrom<RelType> for RelationNode {
                     join_type,
                 }))
             }
-            RelType::ChunkedCachedLocalRelation(_) => {
-                Err(SparkError::todo("chunked cached local relation"))
+            RelType::ChunkedCachedLocalRelation(local_relation) => {
+                let sc::ChunkedCachedLocalRelation {
+                    data_hashes,
+                    schema_hash,
+                } = local_relation;
+                Ok(RelationNode::Query(
+                    spec::QueryNode::ChunkedCachedLocalRelation {
+                        data_hashes,
+                        schema_hash,
+                    },
+                ))
             }
             RelType::FillNa(fill_na) => {
                 let sc::NaFill {
@@ -2125,6 +2134,31 @@ mod tests {
             |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
+    }
+
+    #[test]
+    fn chunked_cached_local_relation_preserves_hashes() -> SparkResult<()> {
+        let relation = sc::Relation {
+            common: None,
+            rel_type: Some(sc::relation::RelType::ChunkedCachedLocalRelation(
+                sc::ChunkedCachedLocalRelation {
+                    data_hashes: vec!["first".to_string(), "second".to_string()],
+                    schema_hash: Some("schema".to_string()),
+                },
+            )),
+        };
+        let plan: spec::Plan = relation.try_into()?;
+        assert!(matches!(
+            plan,
+            spec::Plan::Query(spec::QueryPlan {
+                node: spec::QueryNode::ChunkedCachedLocalRelation {
+                    data_hashes,
+                    schema_hash: Some(schema_hash),
+                },
+                ..
+            }) if data_hashes == ["first", "second"] && schema_hash == "schema"
+        ));
+        Ok(())
     }
 
     #[test]
