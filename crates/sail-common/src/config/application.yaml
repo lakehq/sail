@@ -805,14 +805,14 @@
   type: number
   default: "4096"
   description: |
-    Maximum number of entries extracted from one Spark archive artifact.
+    Maximum total number of archive entries extracted from one Spark session artifact set.
   experimental: true
 
 - key: spark.artifact.max_archive_expanded_bytes
   type: number
   default: "67108864"
   description: |
-    Maximum expanded size in bytes of one Spark archive artifact.
+    Maximum total archive expanded size in bytes for one Spark session artifact set.
   experimental: true
 
 - key: flight.session_timeout_secs

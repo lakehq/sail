@@ -66,15 +66,15 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        if artifacts.is_empty() {
-            Ok(execute_stream(plan, ctx.task_ctx())?)
-        } else {
+        if artifacts.is_present() {
             let activation = ctx
                 .extension::<ArtifactRuntime>()?
                 .activate(&artifacts)
                 .await?;
             let stream = execute_stream(plan, ctx.task_ctx())?;
             Ok(hold_artifact_activation(stream, activation))
+        } else {
+            Ok(execute_stream(plan, ctx.task_ctx())?)
         }
     }
 
@@ -128,13 +128,14 @@ impl JobRunner for ClusterJobRunner {
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
-        _artifacts: ArtifactManifest,
+        artifacts: ArtifactManifest,
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
             .send(DriverEvent::ExecuteJob {
                 plan,
                 context: ctx.task_ctx(),
+                artifacts,
                 result: tx,
             })
             .await

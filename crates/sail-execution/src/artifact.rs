@@ -22,11 +22,14 @@ use sail_common_datafusion::session::artifact::{
 };
 use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, watch};
 use zip::ZipArchive;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactRuntimeOptions {
+    pub max_artifact_bytes: usize,
+    pub max_session_bytes: usize,
+    pub max_artifacts: usize,
     pub max_archive_entries: usize,
     pub max_archive_expanded_bytes: usize,
 }
@@ -42,9 +45,19 @@ type MaterializedArtifactCache = HashMap<ArtifactSetKey, Arc<MaterializedArtifac
 
 impl ArtifactRuntime {
     pub fn try_new(options: ArtifactRuntimeOptions) -> Result<Self> {
-        if options.max_archive_entries == 0 || options.max_archive_expanded_bytes == 0 {
+        if options.max_artifact_bytes == 0
+            || options.max_session_bytes == 0
+            || options.max_artifacts == 0
+            || options.max_archive_entries == 0
+            || options.max_archive_expanded_bytes == 0
+        {
             return Err(DataFusionError::Configuration(
-                "Spark archive limits must be greater than zero".to_string(),
+                "Spark artifact runtime limits must be greater than zero".to_string(),
+            ));
+        }
+        if options.max_artifact_bytes > options.max_session_bytes {
+            return Err(DataFusionError::Configuration(
+                "Spark artifact max_artifact_bytes cannot exceed max_session_bytes".to_string(),
             ));
         }
         let root = Builder::new()
@@ -88,15 +101,8 @@ impl ArtifactRuntime {
 
     pub async fn activate(&self, manifest: &ArtifactManifest) -> Result<ArtifactActivationGuard> {
         let artifacts = self.materialize(manifest).await?;
-        let lease = python_artifact_lease().lock_owned().await;
-        if let Err(error) = Python::attach(|py| activate_python_artifacts(py, &artifacts)) {
-            let _ = Python::attach(deactivate_python_artifacts);
-            return Err(external_error(error));
-        }
-        Ok(ArtifactActivationGuard {
-            _lease: lease,
-            _artifacts: artifacts,
-        })
+        let key = (manifest.set_id.clone(), manifest.fingerprint);
+        acquire_python_artifacts(key, artifacts).await
     }
 }
 
@@ -123,14 +129,36 @@ impl MaterializedArtifactSet {
 }
 
 pub struct ArtifactActivationGuard {
-    _lease: OwnedMutexGuard<()>,
-    _artifacts: Arc<MaterializedArtifactSet>,
+    key: ArtifactSetKey,
 }
 
 impl Drop for ArtifactActivationGuard {
     fn drop(&mut self) {
-        if let Err(error) = Python::attach(deactivate_python_artifacts) {
-            warn!("failed to deactivate Spark artifacts: {error}");
+        let coordinator = python_artifact_coordinator();
+        let mut state = match coordinator.state.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                warn!("failed to release Spark artifact activation: {error}");
+                return;
+            }
+        };
+        if state.active_key.as_ref() != Some(&self.key) || state.user_count == 0 {
+            warn!("Spark artifact activation state is inconsistent");
+            return;
+        }
+        state.user_count -= 1;
+        if state.user_count == 0 {
+            if let Err(error) =
+                Python::attach(|py| clear_python_artifact_state(py, &mut state.python))
+            {
+                warn!("failed to deactivate Spark artifacts: {error}");
+            }
+            state.active_key = None;
+            state.active_artifacts = None;
+            drop(state);
+            coordinator
+                .changed
+                .send_modify(|version| *version = version.wrapping_add(1));
         }
     }
 }
@@ -147,6 +175,24 @@ pin_project! {
 enum MaterializedTargetKind {
     File,
     Directory,
+}
+
+struct ArchiveExtractionBudget {
+    max_entries: usize,
+    remaining_entries: usize,
+    max_expanded_bytes: usize,
+    remaining_expanded_bytes: usize,
+}
+
+impl ArchiveExtractionBudget {
+    fn new(options: ArtifactRuntimeOptions) -> Self {
+        Self {
+            max_entries: options.max_archive_entries,
+            remaining_entries: options.max_archive_entries,
+            max_expanded_bytes: options.max_archive_expanded_bytes,
+            remaining_expanded_bytes: options.max_archive_expanded_bytes,
+        }
+    }
 }
 
 impl Stream for ActivatedArtifactStream {
@@ -178,10 +224,11 @@ fn materialize_manifest(
     manifest: &ArtifactManifest,
     options: ArtifactRuntimeOptions,
 ) -> Result<MaterializedArtifactSet> {
-    validate_manifest(manifest)?;
+    validate_manifest(manifest, options)?;
     let root = directory.path().to_path_buf();
     let mut targets = HashMap::<PathBuf, ([u8; 32], MaterializedTargetKind)>::new();
     let mut python_includes = Vec::new();
+    let mut archive_budget = ArchiveExtractionBudget::new(options);
 
     for artifact in &manifest.artifacts {
         let file_name = runtime_file_name(artifact)?;
@@ -218,7 +265,7 @@ fn materialize_manifest(
                     artifact.digest,
                     MaterializedTargetKind::Directory,
                 )? {
-                    extract_zip(&artifact.data, &target, options)?;
+                    extract_zip(&artifact.data, &target, &mut archive_budget)?;
                 }
             }
         }
@@ -231,9 +278,36 @@ fn materialize_manifest(
     })
 }
 
-fn validate_manifest(manifest: &ArtifactManifest) -> Result<()> {
+fn validate_manifest(manifest: &ArtifactManifest, options: ArtifactRuntimeOptions) -> Result<()> {
+    if manifest.artifacts.len() > options.max_artifacts {
+        return Err(DataFusionError::Execution(format!(
+            "artifact manifest contains {} artifacts, exceeding the {} artifact limit",
+            manifest.artifacts.len(),
+            options.max_artifacts
+        )));
+    }
     let mut hasher = Sha256::new();
+    let mut total_bytes = 0usize;
     for artifact in &manifest.artifacts {
+        if artifact.data.len() > options.max_artifact_bytes {
+            return Err(DataFusionError::Execution(format!(
+                "artifact {} contains {} bytes, exceeding the {} byte limit",
+                artifact.name,
+                artifact.data.len(),
+                options.max_artifact_bytes
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(artifact.data.len())
+            .ok_or_else(|| {
+                DataFusionError::Execution("artifact byte count overflow".to_string())
+            })?;
+        if total_bytes > options.max_session_bytes {
+            return Err(DataFusionError::Execution(format!(
+                "artifact manifest contains {total_bytes} bytes, exceeding the {} byte limit",
+                options.max_session_bytes
+            )));
+        }
         let digest: [u8; 32] = Sha256::digest(&artifact.data).into();
         if digest != artifact.digest {
             return Err(DataFusionError::Execution(format!(
@@ -365,18 +439,17 @@ fn write_new_file(path: &Path, data: &[u8]) -> Result<()> {
     file.sync_all().map_err(external_error)
 }
 
-fn extract_zip(data: &[u8], target: &Path, options: ArtifactRuntimeOptions) -> Result<()> {
+fn extract_zip(data: &[u8], target: &Path, budget: &mut ArchiveExtractionBudget) -> Result<()> {
     std::fs::create_dir(target).map_err(external_error)?;
     let mut archive = ZipArchive::new(Cursor::new(data)).map_err(external_error)?;
-    if archive.len() > options.max_archive_entries {
+    if archive.len() > budget.remaining_entries {
         return Err(DataFusionError::Execution(format!(
-            "archive contains {} entries, exceeding the {} entry limit",
-            archive.len(),
-            options.max_archive_entries
+            "archives contain more than {} entries",
+            budget.max_entries
         )));
     }
+    budget.remaining_entries -= archive.len();
 
-    let mut expanded_bytes = 0usize;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(external_error)?;
         let enclosed = entry.enclosed_name().ok_or_else(|| {
@@ -411,13 +484,10 @@ fn extract_zip(data: &[u8], target: &Path, options: ArtifactRuntimeOptions) -> R
         let declared_size = usize::try_from(declared_size_u64).map_err(|_| {
             DataFusionError::Execution(format!("ZIP entry is too large: {}", entry.name()))
         })?;
-        let next_size = expanded_bytes.checked_add(declared_size).ok_or_else(|| {
-            DataFusionError::Execution("archive expanded size overflow".to_string())
-        })?;
-        if next_size > options.max_archive_expanded_bytes {
+        if declared_size > budget.remaining_expanded_bytes {
             return Err(DataFusionError::Execution(format!(
                 "archive expands to more than {} bytes",
-                options.max_archive_expanded_bytes
+                budget.max_expanded_bytes
             )));
         }
         if let Some(parent) = output.parent() {
@@ -428,7 +498,7 @@ fn extract_zip(data: &[u8], target: &Path, options: ArtifactRuntimeOptions) -> R
             .create_new(true)
             .open(&output)
             .map_err(external_error)?;
-        let remaining = options.max_archive_expanded_bytes - expanded_bytes;
+        let remaining = budget.remaining_expanded_bytes;
         let mut limited = entry.take(
             u64::try_from(remaining)
                 .unwrap_or(u64::MAX)
@@ -438,7 +508,7 @@ fn extract_zip(data: &[u8], target: &Path, options: ArtifactRuntimeOptions) -> R
         if copied > u64::try_from(remaining).unwrap_or(u64::MAX) {
             return Err(DataFusionError::Execution(format!(
                 "archive expands to more than {} bytes",
-                options.max_archive_expanded_bytes
+                budget.max_expanded_bytes
             )));
         }
         if copied != declared_size_u64 {
@@ -448,7 +518,7 @@ fn extract_zip(data: &[u8], target: &Path, options: ArtifactRuntimeOptions) -> R
             )));
         }
         file.sync_all().map_err(external_error)?;
-        expanded_bytes = next_size;
+        budget.remaining_expanded_bytes -= declared_size;
     }
     Ok(())
 }
@@ -461,29 +531,91 @@ struct PythonArtifactState {
     previous_spark_files_worker: Option<Py<PyAny>>,
 }
 
-fn python_artifact_lease() -> Arc<Mutex<()>> {
+#[derive(Default)]
+struct PythonArtifactCoordinatorState {
+    active_key: Option<ArtifactSetKey>,
+    active_artifacts: Option<Arc<MaterializedArtifactSet>>,
+    user_count: usize,
+    python: PythonArtifactState,
+}
+
+struct PythonArtifactCoordinator {
+    state: StdMutex<PythonArtifactCoordinatorState>,
+    changed: watch::Sender<u64>,
+}
+
+fn python_artifact_coordinator() -> &'static PythonArtifactCoordinator {
     // TODO: Replace process-wide activation with per-session Python interpreters.
-    static LEASE: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
-    LEASE.get_or_init(|| Arc::new(Mutex::new(()))).clone()
+    static COORDINATOR: OnceLock<PythonArtifactCoordinator> = OnceLock::new();
+    COORDINATOR.get_or_init(|| PythonArtifactCoordinator {
+        state: StdMutex::new(PythonArtifactCoordinatorState::default()),
+        changed: watch::channel(0).0,
+    })
 }
 
-fn python_artifact_state() -> &'static StdMutex<PythonArtifactState> {
-    static STATE: OnceLock<StdMutex<PythonArtifactState>> = OnceLock::new();
-    STATE.get_or_init(|| StdMutex::new(PythonArtifactState::default()))
+async fn acquire_python_artifacts(
+    key: ArtifactSetKey,
+    artifacts: Arc<MaterializedArtifactSet>,
+) -> Result<ArtifactActivationGuard> {
+    let coordinator = python_artifact_coordinator();
+    loop {
+        let mut changed = coordinator.changed.subscribe();
+        {
+            let mut state = coordinator.state.lock().map_err(|error| {
+                DataFusionError::Execution(format!(
+                    "failed to acquire Spark artifact activation: {error}"
+                ))
+            })?;
+            if state.active_key.as_ref() == Some(&key) {
+                if state.active_artifacts.is_none() {
+                    return Err(DataFusionError::Execution(
+                        "Spark artifact activation has no materialized artifact set".to_string(),
+                    ));
+                }
+                state.user_count = state.user_count.checked_add(1).ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Spark artifact activation user count overflow".to_string(),
+                    )
+                })?;
+                return Ok(ArtifactActivationGuard { key });
+            }
+            if state.active_key.is_none() {
+                if let Err(error) = Python::attach(|py| {
+                    activate_python_artifacts(py, &artifacts, &mut state.python)
+                }) {
+                    if let Err(cleanup_error) =
+                        Python::attach(|py| clear_python_artifact_state(py, &mut state.python))
+                    {
+                        warn!("failed to clean up Spark artifact activation: {cleanup_error}");
+                    }
+                    return Err(external_error(error));
+                }
+                state.active_key = Some(key.clone());
+                state.active_artifacts = Some(artifacts);
+                state.user_count = 1;
+                return Ok(ArtifactActivationGuard { key });
+            }
+        }
+        changed.changed().await.map_err(|error| {
+            DataFusionError::Execution(format!(
+                "failed to wait for Spark artifact activation: {error}"
+            ))
+        })?;
+    }
 }
 
-fn activate_python_artifacts(py: Python<'_>, artifacts: &MaterializedArtifactSet) -> PyResult<()> {
+fn activate_python_artifacts(
+    py: Python<'_>,
+    artifacts: &MaterializedArtifactSet,
+    state: &mut PythonArtifactState,
+) -> PyResult<()> {
     let root = path_to_string(&artifacts.root)?;
     let includes = artifacts
         .python_includes
         .iter()
         .map(|path| path_to_string(path))
         .collect::<PyResult<Vec<_>>>()?;
-    let mut state = python_artifact_state()
-        .lock()
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-    clear_python_artifact_state(py, &mut state)?;
+    clear_python_artifact_state(py, state)?;
 
     let sys = PyModule::import(py, "sys")?;
     let sys_path = sys.getattr("path")?;
@@ -508,13 +640,6 @@ fn activate_python_artifacts(py: Python<'_>, artifacts: &MaterializedArtifactSet
     spark_files.setattr("_root_directory", &root)?;
     spark_files.setattr("_is_running_on_worker", true)?;
     Ok(())
-}
-
-fn deactivate_python_artifacts(py: Python<'_>) -> PyResult<()> {
-    let mut state = python_artifact_state()
-        .lock()
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    clear_python_artifact_state(py, &mut state)
 }
 
 fn clear_python_artifact_state(py: Python<'_>, state: &mut PythonArtifactState) -> PyResult<()> {
@@ -607,6 +732,9 @@ mod tests {
 
     fn options() -> ArtifactRuntimeOptions {
         ArtifactRuntimeOptions {
+            max_artifact_bytes: 1024,
+            max_session_bytes: 4096,
+            max_artifacts: 16,
             max_archive_entries: 8,
             max_archive_expanded_bytes: 1024,
         }
@@ -767,6 +895,76 @@ mod tests {
 
         let result = materialize_manifest(tempfile::tempdir()?, &manifest(vec![artifact]), limits);
         assert!(matches!(result, Err(DataFusionError::Execution(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn enforces_manifest_and_cumulative_archive_limits() -> TestResult {
+        let two_files = || {
+            manifest(vec![
+                artifact(
+                    "files/first.txt",
+                    RuntimeArtifactKind::File,
+                    None,
+                    b"123".to_vec(),
+                ),
+                artifact(
+                    "files/second.txt",
+                    RuntimeArtifactKind::File,
+                    None,
+                    b"456".to_vec(),
+                ),
+            ])
+        };
+
+        let mut limits = options();
+        limits.max_artifacts = 1;
+        assert!(matches!(
+            materialize_manifest(tempfile::tempdir()?, &two_files(), limits),
+            Err(DataFusionError::Execution(_))
+        ));
+
+        let mut limits = options();
+        limits.max_artifact_bytes = 2;
+        assert!(matches!(
+            materialize_manifest(tempfile::tempdir()?, &two_files(), limits),
+            Err(DataFusionError::Execution(_))
+        ));
+
+        let mut limits = options();
+        limits.max_session_bytes = 5;
+        assert!(matches!(
+            materialize_manifest(tempfile::tempdir()?, &two_files(), limits),
+            Err(DataFusionError::Execution(_))
+        ));
+
+        let archives = manifest(vec![
+            artifact(
+                "archives/first.zip",
+                RuntimeArtifactKind::Archive,
+                Some("first"),
+                zip_files(&[("value.txt", b"123")])?,
+            ),
+            artifact(
+                "archives/second.zip",
+                RuntimeArtifactKind::Archive,
+                Some("second"),
+                zip_files(&[("value.txt", b"456")])?,
+            ),
+        ]);
+        let mut limits = options();
+        limits.max_archive_entries = 1;
+        assert!(matches!(
+            materialize_manifest(tempfile::tempdir()?, &archives, limits),
+            Err(DataFusionError::Execution(_))
+        ));
+
+        let mut limits = options();
+        limits.max_archive_expanded_bytes = 5;
+        assert!(matches!(
+            materialize_manifest(tempfile::tempdir()?, &archives, limits),
+            Err(DataFusionError::Execution(_))
+        ));
         Ok(())
     }
 

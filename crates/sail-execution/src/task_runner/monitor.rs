@@ -44,18 +44,11 @@ where
             stream,
             signal,
         } = self;
-        let event = Self::running(key.clone());
-        let _ = handle.send(event).await;
         let event = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
         let _ = handle.send(event).await;
-    }
-
-    /// Builds a "task is running" status message.
-    fn running(key: TaskKey) -> T::Message {
-        T::Message::report_task_status(key, TaskStatus::Running, None, None)
     }
 
     /// Waits for a cancellation signal and builds a canceled status message.

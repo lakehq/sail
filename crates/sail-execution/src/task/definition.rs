@@ -4,6 +4,9 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use sail_common_datafusion::session::artifact::{
+    ArtifactManifest, RuntimeArtifact, RuntimeArtifactKind,
+};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -17,6 +20,7 @@ pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+    pub artifact_manifest: ArtifactManifest,
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +84,15 @@ impl From<TaskDefinition> for r#gen::TaskDefinition {
             plan,
             inputs,
             output,
+            artifact_manifest,
         } = value;
         r#gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
+            artifact_manifest: artifact_manifest
+                .is_present()
+                .then(|| artifact_manifest.into()),
         }
     }
 }
@@ -106,12 +114,113 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
                 ));
             }
         };
+        let artifact_manifest = value
+            .artifact_manifest
+            .map(ArtifactManifest::try_from)
+            .transpose()?
+            .unwrap_or_default();
         Ok(TaskDefinition {
             plan: Arc::from(value.plan),
             inputs,
             output,
+            artifact_manifest,
         })
     }
+}
+
+impl From<ArtifactManifest> for r#gen::ArtifactManifest {
+    fn from(value: ArtifactManifest) -> Self {
+        let ArtifactManifest {
+            set_id,
+            fingerprint,
+            artifacts,
+        } = value;
+        Self {
+            set_id,
+            fingerprint: fingerprint.to_vec(),
+            artifacts: artifacts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<r#gen::ArtifactManifest> for ArtifactManifest {
+    type Error = ExecutionError;
+
+    fn try_from(value: r#gen::ArtifactManifest) -> Result<Self, Self::Error> {
+        if value.set_id.is_empty() {
+            return Err(ExecutionError::InvalidArgument(
+                "artifact manifest set ID cannot be empty".to_string(),
+            ));
+        }
+        let fingerprint = decode_sha256(value.fingerprint, "artifact manifest fingerprint")?;
+        let artifacts = value
+            .artifacts
+            .into_iter()
+            .map(RuntimeArtifact::try_from)
+            .collect::<ExecutionResult<Vec<_>>>()?;
+        Ok(Self {
+            set_id: value.set_id,
+            fingerprint,
+            artifacts,
+        })
+    }
+}
+
+impl From<RuntimeArtifact> for r#gen::RuntimeArtifact {
+    fn from(value: RuntimeArtifact) -> Self {
+        let RuntimeArtifact {
+            name,
+            kind,
+            archive_name,
+            digest,
+            data,
+        } = value;
+        let kind = match kind {
+            RuntimeArtifactKind::PythonFile => r#gen::RuntimeArtifactKind::PythonFile,
+            RuntimeArtifactKind::File => r#gen::RuntimeArtifactKind::File,
+            RuntimeArtifactKind::Archive => r#gen::RuntimeArtifactKind::Archive,
+        };
+        Self {
+            name,
+            kind: kind.into(),
+            archive_name,
+            digest: digest.to_vec(),
+            data: data.to_vec(),
+        }
+    }
+}
+
+impl TryFrom<r#gen::RuntimeArtifact> for RuntimeArtifact {
+    type Error = ExecutionError;
+
+    fn try_from(value: r#gen::RuntimeArtifact) -> Result<Self, Self::Error> {
+        let kind = match r#gen::RuntimeArtifactKind::try_from(value.kind)? {
+            r#gen::RuntimeArtifactKind::PythonFile => RuntimeArtifactKind::PythonFile,
+            r#gen::RuntimeArtifactKind::File => RuntimeArtifactKind::File,
+            r#gen::RuntimeArtifactKind::Archive => RuntimeArtifactKind::Archive,
+            r#gen::RuntimeArtifactKind::Unspecified => {
+                return Err(ExecutionError::InvalidArgument(
+                    "runtime artifact kind is unspecified".to_string(),
+                ));
+            }
+        };
+        Ok(Self {
+            name: value.name,
+            kind,
+            archive_name: value.archive_name,
+            digest: decode_sha256(value.digest, "runtime artifact digest")?,
+            data: value.data.into(),
+        })
+    }
+}
+
+fn decode_sha256(value: Vec<u8>, description: &str) -> ExecutionResult<[u8; 32]> {
+    value.try_into().map_err(|value: Vec<u8>| {
+        ExecutionError::InvalidArgument(format!(
+            "{description} must contain 32 bytes, got {}",
+            value.len()
+        ))
+    })
 }
 
 impl From<TaskInput> for r#gen::TaskInput {
@@ -626,5 +735,96 @@ impl TaskOutput {
             &self.distribution,
             TaskOutputDistribution::RoundRobinRow { .. }
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn artifact_manifest() -> ArtifactManifest {
+        ArtifactManifest {
+            set_id: "session-1".to_string(),
+            fingerprint: [7; 32],
+            artifacts: vec![RuntimeArtifact {
+                name: "files/value.txt".to_string(),
+                kind: RuntimeArtifactKind::File,
+                archive_name: None,
+                digest: [9; 32],
+                data: Arc::from(b"value".as_slice()),
+            }],
+        }
+    }
+
+    fn task_definition(artifact_manifest: ArtifactManifest) -> TaskDefinition {
+        TaskDefinition {
+            plan: Arc::from(b"plan".as_slice()),
+            inputs: vec![],
+            output: TaskOutput {
+                distribution: TaskOutputDistribution::RoundRobin { channels: 1 },
+                locator: TaskOutputLocator::Local { replicas: 1 },
+            },
+            artifact_manifest,
+        }
+    }
+
+    #[test]
+    fn task_definition_round_trips_artifact_manifest() -> ExecutionResult<()> {
+        let expected = artifact_manifest();
+        let encoded = r#gen::TaskDefinition::from(task_definition(expected.clone()));
+        assert!(encoded.artifact_manifest.is_some());
+
+        let decoded = TaskDefinition::try_from(encoded)?;
+        assert_eq!(decoded.artifact_manifest, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn task_definition_omits_absent_artifact_manifest() {
+        let encoded = r#gen::TaskDefinition::from(task_definition(ArtifactManifest::default()));
+        assert!(encoded.artifact_manifest.is_none());
+
+        let session_manifest = ArtifactManifest {
+            set_id: "session-1".to_string(),
+            fingerprint: [3; 32],
+            artifacts: vec![],
+        };
+        let encoded = r#gen::TaskDefinition::from(task_definition(session_manifest));
+        assert!(encoded.artifact_manifest.is_some());
+    }
+
+    #[test]
+    fn rejects_invalid_artifact_hash_lengths_and_kind() {
+        let invalid_fingerprint = r#gen::ArtifactManifest {
+            set_id: "session-1".to_string(),
+            fingerprint: vec![0; 31],
+            artifacts: vec![],
+        };
+        assert!(matches!(
+            ArtifactManifest::try_from(invalid_fingerprint),
+            Err(ExecutionError::InvalidArgument(_))
+        ));
+
+        let missing_set_id = r#gen::ArtifactManifest {
+            set_id: String::new(),
+            fingerprint: vec![0; 32],
+            artifacts: vec![],
+        };
+        assert!(matches!(
+            ArtifactManifest::try_from(missing_set_id),
+            Err(ExecutionError::InvalidArgument(_))
+        ));
+
+        let invalid_kind = r#gen::RuntimeArtifact {
+            name: "files/value.txt".to_string(),
+            kind: r#gen::RuntimeArtifactKind::Unspecified.into(),
+            archive_name: None,
+            digest: vec![0; 32],
+            data: b"value".to_vec(),
+        };
+        assert!(matches!(
+            RuntimeArtifact::try_from(invalid_kind),
+            Err(ExecutionError::InvalidArgument(_))
+        ));
     }
 }

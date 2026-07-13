@@ -8,6 +8,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_common_datafusion::system::predicate::Predicates;
@@ -168,9 +169,10 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
+        artifacts: ArtifactManifest,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
+        let out = self.job_scheduler.accept_job(ctx, plan, context, artifacts);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);

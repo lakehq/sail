@@ -9,15 +9,18 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::debug;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorContext};
+use sail_server::actor::{Actor, ActorContext, ActorHandle};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
+use crate::artifact::{ArtifactRuntime, hold_artifact_activation};
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
@@ -32,7 +35,7 @@ impl TaskRunner {
     pub fn new() -> Self {
         Self {
             signals: HashMap::new(),
-            codec: Box::new(RemoteExecutionCodec),
+            codec: Arc::new(RemoteExecutionCodec),
         }
     }
 
@@ -45,24 +48,47 @@ impl TaskRunner {
     ) where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let stream = match self.execute_plan(ctx, &key, definition, context) {
-            Ok(x) => x,
-            Err(e) => {
-                let event = T::Message::report_task_status(
-                    key,
-                    TaskStatus::Failed,
-                    Some(format!("failed to execute plan: {e}")),
-                    Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                );
-                ctx.send(event);
-                return;
-            }
-        };
         let handle = ctx.handle().clone();
+        let codec = self.codec.clone();
         let (tx, rx) = oneshot::channel();
         self.signals.insert(key.clone(), tx);
-        let monitor = TaskMonitor::new(handle, key, stream, rx);
-        ctx.spawn(monitor.run());
+        ctx.spawn(async move {
+            let event =
+                T::Message::report_task_status(key.clone(), TaskStatus::Running, None, None);
+            if handle.send(event).await.is_err() {
+                return;
+            }
+            let mut signal = rx;
+            let preparation =
+                Self::prepare_task(handle.clone(), key.clone(), definition, context, codec);
+            tokio::pin!(preparation);
+            let stream = tokio::select! {
+                result = &mut preparation => match result {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let event = T::Message::report_task_status(
+                            key,
+                            TaskStatus::Failed,
+                            Some(format!("failed to execute plan: {error}")),
+                            Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                        );
+                        let _ = handle.send(event).await;
+                        return;
+                    }
+                },
+                _ = &mut signal => {
+                    let event = T::Message::report_task_status(
+                        key.clone(),
+                        TaskStatus::Canceled,
+                        Some(format!("{} canceled", TaskKeyDisplay(&key))),
+                        None,
+                    );
+                    let _ = handle.send(event).await;
+                    return;
+                }
+            };
+            TaskMonitor::new(handle, key, stream, signal).run().await;
+        });
     }
 
     pub fn stop_task(&mut self, key: &TaskKey) {
@@ -71,27 +97,54 @@ impl TaskRunner {
         }
     }
 
-    /// Deserializes and prepares a physical plan for execution on this node.
-    fn execute_plan<T: Actor>(
-        &mut self,
-        ctx: &mut ActorContext<T>,
-        key: &TaskKey,
+    async fn prepare_task<T: Actor>(
+        handle: ActorHandle<T>,
+        key: TaskKey,
         definition: TaskDefinition,
         context: Arc<TaskContext>,
+        codec: Arc<dyn PhysicalExtensionCodec>,
     ) -> ExecutionResult<SendableRecordBatchStream>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan =
-            decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
-        let plan = self.rewrite_file_scans(plan)?;
-        let plan = self.rewrite_shuffle(
-            ctx,
+        let activation = if definition.artifact_manifest.is_present() {
+            Some(
+                context
+                    .extension::<ArtifactRuntime>()?
+                    .activate(&definition.artifact_manifest)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let stream = Self::execute_plan(&handle, &key, definition, context, codec.as_ref())?;
+        Ok(match activation {
+            Some(activation) => hold_artifact_activation(stream, activation),
+            None => stream,
+        })
+    }
+
+    /// Deserializes and prepares a physical plan for execution on this node.
+    fn execute_plan<T: Actor>(
+        handle: &ActorHandle<T>,
+        key: &TaskKey,
+        definition: TaskDefinition,
+        context: Arc<TaskContext>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> ExecutionResult<SendableRecordBatchStream>
+    where
+        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+    {
+        let plan = decode_remote_physical_plan(&context, codec, definition.plan.as_ref())?;
+        let plan = Self::rewrite_file_scans(plan)?;
+        let plan = Self::rewrite_shuffle(
+            handle,
             key,
             &definition.inputs,
             &definition.output,
             plan,
             &context,
+            codec,
         )?;
         debug!(
             "{} execution plan\n{}",
@@ -110,10 +163,7 @@ impl TaskRunner {
         Ok(stream)
     }
 
-    fn rewrite_file_scans(
-        &mut self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    fn rewrite_file_scans(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let result = plan.transform(|node| {
             if let Some(ds) = node.downcast_ref::<DataSourceExec>()
                 && let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>()
@@ -140,18 +190,19 @@ impl TaskRunner {
     }
 
     fn rewrite_shuffle<T: Actor>(
-        &mut self,
-        ctx: &mut ActorContext<T>,
+        handle: &ActorHandle<T>,
         key: &TaskKey,
         inputs: &[TaskInput],
         output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
         context: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let handle = ctx.handle();
+        let handle = handle.clone();
+        let input_handle = handle.clone();
         let result = plan.transform(move |node| {
             if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
                 let Some(input) = inputs.get(*placeholder.input()) else {
@@ -162,7 +213,7 @@ impl TaskRunner {
                     );
                 };
                 let locations = input.locations(key.job_id);
-                let accessor = StreamAccessor::new(handle.clone());
+                let accessor = StreamAccessor::new(input_handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,
                     Arc::new(accessor),
@@ -186,7 +237,7 @@ impl TaskRunner {
                 )));
             }
         };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
+        let partitioning = output.partitioning(context, &schema, codec)?;
         let row_based = output.row_based();
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);

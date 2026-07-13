@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
@@ -53,6 +54,7 @@ pub enum DriverEvent {
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
+        artifacts: ArtifactManifest,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
     CleanUpJob {
@@ -212,6 +214,7 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ExecuteJob {
                 plan: _,
                 context: _,
+                artifacts: _,
                 result: _,
             } => {}
             DriverEvent::CleanUpJob { job_id } => {

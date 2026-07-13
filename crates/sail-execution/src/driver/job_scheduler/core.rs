@@ -8,6 +8,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
@@ -42,6 +43,7 @@ impl JobScheduler {
         ctx: &mut ActorContext<DriverActor>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
+        artifacts: ArtifactManifest,
     ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
 
@@ -53,7 +55,8 @@ impl JobScheduler {
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
-        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output, context })?;
+        let descriptor =
+            JobDescriptor::try_new(graph, artifacts, JobState::Running { output, context })?;
         self.jobs.insert(job_id, descriptor);
 
         Ok((job_id, stream))
@@ -535,6 +538,8 @@ impl JobScheduler {
             plan: Arc::from(plan),
             inputs,
             output,
+            // TODO: Replace inline bytes with content-addressed remote locations for large jobs.
+            artifact_manifest: job.artifacts.clone(),
         };
         Ok((definition, context.clone()))
     }

@@ -6,6 +6,28 @@ message TaskDefinition {
   bytes plan = 1;
   repeated TaskInput inputs = 2;
   TaskOutput output = 3;
+  ArtifactManifest artifact_manifest = 4;
+}
+
+enum RuntimeArtifactKind {
+  RUNTIME_ARTIFACT_KIND_UNSPECIFIED = 0;
+  RUNTIME_ARTIFACT_KIND_PYTHON_FILE = 1;
+  RUNTIME_ARTIFACT_KIND_FILE = 2;
+  RUNTIME_ARTIFACT_KIND_ARCHIVE = 3;
+}
+
+message RuntimeArtifact {
+  string name = 1;
+  RuntimeArtifactKind kind = 2;
+  optional string archive_name = 3;
+  bytes digest = 4;
+  bytes data = 5;
+}
+
+message ArtifactManifest {
+  string set_id = 1;
+  bytes fingerprint = 2;
+  repeated RuntimeArtifact artifacts = 3;
 }
 
 message TaskInput {
@@ -107,4 +129,3 @@ message TaskOutputLocalLocator {
 message TaskOutputRemoteLocator {
   string uri = 1;
 }
-

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::artifact::ArtifactManifest;
 use sail_common_datafusion::session::job::{JobSnapshot, StageSnapshot, TaskSnapshot};
 
 use crate::driver::job_scheduler::topology::JobTopology;
@@ -15,6 +16,7 @@ use crate::job_graph::JobGraph;
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
     pub graph: JobGraph,
+    pub artifacts: ArtifactManifest,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
@@ -47,7 +49,11 @@ impl JobState {
 }
 
 impl JobDescriptor {
-    pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
+    pub fn try_new(
+        graph: JobGraph,
+        artifacts: ArtifactManifest,
+        state: JobState,
+    ) -> ExecutionResult<Self> {
         let mut stages = vec![];
         for stage in graph.stages().iter() {
             let mut descriptor = StageDescriptor {
@@ -69,6 +75,7 @@ impl JobDescriptor {
             .collect();
         Ok(Self {
             graph,
+            artifacts,
             topology,
             stages,
             regions,

@@ -59,6 +59,9 @@ impl ServerSessionMutator for SparkSessionMutator {
             SparkCachedLocalRelationLoader::new(spark.clone()),
         ));
         let artifact_runtime = ArtifactRuntime::try_new(ArtifactRuntimeOptions {
+            max_artifact_bytes: self.config.spark.artifact.max_artifact_bytes,
+            max_session_bytes: self.config.spark.artifact.max_session_bytes,
+            max_artifacts: self.config.spark.artifact.max_artifacts,
             max_archive_entries: self.config.spark.artifact.max_archive_entries,
             max_archive_expanded_bytes: self.config.spark.artifact.max_archive_expanded_bytes,
         })?;

@@ -267,14 +267,14 @@ pub(crate) async fn activate_session_artifacts(
 ) -> SparkResult<(ArtifactManifest, Option<ArtifactActivationGuard>)> {
     let spark = ctx.extension::<SparkSession>()?;
     let manifest = spark.artifact_manifest()?;
-    let activation = if manifest.is_empty() {
-        None
-    } else {
+    let activation = if manifest.is_present() {
         Some(
             ctx.extension::<ArtifactRuntime>()?
                 .activate(&manifest)
                 .await?,
         )
+    } else {
+        None
     };
     Ok((manifest, activation))
 }

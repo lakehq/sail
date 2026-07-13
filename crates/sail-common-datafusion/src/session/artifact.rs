@@ -32,6 +32,10 @@ impl ArtifactManifest {
     pub fn is_empty(&self) -> bool {
         self.artifacts.is_empty()
     }
+
+    pub fn is_present(&self) -> bool {
+        !self.set_id.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
