@@ -11,6 +11,13 @@ pub(crate) enum ArtifactKind {
     Archive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactAddOutcome {
+    Added,
+    Unchanged,
+    Conflict,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Artifact {
     name: String,
@@ -87,7 +94,7 @@ impl SessionArtifacts {
         self.limits
     }
 
-    pub(crate) fn add(&self, artifact: Artifact) -> SparkResult<()> {
+    pub(crate) fn add(&self, artifact: Artifact) -> SparkResult<ArtifactAddOutcome> {
         if artifact.data.len() > self.limits.max_artifact_bytes {
             return Err(SparkError::invalid(format!(
                 "artifact {} contains {} bytes, exceeding the {} byte limit",
@@ -101,9 +108,9 @@ impl SessionArtifacts {
         if let Some(existing) = state.entries.get(&artifact.name) {
             if artifact.kind != ArtifactKind::Cache {
                 if existing.data.as_ref() == artifact.data.as_ref() {
-                    return Ok(());
+                    return Ok(ArtifactAddOutcome::Unchanged);
                 }
-                return Err(SparkError::artifact_already_exists(&artifact.name));
+                return Ok(ArtifactAddOutcome::Conflict);
             }
         } else if state.entries.len() >= self.limits.max_artifacts {
             return Err(SparkError::invalid(format!(
@@ -131,7 +138,7 @@ impl SessionArtifacts {
 
         state.total_bytes = total_bytes;
         state.entries.insert(artifact.name.clone(), artifact);
-        Ok(())
+        Ok(ArtifactAddOutcome::Added)
     }
 
     #[cfg(test)]
@@ -163,26 +170,32 @@ mod tests {
     #[test]
     fn duplicate_artifacts_are_content_idempotent() -> SparkResult<()> {
         let registry = registry()?;
-        registry.add(Artifact::new(
-            "files/item".to_string(),
-            ArtifactKind::File,
-            None,
-            b"one".to_vec(),
-        ))?;
-        registry.add(Artifact::new(
-            "files/item".to_string(),
-            ArtifactKind::File,
-            None,
-            b"one".to_vec(),
-        ))?;
+        assert_eq!(
+            registry.add(Artifact::new(
+                "files/item".to_string(),
+                ArtifactKind::File,
+                None,
+                b"one".to_vec(),
+            ))?,
+            ArtifactAddOutcome::Added
+        );
+        assert_eq!(
+            registry.add(Artifact::new(
+                "files/item".to_string(),
+                ArtifactKind::File,
+                None,
+                b"one".to_vec(),
+            ))?,
+            ArtifactAddOutcome::Unchanged
+        );
 
-        let result = registry.add(Artifact::new(
+        let outcome = registry.add(Artifact::new(
             "files/item".to_string(),
             ArtifactKind::File,
             None,
             b"two".to_vec(),
-        ));
-        assert!(matches!(result, Err(SparkError::SparkRuntimeError { .. })));
+        ))?;
+        assert_eq!(outcome, ArtifactAddOutcome::Conflict);
         Ok(())
     }
 
@@ -190,12 +203,13 @@ mod tests {
     fn cache_artifacts_can_be_replaced() -> SparkResult<()> {
         let registry = registry()?;
         for data in [b"one".to_vec(), b"two".to_vec()] {
-            registry.add(Artifact::new(
+            let outcome = registry.add(Artifact::new(
                 "cache/hash".to_string(),
                 ArtifactKind::Cache,
                 None,
                 data,
             ))?;
+            assert_eq!(outcome, ArtifactAddOutcome::Added);
         }
         assert_eq!(
             registry.get("cache/hash")?.as_ref().map(Artifact::data),

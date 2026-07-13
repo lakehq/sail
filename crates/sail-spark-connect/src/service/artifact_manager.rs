@@ -4,7 +4,7 @@ use datafusion::prelude::SessionContext;
 use futures::{Stream, StreamExt, pin_mut};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::artifact::{Artifact, ArtifactKind, ArtifactLimits};
+use crate::artifact::{Artifact, ArtifactAddOutcome, ArtifactKind, ArtifactLimits};
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::session::SparkSession;
 use crate::spark::connect::add_artifacts_request::{ArtifactChunk, Payload, SingleChunkArtifact};
@@ -281,29 +281,26 @@ pub(crate) async fn handle_add_artifacts(
         if !artifact.crc_successful {
             continue;
         }
+        let summary_name = artifact.name.original.clone();
         let artifact = Artifact::new(
             artifact.name.normalized,
             artifact.name.kind,
             artifact.name.archive_name,
             artifact.data,
         );
-        match spark.artifacts().add(artifact) {
-            Err(
-                error @ SparkError::SparkRuntimeError {
-                    condition: "ARTIFACT_ALREADY_EXISTS",
-                    ..
-                },
-            ) => {
+        match spark.artifacts().add(artifact)? {
+            ArtifactAddOutcome::Conflict => {
                 if first_conflict.is_none() {
-                    first_conflict = Some(error);
+                    first_conflict = Some(summary_name);
                 }
             }
-            Err(error) => return Err(error),
-            Ok(()) => {}
+            ArtifactAddOutcome::Added | ArtifactAddOutcome::Unchanged => {}
         }
     }
-    if let Some(error) = first_conflict {
-        return Err(error);
+    if let Some(name) = first_conflict {
+        return Err(SparkError::invalid(format!(
+            "artifact {name} already exists with different content"
+        )));
     }
     Ok(summaries)
 }
@@ -324,13 +321,13 @@ pub(crate) async fn handle_artifact_statuses(
 
 fn parse_artifact_name(name: &str) -> SparkResult<ParsedArtifactName> {
     if name.is_empty() || name.starts_with('/') || name.contains('\\') {
-        return Err(SparkError::invalid_artifact_path(name));
+        return Err(invalid_artifact_path(name));
     }
     let mut fragment_parts = name.split('#');
     let path = fragment_parts.next().unwrap_or_default();
     let fragment = fragment_parts.next();
     if fragment_parts.next().is_some() {
-        return Err(SparkError::invalid_artifact_path(name));
+        return Err(invalid_artifact_path(name));
     }
     let components: Vec<_> = path.split('/').collect();
     if components.len() < 2
@@ -338,19 +335,19 @@ fn parse_artifact_name(name: &str) -> SparkResult<ParsedArtifactName> {
             .iter()
             .any(|component| component.is_empty() || *component == "." || *component == "..")
     {
-        return Err(SparkError::invalid_artifact_path(name));
+        return Err(invalid_artifact_path(name));
     }
 
     let kind = match components[0] {
         "cache" => {
             if components.len() != 2 || fragment.is_some() {
-                return Err(SparkError::invalid_artifact_path(name));
+                return Err(invalid_artifact_path(name));
             }
             ArtifactKind::Cache
         }
         "pyfiles" => {
             if fragment.is_some() {
-                return Err(SparkError::invalid_artifact_path(name));
+                return Err(invalid_artifact_path(name));
             }
             let file_name = components.last().copied().unwrap_or_default();
             if ![".py", ".zip", ".egg", ".jar"]
@@ -365,7 +362,7 @@ fn parse_artifact_name(name: &str) -> SparkResult<ParsedArtifactName> {
         }
         "files" => {
             if fragment.is_some() {
-                return Err(SparkError::invalid_artifact_path(name));
+                return Err(invalid_artifact_path(name));
             }
             ArtifactKind::File
         }
@@ -385,7 +382,7 @@ fn parse_artifact_name(name: &str) -> SparkResult<ParsedArtifactName> {
                     || fragment == "."
                     || fragment == "..")
             {
-                return Err(SparkError::invalid_artifact_path(name));
+                return Err(invalid_artifact_path(name));
             }
             ArtifactKind::Archive
         }
@@ -417,6 +414,12 @@ fn parse_artifact_name(name: &str) -> SparkResult<ParsedArtifactName> {
         kind,
         archive_name,
     })
+}
+
+fn invalid_artifact_path(name: &str) -> SparkError {
+    SparkError::invalid(format!(
+        "invalid artifact path {name:?}: expected a safe relative path below a supported namespace"
+    ))
 }
 
 fn chunk_crc_matches(chunk: &ArtifactChunk) -> bool {
@@ -552,7 +555,7 @@ mod tests {
             single("files/later", b"later"),
         ];
         let result = handle_add_artifacts(&ctx, stream::iter(payloads.map(Ok))).await;
-        assert!(matches!(result, Err(SparkError::SparkRuntimeError { .. })));
+        assert!(matches!(result, Err(SparkError::InvalidArgument(_))));
         let spark = ctx.extension::<SparkSession>()?;
         assert!(spark.artifact("files/later")?.is_some());
         Ok(())
