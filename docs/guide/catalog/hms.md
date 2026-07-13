@@ -18,12 +18,11 @@ The following areas are supported:
 - HMS high-availability URI lists with endpoint failover.
 - Flat database namespaces.
 - Database, table, and view metadata stored in HMS.
-- Generic Hive storage formats: `parquet`, `csv`, `textfile`, `json`, `orc`, `avro`, and `delta` with the alias `deltalake`.
+- Table format resolution: Sail resolves the provider and location recorded in existing HMS metadata. Support for individual formats is documented in [Data Sources](../sources/index.md).
 
 The following areas are not implemented yet:
 
 - Hive ACID or transactional HMS APIs such as transaction heartbeats, locks, or write ID allocation.
-- Iceberg-in-HMS behavior.
 - Delegation-token authentication.
 
 Hive Metastore can be configured using the following options:
