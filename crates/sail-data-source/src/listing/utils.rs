@@ -234,10 +234,12 @@ pub async fn list_all_files<'a>(
         .boxed())
 }
 
-/// Returns `true` if the path is hidden per Spark's `InMemoryFileIndex.shouldFilterOut`.
+/// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
     let is_hidden = |name: &str| {
-        let exclude = (name.starts_with('_') && !name.contains('=')) || name.starts_with('.');
+        let exclude = (name.starts_with('_') && !name.contains('='))
+            || name.starts_with('.')
+            || name.ends_with("._COPYING_");
         let keep = name.starts_with("_common_metadata") || name.starts_with("_metadata");
         exclude && !keep
     };
@@ -272,6 +274,9 @@ mod tests {
         assert!(hidden("data/.hidden.json"));
         assert!(hidden("data/_temporary/0/part-0.parquet"));
         assert!(hidden("data/visible/_hidden/bad.json"));
+
+        // Files mid-copy (Hadoop `._COPYING_`) are excluded.
+        assert!(hidden("data/part-0.parquet._COPYING_"));
 
         // Spark keeps the Parquet summary files.
         assert!(!hidden("data/_metadata"));
