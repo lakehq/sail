@@ -1,5 +1,8 @@
 """Tests for the DataFrame ``inputFiles`` snapshot of constituent files."""
 
+import pytest
+from pyspark.sql.utils import AnalysisException
+
 
 def test_input_files_single_file(spark, tmp_path):
     """Return the single file backing a one-partition dataset."""
@@ -102,3 +105,12 @@ def test_input_files_honors_path_glob_filter(spark, tmp_path):
     files = df.inputFiles()
     assert len(files) == 1
     assert files[0].endswith("keep.png")
+
+
+def test_input_files_rejects_invalid_path_glob_filter(spark, tmp_path):
+    """A malformed ``pathGlobFilter`` surfaces as an error rather than being silently ignored."""
+    (tmp_path / "a.png").write_bytes(b"\x89PNG")
+    df = spark.read.format("binaryFile").option("pathGlobFilter", "[").load(str(tmp_path))
+
+    with pytest.raises(AnalysisException, match="path glob filter"):
+        df.inputFiles()

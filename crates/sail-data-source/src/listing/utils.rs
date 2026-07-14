@@ -234,17 +234,7 @@ pub async fn list_all_files<'a>(
         .boxed())
 }
 
-/// Returns `true` if the file is hidden per Spark's file index, considering every
-/// path component below the listing prefix as well as the file's own name (so that
-/// `_SUCCESS` markers, `.crc` checksums, files under hidden directories, and
-/// explicitly targeted hidden files are excluded, while a hidden listing root is
-/// left untouched).
-///
-/// The per-name rule mirrors `InMemoryFileIndex.shouldFilterOut` in Spark: a name is
-/// hidden when it starts with `_` (unless it contains `=`, i.e. a partition
-/// directory) or with `.`, except for names carrying the `_metadata` or
-/// `_common_metadata` prefix. The prefix (rather than exact) match is deliberate: Spark
-/// uses `startsWith` here, so we do too in order to stay bug-for-bug compatible.
+/// Returns `true` if the path is hidden per Spark's `InMemoryFileIndex.shouldFilterOut`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
     let is_hidden = |name: &str| {
         let exclude = (name.starts_with('_') && !name.contains('=')) || name.starts_with('.');
@@ -296,6 +286,10 @@ mod tests {
             &hidden_root,
             &Path::from("_root/part-0.parquet")
         ));
+
+        // A location outside the prefix falls back to judging its file name.
+        assert!(!hidden("outside/part-0.parquet"));
+        assert!(hidden("outside/_SUCCESS"));
 
         // An explicitly targeted hidden file is excluded.
         let file = ListingTableUrl::parse("file:///data/_data.json").unwrap();

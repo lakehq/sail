@@ -11,10 +11,7 @@ use sail_data_source::listing::table::ListingTableSource;
 use sail_data_source::listing::utils::list_all_files;
 use url::Url;
 
-/// Return a best-effort snapshot of the files that compose the given plan, mirroring
-/// Spark's `DataFrame.inputFiles`. The union of the files reported by each constituent
-/// relation is returned as deduplicated, percent-encoded URIs. Relations that are not
-/// backed by a file listing are ignored.
+/// Deduplicated, percent-encoded URIs of the files composing `plan` (Spark's `DataFrame.inputFiles`).
 pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<String>> {
     // Optimize first, like Spark, so eliminated scans (e.g. `WHERE false`) contribute no files.
     let state = ctx.state();
@@ -34,16 +31,11 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     })?;
 
     let mut files: Vec<String> = vec![];
-    // The same underlying scan can appear multiple times in a plan (e.g. `df.union(df)`).
-    // Listing each (path, filter) pair once avoids redundant and potentially expensive
-    // object-store calls; the final output is deduplicated anyway. The name filter is part
-    // of the key so the (contrived) case of one path read with two different filters still
-    // reports every matching file.
+    // List each (path, filter) once so a repeated scan (e.g. `df.union(df)`) isn't re-listed.
     let mut listed: HashSet<(String, Option<String>)> = HashSet::new();
 
     for source in &listing_sources {
-        // Honor a format-level name filter (e.g. binary `pathGlobFilter`).
-        // Hidden files are already excluded by `list_all_files`.
+        // Apply the format-level name filter (e.g. binary `pathGlobFilter`).
         let raw_glob = source.config().read_format.input_file_name_glob();
         let name_glob = raw_glob
             .map(Pattern::new)

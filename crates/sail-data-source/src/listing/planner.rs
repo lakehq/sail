@@ -357,8 +357,7 @@ async fn list_files_for_scan<'a>(
             let files =
                 pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
                     .await?;
-            // Skip hidden files (e.g. `_SUCCESS`, files under hidden directories) so that
-            // scans agree with `inputFiles` and schema sampling, matching Spark's file index.
+            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
             let files = files.try_filter(move |file| {
                 futures::future::ready(!has_hidden_path_component(
                     table_path,
