@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashSet;
 
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::logical_expr::{LogicalPlan, TableScan};
@@ -33,18 +34,28 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     })?;
 
     let mut files: Vec<String> = vec![];
+    // The same underlying scan can appear multiple times in a plan (e.g. `df.union(df)`).
+    // Listing each (path, filter) pair once avoids redundant and potentially expensive
+    // object-store calls; the final output is deduplicated anyway. The name filter is part
+    // of the key so the (contrived) case of one path read with two different filters still
+    // reports every matching file.
+    let mut listed: HashSet<(String, Option<String>)> = HashSet::new();
 
     for source in &listing_sources {
         // Honor a format-level name filter (e.g. binary `pathGlobFilter`).
         // Hidden files are already excluded by `list_all_files`.
-        let name_glob = source
-            .config()
-            .read_format
-            .input_file_name_glob()
+        let raw_glob = source.config().read_format.input_file_name_glob();
+        let name_glob = raw_glob
             .map(Pattern::new)
             .transpose()
             .map_err(|e| DataFusionError::Plan(format!("invalid path glob filter: {e}")))?;
         for table_path in &source.config().table_paths {
+            if !listed.insert((
+                table_path.as_str().to_string(),
+                raw_glob.map(str::to_string),
+            )) {
+                continue;
+            }
             let store = ctx.runtime_env().object_store(table_path)?;
             let base = Url::parse(table_path.object_store().as_str())
                 .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;

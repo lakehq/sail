@@ -242,8 +242,9 @@ pub async fn list_all_files<'a>(
 ///
 /// The per-name rule mirrors `InMemoryFileIndex.shouldFilterOut` in Spark: a name is
 /// hidden when it starts with `_` (unless it contains `=`, i.e. a partition
-/// directory) or with `.`, except for the Parquet summary files `_metadata` and
-/// `_common_metadata`.
+/// directory) or with `.`, except for names carrying the `_metadata` or
+/// `_common_metadata` prefix. The prefix (rather than exact) match is deliberate: Spark
+/// uses `startsWith` here, so we do too in order to stay bug-for-bug compatible.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
     let is_hidden = |name: &str| {
         let exclude = (name.starts_with('_') && !name.contains('=')) || name.starts_with('.');
@@ -262,6 +263,7 @@ pub fn can_be_evaluated_for_partition_pruning(
     !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }
 
+#[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
