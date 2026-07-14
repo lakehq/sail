@@ -89,16 +89,37 @@ pub async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
 ) -> Result<Vec<ListingFileSample<'a>>> {
+    let exact_file_metadata = vec![None; urls.len()];
+    sample_resolved_listing_files(ctx, urls, &exact_file_metadata).await
+}
+
+pub(crate) async fn sample_resolved_listing_files<'a>(
+    ctx: &dyn Session,
+    urls: &'a [ListingTableUrl],
+    exact_file_metadata: &[Option<ObjectMeta>],
+) -> Result<Vec<ListingFileSample<'a>>> {
+    if urls.len() != exact_file_metadata.len() {
+        return Err(internal_datafusion_err!(
+            "listing URL count does not match exact-file metadata count"
+        ));
+    }
     let mut samples = vec![];
-    for url in urls {
+    for (url, exact_file_metadata) in urls.iter().zip(exact_file_metadata) {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref())
-            .await?
+        let objects = if let Some(metadata) = exact_file_metadata {
             // Empty files can't contribute to schema / partition inference and may error when read.
-            .try_filter(|meta| futures::future::ready(meta.size > 0))
-            .take(10)
-            .try_collect()
-            .await?;
+            (metadata.size > 0)
+                .then(|| metadata.clone())
+                .into_iter()
+                .collect()
+        } else {
+            list_all_files(url, ctx, store.as_ref())
+                .await?
+                .try_filter(|meta| futures::future::ready(meta.size > 0))
+                .take(10)
+                .try_collect()
+                .await?
+        };
         samples.push(ListingFileSample {
             url,
             store,
