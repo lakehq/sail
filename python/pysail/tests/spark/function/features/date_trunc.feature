@@ -1,5 +1,9 @@
 @date_trunc
-Feature: DATE_TRUNC always returns a timestamp
+Feature: DATE_TRUNC and TRUNC truncate to a unit
+  # `date_trunc` (TruncTimestamp) and `trunc` (TruncDate) are different Spark expressions and do
+  # NOT accept the same units: `trunc` only truncates to date-level units, and anything finer --
+  # or unrecognized, or NULL -- is NULL, not an error. They are covered together because a single
+  # unit table in the plan builder governs both.
 
   Rule: date_trunc returns timestamp for every date-family input type
 
@@ -539,3 +543,138 @@ Feature: DATE_TRUNC always returns a timestamp
       Then query result
       | result |
       | 1      |
+
+  Rule: trunc truncates to a date-level unit
+
+    Scenario: trunc to the week
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'week') AS result
+        """
+      Then query result
+        | result     |
+        | 2019-07-29 |
+
+    Scenario: trunc to the quarter
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'quarter') AS result
+        """
+      Then query result
+        | result     |
+        | 2019-07-01 |
+
+    Scenario: trunc matches the unit case-insensitively
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'MoN') AS result
+        """
+      Then query result
+        | result     |
+        | 2019-08-01 |
+
+    Scenario: trunc accepts the yy alias
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'yy') AS result
+        """
+      Then query result
+        | result     |
+        | 2019-01-01 |
+
+    Scenario: trunc takes the date from a column
+      When query
+        """
+        SELECT trunc(d, 'month') AS result FROM VALUES (1, DATE '2019-08-04'), (2, DATE '2020-02-29') AS t(i, d) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 2019-08-01 |
+        | 2020-02-01 |
+
+  Rule: a unit finer than a day is NULL, not a truncation
+
+    # Sail reuses date_trunc's unit table, so it truncates to the day and returns the date itself.
+    @sail-bug
+    Scenario: trunc to the day is NULL
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'DAY') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    # Sail returns the date itself.
+    @sail-bug
+    Scenario: trunc to the hour is NULL
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'HOUR') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: an unrecognized or NULL unit is NULL, not an error
+
+    # Sail errors: Unsupported date_trunc granularity: 'bogus'.
+    @sail-bug
+    Scenario: trunc with an unrecognized unit is NULL
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', 'bogus') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    # Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8.
+    @sail-bug
+    Scenario: trunc with a NULL unit is NULL
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: the unit may come from a column
+
+    # The plan builder only matches `Expr::Literal`, so a unit in a column falls through to
+    # DataFusion's `date_trunc`, which demands a scalar. Sail errors: Granularity of `date_trunc`
+    # must be non-null scalar Utf8.
+    @sail-bug
+    Scenario: trunc resolves the unit of each row
+      When query
+        """
+        SELECT trunc(DATE '2019-08-04', c) AS result FROM VALUES (1, 'year'), (2, 'month'), (3, 'DAY'), (4, NULL) AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 2019-01-01 |
+        | 2019-08-01 |
+        | NULL       |
+        | NULL       |
+
+  Rule: the plan resolves the unit
+
+    # The plan is Sail's, so it cannot be compared against Spark. These snapshots exist to make the
+    # shape of the plan reviewable: how the unit is matched, and whether a literal unit still
+    # collapses to a single call once the units are enumerated in the plan.
+    @sail-only
+    Scenario: the plan for a literal unit
+      When query
+        """
+        EXPLAIN SELECT date_trunc('YEAR', ts) AS result FROM VALUES (TIMESTAMP '2024-05-15 13:45:30') AS t(ts)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: the plan for a unit coming from a column
+      When query
+        """
+        EXPLAIN SELECT date_trunc(c, ts) AS result FROM VALUES (TIMESTAMP '2024-05-15 13:45:30', 'YEAR') AS t(ts, c)
+        """
+      Then query plan matches snapshot
