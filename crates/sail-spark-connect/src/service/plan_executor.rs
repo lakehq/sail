@@ -652,6 +652,11 @@ fn resolve_local_checkpoint_storage_level(
             "localCheckpoint StorageLevel replication must be at least 1",
         ));
     }
+    if storage_level.replication >= 40 {
+        return Err(SparkError::invalid(
+            "localCheckpoint StorageLevel replication must be less than 40",
+        ));
+    }
     Ok(storage_level)
 }
 

@@ -1,20 +1,21 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Formatter;
 use std::sync::{Arc, RwLock};
 
+use datafusion::arrow::array::{Array, LargeBinaryArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    collect_partitioned, with_new_children_if_necessary,
+    with_new_children_if_necessary,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
@@ -26,13 +27,16 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use futures::StreamExt;
 use futures::future::BoxFuture;
 use object_store::ObjectMeta;
 use sail_common::spec;
 
-use crate::array::record_batch::{read_record_batches, write_record_batches};
+use crate::array::record_batch::read_record_batches;
+use crate::checkpoint::LocalCheckpointExec;
 use crate::extension::{SessionExtension, SessionExtensionAccessor};
 use crate::session::checkpoint::{CheckpointStoreService, ReliableCheckpoint};
+use crate::session::job::JobService;
 
 #[derive(Debug, Clone)]
 enum CachedRelationCleanup {
@@ -119,19 +123,26 @@ enum CachedRelationMaterialized {
     Reliable {
         schema: SchemaRef,
         checkpoint: ReliableCheckpoint,
+        properties: Arc<PlanProperties>,
     },
 }
 
 #[derive(Debug, Clone)]
 struct CachedRelationLocalMaterialized {
     schema: SchemaRef,
+    properties: Arc<PlanProperties>,
     memory_partitions: Option<Arc<Vec<Vec<RecordBatch>>>>,
-    serialized_memory_partitions: Option<Arc<Vec<Vec<u8>>>>,
+    serialized_memory_partitions: Option<Arc<Vec<Vec<Vec<u8>>>>>,
     disk_partitions: Option<Arc<Vec<CachedRelationDiskPartition>>>,
 }
 
 #[derive(Debug, Clone)]
 struct CachedRelationDiskPartition {
+    chunks: Vec<CachedRelationDiskChunk>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRelationDiskChunk {
     files: Vec<RefCountedTempFile>,
 }
 
@@ -147,6 +158,104 @@ enum CachedRelationPendingTarget {
     Reliable { path: String },
 }
 
+#[derive(Debug)]
+pub struct CachedRelationExec {
+    input: Arc<dyn ExecutionPlan>,
+    properties: Arc<PlanProperties>,
+    relation_lease: Option<CachedRelation>,
+}
+
+impl CachedRelationExec {
+    pub fn new(input: Arc<dyn ExecutionPlan>, properties: Arc<PlanProperties>) -> Self {
+        Self {
+            input,
+            properties,
+            relation_lease: None,
+        }
+    }
+
+    fn with_relation_lease(
+        input: Arc<dyn ExecutionPlan>,
+        properties: Arc<PlanProperties>,
+        relation: CachedRelation,
+    ) -> Self {
+        Self {
+            input,
+            properties,
+            relation_lease: Some(relation),
+        }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+}
+
+impl DisplayAs for CachedRelationExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "CachedRelationExec")
+    }
+}
+
+impl ExecutionPlan for CachedRelationExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.len() != 1 {
+            return Err(internal_datafusion_err!(
+                "CachedRelationExec must have exactly one child"
+            ));
+        }
+        Ok(Arc::new(Self {
+            input: Arc::clone(&children[0]),
+            properties: Arc::clone(&self.properties),
+            relation_lease: self.relation_lease.clone(),
+        }))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let stream = self.input.execute(partition, context)?;
+        let Some(relation_lease) = self.relation_lease.clone() else {
+            return Ok(stream);
+        };
+        let schema = stream.schema();
+        let stream = stream.map(move |batch| {
+            let _ = &relation_lease;
+            batch
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.input.partition_statistics(partition)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PendingCachedRelationExec {
     relation_id: String,
@@ -156,14 +265,7 @@ struct PendingCachedRelationExec {
 
 impl PendingCachedRelationExec {
     fn new(relation_id: String, relation: CachedRelation, plan: Arc<dyn ExecutionPlan>) -> Self {
-        let schema = plan.schema();
-        let partition_count = plan.output_partitioning().partition_count();
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(partition_count),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        ));
+        let properties = Arc::clone(plan.properties());
         Self {
             relation_id,
             relation,
@@ -288,7 +390,14 @@ impl CachedRelation {
     pub async fn to_physical_plan(&self, relation_id: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let data = self.data.lock().await;
         match &*data {
-            CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
+            CachedRelationData::Materialized(materialized) => {
+                let input = materialized.to_physical_plan().await?;
+                Ok(Arc::new(CachedRelationExec::with_relation_lease(
+                    input,
+                    materialized.properties(),
+                    self.clone(),
+                )))
+            }
             CachedRelationData::Pending(pending) => Ok(Arc::new(PendingCachedRelationExec::new(
                 relation_id.to_string(),
                 self.clone(),
@@ -303,26 +412,52 @@ impl CachedRelation {
             *data = pending.materialize(ctx).await?;
         }
         match &*data {
-            CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
+            CachedRelationData::Materialized(materialized) => {
+                let input = materialized.to_physical_plan().await?;
+                Ok(Arc::new(CachedRelationExec::with_relation_lease(
+                    input,
+                    materialized.properties(),
+                    self.clone(),
+                )))
+            }
             CachedRelationData::Pending(_) => Err(internal_datafusion_err!(
                 "cached relation materialization did not complete"
             )),
         }
     }
+
+    fn is_exclusively_owned(&self) -> bool {
+        Arc::strong_count(&self.data) == 1
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct CachedRelationRegistry {
-    relations: RwLock<HashMap<String, CachedRelation>>,
+    state: RwLock<CachedRelationRegistryState>,
+}
+
+#[derive(Debug, Default)]
+struct CachedRelationRegistryState {
+    relations: HashMap<String, CachedRelation>,
+    retired: Vec<(String, CachedRelation)>,
 }
 
 impl CachedRelationRegistry {
     pub fn insert(&self, relation_id: String, relation: CachedRelation) -> Result<()> {
-        let mut relations = self
-            .relations
+        let mut state = self
+            .state
             .write()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        match relations.entry(relation_id) {
+        if state
+            .retired
+            .iter()
+            .any(|(retired_id, _)| retired_id == &relation_id)
+        {
+            return Err(internal_datafusion_err!(
+                "cached relation already exists: {relation_id}"
+            ));
+        }
+        match state.relations.entry(relation_id) {
             Entry::Occupied(entry) => Err(internal_datafusion_err!(
                 "cached relation already exists: {}",
                 entry.key()
@@ -335,27 +470,51 @@ impl CachedRelationRegistry {
     }
 
     pub fn get(&self, relation_id: &str) -> Result<Option<CachedRelation>> {
-        let relations = self
-            .relations
+        let state = self
+            .state
             .read()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(relations.get(relation_id).cloned())
+        Ok(state.relations.get(relation_id).cloned())
     }
 
     pub fn remove(&self, relation_id: &str) -> Result<Option<CachedRelation>> {
-        let mut relations = self
-            .relations
+        let mut state = self
+            .state
             .write()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(relations.remove(relation_id))
+        Ok(state.relations.remove(relation_id))
+    }
+
+    fn retire(&self, relation_id: String, relation: CachedRelation) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        state.retired.push((relation_id, relation));
+        Ok(())
+    }
+
+    fn take_cleanup_ready(&self) -> Result<Vec<(String, CachedRelation)>> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let retired = std::mem::take(&mut state.retired);
+        let (ready, retained) = retired
+            .into_iter()
+            .partition(|(_, relation)| relation.is_exclusively_owned());
+        state.retired = retained;
+        Ok(ready)
     }
 
     pub fn drain(&self) -> Result<Vec<(String, CachedRelation)>> {
-        let mut relations = self
-            .relations
+        let mut state = self
+            .state
             .write()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(relations.drain().collect())
+        let mut relations: Vec<_> = state.relations.drain().collect();
+        relations.append(&mut state.retired);
+        Ok(relations)
     }
 }
 
@@ -396,6 +555,13 @@ impl CachedRelationMaterialized {
         }
     }
 
+    fn properties(&self) -> Arc<PlanProperties> {
+        match self {
+            Self::Local(local) => Arc::clone(&local.properties),
+            Self::Reliable { properties, .. } => Arc::clone(properties),
+        }
+    }
+
     fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CachedRelationNode::try_new(
@@ -408,7 +574,9 @@ impl CachedRelationMaterialized {
     async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         match self {
             Self::Local(local) => local.to_physical_plan().await,
-            Self::Reliable { schema, checkpoint } => create_arrow_checkpoint_scan(
+            Self::Reliable {
+                schema, checkpoint, ..
+            } => create_arrow_checkpoint_scan(
                 checkpoint.object_store_url().clone(),
                 checkpoint.object_meta().to_vec(),
                 schema,
@@ -421,7 +589,9 @@ impl CachedRelationLocalMaterialized {
     async fn try_new(
         ctx: &SessionContext,
         schema: SchemaRef,
-        partitions: Vec<Vec<RecordBatch>>,
+        properties: Arc<PlanProperties>,
+        partition_count: usize,
+        mut stream: SendableRecordBatchStream,
         storage_level: spec::StorageLevel,
     ) -> Result<Self> {
         let use_memory = storage_level.use_memory;
@@ -433,55 +603,125 @@ impl CachedRelationLocalMaterialized {
                 "local checkpoint storage level must use memory or disk"
             ));
         }
+        if !(1..40).contains(&storage_level.replication) {
+            return Err(internal_datafusion_err!(
+                "local checkpoint storage level replication must be between 1 and 39"
+            ));
+        }
 
+        let mut memory_partitions = if use_deserialized_memory {
+            Some(partition_maps(partition_count))
+        } else {
+            None
+        };
         let mut serialized_partitions = if use_serialized_memory {
-            Some(Vec::with_capacity(partitions.len()))
+            Some(partition_maps(partition_count))
         } else {
             None
         };
         let mut disk_partitions = if use_disk {
-            Some(Vec::with_capacity(partitions.len()))
+            Some(partition_maps(partition_count))
         } else {
             None
         };
+        let mut sequences: Vec<BTreeSet<u64>> =
+            (0..partition_count).map(|_| BTreeSet::new()).collect();
 
-        for partition in &partitions {
-            let bytes = if use_serialized_memory || use_disk {
-                Some(write_record_batches(partition, schema.as_ref())?)
-            } else {
-                None
-            };
-
-            if let Some(serialized_partitions) = serialized_partitions.as_mut() {
-                let bytes = bytes
-                    .as_ref()
-                    .ok_or_else(|| internal_datafusion_err!("missing serialized partition"))?;
-                serialized_partitions.push(bytes.clone());
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            if batch.num_columns() != 3 {
+                return Err(internal_datafusion_err!(
+                    "local checkpoint returned {} columns instead of 3",
+                    batch.num_columns()
+                ));
             }
+            let partition_array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| internal_datafusion_err!("invalid checkpoint partition column"))?;
+            let sequence_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| internal_datafusion_err!("invalid checkpoint sequence column"))?;
+            let data_array = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .ok_or_else(|| internal_datafusion_err!("invalid checkpoint data column"))?;
 
-            if let Some(disk_partitions) = disk_partitions.as_mut() {
-                let bytes = bytes
-                    .as_ref()
-                    .ok_or_else(|| internal_datafusion_err!("missing serialized partition"))?;
-                let replication = storage_level.replication.max(1);
-                let mut files = Vec::with_capacity(replication);
-                for _ in 0..replication {
-                    files.push(write_disk_partition(ctx, bytes).await?);
+            for row in 0..batch.num_rows() {
+                if partition_array.is_null(row)
+                    || sequence_array.is_null(row)
+                    || data_array.is_null(row)
+                {
+                    return Err(internal_datafusion_err!(
+                        "local checkpoint returned a null metadata value"
+                    ));
                 }
-                disk_partitions.push(CachedRelationDiskPartition { files });
+                let partition = usize::try_from(partition_array.value(row)).map_err(|_| {
+                    internal_datafusion_err!("local checkpoint partition index is too large")
+                })?;
+                if partition >= partition_count {
+                    return Err(internal_datafusion_err!(
+                        "local checkpoint returned invalid partition {partition}"
+                    ));
+                }
+                let sequence = sequence_array.value(row);
+                if !sequences[partition].insert(sequence) {
+                    return Err(internal_datafusion_err!(
+                        "local checkpoint returned duplicate partition {partition} sequence {sequence}"
+                    ));
+                }
+                let bytes = data_array.value(row);
+
+                if let Some(partitions) = memory_partitions.as_mut() {
+                    partitions[partition].insert(sequence, read_record_batches(bytes)?);
+                }
+                if let Some(partitions) = serialized_partitions.as_mut() {
+                    partitions[partition].insert(sequence, bytes.to_vec());
+                }
+                if let Some(partitions) = disk_partitions.as_mut() {
+                    partitions[partition].insert(
+                        sequence,
+                        write_disk_chunk(ctx, bytes, storage_level.replication).await?,
+                    );
+                }
             }
         }
 
-        let memory_partitions = if use_deserialized_memory {
-            Some(Arc::new(partitions))
-        } else {
-            None
-        };
-        let serialized_memory_partitions = serialized_partitions.map(Arc::new);
-        let disk_partitions = disk_partitions.map(Arc::new);
+        validate_partition_sequences(&sequences)?;
+        let memory_partitions = memory_partitions.map(|partitions| {
+            Arc::new(
+                partitions
+                    .into_iter()
+                    .map(|partition| partition.into_values().flatten().collect())
+                    .collect(),
+            )
+        });
+        let serialized_memory_partitions = serialized_partitions.map(|partitions| {
+            Arc::new(
+                partitions
+                    .into_iter()
+                    .map(|partition| partition.into_values().collect())
+                    .collect(),
+            )
+        });
+        let disk_partitions = disk_partitions.map(|partitions| {
+            Arc::new(
+                partitions
+                    .into_iter()
+                    .map(|partition| CachedRelationDiskPartition {
+                        chunks: partition.into_values().collect(),
+                    })
+                    .collect(),
+            )
+        });
 
         Ok(Self {
             schema,
+            properties,
             memory_partitions,
             serialized_memory_partitions,
             disk_partitions,
@@ -500,10 +740,15 @@ impl CachedRelationLocalMaterialized {
             return Ok(partitions.as_ref().clone());
         }
         if let Some(partitions) = &self.serialized_memory_partitions {
-            return partitions
-                .iter()
-                .map(|bytes| read_record_batches(bytes))
-                .collect();
+            let mut batches = Vec::with_capacity(partitions.len());
+            for partition in partitions.iter() {
+                let mut partition_batches = vec![];
+                for bytes in partition {
+                    partition_batches.extend(read_record_batches(bytes)?);
+                }
+                batches.push(partition_batches);
+            }
+            return Ok(batches);
         }
         if let Some(partitions) = &self.disk_partitions {
             let mut batches = Vec::with_capacity(partitions.len());
@@ -520,6 +765,16 @@ impl CachedRelationLocalMaterialized {
 
 impl CachedRelationDiskPartition {
     async fn read(&self) -> Result<Vec<RecordBatch>> {
+        let mut batches = vec![];
+        for chunk in &self.chunks {
+            batches.extend(chunk.read().await?);
+        }
+        Ok(batches)
+    }
+}
+
+impl CachedRelationDiskChunk {
+    async fn read(&self) -> Result<Vec<RecordBatch>> {
         let mut last_error = None;
         for file in &self.files {
             match tokio::fs::read(file.path())
@@ -532,9 +787,31 @@ impl CachedRelationDiskPartition {
             }
         }
         Err(last_error.unwrap_or_else(|| {
-            DataFusionError::Internal("cached relation disk partition has no files".to_string())
+            DataFusionError::Internal("cached relation disk chunk has no files".to_string())
         }))
     }
+}
+
+fn partition_maps<T>(partition_count: usize) -> Vec<BTreeMap<u64, T>> {
+    (0..partition_count).map(|_| BTreeMap::new()).collect()
+}
+
+fn validate_partition_sequences(sequences: &[BTreeSet<u64>]) -> Result<()> {
+    for (partition, sequences) in sequences.iter().enumerate() {
+        if sequences.is_empty() {
+            return Err(internal_datafusion_err!(
+                "local checkpoint did not return partition {partition}"
+            ));
+        }
+        let expected = 0..u64::try_from(sequences.len())
+            .map_err(|_| internal_datafusion_err!("checkpoint sequence count is too large"))?;
+        if !sequences.iter().copied().eq(expected) {
+            return Err(internal_datafusion_err!(
+                "local checkpoint returned incomplete sequence for partition {partition}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn materialize_cached_relations<'a>(
@@ -562,9 +839,22 @@ async fn materialize_local_checkpoint(
 ) -> Result<CachedRelationData> {
     let plan = materialize_cached_relations(ctx, plan).await?;
     let schema = plan.schema();
-    let partitions = collect_checkpoint_partitions(ctx, plan).await?;
-    let materialized =
-        CachedRelationLocalMaterialized::try_new(ctx, schema, partitions, storage_level).await?;
+    let properties = checkpoint_plan_properties(&plan);
+    let partition_count = plan.output_partitioning().partition_count();
+    let service = ctx.extension::<JobService>()?;
+    let stream = service
+        .runner()
+        .execute(ctx, Arc::new(LocalCheckpointExec::new(plan)))
+        .await?;
+    let materialized = CachedRelationLocalMaterialized::try_new(
+        ctx,
+        schema,
+        properties,
+        partition_count,
+        stream,
+        storage_level,
+    )
+    .await?;
     Ok(CachedRelationData::Materialized(
         CachedRelationMaterialized::Local(materialized),
     ))
@@ -577,6 +867,7 @@ async fn materialize_reliable_checkpoint(
 ) -> Result<CachedRelationData> {
     let plan = materialize_cached_relations(ctx, plan).await?;
     let schema = plan.schema();
+    let properties = checkpoint_plan_properties(&plan);
     let service = ctx.extension::<CheckpointStoreService>()?;
     let checkpoint = match service
         .write_reliable_checkpoint(ctx, plan, path, Arc::clone(&schema))
@@ -589,7 +880,20 @@ async fn materialize_reliable_checkpoint(
         }
     };
     Ok(CachedRelationData::Materialized(
-        CachedRelationMaterialized::Reliable { schema, checkpoint },
+        CachedRelationMaterialized::Reliable {
+            schema,
+            checkpoint,
+            properties,
+        },
+    ))
+}
+
+fn checkpoint_plan_properties(plan: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
+    Arc::new(PlanProperties::new(
+        plan.properties().eq_properties.clone(),
+        plan.output_partitioning().clone(),
+        EmissionType::Incremental,
+        Boundedness::Bounded,
     ))
 }
 
@@ -638,6 +942,10 @@ pub async fn remove_cached_relation(ctx: &SessionContext, relation_id: &str) -> 
     let Some(relation) = registry.remove(relation_id)? else {
         return Ok(());
     };
+    if !relation.is_exclusively_owned() {
+        registry.retire(relation_id.to_string(), relation)?;
+        return cleanup_retired_cached_relations(ctx, &registry).await;
+    }
     if let Err(cleanup_error) = cleanup_cached_relation(ctx, &relation).await {
         if let Err(restore_error) = registry.insert(relation_id.to_string(), relation) {
             return Err(internal_datafusion_err!(
@@ -645,6 +953,34 @@ pub async fn remove_cached_relation(ctx: &SessionContext, relation_id: &str) -> 
             ));
         }
         return Err(cleanup_error);
+    }
+    drop(relation);
+    cleanup_retired_cached_relations(ctx, &registry).await
+}
+
+async fn cleanup_retired_cached_relations(
+    ctx: &SessionContext,
+    registry: &CachedRelationRegistry,
+) -> Result<()> {
+    let relations = registry.take_cleanup_ready()?;
+    let mut errors = vec![];
+    for (relation_id, relation) in relations {
+        if let Err(cleanup_error) = cleanup_cached_relation(ctx, &relation).await {
+            if let Err(restore_error) = registry.retire(relation_id.clone(), relation) {
+                errors.push(format!(
+                    "{relation_id}: {cleanup_error}; additionally failed to retain it for retry: {restore_error}"
+                ));
+            } else {
+                errors.push(format!("{relation_id}: {cleanup_error}"));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(internal_datafusion_err!(
+            "failed to clean {} retired cached relation(s): {}",
+            errors.len(),
+            errors.join("; ")
+        ));
     }
     Ok(())
 }
@@ -674,14 +1010,19 @@ pub async fn cleanup_cached_relations(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
-async fn collect_checkpoint_partitions(
+async fn write_disk_chunk(
     ctx: &SessionContext,
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Vec<Vec<RecordBatch>>> {
-    collect_partitioned(plan, ctx.task_ctx()).await
+    bytes: &[u8],
+    replication: usize,
+) -> Result<CachedRelationDiskChunk> {
+    let mut files = Vec::with_capacity(replication);
+    for _ in 0..replication {
+        files.push(write_disk_file(ctx, bytes).await?);
+    }
+    Ok(CachedRelationDiskChunk { files })
 }
 
-async fn write_disk_partition(ctx: &SessionContext, bytes: &[u8]) -> Result<RefCountedTempFile> {
+async fn write_disk_file(ctx: &SessionContext, bytes: &[u8]) -> Result<RefCountedTempFile> {
     let mut file = ctx
         .runtime_env()
         .disk_manager

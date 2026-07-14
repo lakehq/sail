@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
+use datafusion::object_store::ObjectStoreExt;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::write_record_batches_file;
+use sail_common_datafusion::checkpoint::ReliableCheckpointExec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
+use sail_common_datafusion::session::job::JobService;
 use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
 
 #[derive(Debug, Default)]
@@ -24,23 +29,80 @@ impl CheckpointStore for ObjectStoreCheckpointStore {
     ) -> Result<ReliableCheckpoint> {
         let runtime_env = ctx.runtime_env();
         let checkpoint_path = resolve_object_store_path(runtime_env.as_ref(), path)?;
-        let streams = execute_stream_partitioned(plan, ctx.task_ctx())?;
-        let mut files = vec![];
-
-        for (file_index, mut stream) in streams.into_iter().enumerate() {
-            let mut batches = vec![];
-            while let Some(batch) = stream.next().await {
-                batches.push(batch?);
-            }
-            let bytes = write_record_batches_file(&batches, schema.as_ref())?;
-            let file_path = checkpoint_path.child(&format!("part-{file_index:05}.arrow"));
-            files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);
-        }
-
-        if files.is_empty() {
+        let partition_count = plan.output_partitioning().partition_count();
+        if partition_count == 0 {
             let bytes = write_record_batches_file(&[], schema.as_ref())?;
             let file_path = checkpoint_path.child("part-00000.arrow");
-            files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);
+            let file = checkpoint_path.put_bytes(&file_path, bytes).await?;
+            return Ok(ReliableCheckpoint::new(
+                checkpoint_path.object_store_url().clone(),
+                vec![file],
+            ));
+        }
+
+        let checkpoint_exec = ReliableCheckpointExec::new(
+            plan,
+            checkpoint_path.object_store_url().clone(),
+            checkpoint_path.prefix().clone(),
+        );
+        let service = ctx.extension::<JobService>()?;
+        let mut stream = service
+            .runner()
+            .execute(ctx, Arc::new(checkpoint_exec))
+            .await?;
+        let mut completed = vec![false; partition_count];
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            if batch.num_columns() != 1 {
+                return Err(internal_datafusion_err!(
+                    "reliable checkpoint returned {} columns instead of 1",
+                    batch.num_columns()
+                ));
+            }
+            let partitions = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("invalid reliable checkpoint partition column")
+                })?;
+            for row in 0..batch.num_rows() {
+                if partitions.is_null(row) {
+                    return Err(internal_datafusion_err!(
+                        "reliable checkpoint returned a null partition"
+                    ));
+                }
+                let partition = usize::try_from(partitions.value(row)).map_err(|_| {
+                    internal_datafusion_err!("reliable checkpoint partition index is too large")
+                })?;
+                let Some(done) = completed.get_mut(partition) else {
+                    return Err(internal_datafusion_err!(
+                        "reliable checkpoint returned invalid partition {partition}"
+                    ));
+                };
+                if std::mem::replace(done, true) {
+                    return Err(internal_datafusion_err!(
+                        "reliable checkpoint returned duplicate partition {partition}"
+                    ));
+                }
+            }
+        }
+
+        let mut files = Vec::with_capacity(partition_count);
+        for (partition, completed) in completed.into_iter().enumerate() {
+            if !completed {
+                return Err(internal_datafusion_err!(
+                    "reliable checkpoint did not return partition {partition}"
+                ));
+            }
+            let file_path = checkpoint_path.child(&format!("part-{partition:05}.arrow"));
+            files.push(
+                checkpoint_path
+                    .store()
+                    .head(&file_path)
+                    .await
+                    .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?,
+            );
         }
 
         Ok(ReliableCheckpoint::new(
