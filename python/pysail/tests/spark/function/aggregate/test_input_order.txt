@@ -1,0 +1,195 @@
+>>> from pyspark.sql import functions as F
+>>> from pyspark.sql import Window
+>>> import pandas as pd
+>>> from pyspark.sql.functions import pandas_udf
+>>> import re
+>>> import tempfile
+
+>>> df = spark.createDataFrame(
+...     [("Alice", 2), ("Bob", 5), ("Alice", None)],
+...     ("name", "age"),
+... )
+>>> result = (
+...     df.orderBy("age")
+...     .select("name", "age")
+...     .groupBy("name")
+...     .agg(F.first("age"))
+... )
+>>> sorted(result.collect(), key=lambda r: r.name)
+[Row(name='Alice', first(age)=None), Row(name='Bob', first(age)=5)]
+
+>>> result = (
+...     df.orderBy("age")
+...     .select("name", "age")
+...     .groupBy("name")
+...     .agg(F.last("age"))
+... )
+>>> sorted(result.collect(), key=lambda r: r.name)
+[Row(name='Alice', last(age)=2), Row(name='Bob', last(age)=5)]
+
+>>> df = spark.createDataFrame([(30, 2, 2), (10, 5, -20), (20, 1, 1)], ("v", "a", "b"))
+>>> df.orderBy(df.a + df.b).select("v", "a", "b").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> spark.sql("""WITH sorted AS (SELECT * FROM VALUES (10,'b'),(20,'a'),(30,'d'),(40,'c') AS t(v, k) ORDER BY k) SELECT first(v) AS result FROM sorted""").collect()
+[Row(result=20)]
+
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k"))
+>>> df.orderBy("k").groupBy().agg(F.collect_list("v")).collect()
+[Row(collect_list(v)=[10, 20, 30])]
+
+>>> df = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> w = Window.partitionBy("name")
+>>> result = df.orderBy("age").select("name", "age", F.first("age").over(w).alias("f"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, f=None), Row(name='Alice', age=2, f=None), Row(name='Bob', age=5, f=5)]
+
+>>> df = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> w = Window.partitionBy("name")
+>>> result = df.orderBy("age").select("name", "age", F.last("age").over(w).alias("l"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, l=2), Row(name='Alice', age=2, l=2), Row(name='Bob', age=5, l=5)]
+
+>>> df = spark.createDataFrame([(1, 'a'), (2, 'a'), (3, 'a')], ("v", "k"))
+>>> df.orderBy("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]
+
+>>> a = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k"))
+>>> b = spark.createDataFrame([(4, 'd'), (3, 'c')], ("v", "k"))
+>>> a.union(b).orderBy("k").groupBy().agg(F.first("v"), F.last("v")).collect()
+[Row(first(v)=1, last(v)=4)]
+
+>>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k"))
+>>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
+>>> left.join(right, "k").orderBy(F.desc("k")).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=2)]
+
+>>> df = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> w = Window.partitionBy("name")
+
+>>> result = df.orderBy("age").select("name", "age", F.first("age").over(w).alias("f"), F.last("age").over(w).alias("l"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, f=None, l=2), Row(name='Alice', age=2, f=None, l=2), Row(name='Bob', age=5, f=5, l=5)]
+
+>>> result = df.orderBy("age").select("name", "age", (F.last("age").over(w) + F.last("age").over(w)).alias("s"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, s=4), Row(name='Alice', age=2, s=4), Row(name='Bob', age=5, s=10)]
+
+>>> result = df.orderBy("age").select("name", "age", F.sum("age").over(w).alias("sm"), F.last("age").over(w).alias("l"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, sm=2, l=2), Row(name='Alice', age=2, sm=2, l=2), Row(name='Bob', age=5, sm=5, l=5)]
+
+>>> spark.sql("SELECT listagg(k) AS s FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY v)").collect()
+[Row(s='abc')]
+
+>>> spark.sql("SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30, 1), (10, 1), (20, 2) AS t(v, g) ORDER BY v) GROUP BY g HAVING first(v) > 15").collect()
+[Row(g=2, f=20)]
+
+>>> spark.sql("SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30, 1), (10, 1), (20, 2) AS t(v, g) ORDER BY v) GROUP BY CUBE(g) ORDER BY g NULLS FIRST").collect()
+[Row(g=None, f=10), Row(g=1, f=10), Row(g=2, f=20)]
+
+>>> w2 = Window.partitionBy("name").orderBy("age")
+>>> result = df.orderBy("age").select("name", "age", F.nth_value("age", 2).over(w2).alias("n"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, n=None), Row(name='Alice', age=2, n=2), Row(name='Bob', age=5, n=None)]
+
+>>> pdf = spark.createDataFrame([(30, 'c', 'x'), (10, 'a', 'x'), (20, 'b', 'y')], ("v", "k", "p"))
+>>> pdf.orderBy("k").groupBy().pivot("p").agg(F.first("v")).collect()
+[Row(x=10, y=20)]
+
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k"))
+>>> df.alias("inner").orderBy("k").alias("outer").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> df.orderBy("k").select("v").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> dfw = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> r = dfw.orderBy("age").select("name", "age", F.sum("age").over(w).alias("sm"), F.first("age").over(w).alias("f"), F.last("age").over(w).alias("l"))
+>>> sorted(r.collect(), key=lambda x: (x.name, x.age if x.age is not None else -1))
+[Row(name='Alice', age=None, sm=2, f=None, l=2), Row(name='Alice', age=2, sm=2, f=None, l=2), Row(name='Bob', age=5, sm=5, f=5, l=5)]
+
+>>> spark.sql("SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)").collect()
+[Row(f=10, l=30)]
+
+>>> @pandas_udf("long")
+... def first_arrival(v: pd.Series) -> int:
+...     return int(v.iloc[0])
+>>> df.orderBy("k").groupBy().agg(first_arrival("v").alias("fa")).collect()
+[Row(fa=10)]
+
+>>> dft = spark.createDataFrame([(1, 'a'), (2, 'a'), (3, 'a')], ("v", "k")).repartition(3)
+>>> dft.orderBy("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]
+
+>>> df = spark.createDataFrame([(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g"),).coalesce(1)
+>>> w_desc = Window.partitionBy("g").orderBy(F.desc("k"))
+>>> w_none = Window.partitionBy("g")
+>>> result = df.orderBy("k").select("v", "k", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
+>>> sorted(result.collect(), key=lambda row: row.k)
+[Row(v=10, k='a', s=60, l=10), Row(v=20, k='b', s=50, l=10), Row(v=30, k='c', s=30, l=10)]
+
+>>> result = df.orderBy("k").select(F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
+>>> result.collect()
+[Row(s=30, l=10), Row(s=50, l=10), Row(s=60, l=10)]
+
+>>> result = df.orderBy("k").select(
+...     "*",
+...     F.sum("v").over(w_desc).alias("s"),
+...     F.last("v").over(w_none).alias("l"),
+... )
+>>> result.columns
+['v', 'k', 'g', 's', 'l']
+>>> result.select("*").columns
+['v', 'k', 'g', 's', 'l']
+>>> with tempfile.TemporaryDirectory() as path:
+...     result.write.mode("overwrite").parquet(path)
+...     written_columns = spark.read.parquet(path).columns
+>>> written_columns
+['v', 'k', 'g', 's', 'l']
+
+>>> stable = spark.createDataFrame([(30, "c"), (10, "a"), (20, "b")], ("v", "k")).coalesce(1)
+>>> stable.alias("inner").orderBy("k").alias("outer").select("v").groupBy().agg(F.first("v").alias("f"), F.last("v").alias("l")).collect()
+[Row(f=10, l=30)]
+
+>>> stable.orderBy("k").groupBy().agg(F.count("*").alias("n"), F.first("v").alias("f"), F.last("v").alias("l")).collect()
+[Row(n=3, f=10, l=30)]
+
+>>> spark.sql("SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(20,'b'),(10,'a'),(20,'d') AS t(v, k) ORDER BY k)").collect()
+[Row(f=10, l=20)]
+
+>>> spark.sql("SELECT skewness(v) AS sk FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").first().sk != 0.0
+True
+
+>>> stable.orderBy("k").groupBy().agg(first_arrival("v").alias("fa")).collect()
+[Row(fa=10)]
+
+>>> explain = spark.sql("EXPLAIN EXTENDED SELECT first(v) FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)").first()[0]
+>>> re.search(r"first(?:_value)?\([^\n]* ORDER BY \[", explain, re.IGNORECASE) is None
+True
+
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k"))
+>>> df.orderBy("k").withColumn("i", F.monotonically_increasing_id()).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+>>> df.orderBy("k").withColumn("p", F.spark_partition_id()).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> dfe = spark.createDataFrame([(30, 'c', [1, 2]), (10, 'a', [3]), (20, 'b', [4, 5])], ("v", "k", "arr"))
+>>> dfe.orderBy("k").select("v", F.explode("arr").alias("e")).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+# Each test in this group is a different edge case
+>>> spark.sql("SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(a=0.3333333333333333)]
+>>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(s=1.0)]
+
+# FIXME: These test cases fail. DataFusion's sum/avg reduces an entire Arrow batch using SIMD/tree-style summation.
+#   Spark adds each value sequentially, which is extremely slow.
+#   We need to find a way to match Spark's behavior while retaining the performance of SIMD/tree-style summation.
+# >>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'a'),(CAST(-1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c') AS t(v, k) ORDER BY k)").collect()
+# [Row(s=1.0)]
+# >>> spark.sql("SELECT sum(v) AS s FROM VALUES (CAST(-1e16 AS DOUBLE)),(CAST(1e16 AS DOUBLE)),(CAST(1.0 AS DOUBLE)) AS t(v)").collect()
+# [Row(s=1.0)]
+# >>> spark.sql("SELECT sum(v) AS s FROM VALUES (CAST(-1e16 AS DOUBLE)),(CAST(1.0 AS DOUBLE)),(CAST(1e16 AS DOUBLE)) AS t(v)").collect()
+# [Row(s=0.0)]
