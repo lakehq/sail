@@ -219,6 +219,23 @@ def test_dataframe_checkpoint_lazy(spark, tmp_path):
         spark.conf.unset("spark.checkpoint.dir")
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
+def test_dataframe_checkpoint_lazy_retains_checkpoint_dependency(spark, tmp_path):
+    checkpoint_path = tmp_path / "checkpoints"
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+    try:
+        first = spark.range(0, 10).checkpoint()
+        second = first.checkpoint(eager=False)
+
+        del first
+        gc.collect()
+
+        assert second.count() == 10  # noqa: PLR2004
+        assert [row.id for row in second.sort("id").collect()] == list(range(10))
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific lazy checkpoint explain behavior")
 def test_dataframe_checkpoint_lazy_explain_does_not_materialize(spark, tmp_path):
     checkpoint_path = tmp_path / "checkpoints"
@@ -328,6 +345,33 @@ def test_dataframe_checkpoint_preserves_empty_partition_ids(spark, tmp_path, loc
     assert actual == expected
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint physical properties")
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("local", [True, False], ids=["local", "reliable"])
+def test_dataframe_checkpoint_preserves_partitioning_and_ordering(spark, tmp_path, local, eager):
+    df = (
+        spark.range(0, 100, numPartitions=4)
+        .withColumn("key", col("id") % 4)
+        .repartition(4, "key")
+        .sortWithinPartitions("key", "id")
+    )
+    if local:
+        checkpointed = df.localCheckpoint(eager=eager)
+    else:
+        checkpoint_path = tmp_path / f"checkpoints-{eager}"
+        spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+        try:
+            checkpointed = df.checkpoint(eager=eager)
+        finally:
+            spark.conf.unset("spark.checkpoint.dir")
+
+    aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
+    ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
+
+    assert "RepartitionExec" not in aggregate_plan
+    assert "SortExec" not in ordered_plan
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names and stack configuration")
 def test_dataframe_local_checkpoint_deep_plan_explain_truncates(spark):
     df = spark.range(0, 10)
@@ -369,3 +413,11 @@ def test_dataframe_local_checkpoint_storage_level_survives_source_removal(spark,
         checkpointed.where(col("id") == 2).select("value").toPandas(),  # noqa: PLR2004
         pd.DataFrame({"value": ["b"]}),
     )
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific local checkpoint validation")
+def test_dataframe_local_checkpoint_rejects_excessive_replication(spark):
+    storage_level = StorageLevel(True, False, False, False, 40)
+
+    with pytest.raises(Exception, match="replication must be less than 40"):
+        spark.range(0, 1).localCheckpoint(storageLevel=storage_level)

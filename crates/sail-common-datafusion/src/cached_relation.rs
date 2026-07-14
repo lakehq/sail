@@ -855,6 +855,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_relation_cleanup_waits_for_physical_plan_lease() -> Result<()> {
+        let store = Arc::new(TestCheckpointStore::default());
+        let ctx = checkpoint_context(store.clone());
+        let registry = ctx.extension::<CachedRelationRegistry>()?;
+        let relation_id = "relation";
+        let path = "memory:///checkpoint-root/session/relation";
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        registry.insert(
+            relation_id.to_string(),
+            CachedRelation::new_pending_reliable_checkpoint(plan, path.to_string()),
+        )?;
+        let relation = registry
+            .get(relation_id)?
+            .ok_or_else(|| internal_datafusion_err!("cached relation missing"))?;
+        let physical_plan = relation.to_physical_plan(relation_id).await?;
+        drop(relation);
+
+        remove_cached_relation(&ctx, relation_id).await?;
+        assert!(registry.get(relation_id)?.is_none());
+        assert!(
+            store
+                .cleanup_paths
+                .lock()
+                .map_err(|e| internal_datafusion_err!("{e}"))?
+                .is_empty()
+        );
+
+        drop(physical_plan);
+        cleanup_cached_relations(&ctx).await?;
+        assert_eq!(
+            store
+                .cleanup_paths
+                .lock()
+                .map_err(|e| internal_datafusion_err!("{e}"))?
+                .as_slice(),
+            &[path.to_string()]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn session_cleanup_attempts_every_cached_relation() -> Result<()> {
         let store = Arc::new(TestCheckpointStore::default());
         let ctx = checkpoint_context(store.clone());
