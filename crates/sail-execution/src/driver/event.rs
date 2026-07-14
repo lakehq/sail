@@ -14,10 +14,13 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
+use crate::driver::worker_pool::TaskResourceStagingId;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::task::definition::TaskDefinition;
+use crate::worker::launch_context::StagedTaskLaunchContext;
 
 pub enum DriverEvent {
     ServerReady {
@@ -50,6 +53,10 @@ pub enum DriverEvent {
         worker_id: WorkerId,
         instant: Instant,
     },
+    WorkerStopFinished {
+        worker_id: WorkerId,
+        result: ExecutionResult<()>,
+    },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
@@ -69,6 +76,28 @@ pub enum DriverEvent {
     },
     ProbePendingTask {
         key: TaskKey,
+    },
+    TaskResourcesStaged {
+        job_id: JobId,
+        stage: usize,
+        staging_id: TaskResourceStagingId,
+        result: ExecutionResult<StagedTaskLaunchContext>,
+    },
+    WorkerJobRequestFinished {
+        job_id: JobId,
+    },
+    JobResourceCleanupFinished {
+        job_id: JobId,
+        result: ExecutionResult<Vec<String>>,
+    },
+    RetryJobResourceCleanup {
+        job_id: JobId,
+    },
+    DriverTaskResourcesMaterialized {
+        key: TaskKey,
+        definition: TaskDefinition,
+        context: Arc<TaskContext>,
+        result: ExecutionResult<crate::task::definition::TaskLaunchContext>,
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
@@ -161,10 +190,18 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ProbePendingWorker { .. } => "ProbePendingWorker",
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
+            DriverEvent::WorkerStopFinished { .. } => "WorkerStopFinished",
             DriverEvent::ExecuteJob { .. } => "ExecuteJob",
             DriverEvent::CleanUpJob { .. } => "CleanUpJob",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
+            DriverEvent::TaskResourcesStaged { .. } => "TaskResourcesStaged",
+            DriverEvent::WorkerJobRequestFinished { .. } => "WorkerJobRequestFinished",
+            DriverEvent::JobResourceCleanupFinished { .. } => "JobResourceCleanupFinished",
+            DriverEvent::RetryJobResourceCleanup { .. } => "RetryJobResourceCleanup",
+            DriverEvent::DriverTaskResourcesMaterialized { .. } => {
+                "DriverTaskResourcesMaterialized"
+            }
             DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             DriverEvent::CreateLocalStream { .. } => "CreateLocalStream",
             DriverEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
@@ -206,6 +243,10 @@ impl SpanAssociation for DriverEvent {
             | DriverEvent::ProbeLostWorker {
                 worker_id,
                 instant: _,
+            }
+            | DriverEvent::WorkerStopFinished {
+                worker_id,
+                result: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
@@ -253,6 +294,37 @@ impl SpanAssociation for DriverEvent {
                         partition,
                         attempt,
                     },
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
+            DriverEvent::TaskResourcesStaged {
+                job_id,
+                stage,
+                staging_id: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+            }
+            DriverEvent::WorkerJobRequestFinished { job_id }
+            | DriverEvent::JobResourceCleanupFinished { job_id, result: _ }
+            | DriverEvent::RetryJobResourceCleanup { job_id } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+            }
+            DriverEvent::DriverTaskResourcesMaterialized {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+                definition: _,
+                context: _,
+                result: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

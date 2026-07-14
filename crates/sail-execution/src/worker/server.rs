@@ -5,7 +5,7 @@ use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskKey;
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
 use crate::worker::r#gen::worker_service_server::WorkerService;
@@ -39,6 +39,7 @@ impl WorkerService for WorkerServer {
             attempt,
             definition,
             peers,
+            launch_context,
         } = request;
         let peers = peers
             .into_iter()
@@ -54,6 +55,10 @@ impl WorkerService for WorkerServer {
                 attempt: attempt as usize,
             },
             definition: TaskDefinition::try_from(definition)?,
+            launch_context: launch_context
+                .map(TaskLaunchContext::try_from)
+                .transpose()?
+                .unwrap_or_default(),
             peers,
         };
         self.handle
@@ -101,14 +106,17 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
+        let (result, completed) = tokio::sync::oneshot::channel();
         let event = WorkerEvent::CleanUpJob {
             job_id: job_id.into(),
             stage: stage.map(|x| x as usize),
+            result,
         };
         self.handle
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
+        completed.await.map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
@@ -121,10 +129,12 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
+        let (result, completed) = tokio::sync::oneshot::channel();
         self.handle
-            .send(WorkerEvent::Shutdown)
+            .send(WorkerEvent::StopWorker { result })
             .await
             .map_err(ExecutionError::from)?;
+        completed.await.map_err(ExecutionError::from)?;
         let response = StopWorkerResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))

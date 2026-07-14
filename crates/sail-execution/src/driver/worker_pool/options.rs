@@ -16,6 +16,9 @@ pub struct WorkerPoolOptions {
     pub worker_launch_timeout: Duration,
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
+    pub artifact_inline_max_bytes: usize,
+    pub artifact_store_uri: Option<String>,
+    pub artifact_transfer_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
 }
 
@@ -31,6 +34,9 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             worker_launch_timeout: options.worker_launch_timeout,
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
+            artifact_inline_max_bytes: options.artifact_inline_max_bytes,
+            artifact_store_uri: options.artifact_store_uri.clone(),
+            artifact_transfer_timeout: options.artifact_transfer_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
         }
     }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastrace::collector::SpanContext;
 use k8s_openapi::api::core::v1::{
@@ -14,7 +15,7 @@ use rand::distr::Uniform;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
@@ -29,6 +30,7 @@ pub struct KubernetesWorkerManagerOptions {
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
     pub worker_pod_template: String,
+    pub artifact_transfer_timeout: std::time::Duration,
 }
 
 pub struct KubernetesWorkerManager {
@@ -36,6 +38,102 @@ pub struct KubernetesWorkerManager {
     name: String,
     options: KubernetesWorkerManagerOptions,
     pods: OnceCell<Api<Pod>>,
+    lifecycle: KubernetesWorkerLifecycle,
+}
+
+#[derive(Default)]
+struct KubernetesWorkerLifecycle {
+    stopping: AtomicBool,
+    launches: RwLock<()>,
+}
+
+impl KubernetesWorkerLifecycle {
+    async fn enter_launch(&self) -> ExecutionResult<RwLockReadGuard<'_, ()>> {
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(ExecutionError::InvalidArgument(
+                "Kubernetes worker manager is stopping".to_string(),
+            ));
+        }
+        let launch = self.launches.read().await;
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(ExecutionError::InvalidArgument(
+                "Kubernetes worker manager is stopping".to_string(),
+            ));
+        }
+        Ok(launch)
+    }
+
+    fn stop_new_launches(&self) {
+        self.stopping.store(true, Ordering::Release);
+    }
+
+    async fn wait_for_launches(&self) -> RwLockWriteGuard<'_, ()> {
+        self.launches.write().await
+    }
+}
+
+async fn run_kubernetes_stop_barrier<T>(
+    lifecycle: &KubernetesWorkerLifecycle,
+    launch_drain_timeout: std::time::Duration,
+    cleanup_timeout: std::time::Duration,
+    cleanup: impl std::future::Future<Output = ExecutionResult<T>>,
+) -> ExecutionResult<T> {
+    let _launches = tokio::time::timeout(launch_drain_timeout, lifecycle.wait_for_launches())
+        .await
+        .map_err(|_| {
+            ExecutionError::InternalError(
+                "timed out waiting for Kubernetes worker launches".to_string(),
+            )
+        })?;
+    tokio::time::timeout(cleanup_timeout, cleanup)
+        .await
+        .unwrap_or_else(|_| {
+            Err(ExecutionError::InternalError(
+                "timed out deleting Kubernetes workers".to_string(),
+            ))
+        })
+}
+
+async fn sweep_kubernetes_worker_pods<
+    Delete,
+    DeleteFuture,
+    Remaining,
+    RemainingFuture,
+    Now,
+    Wait,
+    WaitFuture,
+>(
+    late_create_window: std::time::Duration,
+    poll_interval: std::time::Duration,
+    mut delete_workers: Delete,
+    mut workers_remaining: Remaining,
+    now: Now,
+    mut wait: Wait,
+) -> ExecutionResult<()>
+where
+    Delete: FnMut() -> DeleteFuture,
+    DeleteFuture: std::future::Future<Output = ExecutionResult<()>>,
+    Remaining: FnMut() -> RemainingFuture,
+    RemainingFuture: std::future::Future<Output = ExecutionResult<bool>>,
+    Now: Fn() -> tokio::time::Instant,
+    Wait: FnMut(std::time::Duration) -> WaitFuture,
+    WaitFuture: std::future::Future<Output = ()>,
+{
+    let late_create_deadline = now() + late_create_window;
+    loop {
+        delete_workers().await?;
+        let remaining = workers_remaining().await?;
+        let current = now();
+        if current >= late_create_deadline && !remaining {
+            return Ok(());
+        }
+        let delay = if current < late_create_deadline {
+            poll_interval.min(late_create_deadline.saturating_duration_since(current))
+        } else {
+            poll_interval
+        };
+        wait(delay).await;
+    }
 }
 
 impl KubernetesWorkerManager {
@@ -44,6 +142,7 @@ impl KubernetesWorkerManager {
             name: Self::generate_name(),
             options,
             pods: OnceCell::new(),
+            lifecycle: KubernetesWorkerLifecycle::default(),
         }
     }
 
@@ -118,6 +217,7 @@ impl KubernetesWorkerManager {
             worker_heartbeat_interval,
             task_stream_buffer,
             task_stream_creation_timeout,
+            artifact_transfer_timeout,
             rpc_retry_strategy,
         } = options;
         let w3c_traceparent =
@@ -206,6 +306,11 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
+                name: "SAIL_SPARK__ARTIFACT_TRANSFER_TIMEOUT_SECS".to_string(),
+                value: Some(artifact_transfer_timeout.as_secs().to_string()),
+                value_from: None,
+            },
+            EnvVar {
                 name: ClusterConfigEnv::RPC_RETRY_STRATEGY.to_string(),
                 value: Some(rpc_retry_strategy),
                 value_from: None,
@@ -229,6 +334,8 @@ impl WorkerManager for KubernetesWorkerManager {
         id: WorkerId,
         options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
+        let _launch = self.lifecycle.enter_launch().await?;
+        let deadline = tokio::time::Instant::now() + self.options.artifact_transfer_timeout;
         let name = format!(
             "{}{}-{}",
             self.options.worker_pod_name_prefix, self.name, id
@@ -269,33 +376,185 @@ impl WorkerManager for KubernetesWorkerManager {
             metadata: ObjectMeta {
                 name: Some(name),
                 labels: Some(labels),
-                owner_references: Some(self.get_owner_references().await?),
+                owner_references: Some(
+                    tokio::time::timeout_at(deadline, self.get_owner_references())
+                        .await
+                        .map_err(|_| {
+                            ExecutionError::InternalError(
+                                "timed out resolving Kubernetes worker ownership".to_string(),
+                            )
+                        })??,
+                ),
                 ..Default::default()
             },
             spec: Some(spec),
             status: None,
         };
         let pp = Default::default();
-        self.pods().await?.create(&pp, &p).await?;
+        let pods = tokio::time::timeout_at(deadline, self.pods())
+            .await
+            .map_err(|_| {
+                ExecutionError::InternalError(
+                    "timed out creating Kubernetes worker client".to_string(),
+                )
+            })??;
+        tokio::time::timeout_at(deadline, pods.create(&pp, &p))
+            .await
+            .map_err(|_| {
+                ExecutionError::InternalError("timed out creating Kubernetes worker".to_string())
+            })??;
         Ok(())
     }
 
     async fn stop(&self) -> ExecutionResult<()> {
-        self.pods()
-            .await?
-            .delete_collection(
-                &DeleteParams::default(),
-                &ListParams::default()
-                    .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
-            )
-            .await?;
-        Ok(())
+        self.lifecycle.stop_new_launches();
+        let transfer_timeout = self.options.artifact_transfer_timeout;
+        let stop_margin = transfer_timeout.min(std::time::Duration::from_millis(250));
+        let launch_drain_timeout = transfer_timeout.saturating_add(stop_margin);
+        let cleanup_timeout = transfer_timeout
+            .saturating_mul(2)
+            .saturating_add(stop_margin);
+        run_kubernetes_stop_barrier(
+            &self.lifecycle,
+            launch_drain_timeout,
+            cleanup_timeout,
+            async {
+                let pods = self.pods().await?.clone();
+                let selector = format!("sail.lakesail.com/worker-manager={}", self.name);
+                let delete_pods = pods.clone();
+                let delete_selector = selector.clone();
+                sweep_kubernetes_worker_pods(
+                    transfer_timeout,
+                    std::time::Duration::from_millis(100),
+                    move || {
+                        let pods = delete_pods.clone();
+                        let selector = delete_selector.clone();
+                        async move {
+                            pods.delete_collection(
+                                &DeleteParams::default(),
+                                &ListParams::default().labels(&selector),
+                            )
+                            .await?;
+                            Ok(())
+                        }
+                    },
+                    move || {
+                        let pods = pods.clone();
+                        let selector = selector.clone();
+                        async move {
+                            Ok(!pods
+                                .list(&ListParams::default().labels(&selector))
+                                .await?
+                                .items
+                                .is_empty())
+                        }
+                    },
+                    tokio::time::Instant::now,
+                    tokio::time::sleep,
+                )
+                .await
+            },
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
     use super::*;
+
+    #[tokio::test]
+    async fn stop_gate_waits_for_launches_and_rejects_new_launches() {
+        let lifecycle = std::sync::Arc::new(KubernetesWorkerLifecycle::default());
+        let launch = lifecycle.enter_launch().await;
+        assert!(launch.is_ok());
+        let Some(launch) = launch.ok() else {
+            return;
+        };
+        lifecycle.stop_new_launches();
+        assert!(lifecycle.enter_launch().await.is_err());
+
+        let waiting = std::sync::Arc::clone(&lifecycle);
+        let cleanup_called = std::sync::Arc::new(AtomicBool::new(false));
+        let called = std::sync::Arc::clone(&cleanup_called);
+        let mut stop = tokio::spawn(async move {
+            run_kubernetes_stop_barrier(
+                &waiting,
+                std::time::Duration::from_millis(280),
+                std::time::Duration::from_millis(30),
+                async move {
+                    called.store(true, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut stop)
+                .await
+                .is_err()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        drop(launch);
+        let stopped = tokio::time::timeout(std::time::Duration::from_secs(1), stop).await;
+        assert!(matches!(stopped, Ok(Ok(Ok(())))));
+        assert!(cleanup_called.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn selector_sweep_deletes_worker_created_at_launch_timeout_boundary() {
+        let base = tokio::time::Instant::now();
+        let elapsed_millis = Arc::new(AtomicU64::new(0));
+        let worker_present = Arc::new(AtomicBool::new(false));
+        let late_worker_created = Arc::new(AtomicBool::new(false));
+        let late_worker_deleted = Arc::new(AtomicBool::new(false));
+        let delete_count = Arc::new(AtomicUsize::new(0));
+
+        let deleted_present = Arc::clone(&worker_present);
+        let deleted_late = Arc::clone(&late_worker_created);
+        let observed_late_delete = Arc::clone(&late_worker_deleted);
+        let deletes = Arc::clone(&delete_count);
+        let listed_present = Arc::clone(&worker_present);
+        let clock = Arc::clone(&elapsed_millis);
+        let waited_clock = Arc::clone(&elapsed_millis);
+        let created_present = Arc::clone(&worker_present);
+        let created_late = Arc::clone(&late_worker_created);
+
+        let result = sweep_kubernetes_worker_pods(
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(5),
+            move || {
+                deletes.fetch_add(1, Ordering::AcqRel);
+                if deleted_present.swap(false, Ordering::AcqRel)
+                    && deleted_late.load(Ordering::Acquire)
+                {
+                    observed_late_delete.store(true, Ordering::Release);
+                }
+                std::future::ready(Ok(()))
+            },
+            move || std::future::ready(Ok(listed_present.load(Ordering::Acquire))),
+            move || base + std::time::Duration::from_millis(clock.load(Ordering::Acquire)),
+            move |delay| {
+                let millis = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+                let current = waited_clock
+                    .fetch_add(millis, Ordering::AcqRel)
+                    .saturating_add(millis);
+                if current >= 20 && !created_late.swap(true, Ordering::AcqRel) {
+                    created_present.store(true, Ordering::Release);
+                }
+                std::future::ready(())
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert!(late_worker_deleted.load(Ordering::Acquire));
+        assert!(!worker_present.load(Ordering::Acquire));
+        assert!(delete_count.load(Ordering::Acquire) >= 5);
+    }
 
     #[test]
     #[expect(clippy::unwrap_used)]

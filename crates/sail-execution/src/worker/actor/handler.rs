@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::mem;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -11,10 +12,14 @@ use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::WorkerEvent;
-use crate::worker::actor::WorkerActor;
+use crate::worker::actor::{
+    PendingJobCleanup, PendingWorkerStop, PreparingTaskResources, WorkerActor,
+    should_run_materialized_task,
+};
 use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
+use crate::worker::launch_context::materialize_task_launch_context;
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -102,11 +107,118 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
-        self.peer_tracker.track(ctx, peers);
-        self.task_runner
-            .run_task(ctx, key, definition, self.options.session.task_ctx());
+        if self.stopping || self.canceled_tasks.contains(&key) {
+            return ActorAction::Continue;
+        }
+        let preparation_id = self.next_resource_preparation_id;
+        self.next_resource_preparation_id = match preparation_id.checked_add(1) {
+            Some(id) => id,
+            None => {
+                error!("task resource preparation ID overflow");
+                return ActorAction::Stop;
+            }
+        };
+        let (cancel, mut canceled) = oneshot::channel();
+        self.preparing_tasks.insert(
+            preparation_id,
+            PreparingTaskResources {
+                key: key.clone(),
+                cancel: Some(cancel),
+            },
+        );
+        if let Some(previous_id) = self
+            .current_preparations
+            .insert(key.clone(), preparation_id)
+            && let Some(previous) = self.preparing_tasks.get_mut(&previous_id)
+            && let Some(cancel) = previous.cancel.take()
+        {
+            let _ = cancel.send(());
+        }
+        let handle = ctx.handle().clone();
+        let transfer_timeout = self.options.artifact_transfer_timeout;
+        ctx.spawn(async move {
+            let result = tokio::select! {
+                _ = &mut canceled => None,
+                result = tokio::time::timeout(
+                    transfer_timeout,
+                    materialize_task_launch_context(launch_context),
+                ) => {
+                    let result = result.unwrap_or_else(|_| {
+                        Err(crate::error::ExecutionError::InvalidArgument(
+                            "timed out materializing task resources".to_string(),
+                        ))
+                    });
+                    Some(result)
+                }
+            };
+            let _ = handle
+                .send(WorkerEvent::TaskResourcesMaterialized {
+                    preparation_id,
+                    key,
+                    definition,
+                    result,
+                    peers,
+                })
+                .await;
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_task_resources_materialized(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        preparation_id: u64,
+        key: TaskKey,
+        definition: TaskDefinition,
+        result: Option<ExecutionResult<TaskLaunchContext>>,
+        peers: Vec<WorkerLocation>,
+    ) -> ActorAction {
+        let is_current = self
+            .current_preparations
+            .get(&key)
+            .is_some_and(|id| *id == preparation_id);
+        let Some(preparing) = self.preparing_tasks.remove(&preparation_id) else {
+            return ActorAction::Continue;
+        };
+        if preparing.key != key {
+            error!("task resource preparation key mismatch");
+            return ActorAction::Stop;
+        }
+        if is_current {
+            self.current_preparations.remove(&key);
+        }
+        let run_task = should_run_materialized_task(
+            is_current,
+            self.stopping,
+            self.canceled_tasks.contains(&key),
+        );
+        match result {
+            Some(Ok(launch_context)) if run_task => {
+                self.peer_tracker.track(ctx, peers);
+                self.task_runner.run_task(
+                    ctx,
+                    key,
+                    definition,
+                    launch_context,
+                    self.options.session.task_ctx(),
+                );
+            }
+            Some(Err(error)) if run_task => {
+                ctx.send(WorkerEvent::ReportTaskStatus {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(format!("failed to materialize task resources: {error}")),
+                    cause: Some(CommonErrorCause::new::<
+                        sail_python_udf::error::PyErrExtractor,
+                    >(&error)),
+                });
+            }
+            Some(Ok(_)) | Some(Err(_)) | None => {}
+        }
+        self.finish_preparation_cleanup(ctx, preparation_id);
         ActorAction::Continue
     }
 
@@ -115,7 +227,15 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         key: TaskKey,
     ) -> ActorAction {
-        self.task_runner.stop_task(&key);
+        self.canceled_tasks.cancel(key.clone());
+        if let Some(preparation_id) = self.current_preparations.get(&key).copied()
+            && let Some(preparing) = self.preparing_tasks.get_mut(&preparation_id)
+            && let Some(cancel) = preparing.cancel.take()
+        {
+            let _ = cancel.send(());
+        } else {
+            self.task_runner.stop_task(&key);
+        }
         ActorAction::Continue
     }
 
@@ -266,11 +386,143 @@ impl WorkerActor {
 
     pub(super) fn handle_clean_up_job(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         job_id: JobId,
         stage: Option<usize>,
+        result: oneshot::Sender<()>,
     ) -> ActorAction {
+        let generation = if stage.is_none() {
+            let generation = self.next_job_cleanup_generation;
+            let Some(next) = generation.checked_add(1) else {
+                error!("job cleanup generation overflow");
+                return ActorAction::Stop;
+            };
+            self.next_job_cleanup_generation = next;
+            self.job_cleanup_generations.insert(job_id, generation);
+            Some(generation)
+        } else {
+            None
+        };
+        let preparation_ids = self
+            .preparing_tasks
+            .iter()
+            .filter_map(|(id, preparing)| {
+                (preparing.key.job_id == job_id
+                    && stage.is_none_or(|stage| preparing.key.stage == stage))
+                .then_some(*id)
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for preparation_id in &preparation_ids {
+            if let Some(preparing) = self.preparing_tasks.get_mut(preparation_id)
+                && let Some(cancel) = preparing.cancel.take()
+            {
+                let _ = cancel.send(());
+            }
+        }
+        self.canceled_tasks.clean_up_job(job_id, stage);
+        self.task_runner.stop_job(job_id, stage);
         self.stream_manager.remove_local_streams(job_id, stage);
+        if preparation_ids.is_empty() {
+            self.acknowledge_job_cleanup(ctx, job_id, generation, result);
+        } else {
+            self.pending_job_cleanups.push(PendingJobCleanup {
+                job_id,
+                preparation_ids,
+                generation,
+                result,
+            });
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_stop_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<()>,
+    ) -> ActorAction {
+        self.stopping = true;
+        let preparation_ids = self.preparing_tasks.keys().copied().collect::<HashSet<_>>();
+        for preparation_id in &preparation_ids {
+            if let Some(preparing) = self.preparing_tasks.get_mut(preparation_id)
+                && let Some(cancel) = preparing.cancel.take()
+            {
+                let _ = cancel.send(());
+            }
+        }
+        self.task_runner.stop_all();
+        if preparation_ids.is_empty() {
+            let _ = result.send(());
+            ctx.send(WorkerEvent::Shutdown);
+        } else {
+            self.pending_worker_stops.push(PendingWorkerStop {
+                preparation_ids,
+                result,
+            });
+        }
+        ActorAction::Continue
+    }
+
+    fn finish_preparation_cleanup(&mut self, ctx: &mut ActorContext<Self>, preparation_id: u64) {
+        let mut index = 0;
+        while index < self.pending_job_cleanups.len() {
+            if self.pending_job_cleanups[index].finish_preparation(preparation_id) {
+                let cleanup = self.pending_job_cleanups.swap_remove(index);
+                self.acknowledge_job_cleanup(
+                    ctx,
+                    cleanup.job_id,
+                    cleanup.generation,
+                    cleanup.result,
+                );
+            } else {
+                index += 1;
+            }
+        }
+
+        let mut stop_index = 0;
+        let mut stop_completed = false;
+        while stop_index < self.pending_worker_stops.len() {
+            if self.pending_worker_stops[stop_index].finish_preparation(preparation_id) {
+                let stop = self.pending_worker_stops.swap_remove(stop_index);
+                let _ = stop.result.send(());
+                stop_completed = true;
+            } else {
+                stop_index += 1;
+            }
+        }
+        if stop_completed {
+            ctx.send(WorkerEvent::Shutdown);
+        }
+    }
+
+    fn acknowledge_job_cleanup(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        generation: Option<u64>,
+        result: oneshot::Sender<()>,
+    ) {
+        let _ = result.send(());
+        if let Some(generation) = generation {
+            ctx.send_with_delay(
+                WorkerEvent::ExpireJobCancellation { job_id, generation },
+                self.options.artifact_transfer_timeout,
+            );
+        }
+    }
+
+    pub(super) fn handle_expire_job_cancellation(
+        &mut self,
+        job_id: JobId,
+        generation: u64,
+    ) -> ActorAction {
+        if self
+            .job_cleanup_generations
+            .get(&job_id)
+            .is_some_and(|current| *current == generation)
+        {
+            self.job_cleanup_generations.remove(&job_id);
+            self.canceled_tasks.finish_job(job_id);
+        }
         ActorAction::Continue
     }
 }

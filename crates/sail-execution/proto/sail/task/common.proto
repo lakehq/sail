@@ -107,4 +107,3 @@ message TaskOutputLocalLocator {
 message TaskOutputRemoteLocator {
   string uri = 1;
 }
-

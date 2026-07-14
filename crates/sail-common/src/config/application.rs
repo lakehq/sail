@@ -607,7 +607,25 @@ pub enum CatalogType {
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
+    pub session_max_count: usize,
     pub execution_heartbeat_interval_secs: u64,
+    pub artifact_root: String,
+    pub artifact_inline_max_bytes: usize,
+    pub artifact_max_bytes: usize,
+    pub artifact_max_chunks: usize,
+    pub artifact_rpc_max_artifacts: usize,
+    pub artifact_rpc_max_chunks: usize,
+    pub artifact_rpc_max_bytes: usize,
+    pub artifact_session_max_artifacts: usize,
+    pub artifact_session_max_bytes: usize,
+    pub artifact_process_max_artifacts: usize,
+    pub artifact_process_max_bytes: usize,
+    pub artifact_process_inline_max_bytes: usize,
+    pub artifact_rpc_timeout_secs: u64,
+    pub artifact_chunk_timeout_secs: u64,
+    pub artifact_transfer_timeout_secs: u64,
+    pub artifact_store_uri: String,
+    pub artifact_cleanup_journal_root: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues, ScalarValue};
@@ -16,6 +16,40 @@ use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitio
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+
+const MAX_CONCURRENT_LOCAL_RELATION_DECODES: usize = 4;
+
+fn local_relation_decode_semaphore() -> &'static Arc<tokio::sync::Semaphore> {
+    static SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| {
+        Arc::new(tokio::sync::Semaphore::new(
+            MAX_CONCURRENT_LOCAL_RELATION_DECODES,
+        ))
+    })
+}
+
+async fn acquire_local_relation_decode_permit() -> PlanResult<tokio::sync::OwnedSemaphorePermit> {
+    Arc::clone(local_relation_decode_semaphore())
+        .acquire_owned()
+        .await
+        .map_err(|_| PlanError::internal("local relation decode limit was closed"))
+}
+
+async fn decode_local_relation_record_batches(
+    data: Vec<u8>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> PlanResult<Vec<datafusion::arrow::array::RecordBatch>> {
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        read_record_batches(&data).map_err(PlanError::from)
+    })
+    .await
+    .map_err(|error| {
+        PlanError::internal(format!(
+            "local relation decode task stopped unexpectedly: {error}"
+        ))
+    })?
+}
 
 impl PlanResolver<'_> {
     /// Resolves a query plan that produces an empty relation.
@@ -114,10 +148,122 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let batches = if let Some(data) = data {
-            read_record_batches(&data)?
+            let permit = acquire_local_relation_decode_permit().await?;
+            decode_local_relation_record_batches(data, permit).await?
         } else {
             vec![]
         };
+        self.resolve_local_relation_batches(batches, schema, state)
+    }
+
+    pub(super) async fn resolve_query_cached_local_relation(
+        &self,
+        hash: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let permit = acquire_local_relation_decode_permit().await?;
+        let relation = self
+            .config
+            .local_relation_cache
+            .read_cached_local_relation(&hash)
+            .await?;
+        let batches = if let Some(data) = relation.data {
+            decode_local_relation_record_batches(data, permit).await?
+        } else {
+            drop(permit);
+            vec![]
+        };
+        self.resolve_local_relation_batches(batches, relation.schema, state)
+    }
+
+    pub(super) async fn resolve_query_chunked_cached_local_relation(
+        &self,
+        data_hashes: Vec<String>,
+        schema_hash: Option<String>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if data_hashes.is_empty() {
+            return Err(PlanError::invalid(
+                "chunked cached local relation must contain data",
+            ));
+        }
+        let mut data_sizes = Vec::with_capacity(data_hashes.len());
+        for hash in &data_hashes {
+            data_sizes.push(
+                self.config
+                    .local_relation_cache
+                    .cached_local_relation_block_size(hash)
+                    .await?,
+            );
+        }
+        let schema_size = if let Some(hash) = schema_hash.as_deref() {
+            Some(
+                self.config
+                    .local_relation_cache
+                    .cached_local_relation_block_size(hash)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        self.check_chunked_cached_local_relation_sizes(data_sizes.into_iter(), schema_size)?;
+
+        let mut batches = vec![];
+        for hash in data_hashes {
+            let permit = acquire_local_relation_decode_permit().await?;
+            let data = self
+                .config
+                .local_relation_cache
+                .read_chunked_cached_local_relation_data(&hash)
+                .await?;
+            batches.extend(decode_local_relation_record_batches(data, permit).await?);
+        }
+        let schema = if let Some(hash) = schema_hash {
+            Some(
+                self.config
+                    .local_relation_cache
+                    .read_chunked_cached_local_relation_schema(&hash)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        self.resolve_local_relation_batches(batches, schema, state)
+    }
+
+    fn check_chunked_cached_local_relation_sizes(
+        &self,
+        data_sizes: impl Iterator<Item = usize>,
+        schema_size: Option<usize>,
+    ) -> PlanResult<()> {
+        let sizes = data_sizes.chain(schema_size).collect::<Vec<_>>();
+        let total_size = sizes
+            .iter()
+            .try_fold(0usize, |total, size| total.checked_add(*size))
+            .ok_or_else(|| {
+                PlanError::invalid("cached local relation size exceeded the platform limit")
+            })?;
+        let relation_size_limit = self.config.local_relation_size_limit;
+        if total_size > relation_size_limit {
+            return Err(PlanError::invalid(format!(
+                "Cached local relation size ({total_size} bytes) exceeds the limit ({relation_size_limit} bytes)."
+            )));
+        }
+        let chunk_size_limit = self.config.local_relation_chunk_size_limit;
+        if sizes.iter().any(|size| *size > chunk_size_limit) {
+            return Err(PlanError::invalid(format!(
+                "One of cached local relation chunks exceeded the limit of {chunk_size_limit} bytes."
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve_local_relation_batches(
+        &self,
+        batches: Vec<datafusion::arrow::array::RecordBatch>,
+        schema: Option<spec::Schema>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
         let (schema, batches) = if let Some(schema) = schema {
             let schema = Arc::new(self.resolve_schema(schema, state)?);
             let batches = batches

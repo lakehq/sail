@@ -6,9 +6,12 @@ use sail_server::actor::ActorSystem;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory};
 
+const DEFAULT_MAX_SESSIONS: usize = 1024;
+
 #[readonly::make]
 pub struct SessionManagerOptions {
     pub session_timeout: Duration,
+    pub max_sessions: usize,
     pub runtime: RuntimeHandle,
     pub system: Arc<Mutex<ActorSystem>>,
     pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
@@ -25,6 +28,7 @@ impl SessionManagerOptions {
     ) -> Self {
         Self {
             session_timeout: Duration::MAX,
+            max_sessions: DEFAULT_MAX_SESSIONS,
             runtime,
             system,
             factory,
@@ -34,6 +38,11 @@ impl SessionManagerOptions {
 
     pub fn with_session_timeout(mut self, timeout: Duration) -> Self {
         self.session_timeout = timeout;
+        self
+    }
+
+    pub fn session_limit(mut self, max_sessions: usize) -> Self {
+        self.max_sessions = max_sessions;
         self
     }
 

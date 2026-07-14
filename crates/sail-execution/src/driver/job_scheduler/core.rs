@@ -16,17 +16,21 @@ use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
+use crate::driver::job_scheduler::{
+    JobAction, JobScheduler, JobSchedulerOptions, StageTaskTemplate,
+};
 use crate::driver::output::build_job_output;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::proto::{
+    RemoteExecutionCodec, encode_remote_physical_expr, encode_remote_physical_plan,
+};
 use crate::task::definition::{
-    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
-    TaskOutputLocator,
+    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskLaunchContext, TaskOutput,
+    TaskOutputDistribution, TaskOutputLocator, TaskResources,
 };
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
@@ -459,6 +463,7 @@ impl JobScheduler {
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
     pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+        release_job_stage_task_templates(&mut self.stage_task_templates, job_id);
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -501,10 +506,46 @@ impl JobScheduler {
 
     /// Builds the serialized task definition and context for the given task key.
     pub fn get_task_definition(
-        &self,
+        &mut self,
         key: &TaskKey,
         assignments: &dyn TaskAssignmentGetter,
-    ) -> ExecutionResult<(TaskDefinition, Arc<TaskContext>)> {
+    ) -> ExecutionResult<(TaskDefinition, TaskLaunchContext, Arc<TaskContext>)> {
+        let template_key = (key.job_id, key.stage);
+        let template = stage_task_template(&mut self.stage_task_templates, template_key, || {
+            let Some(job) = self.jobs.get(&key.job_id) else {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "job {} not found",
+                    key.job_id
+                )));
+            };
+            let JobState::Running { .. } = &job.state else {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "job {} is not running",
+                    key.job_id
+                )));
+            };
+            let Some(stage) = job.graph.stages().get(key.stage) else {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "stage {} not found in job {}",
+                    key.stage, key.job_id
+                )));
+            };
+
+            self.codec.clear_task_resources()?;
+            let plan = encode_remote_physical_plan(&self.codec, Arc::clone(&stage.plan))?;
+            let output = Self::encode_task_output(&self.codec, job, key.stage, stage)?;
+            let python_artifacts = self.codec.take_python_artifacts()?;
+            let local_relation_resources = self.codec.take_local_relation_resources()?;
+            Ok(StageTaskTemplate {
+                plan: Arc::from(plan),
+                resources: TaskResources {
+                    python_artifacts,
+                    local_relation_resources,
+                },
+                output,
+            })
+        })?;
+
         let Some(job) = self.jobs.get(&key.job_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "job {} not found",
@@ -523,23 +564,25 @@ impl JobScheduler {
                 key.stage, key.job_id
             )));
         };
-
-        let plan = encode_remote_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
             .map(|input| self.get_task_input(job, key, input, assignments))
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = self.get_task_output(job, key, stage)?;
         let definition = TaskDefinition {
-            plan: Arc::from(plan),
+            plan: template.plan,
             inputs,
-            output,
+            output: template.output,
         };
-        Ok((definition, context.clone()))
+        let launch_context = TaskLaunchContext {
+            resources: template.resources,
+            ..Default::default()
+        };
+        Ok((definition, launch_context, context.clone()))
     }
 
     pub fn stop(&mut self) {
+        self.stage_task_templates.clear();
         for (_, job) in self.jobs.iter_mut() {
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 // For running jobs, the job output is dropped here.
@@ -664,19 +707,19 @@ impl JobScheduler {
         Ok(TaskInput { locator })
     }
 
-    fn get_task_output(
-        &self,
+    fn encode_task_output(
+        codec: &RemoteExecutionCodec,
         job: &JobDescriptor,
-        key: &TaskKey,
+        stage_index: usize,
         stage: &Stage,
     ) -> ExecutionResult<TaskOutput> {
-        let replicas = job.graph.replicas(key.stage);
+        let replicas = job.graph.replicas(stage_index);
         let distribution = match &stage.distribution {
             OutputDistribution::Hash { keys, channels } => {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr = encode_remote_physical_expr(self.codec.as_ref(), expr)?;
+                        let expr = encode_remote_physical_expr(codec, expr)?;
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
@@ -717,6 +760,28 @@ impl JobScheduler {
             .and_then(|stage| stage.tasks.get(partition))
             .and_then(|task| task.attempts.split_last().map(|(_, head)| head.len()))
     }
+}
+
+fn stage_task_template(
+    templates: &mut HashMap<(JobId, usize), StageTaskTemplate>,
+    key: (JobId, usize),
+    encode: impl FnOnce() -> ExecutionResult<StageTaskTemplate>,
+) -> ExecutionResult<StageTaskTemplate> {
+    match templates.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.get().clone()),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let template = encode()?;
+            entry.insert(template.clone());
+            Ok(template)
+        }
+    }
+}
+
+fn release_job_stage_task_templates(
+    templates: &mut HashMap<(JobId, usize), StageTaskTemplate>,
+    job_id: JobId,
+) {
+    templates.retain(|(template_job_id, _), _| *template_job_id != job_id);
 }
 
 fn build_task_input_keys(
@@ -809,4 +874,118 @@ struct StageGroupKey {
 struct StageGroup {
     stages: IndexSet<usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::task::definition::LocalRelationResource;
+
+    #[test]
+    fn stage_task_template_encodes_once_and_reuses_payload_arcs() -> ExecutionResult<()> {
+        let build_count = Cell::new(0);
+        let job_id = JobId::from(1);
+        let mut templates = HashMap::new();
+
+        let encode_template = || {
+            build_count.set(build_count.get() + 1);
+            Ok(StageTaskTemplate {
+                plan: Arc::from(vec![1, 2, 3]),
+                resources: TaskResources {
+                    python_artifacts: vec![],
+                    local_relation_resources: vec![LocalRelationResource {
+                        key: "relation".to_string(),
+                        data: Some(Arc::from(vec![4, 5, 6])),
+                        uri: None,
+                        sha256: "digest".to_string(),
+                        size: 3,
+                    }],
+                },
+                output: TaskOutput {
+                    distribution: TaskOutputDistribution::Hash {
+                        keys: vec![Arc::from(vec![7, 8, 9])],
+                        channels: 2,
+                    },
+                    locator: TaskOutputLocator::Local { replicas: 1 },
+                },
+            })
+        };
+        let first = stage_task_template(&mut templates, (job_id, 0), encode_template)?;
+        let second = stage_task_template(&mut templates, (job_id, 0), encode_template)?;
+
+        assert_eq!(build_count.get(), 1);
+        assert!(Arc::ptr_eq(&first.plan, &second.plan));
+        let first_data = first.resources.local_relation_resources[0]
+            .data
+            .as_ref()
+            .ok_or_else(|| ExecutionError::InternalError("missing first resource data".into()))?;
+        let second_data = second.resources.local_relation_resources[0]
+            .data
+            .as_ref()
+            .ok_or_else(|| ExecutionError::InternalError("missing second resource data".into()))?;
+        assert!(Arc::ptr_eq(first_data, second_data));
+        let TaskOutputDistribution::Hash {
+            keys: first_keys, ..
+        } = &first.output.distribution
+        else {
+            return Err(ExecutionError::InternalError(
+                "expected first hash output distribution".into(),
+            ));
+        };
+        let TaskOutputDistribution::Hash {
+            keys: second_keys, ..
+        } = &second.output.distribution
+        else {
+            return Err(ExecutionError::InternalError(
+                "expected second hash output distribution".into(),
+            ));
+        };
+        assert!(Arc::ptr_eq(&first_keys[0], &second_keys[0]));
+        Ok(())
+    }
+
+    #[test]
+    fn clean_up_job_releases_stage_task_templates() {
+        let job_id = JobId::from(1);
+        let mut templates = HashMap::new();
+
+        let plan: Arc<[u8]> = Arc::from(vec![1]);
+        let relation_data: Arc<[u8]> = Arc::from(vec![2]);
+        let distribution_key: Arc<[u8]> = Arc::from(vec![3]);
+        let plan_reference = Arc::downgrade(&plan);
+        let relation_data_reference = Arc::downgrade(&relation_data);
+        let distribution_key_reference = Arc::downgrade(&distribution_key);
+        templates.insert(
+            (job_id, 0),
+            StageTaskTemplate {
+                plan,
+                resources: TaskResources {
+                    python_artifacts: vec![],
+                    local_relation_resources: vec![LocalRelationResource {
+                        key: "relation".to_string(),
+                        data: Some(relation_data),
+                        uri: None,
+                        sha256: "digest".to_string(),
+                        size: 1,
+                    }],
+                },
+                output: TaskOutput {
+                    distribution: TaskOutputDistribution::Hash {
+                        keys: vec![distribution_key],
+                        channels: 1,
+                    },
+                    locator: TaskOutputLocator::Local { replicas: 1 },
+                },
+            },
+        );
+
+        release_job_stage_task_templates(&mut templates, job_id);
+
+        assert!(templates.is_empty());
+        assert!(plan_reference.upgrade().is_none());
+        assert!(relation_data_reference.upgrade().is_none());
+        assert!(distribution_key_reference.upgrade().is_none());
+    }
 }

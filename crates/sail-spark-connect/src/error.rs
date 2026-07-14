@@ -46,6 +46,8 @@ pub enum SparkError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("deadline exceeded: {0}")]
+    DeadlineExceeded(String),
 }
 
 impl SparkError {
@@ -67,6 +69,10 @@ impl SparkError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         SparkError::InternalError(message.into())
+    }
+
+    pub fn deadline_exceeded(message: impl Into<String>) -> Self {
+        SparkError::DeadlineExceeded(message.into())
     }
 }
 
@@ -450,6 +456,9 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
+            SparkError::DeadlineExceeded(message) => {
+                Status::deadline_exceeded(truncate_grpc_message(&message))
+            }
             e @ SparkError::SendError(_) => {
                 Status::cancelled(truncate_grpc_message(&e.to_string()))
             }

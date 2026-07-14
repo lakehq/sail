@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::SessionResult;
+use crate::session_manager::session::SessionKey;
 
 pub enum SessionManagerEvent {
     GetOrCreateSession {
@@ -16,23 +17,27 @@ pub enum SessionManagerEvent {
         result: oneshot::Sender<SessionResult<SessionContext>>,
     },
     ProbeIdleSession {
-        session_id: String,
+        session_key: SessionKey,
         /// The time when the session was known to be active.
         instant: Instant,
     },
     DeleteSession {
         session_id: String,
+        user_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     },
     SetSessionHistory {
-        session_id: String,
+        session_key: SessionKey,
         history: SessionHistory,
     },
     SetSessionFailure {
-        session_id: String,
+        session_key: SessionKey,
     },
     ObserveState {
         observer: SessionManagerObserver,
+    },
+    Shutdown {
+        result: oneshot::Sender<SessionResult<()>>,
     },
 }
 
@@ -49,6 +54,7 @@ impl SpanAssociation for SessionManagerEvent {
             SessionManagerEvent::SetSessionHistory { .. } => "SetSessionHistory",
             SessionManagerEvent::SetSessionFailure { .. } => "SetSessionFailure",
             SessionManagerEvent::ObserveState { .. } => "ObserveState",
+            SessionManagerEvent::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -61,22 +67,29 @@ impl SpanAssociation for SessionManagerEvent {
                 user_id: _,
                 result: _,
             }
-            | SessionManagerEvent::ProbeIdleSession {
-                session_id,
-                instant: _,
-            }
             | SessionManagerEvent::DeleteSession {
                 session_id,
+                user_id: _,
                 result: _,
-            }
-            | SessionManagerEvent::SetSessionHistory {
-                session_id,
-                history: _,
-            }
-            | SessionManagerEvent::SetSessionFailure { session_id } => {
+            } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
             }
-            SessionManagerEvent::ObserveState { observer: _ } => {}
+            SessionManagerEvent::ProbeIdleSession {
+                session_key,
+                instant: _,
+            }
+            | SessionManagerEvent::SetSessionHistory {
+                session_key,
+                history: _,
+            }
+            | SessionManagerEvent::SetSessionFailure { session_key } => {
+                p.push((
+                    SpanAttribute::SESSION_ID,
+                    session_key.session_id().to_string(),
+                ));
+            }
+            SessionManagerEvent::ObserveState { observer: _ }
+            | SessionManagerEvent::Shutdown { result: _ } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

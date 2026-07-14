@@ -11,6 +11,7 @@ sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-object-store = { path = "../sail-object-store" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
@@ -29,6 +30,7 @@ pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 uuid = { workspace = true }
 datafusion = { workspace = true }
+object_store = { workspace = true }
 arrow-schema = { workspace = true }
 parquet-variant-compute = { workspace = true }
 async-stream = { workspace = true }
@@ -40,8 +42,14 @@ regex = { workspace = true }
 phf = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
+fs2 = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
+crc32fast = { workspace = true }
+datafusion-datasource = { workspace = true }
+sha2 = { workspace = true }
+url = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

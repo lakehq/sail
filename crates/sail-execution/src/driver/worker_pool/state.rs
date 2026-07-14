@@ -18,12 +18,16 @@ pub struct WorkerDescriptor {
     pub peers: HashSet<WorkerId>,
     pub created_at: DateTime<Utc>,
     pub stopped_at: Option<DateTime<Utc>>,
+    /// The latest time a failed worker can still be materializing task resources.
+    pub resource_access_deadline: Option<Instant>,
 }
 
 impl WorkerDescriptor {
     pub fn worker_snapshot(&self, worker_id: WorkerId) -> WorkerSnapshot {
         let (host, port) = match &self.state {
-            WorkerState::Running { host, port, .. } => (Some(host.clone()), Some(*port)),
+            WorkerState::Running { host, port, .. } | WorkerState::Stopping { host, port, .. } => {
+                (Some(host.clone()), Some(*port))
+            }
             _ => (None, None),
         };
         WorkerSnapshot {
@@ -47,6 +51,10 @@ pub enum WorkerState {
         /// The gRPC client to communicate with the worker if the connection is established.
         client: Option<WorkerClientSet>,
     },
+    Stopping {
+        host: String,
+        port: u16,
+    },
     Completed,
     Failed,
 }
@@ -56,6 +64,7 @@ impl WorkerState {
         match self {
             WorkerState::Pending => "PENDING",
             WorkerState::Running { .. } => "RUNNING",
+            WorkerState::Stopping { .. } => "STOPPING",
             WorkerState::Completed => "COMPLETED",
             WorkerState::Failed => "FAILED",
         }

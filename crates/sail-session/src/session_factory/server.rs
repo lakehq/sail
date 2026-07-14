@@ -1,6 +1,7 @@
 use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{Result, internal_datafusion_err};
@@ -185,6 +186,9 @@ impl ServerSessionFactory {
                         .worker_service_account_name
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
+                    artifact_transfer_timeout: Duration::from_secs(
+                        self.config.spark.artifact_transfer_timeout_secs,
+                    ),
                 };
                 let worker_manager = Arc::new(KubernetesWorkerManager::new(options));
                 let options =

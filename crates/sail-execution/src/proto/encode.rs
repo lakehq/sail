@@ -73,11 +73,7 @@ pub(super) fn physical_plan_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<PhysicalPlanNode> {
-    PhysicalPlanNode::try_from_physical_plan_with_converter(
-        plan,
-        codec,
-        &RemotePhysicalProtoConverter {},
-    )
+    RemotePhysicalProtoConverter {}.execution_plan_to_proto(&plan, codec)
 }
 
 pub(super) fn try_encode_physical_expr(

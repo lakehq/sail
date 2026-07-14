@@ -14,6 +14,7 @@ use crate::spark::config::{
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_PIVOT_MAX_VALUES,
+    SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT, SPARK_SQL_SESSION_LOCAL_RELATION_SIZE_LIMIT,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
     SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED, SPARK_SQL_WAREHOUSE_DIR,
 };
@@ -208,6 +209,40 @@ fn get_pyspark_major_version() -> Option<u64> {
     })
 }
 
+fn parse_bytes_config(key: &str, value: &str) -> SparkResult<usize> {
+    let value = value.trim();
+    let digit_count = value
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if digit_count == 0 {
+        return Err(SparkError::invalid(format!(
+            "invalid byte value for {key}: {value}"
+        )));
+    }
+    let number = value[..digit_count].parse::<u128>()?;
+    let suffix = value[digit_count..].trim().to_ascii_lowercase();
+    let multiplier = match suffix.as_str() {
+        "" | "b" | "byte" | "bytes" => 1_u128,
+        "k" | "kb" | "kib" => 1024_u128,
+        "m" | "mb" | "mib" => 1024_u128.pow(2),
+        "g" | "gb" | "gib" => 1024_u128.pow(3),
+        "t" | "tb" | "tib" => 1024_u128.pow(4),
+        "p" | "pb" | "pib" => 1024_u128.pow(5),
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid byte unit for {key}: {value}"
+            )));
+        }
+    };
+    let bytes = number.checked_mul(multiplier).ok_or_else(|| {
+        SparkError::invalid(format!("byte value for {key} is too large: {value}"))
+    })?;
+    usize::try_from(bytes)
+        .map_err(|_| SparkError::invalid(format!("byte value for {key} is too large: {value}")))
+}
+
 pub(crate) fn get_pyspark_version() -> SparkResult<String> {
     use pyo3::Python;
     use pyo3::prelude::PyAnyMethods;
@@ -296,6 +331,16 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.pivot_max_values = value;
+        }
+
+        if let Some(value) = config.get(SPARK_SQL_SESSION_LOCAL_RELATION_SIZE_LIMIT)? {
+            output.local_relation_size_limit =
+                parse_bytes_config(SPARK_SQL_SESSION_LOCAL_RELATION_SIZE_LIMIT, value)?;
+        }
+
+        if let Some(value) = config.get(SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT)? {
+            output.local_relation_chunk_size_limit =
+                parse_bytes_config(SPARK_SQL_SESSION_LOCAL_RELATION_CHUNK_SIZE_LIMIT, value)?;
         }
 
         if let Some(value) = config

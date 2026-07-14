@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem;
 
 use fastrace::Span;
@@ -37,6 +38,15 @@ impl Actor for WorkerActor {
             driver_client_set,
             peer_tracker,
             task_runner: TaskRunner::new(),
+            preparing_tasks: HashMap::new(),
+            current_preparations: HashMap::new(),
+            pending_job_cleanups: vec![],
+            pending_worker_stops: vec![],
+            stopping: false,
+            job_cleanup_generations: HashMap::new(),
+            next_job_cleanup_generation: 0,
+            canceled_tasks: Default::default(),
+            next_resource_preparation_id: 0,
             stream_manager,
             sequence: 42,
         }
@@ -66,8 +76,23 @@ impl Actor for WorkerActor {
             WorkerEvent::RunTask {
                 key,
                 definition,
+                launch_context,
                 peers,
-            } => self.handle_run_task(ctx, key, definition, peers),
+            } => self.handle_run_task(ctx, key, definition, launch_context, peers),
+            WorkerEvent::TaskResourcesMaterialized {
+                preparation_id,
+                key,
+                definition,
+                result,
+                peers,
+            } => self.handle_task_resources_materialized(
+                ctx,
+                preparation_id,
+                key,
+                definition,
+                result,
+                peers,
+            ),
             WorkerEvent::StopTask { key } => self.handle_stop_task(ctx, key),
             WorkerEvent::ReportTaskStatus {
                 key,
@@ -104,15 +129,30 @@ impl Actor for WorkerActor {
                 schema,
                 result,
             } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
-            WorkerEvent::CleanUpJob { job_id, stage } => {
-                self.handle_clean_up_job(ctx, job_id, stage)
+            WorkerEvent::CleanUpJob {
+                job_id,
+                stage,
+                result,
+            } => self.handle_clean_up_job(ctx, job_id, stage, result),
+            WorkerEvent::StopWorker { result } => self.handle_stop_worker(ctx, result),
+            WorkerEvent::ExpireJobCancellation { job_id, generation } => {
+                self.handle_expire_job_cancellation(job_id, generation)
             }
             WorkerEvent::Shutdown => ActorAction::Stop,
         }
     }
 
-    async fn stop(self, _ctx: &mut ActorContext<Self>) {
-        self.server.stop().await;
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        self.stopping = true;
+        for preparing in self.preparing_tasks.values_mut() {
+            if let Some(cancel) = preparing.cancel.take() {
+                let _ = cancel.send(());
+            }
+        }
+        self.task_runner.stop_all();
+        self.stream_manager.stop().await;
+        ctx.shutdown_tasks().await;
+        mem::take(&mut self.server).stop().await;
         info!("worker {} server has stopped", self.options.worker_id);
     }
 }

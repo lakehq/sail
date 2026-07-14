@@ -1,6 +1,10 @@
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
 use async_stream;
 use datafusion::prelude::SessionContext;
 use log::debug;
+use sail_common::config::AppConfig;
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
@@ -23,14 +27,105 @@ use crate::spark::connect::{
     config_request, plan,
 };
 
+const MAX_SESSION_IDENTITY_BYTES: usize = 256;
+const MAX_CONCURRENT_ARTIFACT_RPCS: usize = 4;
+
+fn artifact_rpc_admission() -> Arc<tokio::sync::Semaphore> {
+    static ADMISSION: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    Arc::clone(
+        ADMISSION
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ARTIFACT_RPCS))),
+    )
+}
+
+async fn acquire_artifact_rpc_permit(
+    admission: Arc<tokio::sync::Semaphore>,
+    rpc_deadline: tokio::time::Instant,
+) -> Result<tokio::sync::OwnedSemaphorePermit, Status> {
+    tokio::time::timeout_at(rpc_deadline, admission.acquire_owned())
+        .await
+        .map_err(|_| Status::deadline_exceeded("AddArtifacts RPC timed out"))?
+        .map_err(|_| Status::unavailable("AddArtifacts RPC admission is closed"))
+}
+
+fn validate_session_identity(session_id: &str, user_id: &str) -> Result<(), Status> {
+    if session_id.is_empty() {
+        return Err(Status::invalid_argument("session ID must not be empty"));
+    }
+    if session_id.len() > MAX_SESSION_IDENTITY_BYTES {
+        return Err(Status::invalid_argument(format!(
+            "session ID exceeded the limit of {MAX_SESSION_IDENTITY_BYTES} bytes"
+        )));
+    }
+    if user_id.len() > MAX_SESSION_IDENTITY_BYTES {
+        return Err(Status::invalid_argument(format!(
+            "user ID exceeded the limit of {MAX_SESSION_IDENTITY_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn debug_add_artifacts_frame(label: &str, request: &AddArtifactsRequest) {
+    let user_id_bytes = request
+        .user_context
+        .as_ref()
+        .map_or(0, |user| user.user_id.len());
+    match request.payload.as_ref() {
+        Some(crate::spark::connect::add_artifacts_request::Payload::Batch(batch)) => {
+            let payload_bytes = batch.artifacts.iter().fold(0_usize, |total, artifact| {
+                total.saturating_add(artifact.data.as_ref().map_or(0, |chunk| chunk.data.len()))
+            });
+            debug!(
+                "AddArtifacts {label}: session_id_bytes={}, user_id_bytes={}, payload=batch, artifacts={}, payload_bytes={payload_bytes}",
+                request.session_id.len(),
+                user_id_bytes,
+                batch.artifacts.len(),
+            );
+        }
+        Some(crate::spark::connect::add_artifacts_request::Payload::BeginChunk(begin)) => {
+            debug!(
+                "AddArtifacts {label}: session_id_bytes={}, user_id_bytes={}, payload=begin_chunk, name_bytes={}, total_bytes={}, chunks={}, initial_chunk_bytes={}",
+                request.session_id.len(),
+                user_id_bytes,
+                begin.name.len(),
+                begin.total_bytes,
+                begin.num_chunks,
+                begin
+                    .initial_chunk
+                    .as_ref()
+                    .map_or(0, |chunk| chunk.data.len()),
+            );
+        }
+        Some(crate::spark::connect::add_artifacts_request::Payload::Chunk(chunk)) => {
+            debug!(
+                "AddArtifacts {label}: session_id_bytes={}, user_id_bytes={}, payload=chunk, payload_bytes={}",
+                request.session_id.len(),
+                user_id_bytes,
+                chunk.data.len(),
+            );
+        }
+        None => {
+            debug!(
+                "AddArtifacts {label}: session_id_bytes={}, user_id_bytes={}, payload=none",
+                request.session_id.len(),
+                user_id_bytes,
+            );
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SparkConnectServer {
     session_manager: SessionManager,
+    config: Arc<AppConfig>,
 }
 
 impl SparkConnectServer {
-    pub fn new(session_manager: SessionManager) -> Self {
-        Self { session_manager }
+    pub fn new(session_manager: SessionManager, config: Arc<AppConfig>) -> Self {
+        Self {
+            session_manager,
+            config,
+        }
     }
 }
 
@@ -127,6 +222,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let metadata = ExecutorMetadata {
             operation_id: request
                 .operation_id
@@ -168,6 +264,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -251,6 +348,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -288,8 +386,18 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<Streaming<AddArtifactsRequest>>,
     ) -> Result<Response<AddArtifactsResponse>, Status> {
+        let chunk_timeout = Duration::from_secs(self.config.spark.artifact_chunk_timeout_secs);
+        let rpc_timeout = Duration::from_secs(self.config.spark.artifact_rpc_timeout_secs);
+        let rpc_deadline = tokio::time::Instant::now() + rpc_timeout;
+        let _rpc_permit =
+            acquire_artifact_rpc_permit(artifact_rpc_admission(), rpc_deadline).await?;
         let mut request = request.into_inner();
-        let first = match request.next().await {
+        let first_deadline = rpc_deadline.min(tokio::time::Instant::now() + chunk_timeout);
+        let first = match tokio::time::timeout_at(first_deadline, request.next())
+            .await
+            .map_err(|_| {
+                Status::deadline_exceeded("timed out waiting for the first artifact request")
+            })? {
             Some(item) => item?,
             None => {
                 return Err(Status::invalid_argument(
@@ -297,37 +405,59 @@ impl SparkConnectService for SparkConnectServer {
                 ));
             }
         };
-        debug!("{first:?}");
+        debug_add_artifacts_frame("first frame", &first);
         let session_id = first.session_id.clone();
-        let user_id = first.user_context.map(|u| u.user_id).unwrap_or_default();
-        let ctx = self
-            .session_manager
-            .get_or_create_session_context(session_id.clone(), user_id)
-            .await
-            .map_err(SparkError::from)?;
-        let payload = first.payload;
+        let user_id = first
+            .user_context
+            .as_ref()
+            .map(|u| u.user_id.clone())
+            .unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
+        let payload = first.payload.ok_or_else(|| {
+            Status::invalid_argument("the first artifact request must contain a payload")
+        })?;
+        crate::artifact::ensure_artifact_cleanup_capacity()?;
+        let ctx = tokio::time::timeout_at(
+            rpc_deadline,
+            self.session_manager
+                .get_or_create_session_context(session_id.clone(), user_id.clone()),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("AddArtifacts RPC timed out"))?
+        .map_err(SparkError::from)?;
+        let expected_session_id = session_id.clone();
+        let expected_user_id = user_id.clone();
         let stream = async_stream::try_stream! {
-            if let Some(payload) = payload {
-                yield payload;
-            }
+            yield payload;
             while let Some(item) = request.next().await {
                 let item = item?;
-                debug!("{item:?}");
-                if item.session_id != session_id {
+                debug_add_artifacts_frame("continuation frame", &item);
+                if item.session_id != expected_session_id {
                     Err(Status::invalid_argument("session ID must be consistent"))?;
+                }
+                let item_user_id = item.user_context.map(|user| user.user_id).unwrap_or_default();
+                if item_user_id != expected_user_id {
+                    Err(Status::invalid_argument("user ID must be consistent"))?;
                 }
                 if let Some(payload) = item.payload {
                     yield payload;
                 }
             }
         };
-        let artifacts = service::handle_add_artifacts(&ctx, stream).await?;
+        let artifacts =
+            tokio::time::timeout_at(rpc_deadline, service::handle_add_artifacts(&ctx, stream))
+                .await
+                .map_err(|_| Status::deadline_exceeded("AddArtifacts RPC timed out"))??;
         let response = AddArtifactsResponse {
-            session_id: first.session_id.clone(),
-            server_side_session_id: first.session_id,
+            session_id: session_id.clone(),
+            server_side_session_id: session_id,
             artifacts,
         };
-        debug!("{response:?}");
+        debug!(
+            "AddArtifacts response: session_id_bytes={}, artifacts={}",
+            response.session_id.len(),
+            response.artifacts.len()
+        );
         Ok(Response::new(response))
     }
 
@@ -336,9 +466,32 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ArtifactStatusesRequest>,
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
         let request = request.into_inner();
-        debug!("{request:?}");
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
+        if request.names.len() > self.config.spark.artifact_rpc_max_artifacts {
+            return Err(Status::invalid_argument(format!(
+                "ArtifactStatus RPC exceeded the limit of {} artifact names",
+                self.config.spark.artifact_rpc_max_artifacts
+            )));
+        }
+        let name_bytes = request.names.iter().try_fold(0_usize, |total, name| {
+            total.checked_add(name.len()).ok_or_else(|| {
+                Status::invalid_argument("ArtifactStatus RPC name byte count overflow")
+            })
+        })?;
+        if name_bytes > self.config.spark.artifact_rpc_max_bytes {
+            return Err(Status::invalid_argument(format!(
+                "ArtifactStatus RPC artifact names exceeded the limit of {} bytes",
+                self.config.spark.artifact_rpc_max_bytes
+            )));
+        }
+        debug!(
+            "ArtifactStatus request: session_id_bytes={}, user_id_bytes={}, artifacts={}, name_bytes={name_bytes}",
+            session_id.len(),
+            user_id.len(),
+            request.names.len(),
+        );
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -350,7 +503,11 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: request.session_id,
             statuses,
         };
-        debug!("{response:?}");
+        debug!(
+            "ArtifactStatus response: session_id_bytes={}, artifacts={}",
+            response.session_id.len(),
+            response.statuses.len()
+        );
         Ok(Response::new(response))
     }
 
@@ -362,6 +519,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -406,6 +564,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -425,6 +584,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{request:?}");
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
@@ -454,9 +614,10 @@ impl SparkConnectService for SparkConnectServer {
             Err(SparkError::unsupported("reconnect session"))?;
         }
         let session_id = request.session_id.clone();
-        let _user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        validate_session_identity(&session_id, &user_id)?;
         self.session_manager
-            .delete_session(session_id)
+            .delete_session(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let response = ReleaseSessionResponse {
@@ -483,5 +644,87 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         Err(Status::unimplemented("clone session"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[test]
+    fn session_identity_allows_unknown_user() {
+        assert!(validate_session_identity("session", "").is_ok());
+    }
+
+    #[test]
+    fn session_identity_requires_bounded_session_id() {
+        assert!(validate_session_identity("", "user").is_err());
+        assert!(
+            validate_session_identity(&"s".repeat(MAX_SESSION_IDENTITY_BYTES + 1), "user").is_err()
+        );
+    }
+
+    #[test]
+    fn session_identity_requires_bounded_user_id() {
+        assert!(
+            validate_session_identity("session", &"u".repeat(MAX_SESSION_IDENTITY_BYTES + 1),)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_rpc_admission_defers_first_frame_until_a_permit_is_released()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let admission = Arc::new(tokio::sync::Semaphore::new(2));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let first = acquire_artifact_rpc_permit(Arc::clone(&admission), deadline).await?;
+        let second = acquire_artifact_rpc_permit(Arc::clone(&admission), deadline).await?;
+        let first_frame_read = Arc::new(tokio::sync::Notify::new());
+        let (finish, wait_for_finish) = oneshot::channel();
+        let queued_admission = Arc::clone(&admission);
+        let queued_read = Arc::clone(&first_frame_read);
+        let queued = tokio::spawn(async move {
+            let _permit = acquire_artifact_rpc_permit(queued_admission, deadline).await?;
+            queued_read.notify_one();
+            wait_for_finish
+                .await
+                .map_err(|_| Status::internal("test RPC finish signal was dropped"))?;
+            Ok::<(), Status>(())
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), first_frame_read.notified())
+                .await
+                .is_err()
+        );
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(1), first_frame_read.notified()).await?;
+        assert!(Arc::clone(&admission).try_acquire_owned().is_err());
+        let _ = finish.send(());
+        queued.await??;
+        assert!(Arc::clone(&admission).try_acquire_owned().is_ok());
+        drop(second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn artifact_rpc_admission_wait_obeys_the_rpc_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let admission = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = acquire_artifact_rpc_permit(
+            Arc::clone(&admission),
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await?;
+        let result = acquire_artifact_rpc_permit(
+            admission,
+            tokio::time::Instant::now() + Duration::from_millis(20),
+        )
+        .await;
+        assert!(matches!(result, Err(status) if status.code() == tonic::Code::DeadlineExceeded));
+        drop(permit);
+        Ok(())
     }
 }

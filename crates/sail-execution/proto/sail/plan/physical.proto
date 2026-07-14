@@ -587,6 +587,7 @@ message MemoryExecNode {
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
   optional uint64 limit = 6;
+  repeated string partition_resource_keys = 7;
 }
 
 message ValuesExecNode {

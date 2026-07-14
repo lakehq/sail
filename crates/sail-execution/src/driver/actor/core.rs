@@ -83,6 +83,9 @@ impl Actor for DriverActor {
             DriverEvent::ProbeLostWorker { worker_id, instant } => {
                 self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
+            DriverEvent::WorkerStopFinished { worker_id, result } => {
+                self.handle_worker_stop_finished(ctx, worker_id, result)
+            }
             DriverEvent::ExecuteJob {
                 plan,
                 context,
@@ -97,6 +100,28 @@ impl Actor for DriverActor {
                 sequence,
             } => self.handle_update_task(ctx, key, status, message, cause, sequence),
             DriverEvent::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
+            DriverEvent::TaskResourcesStaged {
+                job_id,
+                staging_id,
+                stage: _,
+                result,
+            } => self.handle_task_resources_staged(ctx, job_id, staging_id, result),
+            DriverEvent::WorkerJobRequestFinished { job_id } => {
+                self.handle_worker_job_request_finished(ctx, job_id)
+            }
+            DriverEvent::JobResourceCleanupFinished { job_id, result } => {
+                self.handle_job_resource_cleanup_finished(ctx, job_id, result)
+            }
+            DriverEvent::RetryJobResourceCleanup { job_id } => {
+                self.handle_retry_job_resource_cleanup(ctx, job_id)
+            }
+            DriverEvent::DriverTaskResourcesMaterialized {
+                key,
+                definition,
+                context,
+                result,
+            } => self
+                .handle_driver_task_resources_materialized(ctx, key, definition, context, result),
             DriverEvent::ProbePendingLocalStream { key } => {
                 self.handle_probe_pending_local_stream(ctx, key)
             }
@@ -134,15 +159,94 @@ impl Actor for DriverActor {
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         self.job_scheduler.stop();
+        self.task_runner.stop_all();
         self.stream_manager.stop().await;
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }
-        if let Some(history) = self.history.take() {
-            let _ = history.send(self.build_history());
-        }
+        ctx.shutdown_tasks().await;
         info!("stopping driver server");
-        self.server.stop().await;
+        mem::take(&mut self.server).stop().await;
         info!("driver server has stopped");
+
+        let history = self
+            .history
+            .take()
+            .map(|sender| (sender, self.build_history()));
+        let DriverActor {
+            options,
+            server,
+            worker_pool,
+            job_scheduler,
+            task_assigner,
+            task_runner,
+            stream_manager,
+            task_sequences,
+            history: _,
+        } = self;
+        release_driver_ownership_then_send_history(
+            (
+                options,
+                server,
+                worker_pool,
+                job_scheduler,
+                task_assigner,
+                task_runner,
+                stream_manager,
+                task_sequences,
+            ),
+            history,
+        );
+    }
+}
+
+fn release_driver_ownership_then_send_history<T, H>(
+    ownership: T,
+    history: Option<(tokio::sync::oneshot::Sender<H>, H)>,
+) {
+    drop(ownership);
+    if let Some((sender, history)) = history {
+        let _ = sender.send(history);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Weak};
+
+    use tokio::sync::oneshot;
+
+    use super::release_driver_ownership_then_send_history;
+
+    struct DriverOwnershipMarker {
+        _ownership: Arc<()>,
+        cleanup_enqueued: Arc<AtomicBool>,
+    }
+
+    impl Drop for DriverOwnershipMarker {
+        fn drop(&mut self) {
+            self.cleanup_enqueued.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_history_is_sent_after_driver_ownership_is_released() {
+        let ownership = Arc::new(());
+        let weak: Weak<()> = Arc::downgrade(&ownership);
+        let cleanup_enqueued = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = oneshot::channel();
+
+        release_driver_ownership_then_send_history(
+            DriverOwnershipMarker {
+                _ownership: ownership,
+                cleanup_enqueued: Arc::clone(&cleanup_enqueued),
+            },
+            Some((sender, ())),
+        );
+
+        assert!(receiver.await.is_ok());
+        assert!(cleanup_enqueued.load(Ordering::Acquire));
+        assert!(weak.upgrade().is_none());
     }
 }

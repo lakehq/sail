@@ -1,10 +1,11 @@
 use prost::Message;
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::TaskStreamFlightClient;
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::event::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
 use crate::worker::r#gen::{
@@ -46,6 +47,7 @@ impl WorkerClient {
         &self,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         let definition = crate::task::r#gen::TaskDefinition::from(definition).encode_to_vec();
@@ -56,7 +58,9 @@ impl WorkerClient {
             partition: key.partition as u64,
             definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
+            launch_context: Some(launch_context.into()),
         };
+        validate_run_task_request_size(&request)?;
         let response = self.inner.get().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();
         Ok(())
@@ -89,5 +93,31 @@ impl WorkerClient {
         let response = self.inner.get().await?.stop_worker(request).await?;
         let StopWorkerResponse {} = response.into_inner();
         Ok(())
+    }
+}
+
+fn validate_run_task_request_size(request: &RunTaskRequest) -> ExecutionResult<()> {
+    let size = request.encoded_len();
+    if size > GRPC_MAX_MESSAGE_LENGTH_DEFAULT {
+        return Err(ExecutionError::InvalidArgument(format!(
+            "RunTaskRequest is {size} bytes, exceeding the worker RPC limit of {GRPC_MAX_MESSAGE_LENGTH_DEFAULT} bytes"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_run_task_request_is_rejected_before_rpc() {
+        let request = RunTaskRequest {
+            definition: vec![0; GRPC_MAX_MESSAGE_LENGTH_DEFAULT],
+            ..Default::default()
+        };
+        let error = validate_run_task_request_size(&request).unwrap_err();
+        assert!(error.to_string().contains("worker RPC limit"));
     }
 }

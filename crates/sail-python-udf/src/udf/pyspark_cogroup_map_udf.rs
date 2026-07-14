@@ -112,6 +112,7 @@ impl PySparkCoGroupMapUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::cogroup_map_udf(
                 py,
@@ -174,6 +175,7 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
                 let data = Python::attach(|py| -> PyUdfResult<_> {
+                    let _artifact_context = self.config.enter_python_artifact_context(py)?;
                     let output = udf.call1(py, (left.try_to_py(py)?, right.try_to_py(py)?))?;
                     Ok(ArrayData::try_from_py(py, &output)?)
                 })?;

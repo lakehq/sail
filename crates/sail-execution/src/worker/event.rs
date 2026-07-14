@@ -10,7 +10,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::r#gen;
 
 pub enum WorkerEvent {
@@ -27,6 +27,14 @@ pub enum WorkerEvent {
     RunTask {
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
+        peers: Vec<WorkerLocation>,
+    },
+    TaskResourcesMaterialized {
+        preparation_id: u64,
+        key: TaskKey,
+        definition: TaskDefinition,
+        result: Option<ExecutionResult<TaskLaunchContext>>,
         peers: Vec<WorkerLocation>,
     },
     StopTask {
@@ -72,6 +80,14 @@ pub enum WorkerEvent {
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
+        result: oneshot::Sender<()>,
+    },
+    StopWorker {
+        result: oneshot::Sender<()>,
+    },
+    ExpireJobCancellation {
+        job_id: JobId,
+        generation: u64,
     },
     Shutdown,
 }
@@ -91,6 +107,7 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::StartHeartbeat => "StartHeartbeat",
             WorkerEvent::ReportKnownPeers { .. } => "ReportKnownPeers",
             WorkerEvent::RunTask { .. } => "RunTask",
+            WorkerEvent::TaskResourcesMaterialized { .. } => "TaskResourcesMaterialized",
             WorkerEvent::StopTask { .. } => "StopTask",
             WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
             WorkerEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
@@ -100,6 +117,8 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
             WorkerEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
             WorkerEvent::CleanUpJob { .. } => "CleanUpJob",
+            WorkerEvent::StopWorker { .. } => "StopWorker",
+            WorkerEvent::ExpireJobCancellation { .. } => "ExpireJobCancellation",
             WorkerEvent::Shutdown => "Shutdown",
         };
         name.into()
@@ -122,6 +141,25 @@ impl SpanAssociation for WorkerEvent {
                         attempt,
                     },
                 definition: _,
+                launch_context: _,
+                peers: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
+            WorkerEvent::TaskResourcesMaterialized {
+                preparation_id: _,
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+                definition: _,
+                result: _,
                 peers: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
@@ -288,11 +326,22 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
                 p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
-            WorkerEvent::CleanUpJob { job_id, stage } => {
+            WorkerEvent::CleanUpJob {
+                job_id,
+                stage,
+                result: _,
+            } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 if let Some(stage) = stage {
                     p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 }
+            }
+            WorkerEvent::StopWorker { result: _ } => {}
+            WorkerEvent::ExpireJobCancellation {
+                job_id,
+                generation: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             WorkerEvent::Shutdown => {}
         }

@@ -12,7 +12,9 @@ use sail_plan::config::PlanConfig;
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
-use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::spark::config::{
+    SPARK_SQL_SESSION_LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES, SPARK_SQL_SESSION_TIME_ZONE,
+};
 use crate::streaming::{
     StreamingQuery, StreamingQueryAwaitHandle, StreamingQueryAwaitHandleSet, StreamingQueryId,
     StreamingQueryManager, StreamingQueryStatus,
@@ -21,6 +23,7 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    pub local_relation_batch_of_chunks_max_bytes: usize,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -61,10 +64,21 @@ impl SparkSession {
             options,
             state: Mutex::new(SparkSessionState::new()),
         };
-        extension.set_config(vec![ConfigKeyValue {
-            key: SPARK_SQL_SESSION_TIME_ZONE.to_string(),
-            value: Some(get_system_timezone()?),
-        }])?;
+        extension.set_config(vec![
+            ConfigKeyValue {
+                key: SPARK_SQL_SESSION_TIME_ZONE.to_string(),
+                value: Some(get_system_timezone()?),
+            },
+            ConfigKeyValue {
+                key: SPARK_SQL_SESSION_LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES.to_string(),
+                value: Some(
+                    extension
+                        .options
+                        .local_relation_batch_of_chunks_max_bytes
+                        .to_string(),
+                ),
+            },
+        ])?;
         Ok(extension)
     }
 
@@ -303,5 +317,36 @@ impl SparkSessionState {
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_relation_batch_size_defaults_to_artifact_rpc_quota() -> SparkResult<()> {
+        let quota = 128 * 1024 * 1024;
+        let session = SparkSession::try_new(
+            "session".to_string(),
+            "user".to_string(),
+            SparkSessionOptions {
+                execution_heartbeat_interval: Duration::from_secs(15),
+                local_relation_batch_of_chunks_max_bytes: quota,
+            },
+        )?;
+
+        let config = session.get_config(vec![
+            SPARK_SQL_SESSION_LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES.to_string(),
+        ])?;
+
+        assert_eq!(
+            config,
+            vec![ConfigKeyValue {
+                key: SPARK_SQL_SESSION_LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES.to_string(),
+                value: Some(quota.to_string()),
+            }]
+        );
+        Ok(())
     }
 }

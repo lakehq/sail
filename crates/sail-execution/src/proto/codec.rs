@@ -1,7 +1,8 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -262,7 +263,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-use sail_python_udf::config::PySparkUdfConfig;
+use sail_python_udf::config::{PySparkPythonArtifact, PySparkUdfConfig};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
@@ -272,6 +273,7 @@ use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::plan::r#gen::extended_aggregate_udf::UdafKind;
@@ -295,13 +297,173 @@ use crate::proto::encode::{
     physical_expr_to_proto, try_encode_field_ref, try_encode_message, try_encode_physical_expr,
     try_encode_physical_plan, try_encode_schema,
 };
+use crate::task::definition::LocalRelationResource;
 
-pub struct RemoteExecutionCodec;
+pub struct RemoteExecutionCodec {
+    decode_python_artifacts: Arc<[PySparkPythonArtifact]>,
+    decode_local_relation_resources: Arc<HashMap<String, LocalRelationResource>>,
+    encode_python_artifacts: Mutex<Vec<PySparkPythonArtifact>>,
+    encode_local_relation_resources: Mutex<Vec<LocalRelationResource>>,
+}
+
+impl Default for RemoteExecutionCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "RemoteExecutionCodec")
     }
+}
+
+impl RemoteExecutionCodec {
+    pub fn new() -> Self {
+        Self {
+            decode_python_artifacts: Arc::from(Vec::new()),
+            decode_local_relation_resources: Arc::new(HashMap::new()),
+            encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn for_driver() -> Self {
+        Self {
+            decode_python_artifacts: Arc::from(Vec::new()),
+            decode_local_relation_resources: Arc::new(HashMap::new()),
+            encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn for_task(
+        python_artifacts: Vec<PySparkPythonArtifact>,
+        local_relation_resources: Vec<LocalRelationResource>,
+    ) -> Self {
+        Self {
+            decode_python_artifacts: Arc::from(python_artifacts),
+            decode_local_relation_resources: Arc::new(
+                local_relation_resources
+                    .into_iter()
+                    .map(|resource| (resource.key.clone(), resource))
+                    .collect(),
+            ),
+            encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn clear_task_resources(&self) -> Result<()> {
+        self.encode_python_artifacts
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock Python artifact collector: {e}"))?
+            .clear();
+        self.encode_local_relation_resources
+            .lock()
+            .map_err(|e| {
+                plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
+            })?
+            .clear();
+        Ok(())
+    }
+
+    pub fn take_python_artifacts(&self) -> Result<Vec<PySparkPythonArtifact>> {
+        Ok(std::mem::take(
+            &mut *self.encode_python_artifacts.lock().map_err(|e| {
+                plan_datafusion_err!("failed to lock Python artifact collector: {e}")
+            })?,
+        ))
+    }
+
+    pub fn take_local_relation_resources(&self) -> Result<Vec<LocalRelationResource>> {
+        Ok(std::mem::take(
+            &mut *self.encode_local_relation_resources.lock().map_err(|e| {
+                plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
+            })?,
+        ))
+    }
+
+    fn collect_python_artifacts(&self, artifacts: &[PySparkPythonArtifact]) -> Result<()> {
+        let mut collected = self
+            .encode_python_artifacts
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock Python artifact collector: {e}"))?;
+        for artifact in artifacts {
+            if !collected.iter().any(|existing| {
+                existing.scope_id == artifact.scope_id
+                    && existing.name == artifact.name
+                    && existing.sha256 == artifact.sha256
+            }) {
+                collected.push(artifact.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_local_relation_resource(&self, data: Vec<u8>) -> Result<String> {
+        let sha256 = sha256_hex(&data);
+        let key = sha256.clone();
+        let size = data.len() as u64;
+        let mut collected = self.encode_local_relation_resources.lock().map_err(|e| {
+            plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
+        })?;
+        if !collected.iter().any(|resource| resource.key == key) {
+            let resource = LocalRelationResource {
+                key: key.clone(),
+                data: Some(data.into()),
+                uri: None,
+                sha256,
+                size,
+            };
+            collected.push(resource);
+        }
+        Ok(key)
+    }
+
+    fn read_local_relation_resource(&self, key: &str) -> Result<&[u8]> {
+        let Some(resource) = self.decode_local_relation_resources.get(key) else {
+            return plan_err!("LocalRelation resource not found: {key}");
+        };
+        let Some(data) = &resource.data else {
+            return plan_err!(
+                "LocalRelation resource {key} was not materialized before plan decoding"
+            );
+        };
+        validate_local_relation_resource_data(resource, data)?;
+        Ok(data.as_ref())
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn validate_local_relation_resource_data(
+    resource: &LocalRelationResource,
+    data: &[u8],
+) -> Result<()> {
+    if data.len() as u64 != resource.size {
+        return plan_err!(
+            "LocalRelation resource {} size mismatch: expected {}, got {}",
+            resource.key,
+            resource.size,
+            data.len()
+        );
+    }
+    let actual = sha256_hex(data);
+    if actual != resource.sha256 {
+        return plan_err!(
+            "LocalRelation resource {} SHA-256 mismatch: expected {}, got {}",
+            resource.key,
+            resource.sha256,
+            actual
+        );
+    }
+    Ok(())
 }
 
 impl PhysicalExtensionCodec for RemoteExecutionCodec {
@@ -433,12 +595,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 show_sizes,
                 sort_information,
                 limit,
+                partition_resource_keys,
             }) => {
                 let schema = try_decode_schema(&schema)?;
-                let partitions = partitions
-                    .into_iter()
-                    .map(|x| read_record_batches(&x))
-                    .collect::<Result<Vec<_>>>()?;
+                let partitions = if partition_resource_keys.is_empty() {
+                    partitions
+                        .into_iter()
+                        .map(|x| read_record_batches(&x))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    if !partitions.is_empty() {
+                        return plan_err!(
+                            "MemoryExecNode cannot contain both inline partitions and resource keys"
+                        );
+                    }
+                    partition_resource_keys
+                        .into_iter()
+                        .map(|key| {
+                            let data = self.read_local_relation_resource(&key)?;
+                            read_record_batches(data)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                };
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let sort_information =
@@ -1695,10 +1873,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
-                let partitions = memory
+                let partition_resource_keys = memory
                     .partitions()
                     .iter()
-                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .map(|x| {
+                        let data = write_record_batches(x, schema.as_ref())?;
+                        self.collect_local_relation_resource(data)
+                    })
                     .collect::<Result<_>>()?;
                 let projection = memory
                     .projection()
@@ -1709,12 +1890,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = try_encode_schema(schema.as_ref())?;
                 let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
                 NodeKind::Memory(r#gen::MemoryExecNode {
-                    partitions,
+                    partitions: vec![],
                     schema,
                     projection,
                     show_sizes: memory.show_sizes(),
                     sort_information,
                     limit: memory.fetch().map(|x| x as u64),
+                    partition_resource_keys,
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
@@ -4201,6 +4383,7 @@ impl RemoteExecutionCodec {
             python_udf_pandas_int_to_decimal_coercion_enabled: config
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
+            python_artifacts: Arc::clone(&self.decode_python_artifacts),
         };
         Ok(config)
     }
@@ -4209,6 +4392,7 @@ impl RemoteExecutionCodec {
         &self,
         config: &PySparkUdfConfig,
     ) -> Result<r#gen::PySparkUdfConfig> {
+        self.collect_python_artifacts(&config.python_artifacts)?;
         let config = r#gen::PySparkUdfConfig {
             session_timezone: config.session_timezone.clone(),
             pandas_window_bound_types: config.pandas_window_bound_types.clone(),
@@ -4321,7 +4505,7 @@ mod tests {
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let name = udf.name().to_string();
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
@@ -4333,7 +4517,7 @@ mod tests {
     }
 
     fn round_trip_udwf_arc(udwf: Arc<WindowUDF>) -> Result<Arc<WindowUDF>> {
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let name = udwf.name().to_string();
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
@@ -4419,7 +4603,7 @@ mod tests {
         expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let bytes = try_encode_physical_expr(&codec, expr)?;
         let ctx = TaskContext::default();
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
@@ -4753,7 +4937,7 @@ mod tests {
             input,
         )?;
 
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let bytes = try_encode_physical_plan(&codec, Arc::new(projection))?;
         let ctx = TaskContext::default();
         let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
@@ -4767,12 +4951,75 @@ mod tests {
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
     }
 
+    fn build_memory_plan() -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::arrow::array::Int32Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let partitions = vec![vec![batch]];
+        let source = MemorySourceConfig::try_new(&partitions, schema, None)?;
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+    }
+
+    fn memory_row_count(plan: Arc<dyn ExecutionPlan>) -> Result<usize> {
+        let data_source = plan
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("plan is not DataSourceExec"))?;
+        let memory = data_source
+            .data_source()
+            .downcast_ref::<MemorySourceConfig>()
+            .ok_or_else(|| plan_datafusion_err!("data source is not MemorySourceConfig"))?;
+        Ok(memory
+            .partitions()
+            .iter()
+            .flat_map(|partition| partition.iter())
+            .map(|batch| batch.num_rows())
+            .sum())
+    }
+
+    #[test]
+    fn test_memory_exec_uses_local_relation_resources() -> Result<()> {
+        let encoder = RemoteExecutionCodec::default();
+        let bytes = crate::proto::encode_remote_physical_plan(&encoder, build_memory_plan()?)?;
+        let resources = encoder.take_local_relation_resources()?;
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].key, resources[0].sha256);
+        assert_eq!(
+            resources[0].data.as_ref().map(|data| data.len() as u64),
+            Some(resources[0].size)
+        );
+        assert!(resources[0].uri.is_none());
+
+        let decoder = RemoteExecutionCodec::for_task(vec![], resources);
+        let ctx = TaskContext::default();
+        let decoded = try_decode_physical_plan(&ctx, &decoder, &bytes)?;
+        assert_eq!(memory_row_count(decoded)?, 3);
+
+        let missing_decoder = RemoteExecutionCodec::for_task(vec![], vec![]);
+        let error = match try_decode_physical_plan(&ctx, &missing_decoder, &bytes) {
+            Ok(_) => {
+                return plan_err!("decode unexpectedly succeeded without LocalRelation resources");
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("LocalRelation resource not found")
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
 
         let (physical, schema_ref, list) = build_filter()?;
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let key = try_encode_physical_expr(&codec, &physical)?;
         let output = TaskOutput {
             distribution: TaskOutputDistribution::Hash {

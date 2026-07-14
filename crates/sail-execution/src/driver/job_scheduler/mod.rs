@@ -4,8 +4,10 @@ mod options;
 mod state;
 mod topology;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -15,22 +17,33 @@ use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
 use crate::proto::RemoteExecutionCodec;
+use crate::task::definition::{TaskOutput, TaskResources};
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    codec: Box<dyn PhysicalExtensionCodec>,
+    codec: RemoteExecutionCodec,
+    stage_task_templates: HashMap<(JobId, usize), StageTaskTemplate>,
+}
+
+#[derive(Clone)]
+struct StageTaskTemplate {
+    plan: Arc<[u8]>,
+    resources: TaskResources,
+    output: TaskOutput,
 }
 
 impl JobScheduler {
     pub fn new(options: JobSchedulerOptions) -> Self {
+        let codec = RemoteExecutionCodec::for_driver();
         Self {
             options,
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
-            codec: Box::new(RemoteExecutionCodec),
+            codec,
+            stage_task_templates: HashMap::new(),
         }
     }
 }

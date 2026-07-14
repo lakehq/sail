@@ -50,6 +50,7 @@ glob = "0.3.3"
 chrono = { version = "0.4.44", features = ["serde"] }
 chrono-tz = "0.10.4"
 futures = "0.3.32"
+fs2 = "0.4.3"
 flate2 = "1.1.9"
 comfy-table = "=7.2.2"
 html-escape = "0.2.13"
@@ -95,6 +96,7 @@ aes-gcm = "0.10.3"
 cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.11.0"
+sha2 = "0.11.0"
 crc32fast = "1.5.0"
 roaring = "0.11.3"
 datasketches = { version = "0.3.0", features = ["hll", "theta"] }
@@ -120,6 +122,8 @@ wiremock = "0.6.5"
 testcontainers = "0.26.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.27.0"
+tar = "0.4.46"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 readonly = "0.2.13"
 toml = "0.8"
 bitflags = "2.12.1"

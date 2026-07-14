@@ -21,13 +21,19 @@ def duck():
 
 @pytest.fixture(scope="module", autouse=True)
 def data(spark, duck):
+    threshold_key = "spark.sql.session.localRelationCacheThreshold"
+    previous_threshold = spark.conf.get(threshold_key)
+    spark.conf.set(threshold_key, "2147483647")
     tables = list(duck.sql("SHOW TABLES").df()["name"])
-    for table in tables:
-        df = duck.sql(f"SELECT * FROM {table}").fetch_arrow_table().to_pandas()  # noqa: S608
-        spark.createDataFrame(df).createOrReplaceTempView(table)
-    yield
-    for table in tables:
-        spark.catalog.dropTempView(table)
+    try:
+        for table in tables:
+            df = duck.sql(f"SELECT * FROM {table}").fetch_arrow_table().to_pandas()  # noqa: S608
+            spark.createDataFrame(df).createOrReplaceTempView(table)
+        yield
+    finally:
+        for table in tables:
+            spark.catalog.dropTempView(table)
+        spark.conf.set(threshold_key, previous_threshold)
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)], ids=[f"{x + 1:02}" for x in range(99)])

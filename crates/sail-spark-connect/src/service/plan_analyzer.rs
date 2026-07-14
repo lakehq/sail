@@ -1,18 +1,17 @@
 use datafusion::prelude::SessionContext;
 use log::warn;
 use sail_common::spec;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
 
+use crate::artifact::resolve_plan_config;
 use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::proto::data_type_json::parse_spark_json_data_type;
 use crate::schema::{to_ddl_string, to_spark_schema, to_tree_string};
-use crate::session::SparkSession;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
@@ -34,8 +33,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
-    let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -63,7 +61,6 @@ pub(crate) async fn handle_analyze_explain(
     ctx: &SessionContext,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    let spark = ctx.extension::<SparkSession>()?;
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;
@@ -71,7 +68,7 @@ pub(crate) async fn handle_analyze_explain(
     let options = ExplainOptions::from_mode(spec_mode);
     let explain = explain_string(
         ctx,
-        spark.plan_config()?,
+        resolve_plan_config(ctx)?,
         spec::Plan::Query(plan.try_into()?),
         options,
     )
@@ -94,23 +91,35 @@ pub(crate) async fn handle_analyze_tree_string(
 }
 
 pub(crate) async fn handle_analyze_is_local(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     request: IsLocalRequest,
 ) -> SparkResult<IsLocalResponse> {
     let IsLocalRequest { plan } = request;
     let plan = plan.required("plan")?;
+    validate_analyzed_query(ctx, &plan).await?;
     let is_local = analyze_is_local(plan)?;
     Ok(IsLocalResponse { is_local })
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     request: IsStreamingRequest,
 ) -> SparkResult<IsStreamingResponse> {
     let IsStreamingRequest { plan } = request;
     let plan = plan.required("plan")?;
+    validate_analyzed_query(ctx, &plan).await?;
     let is_streaming = analyze_is_streaming(plan)?;
     Ok(IsStreamingResponse { is_streaming })
+}
+
+async fn validate_analyzed_query(ctx: &SessionContext, plan: &sc::Plan) -> SparkResult<()> {
+    if let Some(plan::OpType::Root(relation)) = &plan.op_type {
+        let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
+        resolver
+            .resolve_named_plan(spec::Plan::Query(relation.clone().try_into()?))
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn handle_analyze_input_files(
@@ -133,8 +142,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
-    let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
     Ok(DdlParseResponse {
         parsed: Some(data_type.try_into()?),
@@ -208,7 +216,8 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
                 spec::Plan::Command(_)
                     | spec::Plan::Query(spec::QueryPlan {
                         node: spec::QueryNode::LocalRelation { .. }
-                            | spec::QueryNode::CachedLocalRelation { .. },
+                            | spec::QueryNode::CachedLocalRelation { .. }
+                            | spec::QueryNode::ChunkedCachedLocalRelation { .. },
                         ..
                     })
             ))
@@ -246,6 +255,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         // leaf nodes with no query plan inputs
         spec::QueryNode::LocalRelation { .. }
         | spec::QueryNode::CachedLocalRelation { .. }
+        | spec::QueryNode::ChunkedCachedLocalRelation { .. }
         | spec::QueryNode::CachedRemoteRelation { .. }
         | spec::QueryNode::Range(_)
         | spec::QueryNode::Empty { .. }
