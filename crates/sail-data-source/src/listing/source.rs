@@ -25,9 +25,7 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
-use crate::listing::utils::{
-    infer_partitions, rewrite_utf8view_fields, sample_resolved_listing_files, validate_partitions,
-};
+use crate::listing::utils::{infer_partitions, sample_resolved_listing_files, validate_partitions};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::url::{resolve_listing_urls_with_metadata, resolve_listing_writer_url};
 
@@ -216,7 +214,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;
-                let schema = rewrite_utf8view_fields(schema);
 
                 let partition_by = if partition_by.is_empty() {
                     infer_partitions(&sampled_files)?

@@ -2,7 +2,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import Row
+from pyspark.sql.types import Row, StringType
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -232,6 +232,19 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
 
     rows = spark.read.parquet(str(path)).orderBy("id").collect()
     assert rows == [Row(id=1), Row(id=2)]
+
+
+def test_parquet_utf8_view_across_cluster_shuffle(spark, tmp_path):
+    path = tmp_path / "utf8_view.parquet"
+    pd.DataFrame({"key": ["alpha", "beta", "alpha"], "value": [1, 2, 3]}).to_parquet(path)
+
+    df = spark.read.parquet(str(path))
+    assert isinstance(df.schema["key"].dataType, StringType)
+    assert df.select("key").orderBy("key").toPandas()["key"].tolist() == ["alpha", "alpha", "beta"]
+
+    result = df.repartition(4, "key").groupBy("key").count().orderBy("key").toPandas()
+    expected = pd.DataFrame({"key": ["alpha", "beta"], "count": [2, 1]}).astype({"count": "int64"})
+    assert_frame_equal(result, expected)
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):

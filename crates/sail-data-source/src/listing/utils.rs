@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
 use arrow_schema::FieldRef;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
@@ -17,26 +14,6 @@ use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::ListingFileSample;
-
-pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
-    // TODO: Spark doesn't support Utf8View
-    let new_fields: Vec<Field> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            if matches!(field.data_type(), &DataType::Utf8View) {
-                field.as_ref().clone().with_data_type(DataType::Utf8)
-            } else {
-                field.as_ref().clone()
-            }
-        })
-        .collect();
-
-    Arc::new(Schema::new_with_metadata(
-        new_fields,
-        schema.metadata().clone(),
-    ))
-}
 
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len()
