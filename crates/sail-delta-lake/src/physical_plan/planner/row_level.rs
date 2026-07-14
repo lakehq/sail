@@ -60,7 +60,7 @@ pub async fn create_row_level_write_physical_plan(
             } else {
                 None
             };
-            let physical_deletion_vector = if let Some(plan) = node.deletion_vector_plan() {
+            let physical_deletion_vector = if let Some(plan) = node.row_index_delete_plan() {
                 Some(planner.create_physical_plan(plan, ctx).await?)
             } else {
                 None

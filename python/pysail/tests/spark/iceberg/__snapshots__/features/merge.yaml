@@ -1,0 +1,224 @@
+# serializer version: 1
+---
+name: "test_explain_keeps_merge_metadata_scans_constant_across_target_files"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/iceberg_merge_many_files_plan/)
+      IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_many_files_plan/, merge_row_intents=true)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[id@1 as id, CASE WHEN __common_expr_1@0 THEN __sail_src_value@8 ELSE value@2 END as value, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, CASE WHEN __sail_merge_target_row_present@7 IS NULL THEN 3 WHEN __common_expr_1@0 THEN 6 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+              ProjectionExec: expr=[(__sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@8 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@3 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_value@7 as __sail_src_value]
+                FilterExec: __sail_merge_target_row_present@6 IS NOT NULL
+                  ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@3 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_value@9 as __sail_src_value, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                    MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                      RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@6], 4), input_partitions=4
+                        HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@3, value@4, __sail_file_path@5, __sail_file_row_index@6, __sail_iceberg_partition_spec_id@7, __sail_iceberg_partition@8, __sail_merge_target_row_id@9, __sail_merge_target_row_present@10, __sail_src_id@0, __sail_src_value@1, __sail_merge_source_row_present@2]
+                          ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
+                            DataSourceExec: partitions=1, partition_sizes=[1]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+                            ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@3 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                              MonotonicIdExec: col=__sail_merge_target_row_id
+                                ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@5 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
+                                  IcebergMergeMetadataExec: data_file_column=__sail_file_path
+                                    DataSourceExec: file_groups={3 groups: [[<tmp>/iceberg_merge_many_files_plan/data/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_merge_many_files_plan/data/part-<uuid>-00000000000000000001.parquet], [<tmp>/iceberg_merge_many_files_plan/data/part-<uuid>-00000000000000000002.parquet]]}, projection=[id, value, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], file_type=parquet
+            ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, 3 as __sail_merge_source_metric]
+              PlaceholderRowExec
+---
+name: "test_explain_shows_one_mergeonread_rowintent_writer"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/iceberg_merge_plan/)
+      IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_plan/, merge_row_intents=true)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@12 ELSE id@5 END as id, CASE WHEN __common_expr_2@1 THEN __sail_src_value@13 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN expired WHEN __common_expr_1@0 THEN __sail_src_value@13 ELSE value@6 END as value, CASE WHEN __common_expr_1@0 THEN __sail_src_flag@14 ELSE flag@7 END as flag, __sail_file_path@8 as __sail_file_path, __sail_file_row_index@9 as __sail_file_row_index, __sail_iceberg_partition_spec_id@10 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@11 as __sail_iceberg_partition, CASE WHEN __common_expr_4@3 THEN 3 WHEN __common_expr_2@1 THEN 6 WHEN (__common_expr_5@4 AND flag@7 = delete) IS NOT DISTINCT FROM true AND NOT __common_expr_2@1 THEN 5 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN 8 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = purge) IS NOT DISTINCT FROM true AND NOT (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN 7 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+              ProjectionExec: expr=[(__common_expr_6@0 AND __sail_merge_source_row_present@13 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_1, (__common_expr_7@1 AND flag@5 = update) IS NOT DISTINCT FROM true as __common_expr_2, __common_expr_8@2 as __common_expr_3, __common_expr_6@0 as __common_expr_4, __common_expr_7@1 as __common_expr_5, id@3 as id, value@4 as value, flag@5 as flag, __sail_file_path@6 as __sail_file_path, __sail_file_row_index@7 as __sail_file_row_index, __sail_iceberg_partition_spec_id@8 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@9 as __sail_iceberg_partition, __sail_src_id@10 as __sail_src_id, __sail_src_value@11 as __sail_src_value, __sail_src_flag@12 as __sail_src_flag, __sail_merge_source_row_present@13 as __sail_merge_source_row_present]
+                ProjectionExec: expr=[__sail_merge_target_row_present@8 IS NULL as __common_expr_6, __common_expr_9@0 AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_7, __common_expr_9@0 as __common_expr_8, id@1 as id, value@2 as value, flag@3 as flag, __sail_file_path@4 as __sail_file_path, __sail_file_row_index@5 as __sail_file_row_index, __sail_iceberg_partition_spec_id@6 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@7 as __sail_iceberg_partition, __sail_src_id@9 as __sail_src_id, __sail_src_value@10 as __sail_src_value, __sail_src_flag@11 as __sail_src_flag, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
+                  ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NOT NULL as __common_expr_9, id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_value@9 as __sail_src_value, __sail_src_flag@10 as __sail_src_flag, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                    FilterExec: __sail_merge_target_row_present@7 IS NOT NULL OR __sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
+                      ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, __sail_merge_target_row_present@8 as __sail_merge_target_row_present, __sail_src_id@9 as __sail_src_id, __sail_src_value@10 as __sail_src_value, __sail_src_flag@11 as __sail_src_flag, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
+                        MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                          RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@7], 4), input_partitions=4
+                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@4, value@5, flag@6, __sail_file_path@7, __sail_file_row_index@8, __sail_iceberg_partition_spec_id@9, __sail_iceberg_partition@10, __sail_merge_target_row_id@11, __sail_merge_target_row_present@12, __sail_src_id@0, __sail_src_value@1, __sail_src_flag@2, __sail_merge_source_row_present@3]
+                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
+                                DataSourceExec: partitions=1, partition_sizes=[1]
+                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, __sail_merge_target_row_id@7 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                  MonotonicIdExec: col=__sail_merge_target_row_id
+                                    ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@6 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition]
+                                      IcebergMergeMetadataExec: data_file_column=__sail_file_path
+                                        DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], file_type=parquet
+            ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, 3 as __sail_merge_source_metric]
+              PlaceholderRowExec
+---
+name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 999
+  last-sequence-number: 2
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_merge_metadata/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_merge_metadata/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_merge_metadata/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties:
+    write.merge.mode: merge-on-read
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: string
+    - id: 3
+      name: flag
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-records: '5'
+      operation: append
+      total-data-files: '1'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '5'
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      added-data-files: '1'
+      added-delete-files: '1'
+      added-position-delete-files: '1'
+      added-position-deletes: '4'
+      added-records: '3'
+      operation: overwrite
+      total-data-files: '2'
+      total-delete-files: '1'
+      total-equality-deletes: '0'
+      total-position-deletes: '4'
+      total-records: '8'
+    timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
+  table-uuid: <uuid>
+---
+name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests.1"
+data:
+  manifests:
+  - added-files-count: 1
+    added-rows-count: 5
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 1
+    partition-spec-id: 0
+    partitions: null
+    sequence-number: 1
+  - added-files-count: 1
+    added-rows-count: 3
+    added-snapshot-id: <snapshot-id>
+    content: data
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions: null
+    sequence-number: 2
+  - added-files-count: 1
+    added-rows-count: 4
+    added-snapshot-id: <snapshot-id>
+    content: deletes
+    deleted-files-count: 0
+    deleted-rows-count: 0
+    existing-files-count: 0
+    existing-rows-count: 0
+    key-metadata: null
+    manifest-length: <bytes>
+    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
+    min-sequence-number: 2
+    partition-spec-id: 0
+    partitions: null
+    sequence-number: 2
+---
+name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests.2"
+data:
+  added-data-files: '1'
+  added-delete-files: '1'
+  added-position-delete-files: '1'
+  added-position-deletes: '4'
+  added-records: '3'
+  operation: overwrite
+  total-data-files: '2'
+  total-delete-files: '1'
+  total-equality-deletes: '0'
+  total-position-deletes: '4'
+  total-records: '8'
+---
+name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests.3"
+data:
+  current-schema-id: 0
+  last-column-id: 3
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: value
+      required: false
+      type: string
+    - id: 3
+      name: flag
+      required: false
+      type: string
+    schema-id: 0
+    type: struct

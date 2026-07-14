@@ -396,6 +396,7 @@ impl PlanResolver<'_> {
                 state,
                 target_schema,
                 source_schema,
+                self.config.case_sensitive,
             );
             let resolved = self
                 .resolve_expression(disambiguated, merge_schema, state)

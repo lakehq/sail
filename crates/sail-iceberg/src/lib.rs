@@ -20,6 +20,7 @@ pub mod options;
 pub mod physical;
 pub mod physical_plan;
 pub(crate) mod properties;
+pub(crate) mod row_level_metadata;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;

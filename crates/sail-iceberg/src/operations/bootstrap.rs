@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction};
+use crate::operations::{ActionCommit, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
@@ -61,15 +61,6 @@ pub struct BootstrapResult {
     pub metadata_file: String,
 }
 
-/// Bootstrap operation for SnapshotProducer
-struct BootstrapOperation;
-
-impl SnapshotProduceOperation for BootstrapOperation {
-    fn operation(&self) -> &'static str {
-        "append"
-    }
-}
-
 pub(crate) async fn bootstrap_snapshot_action_commit(
     table_url: &Url,
     store_ctx: &StoreContext,
@@ -102,11 +93,15 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let tx = Transaction::new(
+        table_url.to_string(),
+        empty_snapshot,
+        table_meta.last_sequence_number,
+    );
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
-        partition_spec,
+        partition_spec.clone(),
         format_version,
         crate::spec::ManifestContentType::Data,
     );
@@ -118,11 +113,13 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_added_delete_files(commit_info.delete_files.clone())
+    .with_partition_specs(table_meta.partition_specs.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     producer
-        .commit(BootstrapOperation)
+        .commit(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)
 }
@@ -182,7 +179,7 @@ pub async fn bootstrap_new_table_with_style(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let tx = Transaction::new(table_url.to_string(), empty_snapshot, 0);
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
@@ -200,11 +197,13 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_added_delete_files(commit_info.delete_files.clone())
+    .with_partition_specs(vec![partition_spec.clone()])
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
-        .commit(BootstrapOperation)
+        .commit(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)?;
 
@@ -224,14 +223,14 @@ pub async fn bootstrap_new_table_with_style(
         format_version,
         table_uuid: None,
         location: table_url.to_string(),
-        last_sequence_number: 1,
+        last_sequence_number: snapshot.sequence_number(),
         last_updated_ms: commit_timestamp_ms,
         last_column_id: iceberg_schema.highest_field_id(),
         schemas: vec![iceberg_schema.clone()],
         current_schema_id: iceberg_schema.schema_id(),
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
-        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        last_partition_id: partition_spec.last_assigned_field_id(),
         properties: table_properties,
         current_snapshot_id: Some(snapshot.snapshot_id()),
         next_row_id: snapshot.added_rows.and_then(|added_rows| {
@@ -329,7 +328,7 @@ pub async fn bootstrap_empty_table_metadata(
         current_schema_id: iceberg_schema.schema_id(),
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
-        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        last_partition_id: partition_spec.last_assigned_field_id(),
         properties: table_properties,
         current_snapshot_id: Some(-1),
         next_row_id: (format_version >= FormatVersion::V3).then_some(0),
@@ -404,21 +403,31 @@ pub async fn replace_empty_table_metadata(
 
     let mut metadata_log = previous_metadata.metadata_log.clone();
     metadata_log.push(crate::spec::metadata::table_metadata::MetadataLog {
-        timestamp_ms: commit_timestamp_ms,
+        timestamp_ms: previous_metadata.last_updated_ms,
         metadata_file: latest_meta_path.to_string(),
     });
+
+    let next_row_id = if format_version >= FormatVersion::V3 {
+        let mut row_lineage_metadata = previous_metadata.clone();
+        row_lineage_metadata.format_version = format_version;
+        row_lineage_metadata.row_lineage_start_row_id()
+    } else {
+        None
+    };
 
     let last_column_id = previous_metadata
         .last_column_id
         .max(iceberg_schema.highest_field_id());
     let last_partition_id = previous_metadata
         .last_partition_id
-        .max(partition_spec.highest_field_id().unwrap_or(0));
+        .max(partition_spec.last_assigned_field_id());
     let mut schemas = previous_metadata.schemas.clone();
     schemas.push(iceberg_schema.clone());
     let mut partition_specs = previous_metadata.partition_specs.clone();
     partition_specs.push(partition_spec.clone());
 
+    // FIXME: Preserve snapshot history, non-main refs, and historical sort/statistics
+    // metadata when replacing table metadata.
     let mut table_meta = TableMetadata {
         format_version,
         table_uuid: previous_metadata.table_uuid,
@@ -433,7 +442,7 @@ pub async fn replace_empty_table_metadata(
         last_partition_id,
         properties: table_properties,
         current_snapshot_id: Some(-1),
-        next_row_id: (format_version >= FormatVersion::V3).then_some(0),
+        next_row_id,
         encryption_keys: previous_metadata.encryption_keys.clone(),
         snapshots: vec![],
         snapshot_log: vec![],
@@ -528,6 +537,7 @@ pub async fn bootstrap_first_snapshot(
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
     // Update table metadata with the new snapshot
+    let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
     table_meta.snapshots.push(snapshot.clone());
@@ -538,12 +548,12 @@ pub async fn bootstrap_first_snapshot(
     table_meta
         .metadata_log
         .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: commit_timestamp_ms,
+            timestamp_ms: previous_metadata_timestamp_ms,
             metadata_file: previous_metadata_file
                 .unwrap_or(latest_meta_path)
                 .to_string(),
         });
-    table_meta.last_sequence_number = 1;
+    table_meta.last_sequence_number = snapshot.sequence_number();
     table_meta.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {
         table_meta.advance_next_row_id(added_rows);

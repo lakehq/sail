@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 NAMESPACE = "iceberg_commit_test"
+UNPARTITIONED_LAST_PARTITION_ID = 999
 UUID_METADATA_FILE_PATTERN = re.compile(
     r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
 )
@@ -47,6 +48,27 @@ def _current_schema_field_names(metadata: dict) -> list[str]:
     current_schema_id = metadata["current-schema-id"]
     current_schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == current_schema_id)
     return [field["name"] for field in current_schema["fields"]]
+
+
+def _current_snapshot(metadata: dict) -> dict:
+    current_snapshot_id = metadata["current-snapshot-id"]
+    return next(snapshot for snapshot in metadata["snapshots"] if snapshot["snapshot-id"] == current_snapshot_id)
+
+
+def _assert_row_level_commit_metadata(
+    metadata: dict,
+    *,
+    previous_metadata_location: str,
+    operation: str,
+) -> dict:
+    snapshot = _current_snapshot(metadata)
+    assert snapshot["summary"]["operation"] == operation
+    assert metadata["last-sequence-number"] == snapshot["sequence-number"]
+    assert metadata["last-partition-id"] == UNPARTITIONED_LAST_PARTITION_ID
+    assert metadata["refs"]["main"]["snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["snapshot-log"][-1]["snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["metadata-log"][-1]["metadata-file"] == previous_metadata_location
+    return snapshot
 
 
 def test_ctas_records_rest_catalog_metadata_location(
@@ -194,6 +216,160 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
 
     rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
+
+
+def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "delete_t"
+    spark.sql("DROP TABLE IF EXISTS iceberg_commit_test.delete_t")
+    spark.sql(
+        """
+        CREATE TABLE iceberg_commit_test.delete_t (
+          id INT,
+          name STRING,
+          flag STRING
+        )
+        USING iceberg
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.delete.mode' = 'merge-on-read'
+        )
+        """
+    )
+    spark.sql(
+        """
+        INSERT INTO iceberg_commit_test.delete_t
+        SELECT * FROM VALUES
+          (1, 'keep-a', 'keep'),
+          (2, 'drop-b', 'drop'),
+          (3, 'keep-c', 'keep')
+        """
+    )
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_location = before["metadata-location"]
+    _assert_uuid_metadata_location(before_location, 1)
+
+    spark.sql("DELETE FROM iceberg_commit_test.delete_t WHERE flag = 'drop'")
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_location = after["metadata-location"]
+    assert after_location != before_location
+    _assert_uuid_metadata_location(after_location, 2)
+    snapshot = _assert_row_level_commit_metadata(
+        after["metadata"],
+        previous_metadata_location=before_location,
+        operation="delete",
+    )
+    summary = snapshot["summary"]
+    assert summary["added-delete-files"] == "1"
+    assert summary["added-equality-delete-files"] == "1"
+    assert summary["added-equality-deletes"] == "1"
+    assert "deleted-records" not in summary
+    assert "added-position-delete-files" not in summary
+    assert summary["total-data-files"] == "1"
+    assert summary["total-delete-files"] == "1"
+    assert summary["total-records"] == "3"
+
+    rows = spark.sql("SELECT id, name, flag FROM iceberg_commit_test.delete_t ORDER BY id").collect()
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == [
+        (1, "keep-a", "keep"),
+        (3, "keep-c", "keep"),
+    ]
+
+
+def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "merge_t"
+    spark.sql("DROP TABLE IF EXISTS iceberg_commit_test.merge_t")
+    spark.sql(
+        """
+        CREATE TABLE iceberg_commit_test.merge_t (
+          id INT,
+          name STRING,
+          flag STRING
+        )
+        USING iceberg
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+    )
+    spark.sql(
+        """
+        INSERT INTO iceberg_commit_test.merge_t
+        SELECT * FROM VALUES
+          (1, 'keep-a', 'keep'),
+          (2, 'old-b', 'update'),
+          (3, 'drop-c', 'delete'),
+          (5, 'old-e', 'expire'),
+          (6, 'drop-f', 'purge')
+        """
+    )
+    spark.sql(
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_rest_merge_source AS
+        SELECT * FROM VALUES
+          (2, 'new-b', 'insert'),
+          (3, 'ignored-c', 'delete'),
+          (4, 'new-d', 'insert')
+        AS src(id, name, flag)
+        """
+    )
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_location = before["metadata-location"]
+    _assert_uuid_metadata_location(before_location, 1)
+
+    spark.sql(
+        """
+        MERGE INTO iceberg_commit_test.merge_t AS t
+        USING iceberg_rest_merge_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND t.flag = 'update' THEN
+          UPDATE SET name = s.name
+        WHEN MATCHED AND t.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, name, flag) VALUES (s.id, s.name, s.flag)
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'expire' THEN
+          UPDATE SET name = 'expired-e'
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'purge' THEN
+          DELETE
+        """
+    )
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_location = after["metadata-location"]
+    assert after_location != before_location
+    _assert_uuid_metadata_location(after_location, 2)
+    snapshot = _assert_row_level_commit_metadata(
+        after["metadata"],
+        previous_metadata_location=before_location,
+        operation="overwrite",
+    )
+    summary = snapshot["summary"]
+    assert summary["added-delete-files"] == "1"
+    assert summary["added-position-delete-files"] == "1"
+    assert summary["added-position-deletes"] == "4"
+    assert "deleted-records" not in summary
+    assert summary["added-data-files"] == "1"
+    assert summary["added-records"] == "3"
+    assert summary["total-data-files"] == "2"
+    assert summary["total-delete-files"] == "1"
+    assert summary["total-position-deletes"] == "4"
+    assert summary["total-records"] == "8"
+
+    rows = spark.sql("SELECT id, name, flag FROM iceberg_commit_test.merge_t ORDER BY id").collect()
+    assert [(row["id"], row["name"], row["flag"]) for row in rows] == [
+        (1, "keep-a", "keep"),
+        (2, "new-b", "update"),
+        (4, "new-d", "insert"),
+        (5, "expired-e", "expire"),
+    ]
 
 
 def test_rest_catalog_rejects_catalog_managed_iceberg_alter(

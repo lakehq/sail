@@ -1,5 +1,293 @@
 Feature: Delta Lake Merge
 
+  Rule: MERGE conditions must be deterministic
+
+    Scenario: A non-deterministic matched condition is rejected before writing
+      Given variable location for temporary directory delta_merge_nondeterministic
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_nondeterministic
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_nondeterministic (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_nondeterministic VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_nondeterministic_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_nondeterministic AS t
+        USING delta_merge_nondeterministic_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND rand() < 0.5 THEN UPDATE SET value = s.value
+        """
+      Then query error Non-deterministic expressions are not allowed in MERGE conditions
+      When query
+        """
+        SELECT id, value FROM delta_merge_nondeterministic
+        """
+      Then query result
+        | id | value |
+        | 1  | old   |
+
+  Rule: Internal MERGE columns cannot shadow table data
+
+    Scenario: A target column using an internal operation name is rejected clearly
+      Given variable location for temporary directory delta_merge_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_internal_column (
+          `__sail_operation_type` INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_internal_column VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_internal_column_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_internal_column AS t
+        USING delta_merge_internal_column_source AS s
+        ON t.`__sail_operation_type` = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error reserved internal MERGE column
+
+    Scenario: A legal target column does not collide with generated source aliases
+      Given variable location for temporary directory delta_merge_source_alias
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_source_alias
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_source_alias (`__sail_src_id` INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_source_alias VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_source_alias_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_source_alias AS t
+        USING delta_merge_source_alias_source AS s
+        ON t.`__sail_src_id` = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT `__sail_src_id`, value FROM delta_merge_source_alias
+        """
+      Then query result
+        | __sail_src_id | value |
+        | 1             | new   |
+
+  Rule: MERGE assignments follow target schema semantics
+
+    Scenario: Star actions reject source columns missing from the target schema
+      Given variable location for temporary directory delta_merge_star_missing
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_star_missing
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_star_missing (id INT, value STRING, keep STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_star_missing VALUES (1, 'old', 'preserved')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_star_missing_source AS
+        SELECT 1 AS id, 'new' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_star_missing AS t
+        USING delta_merge_star_missing_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then query error Cannot resolve source column `keep` for MERGE \* action without schema evolution
+
+    Scenario: Assignments cast to target types and reject overflow
+      Given config spark.sql.ansi.enabled = true
+      Given variable location for temporary directory delta_merge_assignment_cast
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_assignment_cast
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_assignment_cast (id INT, value INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_assignment_cast VALUES (1, 10)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_assignment_cast_source AS
+        SELECT 1 AS id, CAST(20 AS BIGINT) AS value
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_assignment_cast AS t
+        USING delta_merge_assignment_cast_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_assignment_cast
+        """
+      Then query result
+        | id | value |
+        | 1  | 20    |
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_assignment_cast_source AS
+        SELECT 1 AS id, CAST(2147483648 AS BIGINT) AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_assignment_cast AS t
+        USING delta_merge_assignment_cast_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error (?i).*(cast|overflow).*
+      When query
+        """
+        SELECT id, value FROM delta_merge_assignment_cast
+        """
+      Then query result
+        | id | value |
+        | 1  | 20    |
+
+    Scenario: Duplicate target assignments are rejected
+      Given variable location for temporary directory delta_merge_duplicate_assignment
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_duplicate_assignment
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_duplicate_assignment (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_duplicate_assignment VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_duplicate_assignment_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO delta_merge_duplicate_assignment AS t
+        USING delta_merge_duplicate_assignment_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = 'first', value = 'second'
+        """
+      Then query error Multiple assignments for MERGE target column
+
+    Scenario: Star matching honors case-sensitive resolution
+      Given config spark.sql.caseSensitive = true
+      Given variable location for temporary directory delta_merge_case_sensitive
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_case_sensitive
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_case_sensitive (`A` INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_case_sensitive VALUES (1)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_case_sensitive_source AS
+        SELECT 1 AS a
+        """
+      When query
+        """
+        MERGE INTO delta_merge_case_sensitive AS t
+        USING delta_merge_case_sensitive_source AS s
+        ON t.`A` = s.a
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      Then query error Cannot resolve source column `A` for MERGE \* action without schema evolution
+
+    Scenario: Explicit inserts use target column defaults
+      Given variable location for temporary directory delta_merge_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_assignment_default (
+          id INT,
+          status STRING DEFAULT 'new'
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_assignment_default AS t
+        USING delta_merge_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)
+        """
+      When query
+        """
+        SELECT id, status FROM delta_merge_assignment_default
+        """
+      Then query result
+        | id | status |
+        | 1  | new    |
+
   Rule: Matched updates, deletes, and default inserts
     Background:
       Given variable location for temporary directory merge_basic
@@ -64,6 +352,69 @@ Feature: Delta Lake Merge
         | 1  | old   | keep   |
         | 2  | new   | update |
         | 4  | ins   | insert |
+
+  Rule: WHEN clauses use first-match semantics
+
+    Scenario: Overlapping matched and target-only clauses apply only their first action
+      Given variable location for temporary directory delta_merge_first_match
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_first_match
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_first_match (
+          id INT,
+          left_value STRING,
+          right_value STRING,
+          kind STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_first_match VALUES
+          (1, 'old-left', 'old-right', 'delete-update'),
+          (2, 'old-left', 'old-right', 'partial-update'),
+          (3, 'old-left', 'old-right', 'source-update-delete'),
+          (4, 'old-left', 'old-right', 'source-delete-update')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_first_match_source AS
+        SELECT * FROM VALUES
+          (1, 'new-left', 'new-right', 'delete-update'),
+          (2, 'new-left', 'new-right', 'partial-update')
+        AS src(id, left_value, right_value, kind)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_first_match AS t
+        USING delta_merge_first_match_source AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.kind = 'delete-update' THEN DELETE
+        WHEN MATCHED AND s.kind IN ('delete-update', 'partial-update') THEN
+          UPDATE SET left_value = s.left_value
+        WHEN MATCHED AND s.kind = 'partial-update' THEN
+          UPDATE SET right_value = s.right_value
+        WHEN MATCHED THEN DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.kind = 'source-delete-update' THEN DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.kind IN ('source-update-delete', 'source-delete-update') THEN
+          UPDATE SET left_value = 'source-left'
+        WHEN NOT MATCHED BY SOURCE AND t.kind = 'source-update-delete' THEN
+          UPDATE SET right_value = 'source-right'
+        WHEN NOT MATCHED BY SOURCE THEN DELETE
+        """
+      When query
+        """
+        SELECT id, left_value, right_value, kind
+        FROM delta_merge_first_match
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | left_value  | right_value | kind                 |
+        | 2  | new-left    | old-right   | partial-update       |
+        | 3  | source-left | old-right   | source-update-delete |
 
   Rule: Cardinality violation is rejected when multiple source rows match one target row
     Background:

@@ -29,22 +29,29 @@ use futures::StreamExt;
 use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode,
+};
 use url::Url;
 
 use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_to_arrow};
+use crate::io::StoreContext;
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
-    CommitMeta, encode_add_data_files, encode_commit_meta, iceberg_action_schema,
+    CommitMeta, encode_add_data_files, encode_commit_meta, encode_delete_data_files,
+    iceberg_action_schema,
 };
+use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
+use crate::physical_plan::position_delete_writer::PositionDeleteAccumulator;
+use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
 };
 use crate::spec::schema::Schema as IcebergSchema;
-use crate::spec::{TableMetadata, TableRequirement};
+use crate::spec::{FormatVersion, TableMetadata, TableRequirement};
 use crate::table::metadata_loader::metadata_location_to_object_path_string;
 use crate::table_format::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
@@ -64,6 +71,7 @@ pub struct IcebergWriterExec {
     table_exists: bool,
     options: IcebergWriterExecOptions,
     logical_input_schema: Option<SchemaRef>,
+    merge_row_intents: bool,
     cache: Arc<PlanProperties>,
 }
 
@@ -117,8 +125,31 @@ impl IcebergWriterExec {
             table_exists,
             options,
             logical_input_schema,
+            merge_row_intents: false,
             cache,
         }
+    }
+
+    pub fn new_merge(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        partition_columns: Vec<CatalogPartitionField>,
+        sink_mode: PhysicalSinkMode,
+        table_exists: bool,
+        options: IcebergWriterExecOptions,
+        logical_input_schema: Option<SchemaRef>,
+    ) -> Self {
+        let mut writer = Self::new(
+            input,
+            table_url,
+            partition_columns,
+            sink_mode,
+            table_exists,
+            options,
+            logical_input_schema,
+        );
+        writer.merge_row_intents = true;
+        writer
     }
 
     fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> Arc<PlanProperties> {
@@ -162,8 +193,11 @@ impl IcebergWriterExec {
         self.logical_input_schema.as_ref()
     }
 
-    fn input_schema_with_logical_metadata(&self) -> SchemaRef {
-        let physical_schema = self.input.schema();
+    pub fn reads_merge_row_intents(&self) -> bool {
+        self.merge_row_intents
+    }
+
+    fn input_schema_with_logical_metadata(&self, physical_schema: SchemaRef) -> SchemaRef {
         let Some(logical_schema) = self.logical_input_schema.as_ref() else {
             return physical_schema;
         };
@@ -215,75 +249,6 @@ impl IcebergWriterExec {
             (false, false) => Ok(None),
         }
     }
-
-    fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
-        Self::resolve_data_dir_from_properties(&table_meta.properties, table_url)
-    }
-
-    fn resolve_data_dir_from_property_value(
-        value: Option<&str>,
-        table_url: &Url,
-    ) -> Option<String> {
-        let raw = value?.trim();
-        if raw.is_empty() {
-            return None;
-        }
-
-        let base_path = crate::utils::url_to_object_path(table_url).ok();
-        if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
-            if prop_url.scheme() == table_url.scheme()
-                && prop_url.host_str() == table_url.host_str()
-                && let (Ok(prop_path), Some(base_path)) = (
-                    crate::utils::url_to_object_path(&prop_url),
-                    base_path.as_ref(),
-                )
-            {
-                let prop_str = prop_path.as_ref();
-                let base_str = base_path.as_ref();
-                if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                    let rel = stripped.trim_start_matches('/').trim_matches('/');
-                    if !rel.is_empty() {
-                        return Some(rel.to_string());
-                    }
-                }
-            }
-        } else {
-            let prop_path = raw.replace('\\', "/");
-            if prop_path.starts_with('/') {
-                if let Some(base_path) = base_path.as_ref() {
-                    let base_str = base_path.as_ref();
-                    let prop_no_leading = prop_path.trim_start_matches('/');
-                    if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
-                    }
-                }
-            } else {
-                let rel = prop_path.trim_matches('/');
-                if !rel.is_empty() {
-                    return Some(rel.to_string());
-                }
-            }
-        }
-
-        None
-    }
-
-    fn resolve_data_dir_from_properties(
-        properties: &std::collections::HashMap<String, String>,
-        table_url: &Url,
-    ) -> String {
-        Self::resolve_data_dir_from_property_value(
-            properties
-                .get("write.data.path")
-                .or_else(|| properties.get("write.folder-storage.path"))
-                .map(String::as_str),
-            table_url,
-        )
-        .unwrap_or_else(|| "data".to_string())
-    }
 }
 
 #[async_trait]
@@ -297,6 +262,8 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        // FIXME: Write data in parallel and roll files by target size once writer
+        // commit metadata can be merged safely across output partitions.
         vec![Distribution::SinglePartition]
     }
 
@@ -311,15 +278,29 @@ impl ExecutionPlan for IcebergWriterExec {
         if children.len() != 1 {
             return internal_err!("IcebergWriterExec requires exactly one child");
         }
-        Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
-            self.table_url.clone(),
-            self.partition_columns.clone(),
-            self.sink_mode.clone(),
-            self.table_exists,
-            self.options.clone(),
-            self.logical_input_schema.clone(),
-        )))
+        let input = Arc::clone(&children[0]);
+        let writer = if self.merge_row_intents {
+            Self::new_merge(
+                input,
+                self.table_url.clone(),
+                self.partition_columns.clone(),
+                self.sink_mode.clone(),
+                self.table_exists,
+                self.options.clone(),
+                self.logical_input_schema.clone(),
+            )
+        } else {
+            Self::new(
+                input,
+                self.table_url.clone(),
+                self.partition_columns.clone(),
+                self.sink_mode.clone(),
+                self.table_exists,
+                self.options.clone(),
+                self.logical_input_schema.clone(),
+            )
+        };
+        Ok(Arc::new(writer))
     }
 
     fn execute(
@@ -344,7 +325,21 @@ impl ExecutionPlan for IcebergWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input_schema_with_logical_metadata();
+        let merge_projection = self
+            .merge_row_intents
+            .then(|| IcebergMergeRowProjection::try_new(self.input.schema()))
+            .transpose()?;
+        let writes_position_deletes = merge_projection.is_some()
+            && self
+                .input
+                .schema()
+                .field_with_name(MERGE_ROW_INDEX_COLUMN)
+                .is_ok();
+        let physical_input_schema = merge_projection
+            .as_ref()
+            .map(IcebergMergeRowProjection::data_schema)
+            .unwrap_or_else(|| self.input.schema());
+        let input_schema = self.input_schema_with_logical_metadata(physical_input_schema);
         let options = self.options.clone();
         let schema_mode = Self::get_schema_mode(&options, &sink_mode)?;
 
@@ -385,6 +380,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 commit_schema,
                 commit_requirements,
                 variant_shredding,
+                table_metadata,
             ) = if table_exists {
                 let latest_meta =
                     if catalog_managed_iceberg_from_properties(&options.table_properties) {
@@ -405,7 +401,12 @@ impl ExecutionPlan for IcebergWriterExec {
                 .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let data_dir = write_location::resolve_data_dir_from_options_and_properties(
+                    options.write_data_path.as_deref(),
+                    options.write_folder_storage_path.as_deref(),
+                    &table_meta.properties,
+                    &table_url,
+                )?;
                 let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
@@ -480,6 +481,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     commit_schema,
                     requirements,
                     variant_shredding,
+                    Some(table_meta),
                 )
             } else {
                 let (_, metadata_properties) =
@@ -519,20 +521,17 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    Self::resolve_data_dir_from_property_value(
-                        options
-                            .write_data_path
-                            .as_deref()
-                            .or(options.write_folder_storage_path.as_deref()),
+                    write_location::resolve_data_dir_from_options_and_properties(
+                        options.write_data_path.as_deref(),
+                        options.write_folder_storage_path.as_deref(),
+                        &metadata_properties,
                         &table_url,
-                    )
-                    .unwrap_or_else(|| {
-                        Self::resolve_data_dir_from_properties(&metadata_properties, &table_url)
-                    }),
+                    )?,
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
                     variant_shredding,
+                    None,
                 )
             };
 
@@ -572,15 +571,64 @@ impl ExecutionPlan for IcebergWriterExec {
                 writer_root,
                 writer_config,
                 spec_id_val,
-                data_dir,
+                data_dir.clone(),
                 table_url.clone(),
             );
+
+            let mut position_deletes = if writes_position_deletes {
+                let table_metadata = table_metadata.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Iceberg MERGE position deletes require existing table metadata"
+                            .to_string(),
+                    )
+                })?;
+                match table_metadata.format_version {
+                    FormatVersion::V1 => {
+                        return Err(DataFusionError::Plan(
+                            "Iceberg position delete writes require table format-version 2"
+                                .to_string(),
+                        ));
+                    }
+                    FormatVersion::V2 => {}
+                    FormatVersion::V3 => {
+                        return Err(DataFusionError::NotImplemented(
+                            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
+                        ));
+                    }
+                }
+                Some(PositionDeleteAccumulator::default())
+            } else {
+                None
+            };
 
             let mut total_rows = 0u64;
             let mut data = stream;
             while let Some(batch_result) = data.next().await {
-                let batch = batch_result?;
+                let input_batch = batch_result?;
+                let batch = if let Some(merge_projection) = &merge_projection {
+                    if let Some(position_deletes) = &mut position_deletes {
+                        let table_metadata = table_metadata.as_ref().ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Iceberg MERGE position deletes require table metadata".to_string(),
+                            )
+                        })?;
+                        let delete_rows =
+                            merge_projection.project_position_delete_rows(&input_batch)?;
+                        position_deletes.add_batch(
+                            table_metadata,
+                            &delete_rows,
+                            MERGE_FILE_COLUMN,
+                            MERGE_ROW_INDEX_COLUMN,
+                        )?;
+                    }
+                    merge_projection.project_data_rows(&input_batch)?
+                } else {
+                    input_batch
+                };
                 let batch_row_count = batch.num_rows();
+                if batch_row_count == 0 {
+                    continue;
+                }
                 total_rows += u64::try_from(batch_row_count).map_err(|e| {
                     DataFusionError::Execution(format!("Row count overflow: {}", e))
                 })?;
@@ -591,15 +639,18 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
+            let delete_files = if let Some(position_deletes) = position_deletes {
+                let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+                position_deletes
+                    .finish(&store_ctx, &table_url, &data_dir)
+                    .await?
+            } else {
+                Vec::new()
+            };
 
             let commit_meta = CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
-                operation: if matches!(sink_mode, PhysicalSinkMode::Overwrite) {
-                    crate::spec::Operation::Overwrite
-                } else {
-                    crate::spec::Operation::Append
-                },
                 requirements: commit_requirements,
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,
@@ -616,6 +667,7 @@ impl ExecutionPlan for IcebergWriterExec {
             let schema = iceberg_action_schema()?;
             let batches = vec![
                 encode_add_data_files(data_files)?,
+                encode_delete_data_files(delete_files)?,
                 encode_commit_meta(commit_meta)?,
             ];
             let batch = concat_batches(&schema, &batches)
@@ -635,11 +687,19 @@ impl DisplayAs for IcebergWriterExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "IcebergWriterExec(table_path={})", self.table_url)
+                write!(f, "IcebergWriterExec(table_path={}", self.table_url)?;
+                if self.merge_row_intents {
+                    write!(f, ", merge_row_intents=true")?;
+                }
+                write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;
-                write!(f, "table_path={}", self.table_url)
+                write!(f, "table_path={}", self.table_url)?;
+                if self.merge_row_intents {
+                    write!(f, ", merge_row_intents=true")?;
+                }
+                Ok(())
             }
         }
     }

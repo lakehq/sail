@@ -17,9 +17,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
+use datafusion::common::{
+    DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
+};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{LogicalPlan, TableSource};
+use datafusion::logical_expr::{LogicalPlan, TableScan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
@@ -29,12 +31,14 @@ use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
+    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, LakehouseOperation,
+    ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatCreateTableResult, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatRegistry,
+    create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -141,6 +145,71 @@ impl TableFormat for IcebergTableFormat {
                 },
             )),
         }))
+    }
+
+    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+        let DeleteInfo {
+            table_name,
+            path,
+            condition,
+            lakehouse_table,
+            options,
+        } = info;
+
+        let read_lakehouse_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.for_operation(LakehouseOperation::Read));
+        let source_info = SourceInfo {
+            paths: vec![path.clone()],
+            lakehouse_table: read_lakehouse_table,
+            schema: None,
+            constraints: Default::default(),
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: options.clone(),
+            // TODO: Thread resolver session case-sensitivity into TableFormat::create_deleter.
+            read_case_sensitive: true,
+        };
+        let provider = build_iceberg_provider(ctx, source_info).await?;
+        let expected_snapshot_id = Some(
+            provider
+                .current_snapshot()
+                .map(|snapshot| snapshot.snapshot_id()),
+        );
+        let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
+        let raw_input_schema = table_source.schema().to_dfschema_ref()?;
+        let target_scan = LogicalPlan::TableScan(TableScan::try_new(
+            table_reference_from_parts(&table_name),
+            table_source,
+            None,
+            vec![],
+            None,
+        )?);
+
+        let write_node = sail_logical_plan::merge::RowLevelWriteNode::new_delete(
+            Arc::new(target_scan),
+            raw_input_schema,
+            condition,
+            self.name().to_string(),
+            path,
+            table_name,
+            options,
+            lakehouse_table,
+        )
+        .with_expected_snapshot_id(expected_snapshot_id);
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(write_node),
+        }))
+    }
+
+    async fn create_merger(
+        &self,
+        _ctx: &dyn Session,
+        info: sail_common_datafusion::datasource::MergeInfo,
+    ) -> Result<LogicalPlan> {
+        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn create_table_metadata(
@@ -543,10 +612,11 @@ impl IcebergTableFormat {
                 continue;
             }
 
+            let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             table_meta.last_updated_ms = timestamp_ms;
             table_meta.metadata_log.push(MetadataLog {
-                timestamp_ms,
+                timestamp_ms: previous_metadata_timestamp_ms,
                 metadata_file: latest_meta.clone(),
             });
 
@@ -620,10 +690,7 @@ impl IcebergTableFormat {
         }
     }
 
-    // TODO: Implement row-level DELETE/UPDATE/MERGE for this format. Expanded
-    // inputs should consume Sail row intent tags to decide which rows rewrite
-    // data files and which rows produce low-level delete artifacts, then strip
-    // all internal metadata before writing user data.
+    // TODO: Add row-level UPDATE and configurable COW/MOR strategy selection.
 }
 
 /// Create an Iceberg table provider for reading.
@@ -769,7 +836,9 @@ impl IcebergTableFormat {
         Ok(table_url)
     }
 
-    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
+    pub(crate) fn partition_columns_from_metadata(
+        table: &Table,
+    ) -> Result<Vec<CatalogPartitionField>> {
         partition_columns_from_table_metadata(table.metadata())
     }
 }
@@ -807,6 +876,26 @@ fn partition_columns_from_table_metadata(
     }
 
     Ok(columns)
+}
+
+fn table_reference_from_parts(parts: &[String]) -> TableReference {
+    match parts {
+        [table] => TableReference::Bare {
+            table: table.as_str().into(),
+        },
+        [schema, table] => TableReference::Partial {
+            schema: schema.as_str().into(),
+            table: table.as_str().into(),
+        },
+        [catalog, schema, table] => TableReference::Full {
+            catalog: catalog.as_str().into(),
+            schema: schema.as_str().into(),
+            table: table.as_str().into(),
+        },
+        _ => TableReference::Bare {
+            table: parts.join(".").into(),
+        },
+    }
 }
 
 fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Result<ArrowSchema> {

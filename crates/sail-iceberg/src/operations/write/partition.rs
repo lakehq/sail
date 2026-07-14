@@ -195,11 +195,7 @@ pub fn split_record_batch_by_partition(
     }
 
     use std::collections::HashMap;
-    struct Group {
-        values: Vec<Option<Literal>>,
-        indices: Vec<u32>,
-    }
-    let mut groups: HashMap<String, Group> = HashMap::new();
+    let mut groups: HashMap<Vec<Option<Literal>>, Vec<u32>> = HashMap::new();
 
     let num_rows = batch.num_rows();
     for row in 0..num_rows {
@@ -218,22 +214,18 @@ pub fn split_record_batch_by_partition(
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
             vals.push(apply_transform(f.transform, field_type, lit));
         }
-        let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
-        let entry = groups.entry(dir).or_insert_with(|| Group {
-            values: vals.clone(),
-            indices: Vec::new(),
-        });
-        entry.indices.push(row as u32);
+        groups.entry(vals).or_default().push(row as u32);
     }
 
     let mut out: Vec<PartitionBatchResult> = Vec::with_capacity(groups.len());
-    for (dir, grp) in groups.into_iter() {
-        let indices = UInt32Array::from(grp.indices);
+    for (partition_values, group_indices) in groups {
+        let partition_dir = build_partition_dir(spec, iceberg_schema, &partition_values)?;
+        let indices = UInt32Array::from(group_indices);
         let rb = compute::take_record_batch(batch, &indices).map_err(|e| e.to_string())?;
         out.push(PartitionBatchResult {
             record_batch: rb,
-            partition_values: grp.values,
-            partition_dir: dir,
+            partition_values,
+            partition_dir,
             spec_id: 0,
         });
     }
