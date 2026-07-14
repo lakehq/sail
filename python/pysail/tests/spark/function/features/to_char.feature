@@ -3,7 +3,7 @@ Feature: to_char with an argument coming from a column
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
   # through a column. All expected values were captured on Spark JVM 4.1.1.
 
-  Rule: to_char — the argument must be foldable
+  Rule: to_char — a numeric format must be foldable
 
     @column_args
     Scenario: to_char with the argument as a literal
@@ -42,6 +42,12 @@ Feature: to_char with an argument coming from a column
         """
       Then query error NON_FOLDABLE_INPUT
 
+  # With a DATE or TIMESTAMP input, Spark resolves `to_char` to `DateFormatClass`, which accepts a
+  # non-foldable format and applies it row by row. So the foldable rule above is specific to the
+  # numeric format; here the column is legal and each row must use its own format.
+  Rule: to_char — a date format is resolved per row
+
+    # Sail applies the first row's value to every row: Sail returns ['2026', '2026'].
     @column_args @sail-bug
     Scenario: to_char takes the date format from a column holding two different values
       When query
