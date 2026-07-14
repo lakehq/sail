@@ -10,6 +10,7 @@ use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -237,6 +238,39 @@ fn rev_args(
     move |args: Vec<expr::Expr>| func(args.into_iter().rev().collect())
 }
 
+fn fold_to_char_format(
+    format: expr::Expr,
+    coerce_to_string: bool,
+) -> PlanResult<(expr::Expr, Option<String>)> {
+    if format.is_volatile() {
+        return Err(PlanError::invalid(
+            "to_char: the `format` parameter must be a foldable string expression",
+        ));
+    }
+    let format = if coerce_to_string {
+        cast(format, DataType::Utf8)
+    } else {
+        format
+    };
+    let scalar = match &format {
+        expr::Expr::Literal(scalar, _) => scalar.clone(),
+        _ => LiteralEvaluator::new().evaluate(&format).map_err(|_| {
+            PlanError::invalid(
+                "to_char: the `format` parameter must be a foldable string expression",
+            )
+        })?,
+    };
+    match scalar {
+        ScalarValue::Utf8(value) | ScalarValue::LargeUtf8(value) | ScalarValue::Utf8View(value) => {
+            Ok((lit(ScalarValue::Utf8(value.clone())), value))
+        }
+        ScalarValue::Null => Ok((lit(ScalarValue::Utf8(None)), None)),
+        _ => Err(PlanError::invalid(
+            "to_char: the `format` parameter must evaluate to a string",
+        )),
+    }
+}
+
 /// Dispatch for `to_char(expr, format)` and its alias `to_varchar`, following Spark's
 /// `ToCharacterBuilder`: datetime input formats like `date_format`, binary input is
 /// converted to a base64, hexadecimal, or UTF-8 string, and any other input is
@@ -259,13 +293,9 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         | DataType::FixedSizeBinary(_) => {
             // Spark requires a foldable format for binary input since the format
             // determines the conversion function.
-            let expr::Expr::Literal(scalar, _) = &format else {
-                return Err(PlanError::invalid(
-                    "to_char: the `format` parameter must be a string literal for binary input",
-                ));
-            };
-            match scalar.try_as_str() {
-                Some(Some(name)) => match name.trim().to_lowercase().as_str() {
+            let (format, name) = fold_to_char_format(format, false)?;
+            match name {
+                Some(name) => match name.trim().to_lowercase().as_str() {
                     "base64" => Ok(ScalarUDF::from(SparkBase64::new()).call(vec![value])),
                     "hex" => Ok(math_fn::hex(value)),
                     "utf-8" => Ok(ScalarUDF::from(SparkDecode::new()).call(vec![value, format])),
@@ -273,15 +303,13 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                         "to_char: the value of the `format` parameter expects one of binary formats 'base64', 'hex', 'utf-8', but got '{invalid}'"
                     ))),
                 },
-                Some(None) => Err(PlanError::invalid(
-                    "to_char: the `format` parameter expects a non-NULL value for binary input",
-                )),
                 None => Err(PlanError::invalid(
-                    "to_char: the `format` parameter must be a string literal for binary input",
+                    "to_char: the `format` parameter expects a non-NULL value for binary input",
                 )),
             }
         }
         _ => {
+            let (format, _) = fold_to_char_format(format, true)?;
             let ansi_mode = function_context.plan_config.ansi_mode;
             Ok(ScalarUDF::from(SparkToChar::new(ansi_mode)).call(vec![value, format]))
         }
