@@ -203,3 +203,51 @@ Feature: get_json_object extracts values via a Spark JSONPath
       Then query result
         | result |
         | NULL   |
+
+  Rule: get_json_object — the argument is resolved per row, not taken from the first row
+
+    @column_args
+    Scenario: get_json_object with the argument as a literal
+      When query
+        """
+        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', '$[0].a') AS result
+        """
+      Then query result ordered
+        | result |
+        | b      |
+
+    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
+    @column_args @sail-bug
+    Scenario: get_json_object takes argument 2 from a column holding two different values
+      When query
+        """
+        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, '$.a') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | b      |
+        | NULL   |
+
+    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
+    @column_args @sail-bug
+    Scenario: get_json_object takes argument 2 from a column containing NULL
+      When query
+        """
+        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, NULL) AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | b      |
+        | NULL   |
+
+    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
+    @column_args @sail-bug
+    Scenario: get_json_object takes argument 2 from a column
+      When query
+        """
+        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, '$[0].a') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result |
+        | b      |
+        | b      |
