@@ -48,39 +48,78 @@ fn years(arg: Expr) -> Expr {
     integer_part(arg, "YEAR")
 }
 
-fn trunc_part_conversion(part: Expr) -> Expr {
+/// The units `date_trunc` truncates to, each with the aliases Spark accepts for it.
+const DATE_TRUNC_UNITS: &[(&str, &[&str])] = &[
+    ("year", &["year", "yyyy", "yy"]),
+    ("quarter", &["quarter"]),
+    ("month", &["month", "mon", "mm"]),
+    ("week", &["week"]),
+    ("day", &["day", "dd"]),
+    ("hour", &["hour"]),
+    ("minute", &["minute"]),
+    ("second", &["second"]),
+    ("millisecond", &["millisecond"]),
+    ("microsecond", &["microsecond"]),
+];
+
+/// `trunc` is a different Spark expression (`TruncDate`) and truncates only to a date-level unit.
+/// A finer unit is not an error: it matches nothing and yields NULL, so `trunc` must not share
+/// `date_trunc`'s table.
+const TRUNC_UNITS: &[(&str, &[&str])] = &[
+    ("year", &["year", "yyyy", "yy"]),
+    ("quarter", &["quarter"]),
+    ("month", &["month", "mon", "mm"]),
+    ("week", &["week"]),
+];
+
+/// Spark resolves the truncation unit **per row** and yields NULL for a unit it does not
+/// recognize, whereas DataFusion's `date_trunc` demands a literal unit and errors otherwise.
+///
+/// So enumerate the units in the plan rather than inspecting the argument: every branch calls the
+/// kernel with a literal unit, which makes a unit arriving in a column behave exactly like a
+/// literal one, and lets an unrecognized, NULL, or non-string unit fall through to NULL. Matching
+/// the unit lives here and nowhere else, so the two comparisons cannot drift apart.
+///
+/// This costs nothing in the common case: with a literal unit every predicate is foldable, so the
+/// simplifier collapses the whole `CASE` back into a single call. The plan snapshots in
+/// `date_trunc.feature` lock both shapes.
+fn truncate_by_unit(
+    unit: Expr,
+    units: &[(&str, &[&str])],
+    truncate: impl Fn(&str) -> Expr,
+    null: Expr,
+) -> Expr {
+    // Spark matches the unit case-insensitively, and coerces a non-string unit to its string form,
+    // which then matches no unit and yields NULL instead of being rejected.
+    let unit = expr_fn::lower(cast(unit, DataType::Utf8));
+    let when_then_expr = units
+        .iter()
+        .filter_map(|(granularity, aliases)| {
+            let matches = aliases
+                .iter()
+                .map(|alias| unit.clone().eq(lit(*alias)))
+                .reduce(Expr::or)?;
+            Some((Box::new(matches), Box::new(truncate(granularity))))
+        })
+        .collect();
     Expr::Case(expr::Case {
         expr: None,
-        when_then_expr: vec![
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("mon"))
-                        .or(part.clone().ilike(lit("mm"))),
-                ),
-                Box::new(lit("month")),
-            ),
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("yy"))
-                        .or(part.clone().ilike(lit("yyyy"))),
-                ),
-                Box::new(lit("year")),
-            ),
-            (
-                Box::new(part.clone().ilike(lit("dd"))),
-                Box::new(lit("day")),
-            ),
-        ],
-        else_expr: Some(Box::new(part)),
+        when_then_expr,
+        else_expr: Some(Box::new(null)),
     })
 }
 
 fn trunc(date: Expr, part: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), date),
-        DataType::Date32,
+    truncate_by_unit(
+        part,
+        TRUNC_UNITS,
+        |granularity| {
+            cast(
+                expr_fn::date_trunc(lit(granularity), date.clone()),
+                DataType::Date32,
+            )
+        },
+        lit(ScalarValue::Date32(None)),
     )
 }
 
@@ -116,15 +155,17 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
             )));
         }
     };
-    // Spark coerces a non-string unit to its string form, which then matches no granularity and
-    // yields NULL, rather than rejecting it. `SparkDateTrunc` resolves the unrecognized and NULL
-    // units, per row, so nothing here depends on the unit being a literal.
-    let part = match part.get_type(input.function_context.schema)? {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => part,
-        _ => cast(part, DataType::Utf8),
-    };
-    let truncated =
-        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
+    let truncated = truncate_by_unit(
+        part,
+        DATE_TRUNC_UNITS,
+        |granularity| {
+            ScalarUDF::from(SparkDateTrunc::new()).call(vec![lit(granularity), timestamp.clone()])
+        },
+        lit(ScalarValue::TimestampMicrosecond(
+            None,
+            Some(session_tz.clone()),
+        )),
+    );
     let truncated = match truncated.get_type(input.function_context.schema)? {
         DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
         DataType::Timestamp(_, tz) => {

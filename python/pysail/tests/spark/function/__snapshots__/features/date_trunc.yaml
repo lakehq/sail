@@ -5,7 +5,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as result]
-      ProjectionExec: expr=[date_trunc(YEAR, column1@0) as #2]
+      ProjectionExec: expr=[date_trunc(year, column1@0) as #2]
         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_the_plan_for_a_unit_coming_from_a_column"
@@ -13,5 +13,6 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#4@0 as result]
-      ProjectionExec: expr=[date_trunc(CASE WHEN column2@1 ILIKE mon OR column2@1 ILIKE mm THEN month WHEN column2@1 ILIKE yy OR column2@1 ILIKE yyyy THEN year WHEN column2@1 ILIKE dd THEN day ELSE column2@1 END, column1@0) as #4]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = year OR __common_expr_1@0 = yyyy OR __common_expr_1@0 = yy THEN date_trunc(year, #2@1) WHEN __common_expr_1@0 = quarter THEN date_trunc(quarter, #2@1) WHEN __common_expr_1@0 = month OR __common_expr_1@0 = mon OR __common_expr_1@0 = mm THEN date_trunc(month, #2@1) WHEN __common_expr_1@0 = week THEN date_trunc(week, #2@1) WHEN __common_expr_1@0 = day OR __common_expr_1@0 = dd THEN date_trunc(day, #2@1) WHEN __common_expr_1@0 = hour THEN date_trunc(hour, #2@1) WHEN __common_expr_1@0 = minute THEN date_trunc(minute, #2@1) WHEN __common_expr_1@0 = second THEN date_trunc(second, #2@1) WHEN __common_expr_1@0 = millisecond THEN date_trunc(millisecond, #2@1) WHEN __common_expr_1@0 = microsecond THEN date_trunc(microsecond, #2@1) END as #4]
+        ProjectionExec: expr=[lower(column2@1) as __common_expr_1, column1@0 as #2]
+          DataSourceExec: partitions=1, partition_sizes=[1]

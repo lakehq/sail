@@ -594,8 +594,6 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
 
   Rule: a unit finer than a day is NULL, not a truncation
 
-    # Sail reuses date_trunc's unit table, so it truncates to the day and returns the date itself.
-    @sail-bug
     Scenario: trunc to the day is NULL
       When query
         """
@@ -605,8 +603,6 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
         | result |
         | NULL   |
 
-    # Sail returns the date itself.
-    @sail-bug
     Scenario: trunc to the hour is NULL
       When query
         """
@@ -618,8 +614,6 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
 
   Rule: an unrecognized or NULL unit is NULL, not an error
 
-    # Sail errors: Unsupported date_trunc granularity: 'bogus'.
-    @sail-bug
     Scenario: trunc with an unrecognized unit is NULL
       When query
         """
@@ -629,8 +623,6 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
         | result |
         | NULL   |
 
-    # Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8.
-    @sail-bug
     Scenario: trunc with a NULL unit is NULL
       When query
         """
@@ -645,7 +637,6 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
     # The plan builder only matches `Expr::Literal`, so a unit in a column falls through to
     # DataFusion's `date_trunc`, which demands a scalar. Sail errors: Granularity of `date_trunc`
     # must be non-null scalar Utf8.
-    @sail-bug
     Scenario: trunc resolves the unit of each row
       When query
         """
