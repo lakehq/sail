@@ -100,6 +100,19 @@ def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2  # noqa: PLR2004
 
 
+def test_coalesce_reduces_visible_partition_ids(spark):
+    # Mirrors the ``DataFrame.coalesce`` PySpark doctest: a three-partition range
+    # exposes partition ids {0, 1, 2}, and coalescing to one partition leaves {0}.
+    def visible_partition_ids(df):
+        return sorted(
+            row["partition"] for row in df.select(F.spark_partition_id().alias("partition")).distinct().collect()
+        )
+
+    base = spark.range(0, 10, 1, 3)
+    assert visible_partition_ids(base) == [0, 1, 2]
+    assert visible_partition_ids(base.coalesce(1)) == [0]
+
+
 def test_coalesce_hint(spark):
     df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
 
