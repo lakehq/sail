@@ -385,10 +385,7 @@ fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option
         .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
         .trim()
         .to_ascii_lowercase();
-    Some(match provider.as_str() {
-        "deltalake" => "delta".to_string(),
-        _ => provider,
-    })
+    Some(provider)
 }
 
 #[async_trait::async_trait]
@@ -990,7 +987,7 @@ mod tests {
             .storage_descriptor(storage)
             .set_parameters(Some(HashMap::from([(
                 hive::SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
-                "deltalake".to_string(),
+                "delta".to_string(),
             )])))
             .build()
             .unwrap();
