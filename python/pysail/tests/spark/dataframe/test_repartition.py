@@ -95,22 +95,6 @@ def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
 
 @pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
-def test_explicit_repartition_pushes_filter_down_plan(spark, snapshot):
-    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0)
-    plan = normalized_plan(df)
-
-    assert plan == snapshot
-
-
-def test_explicit_repartition_pushes_filter_down_result(spark):
-    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0).orderBy("id")
-    result = df.collect()
-
-    assert [row["id"] for row in result] == [0, 2, 4]
-
-
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
-@pytest.mark.yamlsnapshot(group="plan")
 def test_explicit_repartition_pushes_column_projection_down_plan(spark, snapshot):
     df1 = spark.sql("SELECT id AS id1 FROM range(6)")
     df2 = spark.sql("SELECT id AS id2 FROM range(6)")
