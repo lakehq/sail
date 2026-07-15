@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
@@ -86,22 +86,25 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let normalizer = ParquetSchemaNormalizer {
-            binary_as_string: options.global.binary_as_string,
-            force_view_types: options.global.schema_force_view_types,
-        };
-        let schemas = schemas.into_iter().map(|(_, schema)| {
-            let schema = if options.global.skip_metadata {
-                clear_metadata(schema)
-            } else {
-                schema
-            };
-            normalizer.normalize_schema(schema)
-        });
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
-        // Embedded Arrow schema metadata can preserve view types from earlier writes.
-        // Normalize every file before merging mixed physical representations.
-        let merged = Schema::try_merge(schemas)?;
+        let merged = if options.global.skip_metadata {
+            Schema::try_merge(schemas.map(clear_metadata))
+        } else {
+            Schema::try_merge(schemas)
+        }?;
+
+        let merged = if options.global.binary_as_string {
+            datafusion::datasource::file_format::parquet::transform_binary_to_string(&merged)
+        } else {
+            merged
+        };
+
+        let merged = if options.global.schema_force_view_types {
+            datafusion::datasource::file_format::parquet::transform_schema_to_view(&merged)
+        } else {
+            merged
+        };
 
         Ok(Arc::new(merged))
     }
@@ -162,82 +165,6 @@ impl ReadFormat for ParquetReadFormat {
             .build();
 
         Ok(config)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ParquetSchemaNormalizer {
-    binary_as_string: bool,
-    force_view_types: bool,
-}
-
-impl ParquetSchemaNormalizer {
-    fn normalize_schema(&self, schema: Schema) -> Schema {
-        let fields = schema
-            .fields()
-            .iter()
-            .map(|field| self.normalize_field(field))
-            .collect::<Fields>();
-        Schema::new_with_metadata(fields, schema.metadata().clone())
-    }
-
-    fn normalize_field(&self, field: &FieldRef) -> FieldRef {
-        let data_type = self.normalize_data_type(field.data_type());
-        if &data_type == field.data_type() {
-            Arc::clone(field)
-        } else {
-            Arc::new(field.as_ref().clone().with_data_type(data_type))
-        }
-    }
-
-    fn normalize_data_type(&self, data_type: &DataType) -> DataType {
-        let data_type = match data_type {
-            DataType::Binary if self.binary_as_string => DataType::Utf8,
-            DataType::LargeBinary if self.binary_as_string => DataType::LargeUtf8,
-            DataType::BinaryView if self.binary_as_string => DataType::Utf8View,
-            DataType::List(field) => DataType::List(self.normalize_field(field)),
-            DataType::ListView(field) => DataType::ListView(self.normalize_field(field)),
-            DataType::FixedSizeList(field, size) => {
-                DataType::FixedSizeList(self.normalize_field(field), *size)
-            }
-            DataType::LargeList(field) => DataType::LargeList(self.normalize_field(field)),
-            DataType::LargeListView(field) => DataType::LargeListView(self.normalize_field(field)),
-            DataType::Struct(fields) => DataType::Struct(
-                fields
-                    .iter()
-                    .map(|field| self.normalize_field(field))
-                    .collect(),
-            ),
-            DataType::Union(fields, mode) => DataType::Union(
-                fields
-                    .iter()
-                    .map(|(type_id, field)| (type_id, self.normalize_field(field)))
-                    .collect(),
-                *mode,
-            ),
-            DataType::Dictionary(key, value) => DataType::Dictionary(
-                Box::new(self.normalize_data_type(key)),
-                Box::new(self.normalize_data_type(value)),
-            ),
-            DataType::Map(field, sorted) => DataType::Map(self.normalize_field(field), *sorted),
-            DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
-                self.normalize_field(run_ends),
-                self.normalize_field(values),
-            ),
-            data_type => data_type.clone(),
-        };
-
-        if self.force_view_types {
-            match data_type {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                    DataType::BinaryView
-                }
-                data_type => data_type,
-            }
-        } else {
-            data_type
-        }
     }
 }
 

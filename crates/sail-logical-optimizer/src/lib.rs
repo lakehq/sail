@@ -3,11 +3,9 @@ use std::sync::Arc;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
-mod output_view_types;
 mod resolve_lambda_variables;
 
 use lateral_join::DecorrelateLateralProjection;
-use output_view_types::ExpandViewTypesAtOutput;
 use resolve_lambda_variables::ResolveLambdaVariables;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
@@ -20,7 +18,6 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
     rules.extend(built_in_rules);
-    rules.push(Arc::new(ExpandViewTypesAtOutput));
     rules
 }
 

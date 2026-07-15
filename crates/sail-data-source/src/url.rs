@@ -9,7 +9,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
 use glob::Pattern;
 use log::debug;
-use object_store::{ObjectMeta, ObjectStoreExt};
+use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
 use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
@@ -490,36 +490,16 @@ impl TryFrom<GlobUrl> for ListingTableUrl {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedListingUrl {
-    pub url: ListingTableUrl,
-    pub exact_file_metadata: Option<ObjectMeta>,
-}
-
 pub async fn resolve_listing_urls(
     ctx: &dyn Session,
     paths: Vec<String>,
 ) -> Result<Vec<ListingTableUrl>> {
-    Ok(resolve_listing_urls_with_metadata(ctx, paths)
-        .await?
-        .into_iter()
-        .map(|resolved| resolved.url)
-        .collect())
-}
-
-pub(crate) async fn resolve_listing_urls_with_metadata(
-    ctx: &dyn Session,
-    paths: Vec<String>,
-) -> Result<Vec<ResolvedListingUrl>> {
     let mut urls = vec![];
     for path in paths {
         for url in GlobUrl::parse(&path)? {
-            let (url, exact_file_metadata) = rewrite_directory_url_with_metadata(url, ctx).await?;
+            let url = rewrite_directory_url(url, ctx).await?;
             let url = attach_default_glob(url)?;
-            urls.push(ResolvedListingUrl {
-                url: url.try_into()?,
-                exact_file_metadata,
-            });
+            urls.push(url.try_into()?);
         }
     }
     Ok(urls)
@@ -555,25 +535,22 @@ fn attach_default_glob(mut url: GlobUrl) -> Result<GlobUrl> {
     Ok(url)
 }
 
-async fn rewrite_directory_url_with_metadata(
-    url: GlobUrl,
-    session: &dyn Session,
-) -> Result<(GlobUrl, Option<ObjectMeta>)> {
+pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {
     if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
-        return Ok((url, None));
+        return Ok(url);
     }
     debug!("rewrite_directory_url: Checking if URL is a directory: {url:?}");
     let store = session.runtime_env().object_store(&url)?;
     let path =
         object_store::path::Path::from_url_path(url.base.path()).map_err(DataFusionError::from)?;
     match store.head(&path).await {
-        Ok(metadata) => Ok((url, Some(metadata))),
+        Ok(_) => Ok(url),
         Err(object_store::Error::NotFound { .. }) => {
             let mut url = url;
             // The object at the path does not exist, so we treat it as a directory.
             let path = format!("{}{}", url.base.path(), object_store::path::DELIMITER);
             url.base.set_path(&path);
-            Ok((url, None))
+            Ok(url)
         }
         Err(e) => Err(DataFusionError::External(Box::new(e)))?,
     }

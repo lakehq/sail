@@ -1,10 +1,8 @@
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import ArrayType, BinaryType, MapType, Row, StringType, StructType
+from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -234,81 +232,6 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
 
     rows = spark.read.parquet(str(path)).orderBy("id").collect()
     assert rows == [Row(id=1), Row(id=2)]
-
-
-def test_parquet_mixed_view_types_across_cluster_shuffle(spark, tmp_path):
-    path = tmp_path / "mixed_view_types"
-    path.mkdir()
-
-    def parquet_schema(string_type, binary_type):
-        return pa.schema(
-            [
-                pa.field("key", string_type),
-                pa.field(
-                    "payload",
-                    pa.struct(
-                        [
-                            pa.field("label", string_type),
-                            pa.field("aliases", pa.list_(string_type)),
-                            pa.field("raw", binary_type),
-                        ]
-                    ),
-                ),
-                pa.field("attributes", pa.map_(string_type, string_type)),
-            ]
-        )
-
-    files = [
-        ("utf8.parquet", pa.string(), pa.binary(), "alpha", "regular"),
-        ("large_utf8.parquet", pa.large_string(), pa.large_binary(), "beta", "large"),
-        ("utf8_view.parquet", pa.string_view(), pa.binary_view(), "alpha", "view"),
-    ]
-    for filename, string_type, binary_type, key, label in files:
-        schema = parquet_schema(string_type, binary_type)
-        table = pa.Table.from_pylist(
-            [
-                {
-                    "key": key,
-                    "payload": {"label": label, "aliases": [f"{label}-alias"], "raw": label.encode()},
-                    "attributes": {"kind": label},
-                }
-            ],
-            schema=schema,
-        )
-        pq.write_table(table, path / filename)
-
-    df = spark.read.parquet(str(path))
-    assert isinstance(df.schema["key"].dataType, StringType)
-    payload_type = df.schema["payload"].dataType
-    assert isinstance(payload_type, StructType)
-    assert isinstance(payload_type["label"].dataType, StringType)
-    assert isinstance(payload_type["aliases"].dataType, ArrayType)
-    assert isinstance(payload_type["aliases"].dataType.elementType, StringType)
-    assert isinstance(payload_type["raw"].dataType, BinaryType)
-    attributes_type = df.schema["attributes"].dataType
-    assert isinstance(attributes_type, MapType)
-    assert isinstance(attributes_type.keyType, StringType)
-    assert isinstance(attributes_type.valueType, StringType)
-
-    rows = df.orderBy("payload.label").collect()
-    assert [
-        (
-            row.key,
-            row.payload.label,
-            row.payload.aliases,
-            bytes(row.payload.raw),
-            row.attributes,
-        )
-        for row in rows
-    ] == [
-        ("beta", "large", ["large-alias"], b"large", {"kind": "large"}),
-        ("alpha", "regular", ["regular-alias"], b"regular", {"kind": "regular"}),
-        ("alpha", "view", ["view-alias"], b"view", {"kind": "view"}),
-    ]
-
-    result = df.repartition(4, "key").groupBy("key").count().orderBy("key").toPandas()
-    expected = pd.DataFrame({"key": ["alpha", "beta"], "count": [2, 1]}).astype({"count": "int64"})
-    assert_frame_equal(result, expected)
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):

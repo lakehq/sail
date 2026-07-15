@@ -22,12 +22,12 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use futures::{Stream, StreamExt, future, stream};
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
@@ -240,7 +240,6 @@ async fn plan_file_write(
             },
         )
         .await?;
-    invalidate_file_listing_cache(session_state, &table_path);
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
@@ -250,42 +249,6 @@ async fn plan_file_write(
     } else {
         Ok(plan)
     }
-}
-
-fn invalidate_file_listing_cache(session_state: &SessionState, table_path: &ListingTableUrl) {
-    let Some(cache) = session_state
-        .runtime_env()
-        .cache_manager
-        .get_list_files_cache()
-    else {
-        return;
-    };
-    let cache_keys = cache.list_entries().into_keys().collect::<Vec<_>>();
-    for key in cache_keys {
-        if listing_paths_overlap(&key.path, table_path.prefix()) {
-            cache.remove(&key);
-        }
-    }
-}
-
-fn listing_paths_overlap(
-    left: &object_store::path::Path,
-    right: &object_store::path::Path,
-) -> bool {
-    fn contains_path(
-        parent: &object_store::path::Path,
-        descendant: &object_store::path::Path,
-    ) -> bool {
-        let parent = parent.as_ref();
-        let descendant = descendant.as_ref();
-        parent.is_empty()
-            || descendant == parent
-            || descendant
-                .strip_prefix(parent)
-                .is_some_and(|suffix| suffix.starts_with(object_store::path::DELIMITER))
-    }
-
-    contains_path(left, right) || contains_path(right, left)
 }
 
 fn try_create_output_ordering(
@@ -387,31 +350,16 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let file_list = future::try_join_all(
-        source
-            .config()
-            .table_paths
-            .iter()
-            .zip(source.exact_file_metadata())
-            .map(|(table_path, exact_file_metadata)| async {
-                if partition_cols.is_empty()
-                    && filters.is_empty()
-                    && let Some(file) =
-                        exact_file_partition(table_path, exact_file_metadata.as_ref())
-                {
-                    return Ok(stream::once(future::ready(Ok(file))).boxed());
-                }
-                pruned_partition_list(
-                    ctx,
-                    store.as_ref(),
-                    table_path,
-                    filters,
-                    "",
-                    &partition_cols,
-                )
-                .await
-            }),
-    )
+    let file_list = future::try_join_all(source.config().table_paths.iter().map(|table_path| {
+        pruned_partition_list(
+            ctx,
+            store.as_ref(),
+            table_path,
+            filters,
+            "",
+            &partition_cols,
+        )
+    }))
     .await?;
 
     let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
@@ -472,17 +420,6 @@ async fn list_files_for_scan<'a>(
         statistics: stats,
         grouped_by_partition,
     })
-}
-
-fn exact_file_partition(
-    table_path: &ListingTableUrl,
-    exact_file_metadata: Option<&ObjectMeta>,
-) -> Option<PartitionedFile> {
-    let metadata = exact_file_metadata
-        .filter(|metadata| metadata.size > 0 && &metadata.location == table_path.prefix())?;
-    let mut file = PartitionedFile::from(metadata.clone());
-    file.table_reference.clone_from(table_path.get_table_ref());
-    Some(file)
 }
 
 async fn do_collect_statistics_and_ordering(

@@ -25,9 +25,12 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
-use crate::listing::utils::{infer_partitions, sample_resolved_listing_files, validate_partitions};
+use crate::listing::utils::{
+    infer_partitions, rewrite_utf8view_fields, sample_listing_files, validate_partitions,
+};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
-use crate::url::{resolve_listing_urls_with_metadata, resolve_listing_writer_url};
+use crate::resolve_listing_urls;
+use crate::url::resolve_listing_writer_url;
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -156,16 +159,8 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let read_format = T::read(ctx, options)?;
-        let resolved_urls = resolve_listing_urls_with_metadata(ctx, paths).await?;
-        let urls = resolved_urls
-            .iter()
-            .map(|resolved| resolved.url.clone())
-            .collect::<Vec<_>>();
-        let exact_file_metadata = resolved_urls
-            .iter()
-            .map(|resolved| resolved.exact_file_metadata.clone())
-            .collect::<Vec<_>>();
-        let sampled_files = sample_resolved_listing_files(ctx, &urls, &exact_file_metadata).await?;
+        let urls = resolve_listing_urls(ctx, paths).await?;
+        let sampled_files = sample_listing_files(ctx, &urls).await?;
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
         let (schema, partition_fields) = match schema {
@@ -214,6 +209,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;
+                let schema = rewrite_utf8view_fields(schema);
 
                 let partition_by = if partition_by.is_empty() {
                     infer_partitions(&sampled_files)?
@@ -233,19 +229,16 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         validate_partitions(&sampled_files, &partition_fields)?;
 
-        let source = ListingTableSource::try_new_from_resolved_files(
-            ListingTableSourceConfig {
-                table_paths: urls,
-                schema: TableSchema::new(schema, partition_fields),
-                constraints,
-                file_sort_order: vec![sort_order],
-                collect_stat: ctx.config().collect_statistics(),
-                target_partitions: ctx.config().target_partitions(),
-                read_format: Arc::new(read_format),
-                compression,
-            },
-            exact_file_metadata,
-        )?;
+        let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            table_paths: urls,
+            schema: TableSchema::new(schema, partition_fields),
+            constraints,
+            file_sort_order: vec![sort_order],
+            collect_stat: ctx.config().collect_statistics(),
+            target_partitions: ctx.config().target_partitions(),
+            read_format: Arc::new(read_format),
+            compression,
+        })?;
         Ok(Arc::new(source))
     }
 

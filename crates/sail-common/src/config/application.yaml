@@ -279,7 +279,7 @@
 
 - key: execution.file_listing_cache.type
   type: string
-  default: "session"
+  default: "none"
   description: |
     The type of cache for file metadata when listing files.
     The cache avoids repeatedly listing file metadata,
