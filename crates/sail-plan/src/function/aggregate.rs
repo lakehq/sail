@@ -105,7 +105,8 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::first_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `First` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
@@ -120,7 +121,8 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::last_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `Last` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
