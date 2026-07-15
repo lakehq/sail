@@ -1,4 +1,5 @@
 //! Helper functions to define Arrow data types used in system tables.
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
@@ -11,6 +12,24 @@ pub(crate) fn string() -> DataType {
 
 pub(crate) fn timestamp() -> DataType {
     DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+}
+
+pub(crate) fn timestamp_nanos() -> DataType {
+    DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC")))
+}
+
+/// The physical Arrow storage for Spark's `VARIANT` type.
+pub(crate) fn variant() -> DataType {
+    DataType::Struct(
+        vec![
+            Field::new("metadata", DataType::BinaryView, false).with_metadata(HashMap::from([(
+                crate::variant::VARIANT_METADATA_MARKER_KEY.to_string(),
+                crate::variant::VARIANT_METADATA_MARKER_VALUE.to_string(),
+            )])),
+            Field::new("value", DataType::BinaryView, false),
+        ]
+        .into(),
+    )
 }
 
 #[expect(unused)]

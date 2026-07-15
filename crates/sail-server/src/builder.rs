@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-use sail_telemetry::layers::TracingServerLayer;
 use tokio::net::TcpListener;
 use tonic::body::Body;
 use tonic::codegen::Service;
@@ -9,8 +8,7 @@ use tonic::codegen::http::Request;
 use tonic::server::NamedService;
 use tonic::transport::server::{Router, TcpIncoming};
 use tonic_health::server::HealthReporter;
-use tower::ServiceBuilder;
-use tower::layer::util::{Identity, Stack};
+use tower::layer::util::Identity;
 
 pub struct ServerBuilderOptions {
     pub nodelay: bool,
@@ -39,8 +37,7 @@ pub struct ServerBuilder<'b> {
     options: ServerBuilderOptions,
     health_reporter: HealthReporter,
     reflection_server_builder: tonic_reflection::server::Builder<'b>,
-    // The router type has to change accordingly when layers are added.
-    router: Router<Stack<Stack<TracingServerLayer, Identity>, Identity>>,
+    router: Router<Identity>,
 }
 
 impl<'b> ServerBuilder<'b> {
@@ -51,22 +48,12 @@ impl<'b> ServerBuilder<'b> {
         let reflection_server_builder = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET);
 
-        let layer = ServiceBuilder::new()
-            // FIXME: Unsure why this doesn't work. Might be fixed when we upgrade to tower-http 0.5.2
-            //  Might be related: https://github.com/tower-rs/tower-http/issues/420
-            // .layer(
-            //     CompressionLayer::new().gzip(true).zstd(true),
-            // )
-            .layer(TracingServerLayer)
-            .into_inner();
-
         let router = tonic::transport::Server::builder()
             .tcp_nodelay(options.nodelay)
             .tcp_keepalive(options.keepalive)
             .http2_keepalive_interval(options.http2_keepalive_interval)
             .http2_keepalive_timeout(options.http2_keepalive_timeout)
             .http2_adaptive_window(options.http2_adaptive_window)
-            .layer(layer)
             .add_service(health_server);
 
         Self {

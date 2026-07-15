@@ -13,7 +13,9 @@ async fn shutdown() {
 }
 
 pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Arc::new(AppConfig::load()?);
+    let mut config = AppConfig::load()?;
+    config.telemetry.configure_collector();
+    let config = Arc::new(config);
 
     let resource = ResourceOptions {
         kind: "flight-server",
@@ -24,7 +26,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
     runtime_manager
         .handle()
         .primary()
-        .block_on(async { init_telemetry(&config.telemetry, resource) })?;
+        .block_on(async { init_telemetry(&config.telemetry, resource).await })?;
 
     runtime_manager.handle().primary().block_on(async {
         let address = SocketAddr::new(ip, port);

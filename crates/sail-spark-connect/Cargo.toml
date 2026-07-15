@@ -12,6 +12,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 sail-server = { path = "../sail-server" }
+sail-telemetry = { path = "../sail-telemetry" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
@@ -42,6 +43,7 @@ log = { workspace = true }
 futures = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
+tower = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

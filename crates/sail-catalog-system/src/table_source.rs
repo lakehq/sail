@@ -37,6 +37,29 @@ impl TableSource for SystemTableSource {
             SystemTable::Options => &["key"],
             SystemTable::Sessions => &["session_id"],
             SystemTable::Workers => &["session_id", "worker_id"],
+            SystemTable::Logs => &[
+                "timestamp",
+                "trace_id",
+                "span_id",
+                "service_name",
+                "severity_text",
+            ],
+            SystemTable::Traces => &[
+                "timestamp",
+                "trace_id",
+                "span_id",
+                "parent_span_id",
+                "service_name",
+                "span_name",
+                "span_kind",
+                "duration",
+                "status_code",
+            ],
+            SystemTable::MetricsGauge
+            | SystemTable::MetricsSum
+            | SystemTable::MetricsHistogram
+            | SystemTable::MetricsExponentialHistogram
+            | SystemTable::MetricsSummary => &["time", "start_time", "service_name", "metric_name"],
         };
         filters
             .iter()

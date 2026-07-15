@@ -7469,6 +7469,7 @@ dependencies = [
  "futures",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-telemetry",
  "serde",
  "tokio",
 ]
@@ -7738,6 +7739,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-health",
+ "tower",
  "uuid",
 ]
 
@@ -8019,10 +8021,8 @@ name = "sail-server"
 version = "0.6.6"
 dependencies = [
  "axum",
- "fastrace",
  "log",
  "sail-common",
- "sail-telemetry",
  "tokio",
  "tonic",
  "tonic-health",
@@ -8109,6 +8109,7 @@ dependencies = [
  "sail-server",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.118",
@@ -8118,6 +8119,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tonic-types",
+ "tower",
  "uuid",
 ]
 
@@ -8177,7 +8179,10 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-appender-log",
  "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry_sdk",
+ "parquet-variant-compute",
+ "parquet-variant-json",
  "paste",
  "pin-project-lite",
  "prettyplease",
@@ -8187,6 +8192,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "serde",
+ "serde_json",
  "serde_yaml",
  "syn 2.0.118",
  "thiserror 2.0.18",

@@ -9,6 +9,7 @@ use sail_common_datafusion::extension::SessionExtension;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::system::observable::{SessionManagerObserver, StateObservable};
 use sail_common_datafusion::system::predicate::Predicates;
+use sail_telemetry::collector::TelemetryStoreHandle;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -16,11 +17,18 @@ use crate::predicate::PredicateExtractor;
 
 pub struct SystemTableService {
     system_manager: Box<dyn StateObservable<SessionManagerObserver>>,
+    telemetry: Option<TelemetryStoreHandle>,
 }
 
 impl SystemTableService {
-    pub fn new(system_manager: Box<dyn StateObservable<SessionManagerObserver>>) -> Self {
-        Self { system_manager }
+    pub fn new(
+        system_manager: Box<dyn StateObservable<SessionManagerObserver>>,
+        telemetry: Option<TelemetryStoreHandle>,
+    ) -> Self {
+        Self {
+            system_manager,
+            telemetry,
+        }
     }
 
     pub async fn read(
@@ -32,6 +40,18 @@ impl SystemTableService {
     ) -> Result<RecordBatch> {
         let schema = table.schema();
         let fetch = fetch.unwrap_or(usize::MAX);
+        if is_telemetry_table(table) {
+            let batch = if let Some(store) = &self.telemetry {
+                store.read(table, filters, fetch).await?
+            } else {
+                RecordBatch::new_empty(schema)
+            };
+            return if let Some(projection) = projection {
+                Ok(batch.project(&projection)?)
+            } else {
+                Ok(batch)
+            };
+        }
         let mut filters = PredicateExtractor::new(filters);
         let batch = match table {
             SystemTable::Jobs => {
@@ -140,6 +160,13 @@ impl SystemTableService {
                 )
                 .await?
             }
+            SystemTable::Logs
+            | SystemTable::Traces
+            | SystemTable::MetricsGauge
+            | SystemTable::MetricsSum
+            | SystemTable::MetricsHistogram
+            | SystemTable::MetricsExponentialHistogram
+            | SystemTable::MetricsSummary => unreachable!("telemetry tables return above"),
         };
         if let Some(projection) = projection {
             Ok(batch.project(&projection)?)
@@ -165,6 +192,19 @@ impl SystemTableService {
             .map_err(|_| internal_datafusion_err!("failed to observe system manager"))??;
         ArrowSerializer::build_record_batch_with_schema(&items, schema)
     }
+}
+
+pub fn is_telemetry_table(table: SystemTable) -> bool {
+    matches!(
+        table,
+        SystemTable::Logs
+            | SystemTable::Traces
+            | SystemTable::MetricsGauge
+            | SystemTable::MetricsSum
+            | SystemTable::MetricsHistogram
+            | SystemTable::MetricsExponentialHistogram
+            | SystemTable::MetricsSummary
+    )
 }
 
 impl SessionExtension for SystemTableService {

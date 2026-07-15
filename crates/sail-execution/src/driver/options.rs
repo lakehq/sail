@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, TelemetryCollectorType};
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
@@ -26,6 +26,9 @@ pub struct DriverOptions {
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub telemetry_collector_type: TelemetryCollectorType,
+    pub telemetry_collector_external_host: String,
+    pub telemetry_collector_external_port: u16,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
 }
@@ -54,6 +57,9 @@ impl DriverOptions {
             ),
             worker_launch_timeout: Duration::from_secs(config.cluster.worker_launch_timeout_secs),
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
+            telemetry_collector_type: config.telemetry.collector.r#type.clone(),
+            telemetry_collector_external_host: config.telemetry.collector.external_host.clone(),
+            telemetry_collector_external_port: config.telemetry.collector.external_port,
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
             task_stream_creation_timeout: Duration::from_secs(

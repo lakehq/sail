@@ -61,7 +61,7 @@ pub fn run_spark_mcp_server(
             let _telemetry = runtime
                 .handle()
                 .primary()
-                .block_on(async { telemetry::TelemetryGuard::try_new(&config) })?;
+                .block_on(telemetry::TelemetryGuard::try_new(&config))?;
 
             _run_mcp_server(settings, x.clone())
         }

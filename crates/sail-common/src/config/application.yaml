@@ -787,6 +787,36 @@
   description: Whether to export traces to an OpenTelemetry collector.
   experimental: true
 
+- key: telemetry.collector.type
+  type: string
+  default: "none"
+  description: The telemetry collector type. Valid values are `none` and `system`.
+  experimental: true
+
+- key: telemetry.collector.listen_host
+  type: string
+  default: "127.0.0.1"
+  description: The host on which the system telemetry collector listens.
+  experimental: true
+
+- key: telemetry.collector.listen_port
+  type: number
+  default: "4317"
+  description: The port on which the system telemetry collector listens.
+  experimental: true
+
+- key: telemetry.collector.external_host
+  type: string
+  default: "127.0.0.1"
+  description: The host workers use to reach the system telemetry collector.
+  experimental: true
+
+- key: telemetry.collector.external_port
+  type: number
+  default: "4317"
+  description: The port workers use to reach the system telemetry collector.
+  experimental: true
+
 - key: telemetry.export_metrics
   type: boolean
   default: "false"

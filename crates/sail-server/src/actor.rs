@@ -1,10 +1,6 @@
 use std::fmt::Debug;
 
-use fastrace::Span;
-use fastrace::future::FutureExt;
-use fastrace::prelude::SpanContext;
 use log::{error, warn};
-use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 
@@ -12,7 +8,7 @@ const ACTOR_CHANNEL_SIZE: usize = 8;
 
 #[tonic::async_trait]
 pub trait Actor: Sized + Send + 'static {
-    type Message: Send + SpanAssociation + 'static;
+    type Message: Send + 'static;
     type Options;
 
     fn name() -> &'static str;
@@ -79,8 +75,7 @@ impl<T: Actor> ActorContext<T> {
         &mut self,
         task: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> AbortHandle {
-        let span = Span::enter_with_local_parent("ActorContext::spawn");
-        self.tasks.spawn(task.in_span(span))
+        self.tasks.spawn(task)
     }
 
     /// Join tasks that have completed.
@@ -124,7 +119,6 @@ impl ActorSystem {
             actor: T::new(options),
             ctx: ActorContext::new(&handle),
             receiver: rx,
-            start: Some(Span::enter_with_local_parent("ActorRunner")),
         };
         self.tasks.spawn(runner.run());
         handle
@@ -167,22 +161,9 @@ impl<T: Actor> ActorHandle<T> {
         &self,
         message: T::Message,
     ) -> Result<(), mpsc::error::SendError<T::Message>> {
-        let span = Span::enter_with_local_parent(format!("Send {}.{}", T::name(), message.name()))
-            .with_properties(|| message.properties())
-            .with_property(|| (SpanAttribute::SPAN_KIND, SpanKind::PRODUCER));
-        self.sender
-            .send(MessageEnvelop {
-                message,
-                context: SpanContext::from_span(&span),
-            })
-            .in_span(span)
-            .await
-            .map_err(
-                |mpsc::error::SendError(MessageEnvelop {
-                     message,
-                     context: _,
-                 })| { mpsc::error::SendError(message) },
-            )
+        self.sender.send(MessageEnvelop { message }).await.map_err(
+            |mpsc::error::SendError(MessageEnvelop { message })| mpsc::error::SendError(message),
+        )
     }
 }
 
@@ -190,24 +171,12 @@ struct ActorRunner<T: Actor> {
     actor: T,
     ctx: ActorContext<T>,
     receiver: mpsc::Receiver<MessageEnvelop<T::Message>>,
-    start: Option<Span>,
 }
 
 impl<T: Actor> ActorRunner<T> {
     async fn run(mut self) {
-        {
-            let span = self.start.take().unwrap_or_default();
-            self.actor.start(&mut self.ctx).in_span(span).await;
-            // The span is dropped here to conclude the actor start phase.
-        }
-        while let Some(MessageEnvelop { message, context }) = self.receiver.recv().await {
-            let span = if let Some(context) = context {
-                Span::root(format!("Receive {}.{}", T::name(), message.name()), context)
-                    .with_property(|| (SpanAttribute::SPAN_KIND, SpanKind::CONSUMER))
-            } else {
-                Span::noop()
-            };
-            let _guard = span.set_local_parent();
+        self.actor.start(&mut self.ctx).await;
+        while let Some(MessageEnvelop { message }) = self.receiver.recv().await {
             let action = self.actor.receive(&mut self.ctx, message);
             match action {
                 ActorAction::Continue => {}
@@ -232,16 +201,13 @@ impl<T: Actor> ActorRunner<T> {
     }
 }
 
-/// A wrapper for an actor message with a tracing span.
+/// A wrapper for an actor message.
 struct MessageEnvelop<M> {
     message: M,
-    context: Option<SpanContext>,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-
     use tokio::sync::oneshot;
 
     use super::*;
@@ -254,22 +220,6 @@ mod tests {
             reply: oneshot::Sender<String>,
         },
         Stop,
-    }
-
-    impl SpanAssociation for TestMessage {
-        fn name(&self) -> Cow<'static, str> {
-            match self {
-                TestMessage::Echo { .. } => "Echo".into(),
-                TestMessage::Stop => "Stop".into(),
-            }
-        }
-
-        fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
-            match self {
-                TestMessage::Echo { value, .. } => vec![("value".into(), value.clone().into())],
-                TestMessage::Stop => vec![],
-            }
-        }
     }
 
     #[tonic::async_trait]

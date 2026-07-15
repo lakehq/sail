@@ -11,9 +11,11 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::{ServerBuilder, ServerBuilderOptions};
+use sail_telemetry::layers::TracingServerLayer;
 use service::SailFlightSqlService;
 use session::create_flight_session_manager;
 use tokio::net::TcpListener;
+use tower::Layer;
 
 pub async fn serve<F>(
     listener: TcpListener,
@@ -26,7 +28,7 @@ where
 {
     let session_manager = create_flight_session_manager(config, runtime)?;
     let service = SailFlightSqlService::new(session_manager);
-    let flight_service = FlightServiceServer::new(service);
+    let flight_service = TracingServerLayer.layer(FlightServiceServer::new(service));
 
     let builder = ServerBuilder::new("flight_sql", ServerBuilderOptions::default())
         .add_service(flight_service, None)

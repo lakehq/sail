@@ -119,6 +119,9 @@ impl KubernetesWorkerManager {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
+            telemetry_collector_type,
+            telemetry_collector_external_host,
+            telemetry_collector_external_port,
         } = options;
         let w3c_traceparent =
             SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
@@ -208,6 +211,24 @@ impl KubernetesWorkerManager {
             EnvVar {
                 name: ClusterConfigEnv::RPC_RETRY_STRATEGY.to_string(),
                 value: Some(rpc_retry_strategy),
+                value_from: None,
+            },
+            EnvVar {
+                name: "SAIL_TELEMETRY__COLLECTOR__TYPE".to_string(),
+                value: Some(match telemetry_collector_type {
+                    sail_common::config::TelemetryCollectorType::None => "none".to_string(),
+                    sail_common::config::TelemetryCollectorType::System => "system".to_string(),
+                }),
+                value_from: None,
+            },
+            EnvVar {
+                name: "SAIL_TELEMETRY__COLLECTOR__EXTERNAL_HOST".to_string(),
+                value: Some(telemetry_collector_external_host),
+                value_from: None,
+            },
+            EnvVar {
+                name: "SAIL_TELEMETRY__COLLECTOR__EXTERNAL_PORT".to_string(),
+                value: Some(telemetry_collector_external_port.to_string()),
                 value_from: None,
             },
         ];

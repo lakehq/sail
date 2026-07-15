@@ -6,12 +6,14 @@ use sail_session::session_factory::{SessionFactory, WorkerSessionFactory};
 use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Arc::new(AppConfig::load()?);
+    let mut config = AppConfig::load()?;
+    config.telemetry.configure_collector();
+    let config = Arc::new(config);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
     runtime.handle().primary().block_on(async {
         let resource = ResourceOptions { kind: "worker" };
-        init_telemetry(&config.telemetry, resource)
+        init_telemetry(&config.telemetry, resource).await
     })?;
 
     let session = WorkerSessionFactory::new(config.clone(), runtime.handle()).create(())?;

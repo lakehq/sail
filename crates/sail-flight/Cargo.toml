@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 uuid = { workspace = true }
+tower = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

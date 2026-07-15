@@ -19,6 +19,10 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-appender-log = { workspace = true }
+opentelemetry-proto = { workspace = true }
+serde_json = { workspace = true }
+parquet-variant-compute = { workspace = true }
+parquet-variant-json = { workspace = true }
 log = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }

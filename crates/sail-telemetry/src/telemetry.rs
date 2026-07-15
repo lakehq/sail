@@ -15,8 +15,11 @@ use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use sail_common::config::{OtlpProtocol, TelemetryConfig};
+use sail_common::config::{OtlpProtocol, TelemetryCollectorType, TelemetryConfig};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
+use crate::collector::{TelemetryStoreHandle, serve as serve_collector};
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::loggers::composite::CompositeLogger;
@@ -36,6 +39,8 @@ struct TelemetryState {
     meter: Option<Meter>,
     metrics: Option<MetricManager>,
     logger_provider: Option<SdkLoggerProvider>,
+    telemetry_store: Option<TelemetryStoreHandle>,
+    collector_shutdown: Option<oneshot::Sender<()>>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
@@ -44,7 +49,25 @@ pub struct ResourceOptions {
     pub kind: &'static str,
 }
 
-pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> TelemetryResult<()> {
+pub async fn init_telemetry(
+    config: &TelemetryConfig,
+    resource: ResourceOptions,
+) -> TelemetryResult<()> {
+    let mut config = config.clone();
+    config.configure_collector();
+    let collector_listener =
+        if config.collector.r#type == TelemetryCollectorType::System && resource.kind != "worker" {
+            Some(
+                TcpListener::bind((
+                    config.collector.listen_host.as_str(),
+                    config.collector.listen_port,
+                ))
+                .await
+                .map_err(|e| TelemetryError::internal(e.to_string()))?,
+            )
+        } else {
+            None
+        };
     let mut status = TELEMETRY_STATUS
         .lock()
         .map_err(|e| TelemetryError::internal(e.to_string()))?;
@@ -52,12 +75,25 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
     match *status {
         TelemetryStatus::Uninitialized => {
             let mut state = TelemetryState::default();
-            match init_traces(config, &mut state, &resource)
-                .and_then(|()| init_metrics(config, &mut state, &resource))
-                .and_then(|()| init_logs(config, &mut state, &resource))
+            match init_traces(&config, &mut state, &resource)
+                .and_then(|()| init_metrics(&config, &mut state, &resource))
+                .and_then(|()| init_logs(&config, &mut state, &resource))
                 .and_then(|()| init_datafusion_telemetry())
             {
                 Ok(()) => {
+                    if let Some(listener) = collector_listener {
+                        let store = TelemetryStoreHandle::new();
+                        let (shutdown, signal) = oneshot::channel();
+                        let collector_store = store.clone();
+                        tokio::spawn(async move {
+                            let _ = serve_collector(listener, collector_store, async {
+                                let _ = signal.await;
+                            })
+                            .await;
+                        });
+                        state.telemetry_store = Some(store);
+                        state.collector_shutdown = Some(shutdown);
+                    }
                     debug!("OpenTelemetry initialized");
                     *status = TelemetryStatus::Initialized(state);
                     Ok(())
@@ -209,7 +245,7 @@ pub fn shutdown_telemetry() {
     debug!("Shutting down OpenTelemetry...");
     fastrace::flush();
     if let Ok(mut status) = TELEMETRY_STATUS.lock()
-        && let TelemetryStatus::Initialized(ref state) = *status
+        && let TelemetryStatus::Initialized(ref mut state) = *status
     {
         if let Some(provider) = &state.meter_provider {
             let _ = provider.shutdown();
@@ -217,8 +253,22 @@ pub fn shutdown_telemetry() {
         if let Some(provider) = &state.logger_provider {
             let _ = provider.shutdown();
         }
+        if let Some(shutdown) = state.collector_shutdown.take() {
+            let _ = shutdown.send(());
+        }
         *status = TelemetryStatus::Finalized;
     }
+}
+
+/// Returns the global system collector store when it is configured in this process.
+pub fn global_telemetry_store() -> Option<TelemetryStoreHandle> {
+    TELEMETRY_STATUS
+        .lock()
+        .ok()
+        .and_then(|status| match &*status {
+            TelemetryStatus::Initialized(state) => state.telemetry_store.clone(),
+            _ => None,
+        })
 }
 
 pub fn global_metrics() -> Option<MetricManager> {

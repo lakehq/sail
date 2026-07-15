@@ -114,9 +114,10 @@ impl GlobalState {
         // about changes to the environment variables later.
         let environment = EnvironmentSnapshot::initialize();
 
-        let config = AppConfig::load().map_err(|e| {
+        let mut config = AppConfig::load().map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to load configuration: {e}"))
         })?;
+        config.telemetry.configure_collector();
 
         let runtime = RuntimeManager::try_new(&config.runtime).map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to create the runtime: {e}"))
@@ -127,7 +128,7 @@ impl GlobalState {
             .primary()
             .block_on(async {
                 let resource = ResourceOptions { kind: "server" };
-                init_telemetry(&config.telemetry, resource)
+                init_telemetry(&config.telemetry, resource).await
             })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!("failed to initialize telemetry: {e}"))

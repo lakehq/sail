@@ -14,7 +14,11 @@ pub mod catalog {
 
     impl SystemTableColumn {
         pub fn field(&self) -> Field {
-            Field::new(self.name, self.arrow_type.clone(), self.nullable)
+            crate::variant::with_variant_extension_if_marked_storage(Field::new(
+                self.name,
+                self.arrow_type.clone(),
+                self.nullable,
+            ))
         }
     }
 

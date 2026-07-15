@@ -1,3 +1,4 @@
+pub mod collector;
 pub mod common;
 pub mod error;
 mod execution;

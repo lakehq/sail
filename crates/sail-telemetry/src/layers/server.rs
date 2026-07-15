@@ -4,6 +4,7 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::{FutureExt, InSpan};
 use tonic::codegen::http::Request;
+use tonic::server::NamedService;
 use tower::{Layer, Service};
 
 use crate::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
@@ -22,6 +23,10 @@ impl<S> Layer<S> for TracingServerLayer {
 #[derive(Clone)]
 pub struct TracingServerService<S> {
     inner: S,
+}
+
+impl<S: NamedService> NamedService for TracingServerService<S> {
+    const NAME: &'static str = S::NAME;
 }
 
 impl<S, Body> Service<Request<Body>> for TracingServerService<S>

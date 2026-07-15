@@ -2,10 +2,12 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::ServerBuilder;
 use sail_server::actor::ActorHandle;
+use sail_telemetry::layers::TracingServerLayer;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
+use tower::Layer;
 
 use crate::driver::DriverEvent;
 use crate::driver::actor::DriverActor;
@@ -44,22 +46,26 @@ impl DriverActor {
         let port = listener.local_addr()?.port();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let server = DriverServer::new(handle.clone());
-        let service = DriverServiceServer::new(server)
-            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
-            .accept_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Zstd)
-            .send_compressed(CompressionEncoding::Gzip)
-            .send_compressed(CompressionEncoding::Zstd);
+        let service = TracingServerLayer.layer(
+            DriverServiceServer::new(server)
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Zstd)
+                .send_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Zstd),
+        );
 
         let flight_server = TaskStreamFlightServer::new(Box::new(DriverTaskStreamFetcher {
             handle: handle.clone(),
         }));
-        let flight_service = FlightServiceServer::new(flight_server)
-            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
-            .accept_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Zstd)
-            .send_compressed(CompressionEncoding::Gzip)
-            .send_compressed(CompressionEncoding::Zstd);
+        let flight_service = TracingServerLayer.layer(
+            FlightServiceServer::new(flight_server)
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Zstd)
+                .send_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Zstd),
+        );
 
         handle
             .send(DriverEvent::ServerReady { port, signal: tx })

@@ -1,12 +1,8 @@
 use std::future::Future;
 use std::time::Duration;
 
-use fastrace::Span;
 use log::warn;
 use sail_common::config;
-use sail_telemetry::common::SpanAttribute;
-use sail_telemetry::futures::TracingFutureExt;
-use sail_telemetry::recorder::record_error;
 
 #[derive(Debug, Clone)]
 pub enum RetryStrategy {
@@ -47,11 +43,8 @@ impl RetryStrategy {
         E: std::fmt::Display + Send + 'static,
     {
         let mut delay = self.delay();
-        let mut attempt = 0;
         loop {
-            let span = Span::enter_with_local_parent("RetryStrategy::run")
-                .with_property(|| (SpanAttribute::RETRY_ATTEMPT, attempt.to_string()));
-            let result = f().in_span_with_recorder(span, record_error).await;
+            let result = f().await;
             match result {
                 x @ Ok(_) => return x,
                 Err(e) => {
@@ -63,7 +56,6 @@ impl RetryStrategy {
                     }
                 }
             }
-            attempt += 1;
         }
     }
 

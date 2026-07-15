@@ -24,6 +24,7 @@ use sail_execution::worker_manager::{
 };
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_telemetry::telemetry::global_telemetry_store;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
@@ -200,9 +201,10 @@ impl ServerSessionFactory {
     }
 
     fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {
-        Ok(SystemTableService::new(Box::new(
-            SessionManagerHandle::new(info.session_manager.clone()),
-        )))
+        Ok(SystemTableService::new(
+            Box::new(SessionManagerHandle::new(info.session_manager.clone())),
+            global_telemetry_store(),
+        ))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {

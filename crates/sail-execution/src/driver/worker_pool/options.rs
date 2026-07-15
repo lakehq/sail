@@ -1,6 +1,7 @@
 //! A dedicated module for worker pool options to ensure readonly access.
 use std::time::Duration;
 
+use sail_common::config::TelemetryCollectorType;
 use sail_server::RetryStrategy;
 
 use crate::driver::DriverOptions;
@@ -17,6 +18,9 @@ pub struct WorkerPoolOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub telemetry_collector_type: TelemetryCollectorType,
+    pub telemetry_collector_external_host: String,
+    pub telemetry_collector_external_port: u16,
 }
 
 impl From<&DriverOptions> for WorkerPoolOptions {
@@ -32,6 +36,9 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
+            telemetry_collector_type: options.telemetry_collector_type.clone(),
+            telemetry_collector_external_host: options.telemetry_collector_external_host.clone(),
+            telemetry_collector_external_port: options.telemetry_collector_external_port,
         }
     }
 }

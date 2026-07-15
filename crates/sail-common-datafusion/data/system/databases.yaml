@@ -223,6 +223,87 @@
           arrow_type: crate::system::types::timestamp()
           nullable: true
 
+- name: telemetry
+  description: The database containing OpenTelemetry data collected by the system collector.
+  tables:
+    - name: logs
+      row_name: log
+      description: OpenTelemetry log records.
+      columns:
+        - { name: timestamp, description: The event timestamp., rust_type: u64, sql_type: "TIMESTAMP_LTZ(9)", arrow_type: "crate::system::types::timestamp_nanos()", nullable: false }
+        - { name: trace_id, description: The trace identifier., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: span_id, description: The span identifier., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: trace_flags, description: The trace flags., rust_type: u32, sql_type: "UNSIGNED INT", arrow_type: "crate::system::types::numeric::<u32>()", nullable: false }
+        - { name: severity_text, description: The log severity text., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: severity_number, description: The log severity number., rust_type: u32, sql_type: "UNSIGNED INT", arrow_type: "crate::system::types::numeric::<u32>()", nullable: false }
+        - { name: service_name, description: The service name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: body, description: The log body., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: true }
+        - { name: resource_schema_url, description: The resource schema URL., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: resource_attributes, description: The resource attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: scope_schema_url, description: The scope schema URL., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_name, description: The instrumentation scope name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_version, description: The instrumentation scope version., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_attributes, description: The instrumentation scope attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: log_attributes, description: The log attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: event_name, description: The event name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+
+    - name: traces
+      row_name: trace
+      description: OpenTelemetry spans.
+      columns:
+        - { name: timestamp, description: The span start timestamp., rust_type: u64, sql_type: "TIMESTAMP_LTZ(9)", arrow_type: "crate::system::types::timestamp_nanos()", nullable: false }
+        - { name: trace_id, description: The trace identifier., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: span_id, description: The span identifier., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: parent_span_id, description: The parent span identifier., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: trace_state, description: The trace state., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: span_name, description: The span name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: span_kind, description: The span kind., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: service_name, description: The service name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: resource_attributes, description: The resource attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: scope_name, description: The instrumentation scope name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_version, description: The instrumentation scope version., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: span_attributes, description: The span attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: duration, description: The span duration in nanoseconds., rust_type: u64, sql_type: "UNSIGNED LONG", arrow_type: "crate::system::types::numeric::<u64>()", nullable: false }
+        - { name: status_code, description: The span status code., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: status_message, description: The span status message., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: events, description: The span events., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: links, description: The span links., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+
+    - name: metrics_gauge
+      row_name: metric_gauge
+      description: OpenTelemetry gauge data points.
+      columns: &metric_columns
+        - { name: resource_attributes, description: The resource attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: service_name, description: The service name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_name, description: The instrumentation scope name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: scope_version, description: The instrumentation scope version., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: metric_name, description: The metric name., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: metric_description, description: The metric description., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: metric_unit, description: The metric unit., rust_type: String, sql_type: STRING, arrow_type: "crate::system::types::string()", nullable: false }
+        - { name: attributes, description: The data point attributes., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: start_time, description: The start timestamp., rust_type: u64, sql_type: "TIMESTAMP_LTZ(9)", arrow_type: "crate::system::types::timestamp_nanos()", nullable: false }
+        - { name: time, description: The point timestamp., rust_type: u64, sql_type: "TIMESTAMP_LTZ(9)", arrow_type: "crate::system::types::timestamp_nanos()", nullable: false }
+        - { name: value, description: The metric value or type-specific payload., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+        - { name: flags, description: The data point flags., rust_type: u32, sql_type: "UNSIGNED INT", arrow_type: "crate::system::types::numeric::<u32>()", nullable: false }
+        - { name: exemplars, description: The data point exemplars., rust_type: String, sql_type: VARIANT, arrow_type: "crate::system::types::variant()", nullable: false }
+
+    - name: metrics_sum
+      row_name: metric_sum
+      description: OpenTelemetry sum data points.
+      columns: *metric_columns
+    - name: metrics_histogram
+      row_name: metric_histogram
+      description: OpenTelemetry histogram data points.
+      columns: *metric_columns
+    - name: metrics_exponential_histogram
+      row_name: metric_exponential_histogram
+      description: OpenTelemetry exponential histogram data points.
+      columns: *metric_columns
+    - name: metrics_summary
+      row_name: metric_summary
+      description: OpenTelemetry summary data points.
+      columns: *metric_columns
+
 - name: session
   description: The database containing user session data.
   tables:

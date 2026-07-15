@@ -36,9 +36,9 @@ pub(super) mod telemetry {
     }
 
     impl TelemetryGuard {
-        pub fn try_new(config: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        pub async fn try_new(config: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
             let resource = ResourceOptions { kind: "server" };
-            init_telemetry(&config.telemetry, resource)?;
+            init_telemetry(&config.telemetry, resource).await?;
             Ok(Self { _marker: () })
         }
     }
@@ -77,13 +77,15 @@ where
     W: FnOnce(SocketAddr) -> F,
     F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let config = Arc::new(AppConfig::load()?);
+    let mut config = AppConfig::load()?;
+    config.telemetry.configure_collector();
+    let config = Arc::new(config);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
     let _telemetry = runtime
         .handle()
         .primary()
-        .block_on(async { telemetry::TelemetryGuard::try_new(&config) })?;
+        .block_on(telemetry::TelemetryGuard::try_new(&config))?;
 
     let handle = runtime.handle();
     let (server_address, server_task) = runtime.handle().primary().block_on(async {

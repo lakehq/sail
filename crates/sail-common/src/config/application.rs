@@ -627,6 +627,7 @@ pub struct FlightConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryConfig {
+    pub collector: TelemetryCollectorConfig,
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
@@ -639,6 +640,39 @@ pub struct TelemetryConfig {
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryCollectorConfig {
+    pub r#type: TelemetryCollectorType,
+    pub listen_host: String,
+    pub listen_port: u16,
+    pub external_host: String,
+    pub external_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TelemetryCollectorType {
+    None,
+    System,
+}
+
+impl TelemetryConfig {
+    /// Applies a configured system collector to the OTLP exporter settings.
+    pub fn configure_collector(&mut self) {
+        if self.collector.r#type == TelemetryCollectorType::System {
+            self.export_traces = true;
+            self.export_metrics = true;
+            self.export_logs = true;
+            self.otlp_protocol = OtlpProtocol::Grpc;
+            self.otlp_endpoint = format!(
+                "http://{}:{}",
+                self.collector.external_host, self.collector.external_port
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
