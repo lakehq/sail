@@ -276,3 +276,50 @@ Feature: next_day comprehensive tests
       Then query result
         | result     |
         | 2025-01-01 |
+
+  Rule: next_day — the argument may come from a column
+
+    @column_args
+    Scenario: next_day with the argument as a literal
+      When query
+        """
+        SELECT next_day('2015-01-14', 'TU') AS result
+        """
+      Then query result ordered
+        | result     |
+        | 2015-01-20 |
+
+    # Sail rejects the column: Sail errors: Unsupported args [Scalar(Date32("2015-01-14")), Array(StringArray [ "TU", null, ])] for Sp...
+    @column_args @sail-bug
+    Scenario: next_day takes argument 2 from a column containing NULL
+      When query
+        """
+        SELECT next_day('2015-01-14', c) AS result FROM VALUES (1, 'TU'), (2, NULL) AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 2015-01-20 |
+        | NULL       |
+
+    # Sail rejects the column: Sail errors: Unsupported args [Scalar(Date32("2015-01-14")), Array(StringArray [ "TU", "TU", ])] for Sp...
+    @column_args @sail-bug
+    Scenario: next_day takes argument 2 from a column
+      When query
+        """
+        SELECT next_day('2015-01-14', c) AS result FROM VALUES (1, 'TU'), (2, 'TU') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 2015-01-20 |
+        | 2015-01-20 |
+
+    @column_args @sail-bug
+    Scenario: next_day takes argument 2 from a column holding two different values
+      When query
+        """
+        SELECT next_day(DATE '2015-01-14', c) AS result FROM VALUES (1, 'TU'), (2, 'FR') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 2015-01-20 |
+        | 2015-01-16 |
