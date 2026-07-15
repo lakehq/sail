@@ -1,7 +1,7 @@
 use async_recursion::async_recursion;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use sail_cache::cached_relation::CachedRelationRegistry;
 use sail_common::spec;
-use sail_common_datafusion::cached_relation::CachedRelationRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 

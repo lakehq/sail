@@ -8,10 +8,19 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-logical-plan = { path = "../sail-logical-plan" }
+sail-physical-plan = { path = "../sail-physical-plan" }
 
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 object_store = { workspace = true }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-expr = { workspace = true }
 chrono = { workspace = true }
+futures = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true }
+tokio = { workspace = true }

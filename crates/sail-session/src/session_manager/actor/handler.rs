@@ -5,7 +5,7 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
-use sail_common_datafusion::cached_relation::cleanup_cached_relations;
+use sail_cache::cached_relation::cleanup_cached_relations;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;

@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Formatter;
@@ -18,91 +17,28 @@ use datafusion::physical_plan::{
     with_new_children_if_necessary,
 };
 use datafusion::prelude::SessionContext;
-use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, Statistics, internal_datafusion_err,
-};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion_expr::{Extension, LogicalPlan};
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use object_store::ObjectMeta;
 use sail_common::spec;
+use sail_common_datafusion::array::record_batch::read_record_batches;
+use sail_common_datafusion::extension::{SessionExtension, SessionExtensionAccessor};
+use sail_common_datafusion::session::job::JobService;
+use sail_logical_plan::cached_relation::CachedRelationNode;
+use sail_physical_plan::checkpoint::LocalCheckpointExec;
 
-use crate::array::record_batch::read_record_batches;
-use crate::checkpoint::LocalCheckpointExec;
-use crate::extension::{SessionExtension, SessionExtensionAccessor};
-use crate::session::checkpoint::{CheckpointStoreService, ReliableCheckpoint};
-use crate::session::job::JobService;
+use crate::checkpoint::{CheckpointStoreService, ReliableCheckpoint};
 
 #[derive(Debug, Clone)]
 enum CachedRelationCleanup {
     ObjectStorePath(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CachedRelationNode {
-    relation_id: String,
-    schema: DFSchemaRef,
-}
-
-impl CachedRelationNode {
-    fn try_new(relation_id: String, schema: SchemaRef) -> Result<Self> {
-        let schema = Arc::new(DFSchema::try_from(schema.as_ref().clone())?);
-        Ok(Self {
-            relation_id,
-            schema,
-        })
-    }
-
-    pub fn relation_id(&self) -> &str {
-        &self.relation_id
-    }
-}
-
-impl PartialOrd for CachedRelationNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.relation_id.partial_cmp(&other.relation_id)
-    }
-}
-
-impl UserDefinedLogicalNodeCore for CachedRelationNode {
-    fn name(&self) -> &str {
-        "CachedRelation"
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![]
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        &self.schema
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "CachedRelation: relation_id={}", self.relation_id)
-    }
-
-    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
-        if !exprs.is_empty() {
-            return Err(internal_datafusion_err!(
-                "CachedRelation does not support expressions"
-            ));
-        }
-        if !inputs.is_empty() {
-            return Err(internal_datafusion_err!(
-                "CachedRelation does not support inputs"
-            ));
-        }
-        Ok(self.clone())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1044,7 +980,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
-    use crate::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
+    use crate::checkpoint::{CheckpointStore, ReliableCheckpoint};
 
     #[test]
     fn pending_reliable_checkpoint_tracks_cleanup_path() -> Result<()> {

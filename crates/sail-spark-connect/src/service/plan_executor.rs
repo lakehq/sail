@@ -9,10 +9,10 @@ use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use futures::stream;
 use log::{debug, warn};
-use sail_common::spec;
-use sail_common_datafusion::cached_relation::{
+use sail_cache::cached_relation::{
     CachedRelation, CachedRelationRegistry, cleanup_checkpoint_path, remove_cached_relation,
 };
+use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::{resolve_and_execute_plan, resolve_physical_plan};

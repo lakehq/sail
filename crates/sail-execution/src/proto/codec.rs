@@ -78,13 +78,12 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
+use sail_cache::cached_relation::CachedRelationExec;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
-use sail_common_datafusion::cached_relation::CachedRelationExec;
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
-use sail_common_datafusion::checkpoint::{LocalCheckpointExec, ReliableCheckpointExec};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
 use sail_common_datafusion::system::catalog::SystemTable;
@@ -251,6 +250,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::checkpoint::{LocalCheckpointExec, ReliableCheckpointExec};
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;

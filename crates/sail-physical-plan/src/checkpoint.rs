@@ -15,8 +15,9 @@ use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use futures::{StreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStoreExt, PutPayload};
-
-use crate::array::record_batch::{write_record_batches, write_record_batches_file};
+use sail_common_datafusion::array::record_batch::{
+    write_record_batches, write_record_batches_file,
+};
 
 const PARTITION_COLUMN: &str = "partition";
 const SEQUENCE_COLUMN: &str = "sequence";

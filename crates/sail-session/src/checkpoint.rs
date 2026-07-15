@@ -8,12 +8,12 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use futures::StreamExt;
+use sail_cache::checkpoint::{CheckpointStore, ReliableCheckpoint};
 use sail_common_datafusion::array::record_batch::write_record_batches_file;
-use sail_common_datafusion::checkpoint::ReliableCheckpointExec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
 use sail_common_datafusion::session::job::JobService;
 use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
+use sail_physical_plan::checkpoint::ReliableCheckpointExec;
 
 #[derive(Debug, Default)]
 pub struct ObjectStoreCheckpointStore;

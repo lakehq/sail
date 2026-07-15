@@ -11,8 +11,8 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use datafusion_common::{DFSchema, internal_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
+use sail_cache::cached_relation::CachedRelationRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
-use sail_common_datafusion::cached_relation::{CachedRelationNode, CachedRelationRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
@@ -26,6 +26,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::cached_relation::CachedRelationNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;

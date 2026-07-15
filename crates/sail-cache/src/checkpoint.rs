@@ -7,8 +7,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use object_store::ObjectMeta;
-
-use crate::extension::SessionExtension;
+use sail_common_datafusion::extension::SessionExtension;
 
 #[derive(Debug, Clone)]
 pub struct ReliableCheckpoint {
