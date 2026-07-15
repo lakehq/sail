@@ -29,7 +29,7 @@ tokio-stream = { version = "0.1.18", features = ["time", "io-util"] }
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
-educe = "0.6.0"
+educe = "0.7.4"
 tower = { version = "0.5.3", features = ["full"] }
 uuid = { version = "1.23.2", features = ["serde", "v4"] }
 async-trait = "0.1.89"
@@ -58,10 +58,10 @@ quote = "1.0.45"
 paste = "1.0.15"
 proc-macro2 = "1.0.106"
 prettyplease = "0.2.37"
-phf = { version = "0.13.1", features = ["macros"] }
+phf = { version = "0.14.0", features = ["macros"] }
 ryu = "1.0.23"
 either = "1.16.0"
-num-bigint = "0.4.6"
+num-bigint = "0.5.1"
 mimalloc = { version = "0.1.52", default-features = false }
 rand = "0.10.1"
 rand_chacha = "0.10.0"
@@ -87,28 +87,28 @@ opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
 opentelemetry-otlp = { version = "0.32.0", features = ["tls", "tls-roots", "grpc-tonic", "http-json"] }
 opentelemetry-appender-log = "0.32.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "3.1.0"
-k8s-openapi = { version = "0.27.1", features = ["latest"] }
+kube = "4.0.0"
+k8s-openapi = { version = "0.28.0", features = ["latest"] }
 murmur3 = "0.5.2"
-aes = "0.8.4"
-aes-gcm = "0.10.3"
+aes = "0.9.1"
+aes-gcm = "0.11.0"
 cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.11.0"
 crc32fast = "1.5.0"
 roaring = "0.11.3"
 datasketches = { version = "0.3.0", features = ["hll", "theta"] }
-sha1 = "0.10.6"
+sha1 = "0.11.0"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
-chumsky = { version = "0.12.0", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.13.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.40"
 dashmap = "6.2.1"
-itertools = "0.14.0"
+itertools = "0.15.0"
 moka = { version = "0.12.15", features = ["sync", "future"] }
 bytes = "1.11.1"
 indexmap = "2.14.0"
@@ -117,13 +117,13 @@ ordered-float = { version = "5.3.0", features = ["serde"] }
 apache-avro = { version = "0.21.0" }
 rust_decimal = "1.42.0"
 wiremock = "0.6.5"
-testcontainers = "0.26.2"
+testcontainers = "0.27.3"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.27.0"
 readonly = "0.2.13"
-toml = "0.8"
+toml = "0.9"
 bitflags = "2.12.1"
-libloading = "0.8.9"
+libloading = "0.9.0"
 pilota = "0.13.1"
 volo = "0.12.3"
 volo-build = "0.12.3"
@@ -177,7 +177,7 @@ datafusion-physical-expr = { version = "54.0.0" }
 datafusion-session = { version = "54.0.0" }
 datafusion-spark = { version = "54.0.0", features = ["core"] }
 pyo3 = { version = "0.29.0", features = ["serde"] }
-jiter = { version = "0.15.0", default-features = false }
+jiter = { version = "0.16.0", default-features = false }
 arrow = { version = "58.3.0", features = ["chrono-tz"] }
 arrow-array = { version = "58.3.0", features = ["ffi"] }
 arrow-buffer = { version = "58.3.0" }
@@ -191,7 +191,7 @@ parquet-variant-json = { version = "58.3.0" }
 serde_arrow = { version = "0.14.1", features = ["arrow-58"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.16.0"
+hdfs-native-object-store = "0.17.0"
 
 ######
 # This is the end of the manually managed dependencies.
