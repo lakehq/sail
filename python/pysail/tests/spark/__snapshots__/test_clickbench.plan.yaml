@@ -366,11 +366,11 @@ data:
     ProjectionExec: expr=[#105@0 as CounterID, #106@1 as l, #107@2 as c]
       SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=25
         SortExec: TopK(fetch=25), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-          ProjectionExec: expr=[#6@0 as #105, avg(character_length(hits.#13))@1 as #106, count(Int64(1))@2 as #107]
+          ProjectionExec: expr=[#6@0 as #105, avg(length(hits.#13))@1 as #106, count(Int64(1))@2 as #107]
             FilterExec: count(Int64(1))@2 > 100000
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[avg(character_length(hits.#13)), count(Int64(1))]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[avg(length(hits.#13)), count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[avg(character_length(hits.#13)), count(Int64(1))]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[avg(length(hits.#13)), count(Int64(1))]
                     ProjectionExec: expr=[CounterID@0 as #6, URL@1 as #13]
                       FilterExec: URL@1 != <eol>
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -385,11 +385,11 @@ data:
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
           SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=25
             SortExec: TopK(fetch=25), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-              ProjectionExec: expr=[k@0 as #105, avg(character_length(hits.#14))@1 as #106, count(Int64(1))@2 as #107, min(hits.#14)@3 as #108]
+              ProjectionExec: expr=[k@0 as #105, avg(length(hits.#14))@1 as #106, count(Int64(1))@2 as #107, min(hits.#14)@3 as #108]
                 FilterExec: count(Int64(1))@2 > 100000
-                  AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]
+                  AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[avg(length(hits.#14)), count(Int64(1)), min(hits.#14)]
                     RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
-                      AggregateExec: mode=Partial, gby=[regexp_replace(CAST(#14@0 AS LargeUtf8), ^https?:/(?:www.)?([^/]+)/.*$, $1, g) as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]
+                      AggregateExec: mode=Partial, gby=[regexp_replace(CAST(#14@0 AS LargeUtf8), ^https?:/(?:www.)?([^/]+)/.*$, $1, g) as k], aggr=[avg(length(hits.#14)), count(Int64(1)), min(hits.#14)]
                         ProjectionExec: expr=[Referer@0 as #14]
                           FilterExec: Referer@0 != <eol>
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
