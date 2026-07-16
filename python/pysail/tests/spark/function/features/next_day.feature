@@ -1,3 +1,4 @@
+@next_day
 Feature: next_day comprehensive tests
 
   Rule: Argument count validation
@@ -166,6 +167,64 @@ Feature: next_day comprehensive tests
         | result     |
         | 2024-01-15 |
 
+    # Spark applies toUpperCase(Locale.ROOT), i.e. full Unicode case folding, so a
+    # non-ASCII letter that upper-cases into a day-name letter is valid. Exactly two
+    # codepoints are reachable: U+0131 (dotless i) -> 'I' and U+017F (long s) -> 'S'.
+    # These two scenarios pin that behaviour. An ASCII-only compare
+    # (eq_ignore_ascii_case) to save the parser's per-row allocation must therefore
+    # stay behind an `is_ascii()` guard, or it silently diverges from Spark here.
+    Scenario: next_day matches a day name containing a dotless i
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'frıday') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-12 |
+
+    Scenario: next_day matches a day name containing a long s
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'ſunday') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-14 |
+
+    # Case folding is not normalisation: full-width letters do not fold to ASCII.
+    Scenario: next_day rejects a full-width day name under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'ＭＯＮＤＡＹ') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Surrounding whitespace is not trimmed
+
+    # Spark is case-insensitive but does NOT trim the day name: surrounding
+    # whitespace makes it invalid, exactly like an unknown name.
+
+    Scenario: next_day ANSI=true errors on a padded day name
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'Monday ') AS result
+        """
+      Then query error .*Illegal input for day of week.*
+
+    Scenario: next_day ANSI=false returns NULL on a padded day name
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', '  Monday  ') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: String date input coercion
 
     Scenario: next_day with string date
@@ -289,8 +348,7 @@ Feature: next_day comprehensive tests
         | result     |
         | 2015-01-20 |
 
-    # Sail rejects the column: Sail errors: Unsupported args [Scalar(Date32("2015-01-14")), Array(StringArray [ "TU", null, ])] for Sp...
-    @column_args @sail-bug
+    @column_args
     Scenario: next_day takes argument 2 from a column containing NULL
       When query
         """
@@ -301,8 +359,7 @@ Feature: next_day comprehensive tests
         | 2015-01-20 |
         | NULL       |
 
-    # Sail rejects the column: Sail errors: Unsupported args [Scalar(Date32("2015-01-14")), Array(StringArray [ "TU", "TU", ])] for Sp...
-    @column_args @sail-bug
+    @column_args
     Scenario: next_day takes argument 2 from a column
       When query
         """
@@ -313,7 +370,7 @@ Feature: next_day comprehensive tests
         | 2015-01-20 |
         | 2015-01-20 |
 
-    @column_args @sail-bug
+    @column_args
     Scenario: next_day takes argument 2 from a column holding two different values
       When query
         """
