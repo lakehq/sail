@@ -517,10 +517,14 @@ impl DriverActor {
                     handle.send(JobOutputItem::Error { cause }).await;
                 });
             }
-            JobAction::CleanUpJob { job_id, stage } => {
+            JobAction::CleanUpJob {
+                job_id,
+                stage,
+                context,
+            } => {
                 if self.task_assigner.untrack_remote_streams(job_id, stage) {
                     self.stream_manager
-                        .remove_remote_streams(ctx, job_id, stage);
+                        .remove_remote_streams(ctx, job_id, stage, context);
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {

@@ -6,7 +6,7 @@ pub mod job_runner;
 mod plan;
 mod proto;
 mod rpc;
-pub mod shuffle;
+mod shuffle;
 mod stream;
 mod stream_accessor;
 mod stream_manager;

@@ -58,7 +58,7 @@ impl JobScheduler {
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
-        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output, context })?;
+        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
         Ok((job_id, stream))
@@ -266,6 +266,7 @@ impl JobScheduler {
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
+                    context: job.context.clone(),
                 });
             }
         }
@@ -494,6 +495,7 @@ impl JobScheduler {
         actions.push(JobAction::CleanUpJob {
             job_id,
             stage: None,
+            context: job.context.clone(),
         });
         if matches!(job.state, JobState::Draining) {
             job.state = JobState::Succeeded;
@@ -516,12 +518,6 @@ impl JobScheduler {
                 key.job_id
             )));
         };
-        let JobState::Running { context, .. } = &job.state else {
-            return Err(ExecutionError::InvalidArgument(format!(
-                "job {} is not running",
-                key.job_id
-            )));
-        };
         let Some(stage) = job.graph.stages().get(key.stage) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "stage {} not found in job {}",
@@ -541,7 +537,7 @@ impl JobScheduler {
             inputs,
             output,
         };
-        Ok((definition, context.clone()))
+        Ok((definition, job.context.clone()))
     }
 
     pub fn stop(&mut self) {

@@ -8,12 +8,9 @@ use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use datafusion::execution::object_store::ObjectStoreRegistry;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
-use sail_common::runtime::RuntimeHandle;
-use sail_object_store::DynamicObjectStoreRegistry;
 use url::Url;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -27,7 +24,6 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
 /// directory, allowing retries to be selected by the task scheduler without overwriting an
 /// earlier attempt.
 pub(super) struct RemoteStreamManager {
-    runtime: RuntimeHandle,
     storage_path: String,
     max_file_size: usize,
     compression: ShuffleCompression,
@@ -35,13 +31,11 @@ pub(super) struct RemoteStreamManager {
 
 impl RemoteStreamManager {
     pub(super) fn new(
-        runtime: RuntimeHandle,
         storage_path: String,
         max_file_size: usize,
         compression: ShuffleCompression,
     ) -> Self {
         Self {
-            runtime,
             storage_path,
             max_file_size,
             compression,
@@ -138,11 +132,16 @@ impl RemoteStreamManager {
         Ok(Box::pin(output))
     }
 
-    pub(super) async fn remove_streams(&self, job_id: JobId, stage: Option<usize>) -> Result<()> {
+    pub(super) async fn remove_streams(
+        &self,
+        job_id: JobId,
+        stage: Option<usize>,
+        context: &TaskContext,
+    ) -> Result<()> {
         // All shuffle data for a job is beneath this prefix, so terminal job cleanup removes
         // every attempt. Stage cleanup can safely reclaim data once all of its consumers finish.
         let Some((store, prefix)) = self
-            .store_and_cleanup_prefix(job_id, stage)
+            .store_and_cleanup_prefix(job_id, stage, context)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
         else {
             return Ok(());
@@ -187,14 +186,17 @@ impl RemoteStreamManager {
         &self,
         job_id: JobId,
         stage: Option<usize>,
+        context: &TaskContext,
     ) -> ExecutionResult<Option<(Arc<dyn ObjectStore>, Path)>> {
         if self.storage_path.is_empty() {
             return Ok(None);
         }
         let url = Url::parse(&self.storage_path)
             .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
-        let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
-        let store = registry.get_store(&url)?;
+        let store = context
+            .runtime_env()
+            .object_store_registry
+            .get_store(&url)?;
         Ok(Some((store, shuffle_prefix(&url, job_id, stage))))
     }
 }

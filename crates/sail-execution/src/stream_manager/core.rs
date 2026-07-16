@@ -31,7 +31,6 @@ impl StreamManager {
                 max_file_size,
                 compression,
             } => Some(Arc::new(RemoteStreamManager::new(
-                options.runtime.clone(),
                 path.clone(),
                 *max_file_size,
                 *compression,
@@ -187,6 +186,7 @@ impl StreamManager {
         ctx: &mut ActorContext<T>,
         job_id: JobId,
         stage: Option<usize>,
+        context: Arc<TaskContext>,
     ) where
         T: Actor,
     {
@@ -194,7 +194,7 @@ impl StreamManager {
             return;
         };
         ctx.spawn(async move {
-            if let Err(e) = remote_streams.remove_streams(job_id, stage).await {
+            if let Err(e) = remote_streams.remove_streams(job_id, stage, &context).await {
                 warn!("failed to remove remote shuffle data for job {job_id}: {e}");
             }
         });

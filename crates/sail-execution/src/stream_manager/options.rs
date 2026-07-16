@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use sail_common::runtime::RuntimeHandle;
-
 use crate::driver::DriverOptions;
 use crate::shuffle::ShuffleServiceKind;
 use crate::worker::WorkerOptions;
@@ -10,7 +8,6 @@ use crate::worker::WorkerOptions;
 pub struct StreamManagerOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
-    pub runtime: RuntimeHandle,
     pub shuffle: ShuffleServiceKind,
 }
 
@@ -19,7 +16,6 @@ impl From<&DriverOptions> for StreamManagerOptions {
         Self {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
-            runtime: options.runtime.clone(),
             shuffle: options.shuffle.clone(),
         }
     }
@@ -30,7 +26,6 @@ impl From<&WorkerOptions> for StreamManagerOptions {
         Self {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
-            runtime: options.runtime.clone(),
             shuffle: options.shuffle.clone(),
         }
     }
