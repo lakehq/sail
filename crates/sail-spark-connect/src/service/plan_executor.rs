@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
@@ -673,15 +674,35 @@ fn checkpoint_path(spark: &SparkSession, relation_id: &str) -> SparkResult<Strin
                 "checkpoint directory is not set; set {SPARK_CHECKPOINT_DIR}"
             ))
         })?;
-    validate_checkpoint_directory(&root)?;
-    validate_checkpoint_path_segment("session ID", spark.session_id())?;
+    build_checkpoint_path(&root, spark.session_id(), relation_id)
+}
+
+fn build_checkpoint_path(root: &str, session_id: &str, relation_id: &str) -> SparkResult<String> {
+    validate_checkpoint_directory(root)?;
+    validate_checkpoint_path_segment("session ID", session_id)?;
     validate_checkpoint_path_segment("relation ID", relation_id)?;
-    Ok(format!(
-        "{}/sail-checkpoints/{}/{}",
-        root.trim_end_matches('/'),
-        spark.session_id(),
-        relation_id
-    ))
+
+    let directory = format!("{}/", root.trim_end_matches('/'));
+    let checkpoint_root = ListingTableUrl::parse(directory)?;
+    let root_url = checkpoint_root.get_url();
+    if checkpoint_root.get_glob().is_some()
+        || root_url.query().is_some()
+        || root_url.fragment().is_some()
+    {
+        return Err(SparkError::invalid(
+            "checkpoint directory cannot contain a query, fragment, or glob",
+        ));
+    }
+
+    let mut checkpoint_url = root_url.clone();
+    checkpoint_url
+        .path_segments_mut()
+        .map_err(|()| SparkError::invalid("checkpoint directory must be a hierarchical URL"))?
+        .pop_if_empty()
+        .push("sail-checkpoints")
+        .push(session_id)
+        .push(relation_id);
+    Ok(checkpoint_url.into())
 }
 
 fn validate_checkpoint_directory(root: &str) -> SparkResult<()> {
@@ -703,6 +724,34 @@ fn validate_checkpoint_path_segment(name: &str, value: &str) -> SparkResult<()> 
         _ => Err(SparkError::invalid(format!(
             "checkpoint {name} must be a single path segment"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_path_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_path_appends_encoded_segments() -> SparkResult<()> {
+        let path = build_checkpoint_path("memory:///checkpoint-root", "session?one", "relation")?;
+
+        assert_eq!(
+            path,
+            "memory:///checkpoint-root/sail-checkpoints/session%3Fone/relation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_path_rejects_url_query() {
+        let error = build_checkpoint_path(
+            "memory:///checkpoint-root?scope=other",
+            "session",
+            "relation",
+        )
+        .expect_err("checkpoint root query must be rejected");
+
+        assert!(error.to_string().contains("cannot contain a query"));
     }
 }
 

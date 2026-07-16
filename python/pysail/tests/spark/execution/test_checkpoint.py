@@ -1,7 +1,6 @@
 import contextlib
 import gc
 import shutil
-import time
 import uuid
 
 import pytest
@@ -23,12 +22,13 @@ pytestmark = [
         pyspark_version() < (4,),
         reason="checkpoint and localCheckpoint require PySpark Connect 4+",
     ),
-    pytest.mark.xfail(
-        not is_jvm_spark(),
-        reason="Known Sail checkpoint parity bugs",
-        strict=True,
-    ),
 ]
+
+SAIL_XFAIL = pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Known Sail checkpoint parity bug",
+    strict=True,
+)
 
 
 SMALL_PAYLOAD_ROWS = 16 * 1024
@@ -112,6 +112,7 @@ def retry_spark(spark, checkpoint_path):
 
 @pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
 @pytest.mark.parametrize("kind", ["local", "reliable"])
+@SAIL_XFAIL
 def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
     source = spark.range(DUPLICATE_COLUMN_ROWS, numPartitions=2).selectExpr(
         "id AS value",
@@ -134,6 +135,7 @@ def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
         pytest.param(StorageLevel.MEMORY_AND_DISK, id="memory-and-disk"),
     ],
 )
+@SAIL_XFAIL
 def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, storage_level):
     source = _payload_dataframe(spark, SMALL_PAYLOAD_ROWS, partitions=1)
     assert source.count() == SMALL_PAYLOAD_ROWS
@@ -146,6 +148,7 @@ def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, s
     _assert_payload(checkpointed, SMALL_PAYLOAD_ROWS)
 
 
+@SAIL_XFAIL
 def test_local_checkpoint_large_payload_remains_executable_in_cluster(spark):
     checkpointed = _payload_dataframe(spark, LARGE_PAYLOAD_ROWS).localCheckpoint()
 
@@ -177,19 +180,16 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
         safe_files = list(root.rglob("*.arrow"))
 
         spark.conf.set("spark.checkpoint.dir", overlapping_root)
-        other = spark.range(1).checkpoint(eager=False)
-        del other
-        gc.collect()
+        with pytest.raises(PySparkException, match="checkpoint directory cannot contain"):
+            spark.range(1).checkpoint(eager=False)
 
-        deadline = time.monotonic() + 5
-        while any(path.exists() for path in safe_files) and time.monotonic() < deadline:
-            time.sleep(0.1)
-
+        assert all(path.exists() for path in safe_files)
         assert safe.count() == CLEANUP_ROWS
     finally:
         spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
 
 
+@SAIL_XFAIL
 def test_checkpoint_command_can_reattach(spark):
     client = spark._client  # noqa: SLF001
     command = Checkpoint(spark.range(3)._plan, local=True, eager=False).command(client)  # noqa: SLF001
@@ -226,6 +226,7 @@ def test_checkpoint_command_can_reattach(spark):
 
 
 @pytest.mark.parametrize("kind", ["local", "reliable"])
+@SAIL_XFAIL
 def test_lazy_checkpoint_can_retry_after_source_recovers(retry_spark, tmp_path, kind):
     row_count = 50_000
     source_path = tmp_path / f"source-{kind}"
