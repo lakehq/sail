@@ -8,9 +8,9 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::csv::options::{CsvFunction, find_option, parse_bool_option, validate_options};
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 #[cfg(test)]
@@ -69,54 +69,56 @@ impl SparkToCsvOptions {
 
     /// Build `SparkToCsvOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
-        let sep = find_key_value(map, Self::SEP_OPTION)
-            .or_else(|| find_key_value(map, Self::DELIMITER_OPTION))
-            .unwrap_or_else(|| Self::SEP_DEFAULT.to_string());
+        validate_options(map, CsvFunction::To)?;
+
+        let sep = find_option(map, Self::SEP_OPTION)
+            .or_else(|| find_option(map, Self::DELIMITER_OPTION))
+            .unwrap_or(Self::SEP_DEFAULT)
+            .to_string();
 
         let quote = parse_char_option(
-            find_key_value(map, Self::QUOTE_OPTION).as_deref(),
+            find_option(map, Self::QUOTE_OPTION),
             Self::QUOTE_OPTION,
             Self::QUOTE_DEFAULT,
         )?;
         let escape = parse_char_option(
-            find_key_value(map, Self::ESCAPE_OPTION).as_deref(),
+            find_option(map, Self::ESCAPE_OPTION),
             Self::ESCAPE_OPTION,
             Self::ESCAPE_DEFAULT,
         )?;
         let escape_quotes = parse_bool_option(
-            find_key_value(map, Self::ESCAPE_QUOTES_OPTION).as_deref(),
+            find_option(map, Self::ESCAPE_QUOTES_OPTION),
             Self::ESCAPE_QUOTES_OPTION,
             true,
         )?;
         let quote_all = parse_bool_option(
-            find_key_value(map, Self::QUOTE_ALL_OPTION).as_deref(),
+            find_option(map, Self::QUOTE_ALL_OPTION),
             Self::QUOTE_ALL_OPTION,
             false,
         )?;
-        let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let null_value = find_option(map, Self::NULL_VALUE_OPTION);
         let null_value_set = null_value.is_some();
-        let null_value = null_value.unwrap_or_default();
-        let empty_value = find_key_value(map, Self::EMPTY_VALUE_OPTION)
-            .unwrap_or_else(|| Self::EMPTY_VALUE_DEFAULT.to_string());
+        let null_value = null_value.unwrap_or_default().to_string();
+        let empty_value = find_option(map, Self::EMPTY_VALUE_OPTION)
+            .unwrap_or(Self::EMPTY_VALUE_DEFAULT)
+            .to_string();
         let ignore_leading_whitespace = parse_bool_option(
-            find_key_value(map, Self::IGNORE_LEADING_WHITESPACE_OPTION).as_deref(),
+            find_option(map, Self::IGNORE_LEADING_WHITESPACE_OPTION),
             Self::IGNORE_LEADING_WHITESPACE_OPTION,
             true,
         )?;
         let ignore_trailing_whitespace = parse_bool_option(
-            find_key_value(map, Self::IGNORE_TRAILING_WHITESPACE_OPTION).as_deref(),
+            find_option(map, Self::IGNORE_TRAILING_WHITESPACE_OPTION),
             Self::IGNORE_TRAILING_WHITESPACE_OPTION,
             true,
         )?;
 
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
+        let timestamp_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
             .map(spark_datetime_format_to_chrono_strftime)
             .transpose()?
             .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
+        let date_format = find_option(map, Self::DATE_FORMAT_OPTION)
             .map(spark_datetime_format_to_chrono_strftime)
             .transpose()?
             .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
@@ -732,35 +734,6 @@ fn format_float64(value: f64) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers (same pattern as spark_from_csv.rs)
-// ---------------------------------------------------------------------------
-
-fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
-    let entries = options.entries();
-    let keys = entries
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-        .and_then(|c| c.as_any().downcast_ref::<StringArray>())?;
-    let values = entries
-        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-        .and_then(|c| c.as_any().downcast_ref::<StringArray>())?;
-
-    keys.iter()
-        .enumerate()
-        .find(|(_, k)| {
-            k.as_deref()
-                .is_some_and(|k| k.eq_ignore_ascii_case(search_key))
-        })
-        .and_then(|(i, _)| {
-            // Return None if the value is null
-            if values.is_null(i) {
-                None
-            } else {
-                Some(values.value(i).to_string())
-            }
-        })
-}
-
 fn parse_char_option(value: Option<&str>, option_name: &str, default: char) -> Result<char> {
     match value {
         None => Ok(default),
@@ -772,15 +745,6 @@ fn parse_char_option(value: Option<&str>, option_name: &str, default: char) -> R
                 _ => exec_err!("CSV option `{option_name}` must be a single character"),
             }
         }
-    }
-}
-
-fn parse_bool_option(value: Option<&str>, option_name: &str, default: bool) -> Result<bool> {
-    match value {
-        None => Ok(default),
-        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
-        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
-        Some(_) => exec_err!("CSV option `{option_name}` must be `true` or `false`"),
     }
 }
 

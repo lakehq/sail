@@ -11,6 +11,7 @@ use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
+use crate::scalar::csv::options::{CsvFunction, validate_options};
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -171,6 +172,7 @@ impl SparkSchemaOfCsvOptions {
         if map_array.is_empty() || map_array.is_null(0) {
             return Ok(options);
         }
+        validate_options(map_array, CsvFunction::SchemaOf)?;
         let entries = map_array.value(0);
         let entries = entries
             .as_any()
@@ -200,14 +202,13 @@ impl SparkSchemaOfCsvOptions {
                     );
                 }
             };
-            match key {
-                "sep" | "delimiter" => options.sep = value.to_string(),
-                "timestampFormat" => {
-                    options.timestamp_format = spark_datetime_format_to_chrono_strftime(value)?;
-                }
-                // Silently ignore unrecognised options, matching Spark's behaviour.
-                _ => {}
+            // Spark reads CSV options through a case-insensitive map.
+            if key.eq_ignore_ascii_case("sep") || key.eq_ignore_ascii_case("delimiter") {
+                options.sep = value.to_string();
+            } else if key.eq_ignore_ascii_case("timestampFormat") {
+                options.timestamp_format = spark_datetime_format_to_chrono_strftime(value)?;
             }
+            // Unrecognised options are silently ignored, matching Spark's behaviour.
         }
         Ok(options)
     }

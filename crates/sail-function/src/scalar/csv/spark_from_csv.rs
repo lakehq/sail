@@ -21,6 +21,7 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::csv::options::{CsvFunction, find_option, validate_options};
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -60,15 +61,17 @@ impl SparkFromCSVOptions {
 
     /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
-        let sep = find_key_value(map, Self::SEP_OPTION)
-            .or(find_key_value(map, Self::DELIMITER_OPTION))
-            .unwrap_or(Self::SEP_DEFAULT.to_string());
+        validate_options(map, CsvFunction::From)?;
 
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
+        let sep = find_option(map, Self::SEP_OPTION)
+            .or_else(|| find_option(map, Self::DELIMITER_OPTION))
+            .unwrap_or(Self::SEP_DEFAULT)
+            .to_string();
+
+        let timestamp_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
             .map(spark_datetime_format_to_chrono_strftime)
             .transpose()?
-            .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
         Ok(Self {
             sep,
@@ -598,41 +601,6 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
         other => Err(DataFusionError::Plan(format!(
             "Unsupported data type in from_csv schema: {other:?}"
         ))),
-    }
-}
-
-/// Finds the index of a specified key in a `MapArray`.
-///
-/// This helper function locates the index of a given key within a `MapArray`,
-/// where the keys are stored in a "key" column. It is useful for quickly identifying
-/// the position of an option or setting within structured options data.
-fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
-    options
-        .entries()
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-        .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-        .and_then(|x| {
-            x.iter()
-                .enumerate()
-                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
-        })
-        .map(|(i, _)| i)
-}
-
-/// Retrieves the value associated with a specified key from a `MapArray`.
-///
-/// This function extracts the string value assigned to a given key within a `MapArray`,
-/// leveraging the index found by `find_key_index`. It searches for the key in the "key"
-/// column and returns the corresponding value from the "value" column if found.
-fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
-    if let Some(index) = find_key_index(options, search_key) {
-        options
-            .entries()
-            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .map(|values| values.value(index).to_string())
-    } else {
-        None
     }
 }
 
