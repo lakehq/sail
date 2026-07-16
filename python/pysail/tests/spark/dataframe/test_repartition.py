@@ -145,6 +145,15 @@ def test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown
     assert plan == snapshot
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
+    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0)
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
 def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004

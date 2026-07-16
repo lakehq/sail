@@ -37,3 +37,13 @@ data:
             RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=1
               ProjectionExec: expr=[id@0 as #5]
                 RangeExec
+---
+name: "test_explicit_repartition_does_not_push_filter_down_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+          ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+            RangeExec
