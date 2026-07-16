@@ -23,8 +23,8 @@ pub struct WorkerPool {
 impl WorkerPool {
     pub fn new(worker_manager: Arc<dyn WorkerManager>, options: WorkerPoolOptions) -> Self {
         Self {
+            driver_server_port: Some(options.driver_server_port),
             options,
-            driver_server_port: None,
             worker_manager,
             workers: IndexMap::new(),
             worker_id_generator: IdGenerator::new(),

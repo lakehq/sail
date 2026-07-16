@@ -15,4 +15,5 @@ mod task_runner;
 mod worker;
 pub mod worker_manager;
 
+pub use id::DriverId;
 pub use worker::entrypoint::run_worker;

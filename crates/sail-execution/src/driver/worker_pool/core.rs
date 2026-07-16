@@ -37,10 +37,6 @@ impl WorkerPool {
         Ok(())
     }
 
-    pub fn set_driver_server_port(&mut self, port: u16) {
-        self.driver_server_port = Some(port);
-    }
-
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.next() else {
             error!("failed to generate worker ID");
@@ -76,6 +72,7 @@ impl WorkerPool {
         };
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
             driver_external_port: if self.options.driver_external_port > 0 {
                 self.options.driver_external_port

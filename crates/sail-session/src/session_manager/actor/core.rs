@@ -1,4 +1,6 @@
 use indexmap::IndexMap;
+use log::{error, info};
+use sail_execution::driver::DriverGateway;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::session_manager::actor::SessionManagerActor;
@@ -16,10 +18,28 @@ impl Actor for SessionManagerActor {
 
     fn new(options: Self::Options) -> Self {
         let factory = (options.factory)();
+        let job_runner_factory = (options.job_runner_factory)();
         Self {
             options,
             factory,
+            job_runner_factory,
             sessions: IndexMap::new(),
+            drivers: Default::default(),
+            gateway: None,
+            next_driver_id: 1,
+        }
+    }
+
+    async fn start(&mut self, _ctx: &mut ActorContext<Self>) {
+        let Some(options) = self.options.driver_gateway.clone() else {
+            return;
+        };
+        match DriverGateway::start(options, self.drivers.clone()).await {
+            Ok(gateway) => {
+                info!("driver server is ready on port {}", gateway.port());
+                self.gateway = Some(gateway);
+            }
+            Err(e) => error!("failed to start driver server: {e}"),
         }
     }
 
@@ -47,6 +67,13 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::ObserveState { observer } => {
                 self.handle_observe_state(ctx, observer)
             }
+        }
+    }
+
+    async fn stop(self, _ctx: &mut ActorContext<Self>) {
+        if let Some(gateway) = self.gateway {
+            gateway.stop().await;
+            info!("driver server has stopped");
         }
     }
 }

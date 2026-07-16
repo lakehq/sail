@@ -1,26 +1,24 @@
 use log::debug;
-use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use crate::driver::actor::DriverActor;
 use crate::driver::r#gen::driver_service_server::DriverService;
 use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
     ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{DriverEvent, r#gen};
+use crate::driver::{DriverEvent, DriverRegistry, r#gen};
 use crate::error::ExecutionError;
-use crate::id::{TaskKey, WorkerId};
+use crate::id::{DriverId, TaskKey, WorkerId};
 
 pub struct DriverServer {
-    handle: ActorHandle<DriverActor>,
+    registry: DriverRegistry,
 }
 
 impl DriverServer {
-    pub fn new(handle: ActorHandle<DriverActor>) -> Self {
-        Self { handle }
+    pub fn new(registry: DriverRegistry) -> Self {
+        Self { registry }
     }
 }
 
@@ -33,6 +31,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let RegisterWorkerRequest {
+            driver_id,
             worker_id,
             host,
             port,
@@ -47,7 +46,8 @@ impl DriverService for DriverServer {
             port,
             result: tx,
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -63,11 +63,15 @@ impl DriverService for DriverServer {
     ) -> Result<Response<ReportWorkerHeartbeatResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let ReportWorkerHeartbeatRequest { worker_id } = request;
+        let ReportWorkerHeartbeatRequest {
+            driver_id,
+            worker_id,
+        } = request;
         let event = DriverEvent::WorkerHeartbeat {
             worker_id: worker_id.into(),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -83,6 +87,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportWorkerKnownPeersRequest {
+            driver_id,
             worker_id,
             peer_worker_ids,
         } = request;
@@ -90,7 +95,8 @@ impl DriverService for DriverServer {
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -106,6 +112,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportTaskStatusRequest {
+            driver_id,
             job_id,
             stage,
             partition,
@@ -132,7 +139,8 @@ impl DriverService for DriverServer {
             cause,
             sequence: Some(sequence),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;

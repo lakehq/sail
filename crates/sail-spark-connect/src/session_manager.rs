@@ -5,7 +5,7 @@ use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionConfig;
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
@@ -13,7 +13,8 @@ use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_server::actor::ActorSystem;
 use sail_session::session_factory::{
-    ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
+    ServerSessionFactory, ServerSessionInfo, ServerSessionJobRunnerFactory, ServerSessionMutator,
+    SessionFactory, SessionJobRunnerFactory,
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
@@ -69,12 +70,11 @@ impl ServerSessionMutator for SparkSessionMutator {
 fn create_spark_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-    system: Arc<Mutex<ActorSystem>>,
 ) -> Box<dyn SessionFactory<ServerSessionInfo>> {
     let mutator = Box::new(SparkSessionMutator {
         config: config.clone(),
     });
-    Box::new(ServerSessionFactory::new(config, runtime, system, mutator))
+    Box::new(ServerSessionFactory::new(config, runtime, mutator))
 }
 
 pub fn create_spark_session_manager(
@@ -85,13 +85,26 @@ pub fn create_spark_session_manager(
     let factory = {
         let config = config.clone();
         let runtime = runtime.clone();
+        Box::new(move || create_spark_session_factory(config.clone(), runtime.clone()))
+    };
+    let job_runner_factory = {
+        let config = config.clone();
+        let runtime = runtime.clone();
         let system = system.clone();
         Box::new(move || {
-            create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
+            Box::new(ServerSessionJobRunnerFactory::new(
+                config.clone(),
+                runtime.clone(),
+                system.clone(),
+            )) as Box<dyn SessionJobRunnerFactory>
         })
     };
-    let options = SessionManagerOptions::new(runtime.clone(), system, factory)
-        .with_session_timeout(Duration::from_secs(config.spark.session_timeout_secs))
-        .with_options(config.raw().map_err(SparkError::from)?);
+    let mut options =
+        SessionManagerOptions::new(runtime.clone(), system, factory, job_runner_factory)
+            .with_session_timeout(Duration::from_secs(config.spark.session_timeout_secs))
+            .with_options(config.raw().map_err(SparkError::from)?);
+    if !matches!(&config.mode, ExecutionMode::Local) {
+        options = options.with_driver_gateway(&config);
+    }
     Ok(SessionManager::try_new(options)?)
 }

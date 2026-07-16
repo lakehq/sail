@@ -1,6 +1,8 @@
 mod actor;
 mod client;
 mod event;
+mod gateway;
+mod handle;
 pub(super) mod job_scheduler;
 mod options;
 pub(super) mod output;
@@ -19,5 +21,7 @@ mod r#gen {
 pub(crate) use actor::DriverActor;
 pub(crate) use client::DriverClientSet;
 pub(crate) use event::{DriverEvent, TaskStatus};
+pub use gateway::{DriverGateway, DriverGatewayOptions};
 pub(crate) use r#gen::driver_service_client::DriverServiceClient;
+pub use handle::{DriverHandle, DriverRegistry};
 pub use options::DriverOptions;
