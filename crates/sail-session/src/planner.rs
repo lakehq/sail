@@ -15,7 +15,9 @@ use sail_cache::cached_relation::CachedRelationRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::rename::physical_plan::{
+    rename_physical_plan, rename_projected_physical_plan,
+};
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -111,7 +113,13 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.relation_id()
                 ))
             })?;
-            relation.to_physical_plan(node.relation_id()).await?
+            let plan = relation.to_physical_plan(node.relation_id()).await?;
+            let names = UserDefinedLogicalNode::schema(node)
+                .fields()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect::<Vec<_>>();
+            rename_physical_plan(plan, &names)?
         } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();

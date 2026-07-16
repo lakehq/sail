@@ -110,10 +110,7 @@ def retry_spark(spark, checkpoint_path):
         yield session
 
 
-@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
-@pytest.mark.parametrize("kind", ["local", "reliable"])
-@SAIL_XFAIL
-def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
+def _assert_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
     source = spark.range(DUPLICATE_COLUMN_ROWS, numPartitions=2).selectExpr(
         "id AS value",
         "id + 10 AS value",
@@ -123,6 +120,12 @@ def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
 
     assert [field.name for field in checkpointed.schema.fields] == ["value", "value"]
     assert checkpointed.count() == DUPLICATE_COLUMN_ROWS
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
+    _assert_checkpoint_preserves_duplicate_column_names(spark, eager, kind)
 
 
 @pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
@@ -223,6 +226,12 @@ def test_checkpoint_command_can_reattach(spark):
     )
 
     assert any(response.HasField("result_complete") for response in responses)
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_embedded_checkpoint_preserves_duplicate_column_names(retry_spark, eager, kind):
+    _assert_checkpoint_preserves_duplicate_column_names(retry_spark, eager, kind)
 
 
 @pytest.mark.parametrize("kind", ["local", "reliable"])

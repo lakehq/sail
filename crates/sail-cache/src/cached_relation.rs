@@ -30,6 +30,7 @@ use object_store::ObjectMeta;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::read_record_batches;
 use sail_common_datafusion::extension::{SessionExtension, SessionExtensionAccessor};
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::session::job::JobService;
 use sail_logical_plan::cached_relation::CachedRelationNode;
 use sail_physical_plan::checkpoint::LocalCheckpointExec;
@@ -320,13 +321,25 @@ impl CachedRelation {
         }
     }
 
-    pub async fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+    pub async fn schema(&self) -> SchemaRef {
+        let data = self.data.lock().await;
+        match &*data {
+            CachedRelationData::Materialized(materialized) => materialized.schema(),
+            CachedRelationData::Pending(pending) => pending.plan.schema(),
+        }
+    }
+
+    pub async fn to_logical_plan(
+        &self,
+        relation_id: &str,
+        names: &[String],
+    ) -> Result<LogicalPlan> {
         let data = self.data.lock().await;
         match &*data {
             CachedRelationData::Materialized(materialized) => {
-                materialized.to_logical_plan(relation_id)
+                materialized.to_logical_plan(relation_id, names)
             }
-            CachedRelationData::Pending(pending) => pending.to_logical_plan(relation_id),
+            CachedRelationData::Pending(pending) => pending.to_logical_plan(relation_id, names),
         }
     }
 
@@ -480,11 +493,12 @@ impl CachedRelationPending {
         }
     }
 
-    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+    fn to_logical_plan(&self, relation_id: &str, names: &[String]) -> Result<LogicalPlan> {
+        let schema = rename_schema(self.plan.schema().as_ref(), names)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CachedRelationNode::try_new(
                 relation_id.to_string(),
-                self.plan.schema(),
+                schema,
             )?),
         }))
     }
@@ -505,11 +519,12 @@ impl CachedRelationMaterialized {
         }
     }
 
-    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+    fn to_logical_plan(&self, relation_id: &str, names: &[String]) -> Result<LogicalPlan> {
+        let schema = rename_schema(self.schema().as_ref(), names)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CachedRelationNode::try_new(
                 relation_id.to_string(),
-                self.schema(),
+                schema,
             )?),
         }))
     }
@@ -983,7 +998,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use datafusion::arrow::datatypes::Schema;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -1002,6 +1017,33 @@ mod tests {
         let rewritten = cached.with_new_children(vec![rewritten_input])?;
 
         assert_eq!(rewritten.output_partitioning().partition_count(), 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cached_relation_logical_plan_renames_duplicate_fields_by_position() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let storage_level = "MEMORY_AND_DISK"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let relation = CachedRelation::new_pending_local_checkpoint(plan, storage_level);
+        let names = vec!["field-0".to_string(), "field-1".to_string()];
+
+        let logical_plan = relation.to_logical_plan("relation", &names).await?;
+
+        assert_eq!(
+            logical_plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
         Ok(())
     }
 
