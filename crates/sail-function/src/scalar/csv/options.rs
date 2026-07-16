@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use datafusion::arrow::array::{Array, MapArray, StringArray};
 use datafusion::error::Result;
 use datafusion_common::exec_err;
@@ -60,7 +62,16 @@ const LINE_SEP_OPTION: &str = "lineSep";
 const MODE_OPTION: &str = "mode";
 const DROP_MALFORMED_MODE: &str = "DROPMALFORMED";
 
-fn entry_columns(map: &MapArray) -> Option<(&StringArray, &StringArray)> {
+/// The key and value columns of the options map, together with the entry range of its first row.
+///
+/// The options argument is one map for the whole batch, but `make_scalar_function` pads a scalar
+/// argument to one value per row, so the flattened entries repeat that map once per row. Only the
+/// first row is read: the rest are copies, and walking them would validate the same option once
+/// per row of the batch.
+fn first_row_entries(map: &MapArray) -> Option<(&StringArray, &StringArray, Range<usize>)> {
+    if map.is_empty() || map.is_null(0) {
+        return None;
+    }
     let keys = map
         .entries()
         .column_by_name(SAIL_MAP_KEY_FIELD_NAME)?
@@ -71,7 +82,10 @@ fn entry_columns(map: &MapArray) -> Option<(&StringArray, &StringArray)> {
         .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)?
         .as_any()
         .downcast_ref::<StringArray>()?;
-    Some((keys, values))
+    let offsets = map.value_offsets();
+    let start = *offsets.first()? as usize;
+    let end = *offsets.get(1)? as usize;
+    Some((keys, values, start..end))
 }
 
 /// Returns the value of the `key` option, or `None` when the map does not carry it.
@@ -80,9 +94,11 @@ fn entry_columns(map: &MapArray) -> Option<(&StringArray, &StringArray)> {
 /// `sep`. A null value yields `None` rather than an empty string, though [`validate_options`]
 /// rejects the call before that can be observed.
 pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
-    let (keys, values) = entry_columns(map)?;
+    let (keys, values, entries) = first_row_entries(map)?;
     keys.iter()
         .zip(values.iter())
+        .take(entries.end)
+        .skip(entries.start)
         .find_map(|(entry_key, entry_value)| match entry_key {
             Some(entry_key) if entry_key.eq_ignore_ascii_case(key) => entry_value,
             _ => None,
@@ -99,13 +115,15 @@ pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
 /// A NULL value is the exception to that: Spark fails the call for any NULL, even under a key it
 /// does not know, so it is a property of the map rather than of the individual option.
 pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<()> {
-    if map.is_empty() {
-        return Ok(());
-    }
-    let Some((keys, values)) = entry_columns(map) else {
+    let Some((keys, values, entries)) = first_row_entries(map) else {
         return Ok(());
     };
-    for (key, value) in keys.iter().zip(values.iter()) {
+    for (key, value) in keys
+        .iter()
+        .zip(values.iter())
+        .take(entries.end)
+        .skip(entries.start)
+    {
         let (Some(key), Some(value)) = (key, value) else {
             return exec_err!(
                 "Failed preparing of the function `{}` for call. Please, double check function's arguments.",
