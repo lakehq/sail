@@ -7,16 +7,18 @@ use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
 use datafusion::common::{DataFusionError, Result};
+use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
-use sail_common::config::ShuffleCompression;
+use sail_common::runtime::RuntimeHandle;
 use sail_object_store::DynamicObjectStoreRegistry;
 use url::Url;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey};
+use crate::shuffle::ShuffleCompression;
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
@@ -24,23 +26,23 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
 /// Object-storage implementation for a blocking shuffle stream. Every task attempt owns a
 /// directory, allowing retries to be selected by the task scheduler without overwriting an
 /// earlier attempt.
-pub(super) struct RemoteStreamStorage {
-    registry: Arc<DynamicObjectStoreRegistry>,
-    storage_url: String,
+pub(super) struct RemoteStreamManager {
+    runtime: RuntimeHandle,
+    storage_path: String,
     max_file_size: usize,
     compression: ShuffleCompression,
 }
 
-impl RemoteStreamStorage {
+impl RemoteStreamManager {
     pub(super) fn new(
-        registry: Arc<DynamicObjectStoreRegistry>,
-        storage_url: String,
+        runtime: RuntimeHandle,
+        storage_path: String,
         max_file_size: usize,
         compression: ShuffleCompression,
     ) -> Self {
         Self {
-            registry,
-            storage_url,
+            runtime,
+            storage_path,
             max_file_size,
             compression,
         }
@@ -51,13 +53,15 @@ impl RemoteStreamStorage {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         if self.max_file_size == 0 {
             return Err(ExecutionError::InvalidArgument(
-                "execution.shuffle.max_file_size must be greater than zero".to_string(),
+                "cluster.shuffle_service.storage.max_file_size must be greater than zero"
+                    .to_string(),
             ));
         }
-        let (store, prefix) = self.store_and_prefix(&uri, &key)?;
+        let (store, prefix) = self.store_and_prefix(&uri, &key, context)?;
         let options = IpcWriteOptions::default()
             .try_with_compression(match self.compression {
                 ShuffleCompression::None => None,
@@ -79,8 +83,9 @@ impl RemoteStreamStorage {
         uri: String,
         key: TaskStreamKey,
         _schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<TaskStreamSource> {
-        let (store, prefix) = self.store_and_prefix(&uri, &key)?;
+        let (store, prefix) = self.store_and_prefix(&uri, &key, context)?;
         let list_store = Arc::clone(&store);
         let output = futures::stream::once(async move {
             let mut locations = list_store
@@ -162,9 +167,13 @@ impl RemoteStreamStorage {
         &self,
         uri: &str,
         key: &TaskStreamKey,
+        context: &TaskContext,
     ) -> ExecutionResult<(Arc<dyn ObjectStore>, Path)> {
         let url = Url::parse(uri).map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
-        let store = self.registry.get_store(&url)?;
+        let store = context
+            .runtime_env()
+            .object_store_registry
+            .get_store(&url)?;
         let prefix = shuffle_prefix(&url, key.job_id, Some(key.stage));
         Ok((
             store,
@@ -179,12 +188,13 @@ impl RemoteStreamStorage {
         job_id: JobId,
         stage: Option<usize>,
     ) -> ExecutionResult<Option<(Arc<dyn ObjectStore>, Path)>> {
-        if self.storage_url.is_empty() {
+        if self.storage_path.is_empty() {
             return Ok(None);
         }
-        let url = Url::parse(&self.storage_url)
+        let url = Url::parse(&self.storage_path)
             .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
-        let store = self.registry.get_store(&url)?;
+        let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
+        let store = registry.get_store(&url)?;
         Ok(Some((store, shuffle_prefix(&url, job_id, stage))))
     }
 }

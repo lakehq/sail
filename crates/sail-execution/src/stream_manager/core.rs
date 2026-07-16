@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use log::warn;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_object_store::DynamicObjectStoreRegistry;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use tokio::sync::mpsc;
@@ -19,20 +19,27 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::stream_manager::local::{LocalStream, MemoryStream};
 use crate::stream_manager::options::StreamManagerOptions;
-use crate::stream_manager::remote::RemoteStreamStorage;
+use crate::stream_manager::remote::RemoteStreamManager;
 use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessage};
 
 impl StreamManager {
     pub fn new(options: StreamManagerOptions) -> Self {
-        let remote_storage = Arc::new(RemoteStreamStorage::new(
-            Arc::new(DynamicObjectStoreRegistry::new(options.runtime.clone())),
-            options.shuffle_storage_url.clone(),
-            options.shuffle_max_file_size,
-            options.shuffle_compression,
-        ));
+        let remote_streams = match &options.shuffle {
+            crate::shuffle::ShuffleServiceKind::None => None,
+            crate::shuffle::ShuffleServiceKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(Arc::new(RemoteStreamManager::new(
+                options.runtime.clone(),
+                path.clone(),
+                *max_file_size,
+                *compression,
+            ))),
+        };
         Self {
             options,
-            remote_storage,
+            remote_streams,
             local_streams: HashMap::new(),
         }
     }
@@ -100,8 +107,14 @@ impl StreamManager {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
-        self.remote_storage.create_stream(uri, key, schema)
+        let Some(remote_streams) = &self.remote_streams else {
+            return Err(ExecutionError::InternalError(
+                "remote stream requested without a storage shuffle service".to_string(),
+            ));
+        };
+        remote_streams.create_stream(uri, key, schema, context)
     }
 
     pub fn fetch_local_stream<T>(
@@ -146,12 +159,18 @@ impl StreamManager {
         uri: String,
         key: &TaskStreamKey,
         schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<TaskStreamSource>
     where
         T: Actor,
         T::Message: StreamManagerMessage,
     {
-        self.remote_storage.fetch_stream(uri, key.clone(), schema)
+        let Some(remote_streams) = &self.remote_streams else {
+            return Err(ExecutionError::InternalError(
+                "remote stream requested without a storage shuffle service".to_string(),
+            ));
+        };
+        remote_streams.fetch_stream(uri, key.clone(), schema, context)
     }
 
     pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {
@@ -171,9 +190,11 @@ impl StreamManager {
     ) where
         T: Actor,
     {
-        let storage = Arc::clone(&self.remote_storage);
+        let Some(remote_streams) = self.remote_streams.clone() else {
+            return;
+        };
         ctx.spawn(async move {
-            if let Err(e) = storage.remove_streams(job_id, stage).await {
+            if let Err(e) = remote_streams.remove_streams(job_id, stage).await {
                 warn!("failed to remove remote shuffle data for job {job_id}: {e}");
             }
         });

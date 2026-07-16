@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use sail_common::config::ShuffleCompression;
 use sail_common::runtime::RuntimeHandle;
 
 use crate::driver::DriverOptions;
+use crate::shuffle::ShuffleServiceKind;
 use crate::worker::WorkerOptions;
 
 #[readonly::make]
@@ -11,9 +11,7 @@ pub struct StreamManagerOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub runtime: RuntimeHandle,
-    pub shuffle_max_file_size: usize,
-    pub shuffle_compression: ShuffleCompression,
-    pub shuffle_storage_url: String,
+    pub shuffle: ShuffleServiceKind,
 }
 
 impl From<&DriverOptions> for StreamManagerOptions {
@@ -22,9 +20,7 @@ impl From<&DriverOptions> for StreamManagerOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             runtime: options.runtime.clone(),
-            shuffle_max_file_size: options.shuffle_max_file_size,
-            shuffle_compression: options.shuffle_compression,
-            shuffle_storage_url: options.shuffle_storage_url.clone(),
+            shuffle: options.shuffle.clone(),
         }
     }
 }
@@ -35,9 +31,7 @@ impl From<&WorkerOptions> for StreamManagerOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             runtime: options.runtime.clone(),
-            shuffle_max_file_size: options.shuffle_max_file_size,
-            shuffle_compression: options.shuffle_compression,
-            shuffle_storage_url: String::new(),
+            shuffle: options.shuffle.clone(),
         }
     }
 }

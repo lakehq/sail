@@ -244,6 +244,39 @@
     when using the `exponential_backoff` retry strategy.
   experimental: true
 
+- key: cluster.shuffle_service.type
+  type: string
+  default: "none"
+  description: |
+    The shuffle service type. Valid values are `none` and `storage`.
+    The `storage` shuffle service materializes merged shuffle partitions in object storage
+    before running dependent stages.
+  experimental: true
+
+- key: cluster.shuffle_service.storage.path
+  type: string
+  default: "file:///tmp/sail/shuffle"
+  description: |
+    The object storage URL and optional path prefix for storage-backed shuffle data.
+    This is only used when `cluster.shuffle_service.type` is `storage`.
+  experimental: true
+
+- key: cluster.shuffle_service.storage.max_file_size
+  type: number
+  default: "134217728"
+  description: |
+    The maximum size in bytes of each storage-backed shuffle file. Larger partitions are
+    split into multiple Arrow IPC files.
+  experimental: true
+
+- key: cluster.shuffle_service.storage.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
 - key: execution.batch_size
   type: number
   default: "8192"
@@ -275,39 +308,6 @@
   description: |
     Should Sail use row number estimates at the input to decide whether increasing parallelism is beneficial or not.
     By default, only exact row numbers (not estimates) are used for this decision.
-  experimental: true
-
-- key: execution.shuffle.mode
-  type: string
-  default: "pipelined"
-  description: |
-    The shuffle transport mode. Valid values are `pipelined` and `storage`.
-    The `storage` mode materializes merged shuffle partitions in object storage before
-    running the dependent stage.
-  experimental: true
-
-- key: execution.shuffle.storage_url
-  type: string
-  default: "file:///tmp/sail/shuffle"
-  description: |
-    The object storage URL and optional path prefix for storage-backed shuffle data.
-    This is only used when `execution.shuffle.mode` is `storage`.
-  experimental: true
-
-- key: execution.shuffle.max_file_size
-  type: number
-  default: "536870912"
-  description: |
-    The maximum size in bytes of each storage-backed shuffle file. Larger partitions are
-    split into multiple Arrow IPC files.
-  experimental: true
-
-- key: execution.shuffle.compression
-  type: string
-  default: "lz4"
-  description: |
-    Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
-    `lz4`, and `zstd`.
   experimental: true
 
 - key: execution.file_listing_cache.type

@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
+use datafusion::execution::TaskContext;
 use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
@@ -8,8 +11,8 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamWriter, TaskWriteLocation}
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 
 impl<T: Actor> StreamAccessor<T> {
-    pub fn new(handle: ActorHandle<T>) -> Self {
-        Self { handle }
+    pub fn new(handle: ActorHandle<T>, context: Arc<TaskContext>) -> Self {
+        Self { handle, context }
     }
 }
 
@@ -31,9 +34,13 @@ where
             TaskReadLocation::Worker { worker_id, key } => {
                 T::Message::fetch_worker_stream(*worker_id, key.clone(), schema, tx)
             }
-            TaskReadLocation::Remote { uri, key } => {
-                T::Message::fetch_remote_stream(uri.clone(), key.clone(), schema, tx)
-            }
+            TaskReadLocation::Remote { uri, key } => T::Message::fetch_remote_stream(
+                uri.clone(),
+                key.clone(),
+                schema,
+                self.context.clone(),
+                tx,
+            ),
         };
         self.handle.send(event).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream reader".to_string())
@@ -59,9 +66,13 @@ where
             TaskWriteLocation::Local { key, storage } => {
                 T::Message::create_local_stream(key.clone(), *storage, schema, tx)
             }
-            TaskWriteLocation::Remote { uri, key } => {
-                T::Message::create_remote_stream(uri.clone(), key.clone(), schema, tx)
-            }
+            TaskWriteLocation::Remote { uri, key } => T::Message::create_remote_stream(
+                uri.clone(),
+                key.clone(),
+                schema,
+                self.context.clone(),
+                tx,
+            ),
         };
         self.handle.send(event).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream writer".to_string())

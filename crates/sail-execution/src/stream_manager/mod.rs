@@ -18,7 +18,7 @@ use crate::worker::WorkerEvent;
 
 pub struct StreamManager {
     options: StreamManagerOptions,
-    remote_storage: Arc<remote::RemoteStreamStorage>,
+    remote_streams: Option<Arc<remote::RemoteStreamManager>>,
     local_streams: HashMap<TaskStreamKey, LocalStreamState>,
 }
 

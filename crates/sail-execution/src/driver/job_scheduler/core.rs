@@ -49,7 +49,12 @@ impl JobScheduler {
             "job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let graph = JobGraph::try_new_with_shuffle_mode(plan, self.options.shuffle_mode)?;
+        let graph = JobGraph::try_new(
+            plan,
+            crate::job_graph::JobGraphOptions {
+                shuffle: self.options.shuffle.clone(),
+            },
+        )?;
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
@@ -653,7 +658,7 @@ impl JobScheduler {
                 }
             },
             OutputMode::Blocking => {
-                let uri = self.options.shuffle_storage_url.clone();
+                let uri = Self::shuffle_storage_path(&self.options)?;
                 TaskInputLocator::Remote {
                     uri,
                     stage: input.stage,
@@ -697,7 +702,7 @@ impl JobScheduler {
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
             OutputMode::Blocking => {
-                let uri = self.options.shuffle_storage_url.clone();
+                let uri = Self::shuffle_storage_path(&self.options)?;
                 TaskOutputLocator::Remote { uri }
             }
         };
@@ -705,6 +710,15 @@ impl JobScheduler {
             distribution,
             locator,
         })
+    }
+
+    fn shuffle_storage_path(options: &JobSchedulerOptions) -> ExecutionResult<String> {
+        let crate::shuffle::ShuffleServiceKind::Storage { path, .. } = &options.shuffle else {
+            return Err(ExecutionError::InternalError(
+                "blocking shuffle stage requested without a storage shuffle service".to_string(),
+            ));
+        };
+        Ok(path.clone())
     }
 
     fn get_latest_task_attempt(

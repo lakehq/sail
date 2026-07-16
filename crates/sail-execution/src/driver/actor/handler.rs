@@ -321,9 +321,13 @@ impl DriverActor {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.create_remote_stream(uri, key, schema));
+        let _ = result.send(
+            self.stream_manager
+                .create_remote_stream(uri, key, schema, &context),
+        );
         ActorAction::Continue
     }
 
@@ -358,11 +362,12 @@ impl DriverActor {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.stream_manager
-                .fetch_remote_stream(ctx, uri, &key, schema),
+                .fetch_remote_stream(ctx, uri, &key, schema, &context),
         );
         ActorAction::Continue
     }
