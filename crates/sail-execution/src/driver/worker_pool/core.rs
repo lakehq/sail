@@ -66,10 +66,6 @@ impl WorkerPool {
         let span = Span::root("WorkerPool::start_worker", SpanContext::random())
             .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
         let _guard = span.set_local_parent();
-        let Some(port) = self.driver_server_port else {
-            error!("the driver server is not ready");
-            return;
-        };
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
             driver_id: self.options.driver_id,
@@ -77,7 +73,7 @@ impl WorkerPool {
             driver_external_port: if self.options.driver_external_port > 0 {
                 self.options.driver_external_port
             } else {
-                port
+                self.options.driver_server_port
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,

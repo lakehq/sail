@@ -14,7 +14,6 @@ use crate::worker_manager::WorkerManager;
 
 pub struct WorkerPool {
     options: WorkerPoolOptions,
-    driver_server_port: Option<u16>,
     worker_manager: Arc<dyn WorkerManager>,
     workers: IndexMap<WorkerId, WorkerDescriptor>,
     worker_id_generator: IdGenerator<WorkerId>,
@@ -23,7 +22,6 @@ pub struct WorkerPool {
 impl WorkerPool {
     pub fn new(worker_manager: Arc<dyn WorkerManager>, options: WorkerPoolOptions) -> Self {
         Self {
-            driver_server_port: Some(options.driver_server_port),
             options,
             worker_manager,
             workers: IndexMap::new(),
