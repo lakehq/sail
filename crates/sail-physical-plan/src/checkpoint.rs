@@ -1,7 +1,7 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, LargeBinaryArray, RecordBatch, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, LargeBinaryArray, RecordBatch, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -18,10 +18,12 @@ use object_store::{ObjectStoreExt, PutPayload};
 use sail_common_datafusion::array::record_batch::{
     write_record_batches, write_record_batches_file,
 };
+use uuid::Uuid;
 
 const PARTITION_COLUMN: &str = "partition";
 const SEQUENCE_COLUMN: &str = "sequence";
 const DATA_COLUMN: &str = "data";
+const LOCATION_COLUMN: &str = "location";
 
 #[derive(Debug)]
 pub struct LocalCheckpointExec {
@@ -186,11 +188,10 @@ impl ReliableCheckpointExec {
         object_store_url: ObjectStoreUrl,
         path: Path,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            PARTITION_COLUMN,
-            DataType::UInt64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(PARTITION_COLUMN, DataType::UInt64, false),
+            Field::new(LOCATION_COLUMN, DataType::Utf8, false),
+        ]));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
@@ -271,8 +272,12 @@ impl ExecutionPlan for ReliableCheckpointExec {
         let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
         let store = context.runtime_env().object_store(&self.object_store_url)?;
-        // FIXME: Publish attempt-scoped temporary files atomically so stale retries cannot overwrite successful output.
-        let location = self.path.clone().join(format!("part-{partition:05}.arrow"));
+        let location = self
+            .path
+            .clone()
+            .join("_temporary")
+            .join(Uuid::new_v4().to_string())
+            .join(format!("part-{partition:05}.arrow"));
         let output = stream::once(async move {
             // FIXME: Stream Arrow IPC to object storage instead of buffering an entire partition.
             let mut batches = vec![];
@@ -286,12 +291,87 @@ impl ExecutionPlan for ReliableCheckpointExec {
                 .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
             let partition = u64::try_from(partition)
                 .map_err(|_| internal_datafusion_err!("checkpoint partition index is too large"))?;
-            let columns: Vec<ArrayRef> = vec![Arc::new(UInt64Array::from(vec![partition]))];
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(UInt64Array::from(vec![partition])),
+                Arc::new(StringArray::from(vec![location.as_ref()])),
+            ];
             Ok(RecordBatch::try_new(output_schema, columns)?)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             stream_schema,
             output,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Array, Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::object_store::memory::InMemory;
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+
+    async fn execute_checkpoint_attempt(
+        checkpoint: &ReliableCheckpointExec,
+        context: Arc<TaskContext>,
+    ) -> Result<Path> {
+        let mut stream = checkpoint.execute(0, context)?;
+        let batch = stream.next().await.ok_or_else(|| {
+            internal_datafusion_err!("reliable checkpoint attempt returned no metadata")
+        })??;
+        let locations = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| internal_datafusion_err!("invalid checkpoint location column"))?;
+        if locations.is_null(0) {
+            return Err(internal_datafusion_err!(
+                "checkpoint attempt returned null location"
+            ));
+        }
+        Path::parse(locations.value(0))
+            .map_err(|error| internal_datafusion_err!("invalid checkpoint location: {error}"))
+    }
+
+    #[tokio::test]
+    async fn reliable_checkpoint_attempts_write_distinct_temporary_objects() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let input: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        let checkpoint =
+            ReliableCheckpointExec::new(input, object_store_url.clone(), Path::from("checkpoint"));
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
+
+        let first = execute_checkpoint_attempt(&checkpoint, ctx.task_ctx()).await?;
+        let second = execute_checkpoint_attempt(&checkpoint, ctx.task_ctx()).await?;
+
+        assert_ne!(first, second);
+        let temporary = Path::from("checkpoint/_temporary");
+        assert!(first.prefix_matches(&temporary));
+        assert!(second.prefix_matches(&temporary));
+        let store = ctx.runtime_env().object_store(&object_store_url)?;
+        store
+            .head(&first)
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
+        store
+            .head(&second)
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
+        Ok(())
     }
 }
