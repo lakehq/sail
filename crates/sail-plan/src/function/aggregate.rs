@@ -11,7 +11,9 @@ use datafusion::functions_aggregate::{
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{AggregateUDF, ExprSchemable, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when,
+};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
@@ -72,6 +74,100 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     }))
+}
+
+fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+        function_context,
+    } = input;
+    let supports_linear_rewrite =
+        !distinct && ignore_nulls.is_none() && filter.is_none() && order_by.is_empty();
+    let arguments = if supports_linear_rewrite {
+        arguments
+            .into_iter()
+            .map(|argument| {
+                widen_safe_linear_sum_argument(argument, function_context.schema.as_ref())
+            })
+            .collect()
+    } else {
+        arguments
+    };
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: sum::sum_udaf(),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct,
+            filter,
+            order_by,
+            null_treatment: get_null_treatment(ignore_nulls),
+        },
+    }))
+}
+
+fn widen_safe_linear_sum_argument(
+    argument: expr::Expr,
+    schema: &datafusion_common::DFSchema,
+) -> expr::Expr {
+    if argument.get_type(schema).ok() != Some(DataType::Int32) {
+        return argument;
+    }
+    let expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) = &argument else {
+        return argument;
+    };
+    if *op != Operator::Plus {
+        return argument;
+    }
+
+    let left_literal = widen_int32_literal(left);
+    let right_literal = widen_int32_literal(right);
+    let (value, widened_literal, value_expression, literal_is_left) =
+        match (left_literal, right_literal) {
+            (Some((value, literal)), None) => (value, literal, right.as_ref(), true),
+            (None, Some((value, literal))) => (value, literal, left.as_ref(), false),
+            _ => return argument,
+        };
+    let Ok(value_type) = value_expression.get_type(schema) else {
+        return argument;
+    };
+    let Some((minimum, maximum)) = signed_integer_bounds(&value_type) else {
+        return argument;
+    };
+    if minimum + value < i64::from(i32::MIN) || maximum + value > i64::from(i32::MAX) {
+        return argument;
+    }
+
+    let widened_value = cast(value_expression.clone(), DataType::Int64);
+    if literal_is_left {
+        widened_literal + widened_value
+    } else {
+        widened_value + widened_literal
+    }
+}
+
+fn widen_int32_literal(argument: &expr::Expr) -> Option<(i64, expr::Expr)> {
+    let expr::Expr::Literal(ScalarValue::Int32(Some(value)), metadata) = argument else {
+        return None;
+    };
+    let value = i64::from(*value);
+    Some((
+        value,
+        expr::Expr::Literal(ScalarValue::Int64(Some(value)), metadata.clone()),
+    ))
+}
+
+fn signed_integer_bounds(data_type: &DataType) -> Option<(i64, i64)> {
+    match data_type {
+        DataType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        DataType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        DataType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        _ => None,
+    }
 }
 
 fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -762,7 +858,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::default(sum::sum_udaf)),
+        ("sum", F::custom(spark_sum)),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
