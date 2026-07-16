@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
     with_new_children_if_necessary,
 };
 use datafusion::prelude::SessionContext;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -99,7 +100,6 @@ enum CachedRelationPendingTarget {
 pub struct CachedRelationExec {
     input: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
-    // FIXME: Ensure completed distributed jobs release this lease so retired checkpoints can be cleaned.
     relation_lease: Option<CachedRelation>,
 }
 
@@ -198,6 +198,21 @@ impl ExecutionPlan for CachedRelationExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
+}
+
+pub fn release_cached_relation_leases(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let Some(cached) = plan.downcast_ref::<CachedRelationExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        Ok(Transformed::yes(Arc::new(CachedRelationExec::new(
+            Arc::clone(cached.input()),
+            Arc::clone(cached.properties()),
+        ))))
+    })
+    .data()
 }
 
 #[derive(Debug, Clone)]
@@ -1017,6 +1032,33 @@ mod tests {
         let rewritten = cached.with_new_children(vec![rewritten_input])?;
 
         assert_eq!(rewritten.output_partitioning().partition_count(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn completed_plan_can_release_cached_relation_lease() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let properties = checkpoint_plan_properties(&input);
+        let relation = CachedRelation::new_pending_local_checkpoint(
+            Arc::clone(&input),
+            "MEMORY_AND_DISK"
+                .parse()
+                .map_err(|error| internal_datafusion_err!("{error}"))?,
+        );
+        let mut completed_plan: Arc<dyn ExecutionPlan> = Arc::new(
+            CachedRelationExec::with_relation_lease(input, properties, relation.clone()),
+        );
+        assert!(!relation.is_exclusively_owned());
+
+        completed_plan = release_cached_relation_leases(completed_plan)?;
+
+        assert!(relation.is_exclusively_owned());
+        assert!(
+            completed_plan
+                .downcast_ref::<CachedRelationExec>()
+                .is_some_and(|cached| cached.relation_lease.is_none())
+        );
         Ok(())
     }
 

@@ -28,6 +28,10 @@ impl JobGraph {
         &self.stages
     }
 
+    pub(crate) fn stages_mut(&mut self) -> &mut [Stage] {
+        &mut self.stages
+    }
+
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }

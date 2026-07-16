@@ -1,6 +1,7 @@
 import contextlib
 import gc
 import shutil
+import time
 import uuid
 
 import pytest
@@ -36,6 +37,7 @@ LARGE_PAYLOAD_ROWS = 64 * 1024
 PAYLOAD_BYTES = 1024
 DUPLICATE_COLUMN_ROWS = 3
 CLEANUP_ROWS = 32
+COMPLETED_JOB_PARTITIONS = 4
 
 
 @contextlib.contextmanager
@@ -188,6 +190,37 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
 
         assert all(path.exists() for path in safe_files)
         assert safe.count() == CLEANUP_ROWS
+    finally:
+        spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
+
+
+def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
+    if is_jvm_spark():
+        checkpointed = spark.range(CLEANUP_ROWS, numPartitions=4).checkpoint()
+        assert checkpointed.count() == CLEANUP_ROWS
+        del checkpointed
+        gc.collect()
+        return
+
+    original_checkpoint_path = spark.conf.get("spark.checkpoint.dir")
+    checkpoint_root = tmp_path / "completed-job"
+    try:
+        spark.conf.set("spark.checkpoint.dir", checkpoint_root.as_uri())
+        checkpointed = spark.range(
+            CLEANUP_ROWS,
+            numPartitions=COMPLETED_JOB_PARTITIONS,
+        ).checkpoint()
+        assert checkpointed.count() == CLEANUP_ROWS
+        checkpoint_files = list(checkpoint_root.rglob("*.arrow"))
+        assert len(checkpoint_files) == COMPLETED_JOB_PARTITIONS
+
+        del checkpointed
+        gc.collect()
+        deadline = time.monotonic() + 5
+        while any(path.exists() for path in checkpoint_files) and time.monotonic() < deadline:
+            time.sleep(0.1)
+
+        assert all(not path.exists() for path in checkpoint_files)
     finally:
         spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
 
