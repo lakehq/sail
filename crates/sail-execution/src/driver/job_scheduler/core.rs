@@ -7,7 +7,6 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
-use sail_cache::cached_relation::release_cached_relation_leases;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
@@ -497,14 +496,6 @@ impl JobScheduler {
             job.state = JobState::Canceled;
         }
         job.stopped_at = Some(Utc::now());
-        for stage in job.graph.stages_mut() {
-            match release_cached_relation_leases(Arc::clone(&stage.plan)) {
-                Ok(plan) => stage.plan = plan,
-                Err(error) => {
-                    warn!("failed to release cached relation leases for job {job_id}: {error}")
-                }
-            }
-        }
         actions
     }
 

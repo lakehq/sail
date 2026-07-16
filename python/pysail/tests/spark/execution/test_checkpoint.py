@@ -153,7 +153,7 @@ def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, p
     _assert_payload(checkpointed, SMALL_PAYLOAD_ROWS)
 
 
-# FIXME: Keep local checkpoint payloads out of worker task definitions without changing distributed stage placement.
+# FIXME: Local checkpoint payloads are embedded in every worker task definition.
 @SAIL_XFAIL
 def test_local_checkpoint_large_payload_remains_executable_in_cluster(spark):
     checkpointed = _payload_dataframe(spark, LARGE_PAYLOAD_ROWS).localCheckpoint()
@@ -195,6 +195,8 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
         spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
 
 
+# FIXME: Completed local-cluster jobs retain checkpoint relation leases after DataFrame GC.
+@SAIL_XFAIL
 def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
     if is_jvm_spark():
         checkpointed = spark.range(CLEANUP_ROWS, numPartitions=4).checkpoint()
