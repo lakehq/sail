@@ -126,6 +126,7 @@ def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
 
 
 @pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("partitions", [1, 2, 4, 8, 10])
 @pytest.mark.parametrize(
     "storage_level",
     [
@@ -135,9 +136,8 @@ def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
         pytest.param(StorageLevel.MEMORY_AND_DISK, id="memory-and-disk"),
     ],
 )
-@SAIL_XFAIL
-def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, storage_level):
-    source = _payload_dataframe(spark, SMALL_PAYLOAD_ROWS, partitions=1)
+def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, partitions, storage_level):
+    source = _payload_dataframe(spark, SMALL_PAYLOAD_ROWS, partitions=partitions)
     assert source.count() == SMALL_PAYLOAD_ROWS
 
     if storage_level is None:

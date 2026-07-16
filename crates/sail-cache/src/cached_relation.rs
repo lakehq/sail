@@ -164,9 +164,15 @@ impl ExecutionPlan for CachedRelationExec {
                 "CachedRelationExec must have exactly one child"
             ));
         }
+        let input = Arc::clone(&children[0]);
         Ok(Arc::new(Self {
-            input: Arc::clone(&children[0]),
-            properties: Arc::clone(&self.properties),
+            properties: Arc::new(
+                self.properties
+                    .as_ref()
+                    .clone()
+                    .with_partitioning(input.output_partitioning().clone()),
+            ),
+            input,
             relation_lease: self.relation_lease.clone(),
         }))
     }
@@ -982,6 +988,22 @@ mod tests {
 
     use super::*;
     use crate::checkpoint::{CheckpointStore, ReliableCheckpoint};
+
+    #[test]
+    fn cached_relation_rewrite_updates_partitioning() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let original: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2));
+        let properties = checkpoint_plan_properties(&original);
+        let cached = Arc::new(CachedRelationExec::new(original, properties));
+        let rewritten_input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(schema).with_partitions(10));
+
+        let rewritten = cached.with_new_children(vec![rewritten_input])?;
+
+        assert_eq!(rewritten.output_partitioning().partition_count(), 10);
+        Ok(())
+    }
 
     #[test]
     fn pending_reliable_checkpoint_tracks_cleanup_path() -> Result<()> {
