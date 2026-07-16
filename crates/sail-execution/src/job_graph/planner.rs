@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
-use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::execution_props::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
@@ -24,7 +22,6 @@ use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, with_new_children_if_necessary,
 };
-use sail_cache::cached_relation::CachedRelationExec;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
@@ -458,18 +455,6 @@ fn plan_job_graph_stages(
         let child = subtree.only_child()?;
         let plan =
             create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?;
-        PlannedSubtree::without_pending_scalar_subquery_expr(plan)
-    } else if subtree
-        .plan
-        .downcast_ref::<CachedRelationExec>()
-        .is_some_and(|cached| {
-            cached
-                .input()
-                .downcast_ref::<DataSourceExec>()
-                .is_some_and(|source| source.data_source().is::<MemorySourceConfig>())
-        })
-    {
-        let plan = create_driver_stage(subtree.into_planned_subtree(), graph, scalar_context)?;
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
@@ -926,11 +911,7 @@ fn create_driver_stage(
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::datasource::memory::MemorySourceConfig;
-    use datafusion::datasource::source::DataSourceExec;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
     use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
@@ -946,7 +927,6 @@ mod tests {
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
-    use sail_cache::cached_relation::CachedRelationExec;
     use sail_catalog::command::CatalogCommand;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
@@ -963,38 +943,6 @@ mod tests {
 
     fn empty_plan() -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(schema()))
-    }
-
-    #[test]
-    fn test_job_graph_reads_cached_memory_from_driver_stage() {
-        let batch =
-            RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(vec![1]))]).unwrap();
-        let memory: Arc<dyn ExecutionPlan> =
-            MemorySourceConfig::try_new_exec(&[vec![batch.clone()], vec![batch]], schema(), None)
-                .unwrap();
-        let cached: Arc<dyn ExecutionPlan> = Arc::new(CachedRelationExec::new(
-            Arc::clone(&memory),
-            Arc::clone(memory.properties()),
-        ));
-
-        let graph = JobGraph::try_new(cached).unwrap();
-
-        assert_eq!(graph.stages().len(), 2);
-        assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
-        assert_eq!(graph.stages()[1].placement, TaskPlacement::Worker);
-        assert!(matches!(
-            graph.stages()[1].inputs.as_slice(),
-            [StageInput {
-                stage: 0,
-                mode: InputMode::Forward,
-            }]
-        ));
-        let cached = graph.stages()[0]
-            .plan
-            .downcast_ref::<CachedRelationExec>()
-            .expect("driver stage should retain the cached relation wrapper");
-        assert!(cached.input().is::<DataSourceExec>());
-        assert!(graph.stages()[1].plan.is::<StageInputExec<usize>>());
     }
 
     #[test]

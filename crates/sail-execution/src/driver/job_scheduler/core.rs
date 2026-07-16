@@ -24,9 +24,7 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::{
-    encode_driver_physical_plan, encode_remote_physical_expr, encode_remote_physical_plan,
-};
+use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -535,16 +533,7 @@ impl JobScheduler {
             )));
         };
 
-        let plan = match stage.placement {
-            TaskPlacement::Driver => encode_driver_physical_plan(
-                self.codec.as_ref(),
-                Arc::clone(&stage.plan),
-                key.partition,
-            )?,
-            TaskPlacement::Worker => {
-                encode_remote_physical_plan(self.codec.as_ref(), Arc::clone(&stage.plan))?
-            }
-        };
+        let plan = encode_remote_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
