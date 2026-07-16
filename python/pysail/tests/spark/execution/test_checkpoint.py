@@ -32,14 +32,6 @@ SAIL_XFAIL = pytest.mark.xfail(
 )
 
 
-SMALL_PAYLOAD_ROWS = 16 * 1024
-LARGE_PAYLOAD_ROWS = 64 * 1024
-PAYLOAD_BYTES = 1024
-DUPLICATE_COLUMN_ROWS = 3
-CLEANUP_ROWS = 32
-COMPLETED_JOB_PARTITIONS = 4
-
-
 @contextlib.contextmanager
 def _checkpoint_spark_session(remote, checkpoint_path):
     builder = (
@@ -77,14 +69,14 @@ def spark(remote, checkpoint_path):
 def _payload_dataframe(spark, rows, partitions=4):
     return spark.range(rows, numPartitions=partitions).selectExpr(
         "id",
-        f"repeat('x', {PAYLOAD_BYTES}) AS payload",
+        "repeat('x', 1024) AS payload",
     )
 
 
 def _assert_payload(checkpointed, rows):
     assert checkpointed.count() == rows
     actual = checkpointed.selectExpr("sum(length(payload)) AS payload_bytes").first()
-    assert actual.payload_bytes == rows * PAYLOAD_BYTES
+    assert actual.payload_bytes == rows * 1024
 
 
 def _assert_large_payload(checkpointed, rows):
@@ -93,7 +85,7 @@ def _assert_large_payload(checkpointed, rows):
         "sum(length(payload)) AS payload_bytes",
     ).first()
     assert actual.row_count == rows
-    assert actual.payload_bytes == rows * PAYLOAD_BYTES
+    assert actual.payload_bytes == rows * 1024
 
 
 @pytest.fixture(scope="module")
@@ -113,7 +105,7 @@ def retry_spark(spark, checkpoint_path):
 
 
 def _assert_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
-    source = spark.range(DUPLICATE_COLUMN_ROWS, numPartitions=2).selectExpr(
+    source = spark.range(3, numPartitions=2).selectExpr(
         "id AS value",
         "id + 10 AS value",
     )
@@ -121,7 +113,7 @@ def _assert_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
     checkpointed = source.localCheckpoint(eager=eager) if kind == "local" else source.checkpoint(eager=eager)
 
     assert [field.name for field in checkpointed.schema.fields] == ["value", "value"]
-    assert checkpointed.count() == DUPLICATE_COLUMN_ROWS
+    assert checkpointed.count() == 3  # noqa: PLR2004
 
 
 @pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
@@ -142,36 +134,36 @@ def test_checkpoint_preserves_duplicate_column_names(spark, eager, kind):
     ],
 )
 def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, partitions, storage_level):
-    source = _payload_dataframe(spark, SMALL_PAYLOAD_ROWS, partitions=partitions)
-    assert source.count() == SMALL_PAYLOAD_ROWS
+    source = _payload_dataframe(spark, 16 * 1024, partitions=partitions)
+    assert source.count() == 16 * 1024
 
     if storage_level is None:
         checkpointed = source.localCheckpoint(eager=eager)
     else:
         checkpointed = source.localCheckpoint(eager=eager, storageLevel=storage_level)
 
-    _assert_payload(checkpointed, SMALL_PAYLOAD_ROWS)
+    _assert_payload(checkpointed, 16 * 1024)
 
 
 # FIXME: Local checkpoint payloads are embedded in every worker task definition.
 @SAIL_XFAIL
 def test_local_checkpoint_large_payload_remains_executable_in_cluster(spark):
-    checkpointed = _payload_dataframe(spark, LARGE_PAYLOAD_ROWS).localCheckpoint()
+    checkpointed = _payload_dataframe(spark, 64 * 1024).localCheckpoint()
 
-    _assert_large_payload(checkpointed, LARGE_PAYLOAD_ROWS)
+    _assert_large_payload(checkpointed, 64 * 1024)
 
 
 def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
     if is_jvm_spark():
         # JVM Spark fixes the checkpoint root at server startup.
-        safe = spark.range(CLEANUP_ROWS, numPartitions=4).checkpoint()
-        assert safe.count() == CLEANUP_ROWS
+        safe = spark.range(32, numPartitions=4).checkpoint()
+        assert safe.count() == 32  # noqa: PLR2004
 
         other = spark.range(1).checkpoint(eager=False)
         del other
         gc.collect()
 
-        assert safe.count() == CLEANUP_ROWS
+        assert safe.count() == 32  # noqa: PLR2004
         return
 
     original_checkpoint_path = spark.conf.get("spark.checkpoint.dir")
@@ -181,8 +173,8 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
 
     try:
         spark.conf.set("spark.checkpoint.dir", safe_root)
-        safe = spark.range(CLEANUP_ROWS, numPartitions=4).checkpoint()
-        assert safe.count() == CLEANUP_ROWS
+        safe = spark.range(32, numPartitions=4).checkpoint()
+        assert safe.count() == 32  # noqa: PLR2004
         safe_files = list(root.rglob("*.arrow"))
 
         spark.conf.set("spark.checkpoint.dir", overlapping_root)
@@ -190,7 +182,7 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
             spark.range(1).checkpoint(eager=False)
 
         assert all(path.exists() for path in safe_files)
-        assert safe.count() == CLEANUP_ROWS
+        assert safe.count() == 32  # noqa: PLR2004
     finally:
         spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
 
@@ -199,8 +191,8 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
 @SAIL_XFAIL
 def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
     if is_jvm_spark():
-        checkpointed = spark.range(CLEANUP_ROWS, numPartitions=4).checkpoint()
-        assert checkpointed.count() == CLEANUP_ROWS
+        checkpointed = spark.range(32, numPartitions=4).checkpoint()
+        assert checkpointed.count() == 32  # noqa: PLR2004
         del checkpointed
         gc.collect()
         return
@@ -209,13 +201,10 @@ def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
     checkpoint_root = tmp_path / "completed-job"
     try:
         spark.conf.set("spark.checkpoint.dir", checkpoint_root.as_uri())
-        checkpointed = spark.range(
-            CLEANUP_ROWS,
-            numPartitions=COMPLETED_JOB_PARTITIONS,
-        ).checkpoint()
-        assert checkpointed.count() == CLEANUP_ROWS
+        checkpointed = spark.range(32, numPartitions=4).checkpoint()
+        assert checkpointed.count() == 32  # noqa: PLR2004
         checkpoint_files = list(checkpoint_root.rglob("*.arrow"))
-        assert len(checkpoint_files) == COMPLETED_JOB_PARTITIONS
+        assert len(checkpoint_files) == 4  # noqa: PLR2004
 
         del checkpointed
         gc.collect()
