@@ -226,7 +226,6 @@ def test_checkpoint_command_can_reattach(spark):
 
 
 @pytest.mark.parametrize("kind", ["local", "reliable"])
-@SAIL_XFAIL
 def test_lazy_checkpoint_can_retry_after_source_recovers(retry_spark, tmp_path, kind):
     row_count = 50_000
     source_path = tmp_path / f"source-{kind}"

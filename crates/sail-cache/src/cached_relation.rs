@@ -10,7 +10,7 @@ use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -469,13 +469,13 @@ impl SessionExtension for CachedRelationRegistry {
 
 impl CachedRelationPending {
     async fn materialize(&self, ctx: &SessionContext) -> Result<CachedRelationData> {
+        let plan = reset_plan_states(Arc::clone(&self.plan))?;
         match &self.target {
             CachedRelationPendingTarget::Local { storage_level } => {
-                materialize_local_checkpoint(ctx, Arc::clone(&self.plan), storage_level.clone())
-                    .await
+                materialize_local_checkpoint(ctx, plan, storage_level.clone()).await
             }
             CachedRelationPendingTarget::Reliable { path } => {
-                materialize_reliable_checkpoint(ctx, Arc::clone(&self.plan), path).await
+                materialize_reliable_checkpoint(ctx, plan, path).await
             }
         }
     }
