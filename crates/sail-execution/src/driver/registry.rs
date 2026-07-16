@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 
 use sail_server::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
+use tonic::async_trait;
 
 use crate::driver::{DriverActor, DriverEvent};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -41,42 +41,35 @@ impl DriverHandle {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct DriverRegistry {
-    drivers: Arc<RwLock<HashMap<DriverId, DriverHandle>>>,
+    drivers: HashMap<DriverId, DriverHandle>,
 }
 
 impl DriverRegistry {
-    pub fn insert(&self, driver_id: DriverId, handle: DriverHandle) -> ExecutionResult<()> {
-        let mut drivers = self
-            .drivers
-            .write()
-            .map_err(|e| ExecutionError::InternalError(e.to_string()))?;
-        if drivers.contains_key(&driver_id) {
+    pub fn insert(&mut self, driver_id: DriverId, handle: DriverHandle) -> ExecutionResult<()> {
+        if self.drivers.contains_key(&driver_id) {
             return Err(ExecutionError::InternalError(format!(
                 "driver {driver_id} is already registered"
             )));
         }
-        drivers.insert(driver_id, handle);
+        self.drivers.insert(driver_id, handle);
         Ok(())
     }
 
-    pub fn remove(&self, driver_id: DriverId) -> ExecutionResult<Option<DriverHandle>> {
-        let mut drivers = self
-            .drivers
-            .write()
-            .map_err(|e| ExecutionError::InternalError(e.to_string()))?;
-        Ok(drivers.remove(&driver_id))
+    pub fn remove(&mut self, driver_id: DriverId) -> Option<DriverHandle> {
+        self.drivers.remove(&driver_id)
     }
 
-    pub(crate) fn get(&self, driver_id: DriverId) -> ExecutionResult<DriverHandle> {
-        let drivers = self
-            .drivers
-            .read()
-            .map_err(|e| ExecutionError::InternalError(e.to_string()))?;
-        drivers
+    pub fn get(&self, driver_id: DriverId) -> ExecutionResult<DriverHandle> {
+        self.drivers
             .get(&driver_id)
             .cloned()
             .ok_or_else(|| ExecutionError::InvalidArgument(format!("driver {driver_id} not found")))
     }
+}
+
+#[async_trait]
+pub trait DriverRegistryAccessor: Send + Sync {
+    async fn get(&self, driver_id: DriverId) -> ExecutionResult<DriverHandle>;
 }

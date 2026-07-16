@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use log::debug;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
@@ -8,16 +10,16 @@ use crate::driver::r#gen::{
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
     ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{DriverEvent, DriverRegistry, r#gen};
+use crate::driver::{DriverEvent, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
 use crate::id::{DriverId, TaskKey, WorkerId};
 
 pub struct DriverServer {
-    registry: DriverRegistry,
+    registry: Arc<dyn DriverRegistryAccessor>,
 }
 
 impl DriverServer {
-    pub fn new(registry: DriverRegistry) -> Self {
+    pub fn new(registry: Arc<dyn DriverRegistryAccessor>) -> Self {
         Self { registry }
     }
 }
@@ -47,7 +49,8 @@ impl DriverService for DriverServer {
             result: tx,
         };
         self.registry
-            .get(DriverId::from(driver_id))?
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -71,7 +74,8 @@ impl DriverService for DriverServer {
             worker_id: worker_id.into(),
         };
         self.registry
-            .get(DriverId::from(driver_id))?
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -96,7 +100,8 @@ impl DriverService for DriverServer {
             peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
         };
         self.registry
-            .get(DriverId::from(driver_id))?
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -140,7 +145,8 @@ impl DriverService for DriverServer {
             sequence: Some(sequence),
         };
         self.registry
-            .get(DriverId::from(driver_id))?
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;

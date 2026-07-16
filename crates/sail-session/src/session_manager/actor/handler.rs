@@ -12,6 +12,8 @@ use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
 use sail_common_datafusion::system::predicate::PredicateExt;
 use sail_execution::DriverId;
+use sail_execution::driver::DriverHandle;
+use sail_execution::error::ExecutionResult;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -23,6 +25,15 @@ use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
 
 impl SessionManagerActor {
+    pub(super) fn handle_get_driver(
+        &self,
+        driver_id: DriverId,
+        result: oneshot::Sender<ExecutionResult<DriverHandle>>,
+    ) -> ActorAction {
+        let _ = result.send(self.drivers.get(driver_id));
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_get_or_create_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -99,7 +110,7 @@ impl SessionManagerActor {
                         }
                         Err(e) => {
                             if let Some(driver_id) = registered_driver_id
-                                && let Ok(Some(driver)) = self.drivers.remove(driver_id)
+                                && let Some(driver) = self.drivers.remove(driver_id)
                             {
                                 ctx.spawn(async move {
                                     let _ = driver.shutdown().await;
@@ -187,10 +198,8 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        if let Some(driver_id) = session.driver_id.take()
-            && let Err(e) = self.drivers.remove(driver_id)
-        {
-            warn!("failed to remove driver {driver_id}: {e}");
+        if let Some(driver_id) = session.driver_id.take() {
+            self.drivers.remove(driver_id);
         }
         if matches!(session.state, ServerSessionState::Deleting) {
             session.state = ServerSessionState::Deleted {
@@ -204,7 +213,7 @@ impl SessionManagerActor {
 
     pub(super) fn handle_set_session_failure(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         session_id: String,
     ) -> ActorAction {
         let Some(session) = self.sessions.get_mut(&session_id) else {
@@ -212,9 +221,13 @@ impl SessionManagerActor {
             return ActorAction::Continue;
         };
         if let Some(driver_id) = session.driver_id.take()
-            && let Err(e) = self.drivers.remove(driver_id)
+            && let Some(driver) = self.drivers.remove(driver_id)
         {
-            warn!("failed to remove driver {driver_id}: {e}");
+            ctx.spawn(async move {
+                if let Err(e) = driver.shutdown().await {
+                    warn!("failed to shut down driver {driver_id}: {e}");
+                }
+            });
         }
         session.state = ServerSessionState::Failed;
         ActorAction::Continue

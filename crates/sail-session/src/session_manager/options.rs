@@ -1,9 +1,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_execution::driver::DriverGatewayOptions;
+use sail_execution::driver::DriverGateway;
 use sail_server::actor::ActorSystem;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
@@ -15,7 +14,7 @@ pub struct SessionManagerOptions {
     pub system: Arc<Mutex<ActorSystem>>,
     pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
     pub job_runner_factory: Box<dyn Fn() -> Box<dyn SessionJobRunnerFactory> + Send>,
-    pub driver_gateway: Option<DriverGatewayOptions>,
+    pub driver_gateway: Option<DriverGateway>,
     /// The application configuration options as key-value pairs,
     /// used to populate the `system.session.options` table.
     pub options: Vec<(String, String)>,
@@ -39,8 +38,8 @@ impl SessionManagerOptions {
         }
     }
 
-    pub fn with_driver_gateway(mut self, config: &AppConfig) -> Self {
-        self.driver_gateway = Some(DriverGatewayOptions::new(config));
+    pub fn with_driver_gateway(mut self, gateway: DriverGateway) -> Self {
+        self.driver_gateway = Some(gateway);
         self
     }
 
@@ -52,5 +51,9 @@ impl SessionManagerOptions {
     pub fn with_options(mut self, options: Vec<(String, String)>) -> Self {
         self.options = options;
         self
+    }
+
+    pub(crate) fn take_driver_gateway(&mut self) -> Option<DriverGateway> {
+        self.driver_gateway.take()
     }
 }

@@ -9,6 +9,7 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_server::actor::ActorSystem;
@@ -77,7 +78,7 @@ fn create_spark_session_factory(
     Box::new(ServerSessionFactory::new(config, runtime, mutator))
 }
 
-pub fn create_spark_session_manager(
+pub async fn create_spark_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
 ) -> SparkResult<SessionManager> {
@@ -99,12 +100,23 @@ pub fn create_spark_session_manager(
             )) as Box<dyn SessionJobRunnerFactory>
         })
     };
+    let gateway = if matches!(&config.mode, ExecutionMode::Local) {
+        None
+    } else {
+        Some(
+            DriverGateway::try_new(DriverGatewayOptions::new(&config))
+                .await
+                .map_err(|e| {
+                    SparkError::internal(format!("failed to create driver gateway: {e}"))
+                })?,
+        )
+    };
     let mut options =
         SessionManagerOptions::new(runtime.clone(), system, factory, job_runner_factory)
             .with_session_timeout(Duration::from_secs(config.spark.session_timeout_secs))
             .with_options(config.raw().map_err(SparkError::from)?);
-    if !matches!(&config.mode, ExecutionMode::Local) {
-        options = options.with_driver_gateway(&config);
+    if let Some(gateway) = gateway {
+        options = options.with_driver_gateway(gateway);
     }
     Ok(SessionManager::try_new(options)?)
 }

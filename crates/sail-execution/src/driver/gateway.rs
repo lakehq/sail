@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use arrow_flight::flight_service_server::FlightServiceServer;
 use prost::Message;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
@@ -10,7 +12,7 @@ use tonic::{Status, async_trait};
 
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
-use crate::driver::{DriverEvent, DriverRegistry};
+use crate::driver::{DriverEvent, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
@@ -33,7 +35,7 @@ impl DriverGatewayOptions {
 }
 
 struct DriverTaskStreamFetcher {
-    registry: DriverRegistry,
+    registry: Arc<dyn DriverRegistryAccessor>,
 }
 
 #[derive(Debug)]
@@ -63,7 +65,8 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
         sender: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
         self.registry
-            .get(key.driver_id)?
+            .get(key.driver_id)
+            .await?
             .send(DriverEvent::FetchDriverStream {
                 key: key.stream,
                 result: sender,
@@ -75,17 +78,27 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
 
 pub struct DriverGateway {
     port: u16,
-    signal: oneshot::Sender<()>,
-    handle: JoinHandle<ExecutionResult<()>>,
+    listener: Option<TcpListener>,
+    signal: Option<oneshot::Sender<()>>,
+    handle: Option<JoinHandle<ExecutionResult<()>>>,
 }
 
 impl DriverGateway {
-    pub async fn start(
-        options: DriverGatewayOptions,
-        registry: DriverRegistry,
-    ) -> ExecutionResult<Self> {
+    pub async fn try_new(options: DriverGatewayOptions) -> ExecutionResult<Self> {
         let listener = TcpListener::bind((options.listen_host, options.listen_port)).await?;
         let port = listener.local_addr()?.port();
+        Ok(Self {
+            port,
+            listener: Some(listener),
+            signal: None,
+            handle: None,
+        })
+    }
+
+    pub fn start(&mut self, registry: Arc<dyn DriverRegistryAccessor>) {
+        let Some(listener) = self.listener.take() else {
+            return;
+        };
         let (tx, rx) = oneshot::channel();
 
         let service = DriverServiceServer::new(DriverServer::new(registry.clone()))
@@ -116,19 +129,20 @@ impl DriverGateway {
                 .await
                 .map_err(|e| ExecutionError::InternalError(e.to_string()))
         });
-        Ok(Self {
-            port,
-            signal: tx,
-            handle,
-        })
+        self.signal = Some(tx);
+        self.handle = Some(handle);
     }
 
     pub fn port(&self) -> u16 {
         self.port
     }
 
-    pub async fn stop(self) {
-        let _ = self.signal.send(());
-        let _ = self.handle.await;
+    pub async fn stop(mut self) {
+        if let Some(signal) = self.signal.take() {
+            let _ = signal.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
     }
 }
