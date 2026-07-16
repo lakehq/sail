@@ -143,7 +143,7 @@ jobs:
           files: coverage-spark-${{ inputs.spark_version }}.info
           flags: spark-tests
           name: spark-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS
 
       - name: Upload Test Logs

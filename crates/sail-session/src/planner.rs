@@ -3,7 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, OrderingRequirements};
+use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -29,7 +30,7 @@ use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
-use sail_logical_plan::sort::SortWithinPartitionsNode;
+use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::filter::StreamFilterNode;
@@ -162,6 +163,29 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 .with_fetch(node.fetch())
                 .with_preserve_partitioning(true);
             Arc::new(sort)
+        } else if let Some(node) = node.as_any().downcast_ref::<RequiredSortNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("RequiredSort requires exactly one physical input");
+            };
+            let expr = create_physical_sort_exprs(
+                node.sort_expr(),
+                UserDefinedLogicalNode::schema(node),
+                session_state.execution_props(),
+            )?;
+            let Some(ordering) = LexOrdering::new(expr) else {
+                return internal_err!("RequiredSort requires at least one sort expression");
+            };
+            let sort = SortExec::new(ordering, input.clone())
+                .with_fetch(node.fetch())
+                .with_preserve_partitioning(node.preserve_partitioning());
+            let requirements = OrderingRequirements::from(sort.expr().clone());
+            let distribution = sort.required_input_distribution().swap_remove(0);
+            Arc::new(OutputRequirementExec::new(
+                Arc::new(sort),
+                Some(requirements),
+                distribution,
+                node.fetch(),
+            ))
         } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SchemaPivotExec requires exactly one physical input");

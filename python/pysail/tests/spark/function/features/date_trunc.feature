@@ -92,3 +92,39 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query result
       | result              |
       | 2026-03-15 18:00:00 |
+
+  Rule: date_trunc — the argument may come from a column
+
+    @column_args
+    Scenario: date_trunc with the argument as a literal
+      When query
+        """
+        SELECT date_trunc('MM', '2015-03-05T09:32:05.359') AS result
+        """
+      Then query result ordered
+        | result              |
+        | 2015-03-01 00:00:00 |
+
+    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
+    @column_args @sail-bug
+    Scenario: date_trunc takes argument 1 from a column holding two different values
+      When query
+        """
+        SELECT date_trunc(c, '2015-03-05T09:32:05.359') AS result FROM VALUES (1, 'YEAR'), (2, 'MM') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result              |
+        | 2015-01-01 00:00:00 |
+        | 2015-03-01 00:00:00 |
+
+    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
+    @column_args @sail-bug
+    Scenario: date_trunc takes argument 1 from a column
+      When query
+        """
+        SELECT date_trunc(c, '2015-03-05T09:32:05.359') AS result FROM VALUES (1, 'YEAR'), (2, 'YEAR') AS t(i, c) ORDER BY i
+        """
+      Then query result ordered
+        | result              |
+        | 2015-01-01 00:00:00 |
+        | 2015-01-01 00:00:00 |
