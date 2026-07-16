@@ -6,7 +6,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode 
 
 
 @pytest.fixture(scope="module")
-def storage_shuffle_spark(tmp_path_factory):
+def remote(tmp_path_factory):
     shuffle_path = tmp_path_factory.mktemp("shuffle_storage")
     envs = {
         "SAIL_MODE": "local-cluster",
@@ -23,22 +23,22 @@ def storage_shuffle_spark(tmp_path_factory):
         "SAIL_CLUSTER__SHUFFLE_SERVICE__STORAGE__MAX_FILE_SIZE": "1024",
         "SAIL_CLUSTER__SHUFFLE_SERVICE__STORAGE__COMPRESSION": "lz4",
     }
-    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
-        yield sessions.create()
+    with spark_connect_server(envs=envs) as server:
+        yield server.remote
 
 
 @pytest.mark.yamlsnapshot(group="plan")
-def test_query_execution_with_storage_shuffle(storage_shuffle_spark, snapshot):
-    left = storage_shuffle_spark.range(0, 64, 1, 4).select(
+def test_query_execution_with_storage_shuffle(spark, snapshot):
+    left = spark.range(0, 64, 1, 4).select(
         F.col("id").alias("k"),
         (F.col("id") * 2).alias("v1"),
     )
-    right = storage_shuffle_spark.range(0, 64, 1, 4).select(
+    right = spark.range(0, 64, 1, 4).select(
         F.col("id").alias("k"),
         (F.col("id") + 1).alias("v2"),
     )
 
-    result = (
+    df = (
         left.repartition(8, "k")
         .join(right.repartition(8, "k"), "k")
         .withColumn("g", F.col("k") % 4)
@@ -51,10 +51,10 @@ def test_query_execution_with_storage_shuffle(storage_shuffle_spark, snapshot):
         .orderBy("g")
     )
 
-    plan = normalize_plan_text(result._explain_string())  # noqa: SLF001
+    plan = normalize_plan_text(df._explain_string())  # noqa: SLF001
     assert plan == snapshot
 
-    actual = result.toPandas()
+    actual = df.toPandas()
     expected = pd.DataFrame(
         {
             "g": [0, 1, 2, 3],
@@ -73,9 +73,9 @@ def test_query_execution_with_storage_shuffle(storage_shuffle_spark, snapshot):
     assert_frame_equal(actual, expected)
 
 
-def test_repartition_collect_with_storage_shuffle(storage_shuffle_spark):
+def test_repartition_collect_with_storage_shuffle(spark):
     rows = (
-        storage_shuffle_spark.createDataFrame([Row(id=i, group=i % 3) for i in range(30)])
+        spark.createDataFrame([Row(id=i, group=i % 3) for i in range(30)])
         .repartition(6, "group")
         .groupBy("group")
         .count()
