@@ -329,6 +329,7 @@ impl SessionManagerActor {
         let context = context.clone();
         ctx.spawn(async move {
             service.runner().stop(tx).await;
+            // FIXME: Await runner shutdown before removing checkpoint data still visible to tasks.
             if let Err(error) = cleanup_cached_relations(&context).await {
                 warn!("failed to clean cached relations for session {session_id}: {error}");
             }

@@ -271,8 +271,10 @@ impl ExecutionPlan for ReliableCheckpointExec {
         let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
         let store = context.runtime_env().object_store(&self.object_store_url)?;
+        // FIXME: Publish attempt-scoped temporary files atomically so stale retries cannot overwrite successful output.
         let location = self.path.clone().join(format!("part-{partition:05}.arrow"));
         let output = stream::once(async move {
+            // FIXME: Stream Arrow IPC to object storage instead of buffering an entire partition.
             let mut batches = vec![];
             while let Some(batch) = input.next().await {
                 batches.push(batch?);

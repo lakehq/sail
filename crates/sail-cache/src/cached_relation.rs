@@ -98,6 +98,7 @@ enum CachedRelationPendingTarget {
 pub struct CachedRelationExec {
     input: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
+    // FIXME: Ensure completed distributed jobs release this lease so retired checkpoints can be cleaned.
     relation_lease: Option<CachedRelation>,
 }
 
