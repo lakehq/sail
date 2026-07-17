@@ -66,6 +66,11 @@ pub fn resolve_object_store_path(
 ) -> Result<ResolvedObjectStorePath> {
     let directory = format!("{}/", path.trim_end_matches('/'));
     let url = ListingTableUrl::parse(&directory)?;
+    if !url.get_url().username().is_empty() || url.get_url().password().is_some() {
+        return Err(DataFusionError::Plan(
+            "object store URL cannot contain user information".to_string(),
+        ));
+    }
     let object_store_url = url.object_store();
     let store = runtime_env.object_store(&object_store_url)?;
     Ok(ResolvedObjectStorePath {
@@ -123,6 +128,29 @@ mod tests {
             Err(object_store::Error::NotFound { .. })
         ));
         assert!(resolved.store().head(&outside).await.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn resolved_path_rejects_url_user_information() -> Result<()> {
+        let runtime_env = RuntimeEnv::default();
+        let error = match resolve_object_store_path(
+            &runtime_env,
+            "s3://checkpoint-user:checkpoint-secret@bucket/checkpoint",
+        ) {
+            Ok(_) => {
+                return Err(DataFusionError::Plan(
+                    "object store credentials were accepted in a URL".to_string(),
+                ));
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("object store URL cannot contain user information")
+        );
         Ok(())
     }
 }
