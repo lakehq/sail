@@ -92,6 +92,53 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t            |
         | interval day |
 
+  Rule: A capped decimal + or - reduces the scale like Spark
+    # Spark caps a wide `+`/`-` with adjustPrecisionScale, which REDUCES the scale to keep
+    # the integer digits. Arrow caps with a plain min(_, 38) that keeps the scale, so
+    # decimal(38,10) + decimal(38,2) came out decimal(38,10) instead of decimal(38,6) —
+    # a wrong type under the DEFAULT config. Only the type is re-derived here; the sum
+    # itself stays on the native kernel.
+
+    Scenario: a wide decimal sum reduces the scale to the adjusted one
+      When query
+        """
+        SELECT typeof(CAST(1 AS DECIMAL(38,10)) + CAST(1 AS DECIMAL(38,2))) AS t,
+               CAST(1.005 AS DECIMAL(38,10)) + CAST(2.5 AS DECIMAL(38,2)) AS r
+        """
+      Then query result
+        | t             | r        |
+        | decimal(38,6) | 3.505000 |
+
+    Scenario: a wide decimal difference reduces the scale to the adjusted one
+      When query
+        """
+        SELECT typeof(CAST(1 AS DECIMAL(38,10)) - CAST(1 AS DECIMAL(38,2))) AS t
+        """
+      Then query result
+        | t             |
+        | decimal(38,6) |
+
+    Scenario: a decimal plus an integer literal reduces the scale when it overflows 38
+      When query
+        """
+        SELECT typeof(CAST(1 AS DECIMAL(38,18)) + 2) AS t
+        """
+      Then query result
+        | t              |
+        | decimal(38,17) |
+
+    Scenario: a decimal sum that fits in 38 keeps the native type
+      # Guards the gate: below precision 38 Arrow already agrees with Spark, so the
+      # re-typing must not fire.
+      When query
+        """
+        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2))) AS t,
+               CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2)) AS r
+        """
+      Then query result
+        | t             | r    |
+        | decimal(11,2) | 6.00 |
+
   Rule: Float or double combined with a decimal promotes to double
     Scenario: float times decimal returns double
       When query
@@ -498,6 +545,37 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | byte_r | short_r | int_r       | long_r               | mul_r |
         | -128   | -32768  | -2147483648 | -9223372036854775808 | -2    |
 
+    Scenario: integer columns wrap on overflow under ANSI off over multiple rows
+      # The literal scenario above is constant-folded at plan time, so only this one
+      # actually exercises the runtime kernel over a batch.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT a + b AS r
+        FROM VALUES
+          (CAST(2147483647 AS INT), CAST(1 AS INT)),
+          (CAST(1 AS INT), CAST(1 AS INT)),
+          (CAST(2147483647 AS INT), CAST(2 AS INT))
+          AS t(a, b)
+        """
+      Then query result
+        | r           |
+        | -2147483648 |
+        | 2           |
+        | -2147483647 |
+
+    @sail-bug
+    Scenario: an int column sum that overflows raises under ANSI on
+      # Column form of the rule below: guards against the divergence being an artifact of
+      # constant folding. Spark: [ARITHMETIC_OVERFLOW]; Sail wraps silently.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT a + b AS r
+        FROM VALUES (CAST(2147483647 AS INT), CAST(1 AS INT)) AS t(a, b)
+        """
+      Then query error ARITHMETIC_OVERFLOW
+
     @sail-bug
     Scenario: a byte sum that overflows raises under ANSI on
       # Spark: [BINARY_ARITHMETIC_OVERFLOW]; Sail wraps to -128.
@@ -506,7 +584,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         SELECT CAST(127 AS TINYINT) + CAST(1 AS TINYINT) AS r
         """
-      Then query error (?i)overflow
+      Then query error ARITHMETIC_OVERFLOW
 
     @sail-bug
     Scenario: a short sum that overflows raises under ANSI on
@@ -516,7 +594,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         SELECT CAST(32767 AS SMALLINT) + CAST(1 AS SMALLINT) AS r
         """
-      Then query error (?i)overflow
+      Then query error ARITHMETIC_OVERFLOW
 
     @sail-bug
     Scenario: an int sum that overflows raises under ANSI on
@@ -526,7 +604,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         SELECT CAST(2147483647 AS INT) + CAST(1 AS INT) AS r
         """
-      Then query error (?i)overflow
+      Then query error ARITHMETIC_OVERFLOW
 
     @sail-bug
     Scenario: a long sum that overflows raises under ANSI on
@@ -536,7 +614,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         SELECT CAST(9223372036854775807 AS BIGINT) + CAST(1 AS BIGINT) AS r
         """
-      Then query error (?i)overflow
+      Then query error ARITHMETIC_OVERFLOW
 
     @sail-bug
     Scenario: an int product that overflows raises under ANSI on
@@ -546,7 +624,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         SELECT CAST(2147483647 AS INT) * CAST(2 AS INT) AS r
         """
-      Then query error (?i)overflow
+      Then query error ARITHMETIC_OVERFLOW
 
   Rule: A capped decimal + or - overflows to NULL under ANSI off (known gap)
     # Spark wraps a capped decimal result in CheckOverflow(nullOnOverflow = !ansi), so an
@@ -840,6 +918,80 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t      |
         | double |
 
+  Rule: pmod narrowing to the remainder type honours ANSI
+    # `pmod` adds the divisor back (`a % n + n`), so unlike `%` its result is bounded only
+    # by |n| — not by the dividend. The remainder type takes min(p1-s1, p2-s2), so the
+    # value can exceed it: typed decimal(3,2) here, but reaching 99994.00. Narrowing to
+    # that type therefore takes the same ANSI gate as `*` and `/`.
+
+    # Both engines raise here, so the coercion side already agrees — what diverges is only
+    # the error itself: Spark names the NUMERIC_VALUE_OUT_OF_RANGE class, Sail reports the
+    # Arrow overflow ("99994.00 is too large to store in a Decimal128 of precision 3").
+    # Asserted as Spark's class, so it xfails until Sail grows Spark error classes, rather
+    # than as a substring both happen to share (which would only assert "some error").
+    @sail-bug
+    Scenario: a pmod result that overflows its remainder type raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT pmod(CAST(-5.00 AS DECIMAL(3,2)), CAST(99999 AS DECIMAL(5,0))) AS r
+        """
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
+
+    Scenario: a pmod result that overflows its remainder type is NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(pmod(CAST(-5.00 AS DECIMAL(3,2)), CAST(99999 AS DECIMAL(5,0)))) AS t,
+               pmod(CAST(-5.00 AS DECIMAL(3,2)), CAST(99999 AS DECIMAL(5,0))) AS r
+        """
+      Then query result
+        | t            | r    |
+        | decimal(3,2) | NULL |
+
+  Rule: The float x decimal promotion holds for columns, not just literals
+    # This is the promotion the plan builder fixes, so a literal-only test would leave the
+    # runtime path unproven: a literal pair is constant-folded away and the kernel never
+    # runs over a real batch.
+
+    Scenario: float or double times a decimal column over multiple rows
+      When query
+        """
+        SELECT typeof(f * d) AS ft, f * d AS fr, typeof(g * d) AS gt, g * d AS gr
+        FROM VALUES
+          (CAST(1.5 AS FLOAT), CAST(2.0 AS DECIMAL(10,2)), CAST(1.5 AS DOUBLE)),
+          (CAST(-2.5 AS FLOAT), CAST(4.0 AS DECIMAL(10,2)), CAST(-2.5 AS DOUBLE)),
+          (CAST(NULL AS FLOAT), CAST(2.0 AS DECIMAL(10,2)), CAST(NULL AS DOUBLE))
+          AS t(f, d, g)
+        """
+      Then query result
+        | ft     | fr    | gt     | gr    |
+        | double | 3.0   | double | 3.0   |
+        | double | -10.0 | double | -10.0 |
+        | double | NULL  | double | NULL  |
+
+    Scenario: a float column plus, minus and divided by a decimal column
+      When query
+        """
+        SELECT typeof(f + d) AS a, typeof(f - d) AS b, typeof(f / d) AS c
+        FROM VALUES (CAST(1.5 AS FLOAT), CAST(2.0 AS DECIMAL(10,2))) AS t(f, d)
+        """
+      Then query result
+        | a      | b      | c      |
+        | double | double | double |
+
+    Scenario: an Infinity float column times a decimal column stays double
+      # The promotion is what keeps this from being cast into a decimal, where Infinity
+      # has no representation.
+      When query
+        """
+        SELECT f * d AS r
+        FROM VALUES (CAST('Infinity' AS FLOAT), CAST(2.0 AS DECIMAL(10,2))) AS t(f, d)
+        """
+      Then query result
+        | r        |
+        | Infinity |
+
   Rule: pmod and round hold over columns, not just literals
 
     Scenario: pmod with a NULL in a column over multiple rows
@@ -1062,6 +1214,73 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | byte_t        | short_t       | int_t         | long_t        |
         | decimal(14,2) | decimal(12,2) | decimal(12,2) | decimal(12,2) |
+
+  Rule: A fractional string cast to an integer truncates under ANSI off
+    # Spark parses with `UTF8String.toInt`, which reads the sign and digits, IGNORES the
+    # fractional part (truncating toward zero, never rounding) and rejects exponents —
+    # `'1e2'` is NULL even though `1e2` is a valid double. Arrow's parser instead rejects
+    # the whole string, so Sail yields NULL where Spark truncates. Under ANSI both raise,
+    # so only the ANSI-off half diverges.
+    # Note `CAST('1.5' AS DECIMAL(10,0))` is a different rule: it ROUNDS to 2, in both modes.
+
+    Scenario: a fractional string cast to an integer raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('1.5' AS INT) AS r
+        """
+      Then query error (?i)cannot (be )?cast
+
+    @sail-bug
+    Scenario: a fractional string cast to an integer truncates under ANSI off
+      # Spark truncates toward zero: 1, 1, -1, -1. Sail returns NULL for all four.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('1.5' AS INT) AS a,
+               CAST('1.9' AS INT) AS b,
+               CAST('-1.5' AS INT) AS c,
+               CAST('-1.9' AS INT) AS d
+        """
+      Then query result
+        | a | b | c  | d  |
+        | 1 | 1 | -1 | -1 |
+
+    Scenario: a control-character prefix is trimmed like whitespace
+      # Spark's trim strips every byte at or below 0x20, not just the usual whitespace —
+      # e.g. the file separator 0x1C. Both a literal and a column go through the shared
+      # trim, so this covers both paths.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(concat(char(28), '5') AS INT) AS lit,
+               CAST(concat(char(9), s) AS INT) AS col
+        FROM VALUES ('7') AS t(s)
+        """
+      Then query result
+        | lit | col |
+        | 5   | 7   |
+
+    Scenario: an exponent string cast to an integer is NULL under ANSI off
+      # Spark's integer parser rejects exponent notation even though the value is integral.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('1e2' AS INT) AS r
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+    Scenario: a fractional string cast to a decimal rounds in both ANSI modes
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('1.5' AS DECIMAL(10,0)) AS r
+        """
+      Then query result
+        | r |
+        | 2 |
 
   Rule: A string that does not parse is NULL under ANSI off and raises under ANSI on
 
@@ -1301,13 +1520,17 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | decimal(38,6) | 3.750000 |
 
   Rule: A full-scale decimal(38,38) division overflows the intermediate (known gap)
-    # Spark computes decimal division in BigDecimal, so it has no intermediate limit.
-    # Sail rewrites it over a widened i256, but Arrow's decimal `div` rescales the
-    # numerator by 10^(4 + s2) first, so the intermediate needs
-    # (p1 - s1) + dividend_scale + 4 + s2 digits — 80 here, against i256's ~76. The
-    # plan builder only takes the Spark-scale path when that provably fits, so this
-    # falls back to the native divide, which overflows i128 as well.
-    # Closing it needs the custom PhysicalExpr follow-up (BigDecimal semantics).
+    # Spark computes decimal division in BigDecimal at scale 39, so its intermediate is
+    # unbounded in practice. Sail rewrites the division over a widened i256, but Arrow's
+    # decimal `div` rescales the numerator by 10^(4 + s2) before dividing, so the
+    # intermediate carries (p1 - s1) + dividend_scale + 4 + s2 digits — 80 here, against
+    # i256's ~76 — and the rescale raises. Widening alone does not prevent this.
+    #
+    # The overflow is value-dependent, not type-dependent: only rows whose numerator
+    # actually exceeds i256 raise, so the Spark-scale path is still taken (rejecting the
+    # whole type would send every row to the native divide, which overflows i128 even
+    # sooner). Closing it needs BigDecimal semantics in the custom PhysicalExpr follow-up:
+    # emulating Spark exactly needs 1e38 x 1e39 = 1e77, which does not fit i256 either.
 
     @sail-bug
     Scenario: decimal(38,38) divided by itself is exactly 1

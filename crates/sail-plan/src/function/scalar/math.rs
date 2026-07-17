@@ -35,7 +35,8 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::math::utils::decimal::{
-    spark_decimal_divide_type, spark_decimal_multiply_type, spark_decimal_remainder_type,
+    spark_decimal_add_diverges, spark_decimal_add_type, spark_decimal_divide_type,
+    spark_decimal_multiply_type, spark_decimal_remainder_type,
 };
 use sail_function::scalar::misc::raise_error::RaiseError;
 
@@ -92,7 +93,28 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     function_context.plan_config.ansi_mode,
                     function_context.plan_config.literal_pick_minimum_precision,
                 );
-                left + right
+                let operands = (
+                    left.get_type(function_context.schema),
+                    right.get_type(function_context.schema),
+                );
+                let sum = left + right;
+                match operands {
+                    (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
+                        if spark_decimal_add_diverges(p1, s1, p2, s2) =>
+                    {
+                        spark_decimal_add_retype(
+                            sum,
+                            p1,
+                            s1,
+                            p2,
+                            s2,
+                            function_context
+                                .plan_config
+                                .decimal_operations_allow_precision_loss,
+                        )
+                    }
+                    _ => sum,
+                }
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
@@ -154,7 +176,28 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     function_context.plan_config.ansi_mode,
                     function_context.plan_config.literal_pick_minimum_precision,
                 );
-                left - right
+                let operands = (
+                    left.get_type(function_context.schema),
+                    right.get_type(function_context.schema),
+                );
+                let sum = left - right;
+                match operands {
+                    (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
+                        if spark_decimal_add_diverges(p1, s1, p2, s2) =>
+                    {
+                        spark_decimal_add_retype(
+                            sum,
+                            p1,
+                            s1,
+                            p2,
+                            s2,
+                            function_context
+                                .plan_config
+                                .decimal_operations_allow_precision_loss,
+                        )
+                    }
+                    _ => sum,
+                }
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
@@ -255,6 +298,35 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
         (Err(_), _) | (_, Err(_)) => left * right,
     })
+}
+
+/// Re-types a decimal `+`/`-` whose exact precision exceeds 38 to Spark's result type.
+///
+/// Spark caps such a result with `adjustPrecisionScale`, which REDUCES the scale to keep
+/// the integer digits (`decimal(38,10) + decimal(38,2)` is `decimal(38,6)`). Arrow caps
+/// with a plain `min(_, 38)` that keeps the scale, giving `decimal(38,10)` — a silently
+/// wrong type under the default `allowPrecisionLoss = true`.
+///
+/// This only fixes the TYPE. The sum itself stays on the native kernel, so its overflow
+/// behaviour is untouched (that is the custom-`PhysicalExpr` follow-up's job): the sum is
+/// rounded HALF_UP to Spark's scale, and the final cast only ever WIDENS — rounding
+/// `decimal(38,s)` to scale `n` yields at most `(38-s+1)+n` digits, which is below the
+/// target precision — so no new error path is introduced.
+fn spark_decimal_add_retype(
+    sum: Expr,
+    p1: u8,
+    s1: i8,
+    p2: u8,
+    s2: i8,
+    allow_precision_loss: bool,
+) -> Expr {
+    let (result_precision, result_scale) =
+        spark_decimal_add_type(p1, s1, p2, s2, allow_precision_loss);
+    let rounded = expr_fn::round(vec![sum, lit(i32::from(result_scale))]);
+    cast(
+        rounded,
+        DataType::Decimal128(result_precision, result_scale),
+    )
 }
 
 /// Spark-specific operand coercion for `+ - *` applied at plan-construction time,
@@ -433,22 +505,6 @@ fn coerce_spark_divide_null_operand(
         ),
         _ => (dividend, divisor),
     }
-}
-
-/// Whether Spark's decimal-division rewrite fits in the widened i256 intermediate.
-///
-/// Arrow's decimal `div` rescales the numerator by `10^(result_scale - s1 + s2)`
-/// before dividing; with the dividend cast to `dividend_scale`, Arrow's own
-/// `result_scale` is `dividend_scale + 4`, so the factor is `10^(4 + s2)` and the
-/// intermediate carries `(p1 - s1) + dividend_scale + 4 + s2` digits. i256 holds ~76,
-/// so anything wider overflows — which the widening alone does not prevent.
-/// <https://github.com/apache/arrow-rs/blob/58.3.0/arrow-arith/src/numeric.rs> (`Op::Div`)
-fn spark_divide_fits_i256(p1: u8, s1: i8, p2: u8, s2: i8, allow_precision_loss: bool) -> bool {
-    let (_, result_scale) = spark_decimal_divide_type(p1, s1, p2, s2, allow_precision_loss);
-    let dividend_scale = s1.max(result_scale - 3);
-    let intermediate_digits =
-        i32::from(p1) - i32::from(s1) + i32::from(dividend_scale) + 4 + i32::from(s2);
-    intermediate_digits <= i32::from(DECIMAL256_MAX_PRECISION)
 }
 
 /// True when one operand is a floating-point type and the other a decimal (either
@@ -725,9 +781,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // decimal/decimal division pays it; `+ - * %`, integer and float division are
         // unchanged. A future optimization could keep the intermediate in i128 when it
         // provably cannot overflow, instead of always widening to i256.
-        (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
-            if spark_divide_fits_i256(*p1, *s1, *p2, *s2, allow_precision_loss) =>
-        {
+        (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2))) => {
             let (result_precision, result_scale) =
                 spark_decimal_divide_type(*p1, *s1, *p2, *s2, allow_precision_loss);
             let dividend_scale = (*s1).max(result_scale - 3);
@@ -1082,7 +1136,14 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // UDF cannot: `Signature::numeric` unifies both operands to one common type before
     // `return_type` runs, so by then the narrow operand's precision is gone. Compute
     // the type here, where both are still visible, and narrow the UDF's wider result
-    // down to it. The remainder always fits (`|a % n| < |n|`), so this only re-labels.
+    // down to it.
+    //
+    // The narrowing can overflow, so it takes the same ANSI gate as `*` and `/`. Unlike
+    // `%`, whose result is bounded by the dividend too, `pmod` adds the divisor back
+    // (`a % n + n`), so it is only bounded by `|n|` while the remainder type takes
+    // `min(p1-s1, p2-s2)`: `pmod(decimal(3,2), decimal(5,0))` is typed `decimal(3,2)`
+    // but can reach 99994.00. Spark's CheckOverflow turns that into NULL under ANSI off
+    // and raises under ANSI on.
     let pmod_type = match (
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
@@ -1103,7 +1164,8 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
     let call = udf.call(vec![left, right]);
     Ok(match pmod_type {
-        Some(target) => cast(call, target),
+        Some(target) if ansi_mode => cast(call, target),
+        Some(target) => try_cast(call, target),
         None => call,
     })
 }

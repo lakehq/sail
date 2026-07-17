@@ -11,20 +11,21 @@ pub fn round_decimal_base(
     decimal_128: bool,
 ) -> (u8, i8) {
     let integral_least_num_digits = precision - scale + 1;
+    let max_precision = if decimal_128 {
+        DECIMAL128_MAX_PRECISION
+    } else {
+        DECIMAL256_MAX_PRECISION
+    } as i32;
     if target_scale < 0 {
-        let new_precision = max(integral_least_num_digits, -target_scale + 1) as u8;
-        if decimal_128 {
-            (min(new_precision, DECIMAL128_MAX_PRECISION), 0)
-        } else {
-            (min(new_precision, DECIMAL256_MAX_PRECISION), 0)
-        }
+        // Cap in i32 BEFORE narrowing: `-target_scale + 1` can overflow i32 for an extreme
+        // literal scale, and casting to u8 before the `min` would wrap (e.g. 256 -> 0).
+        let new_precision = max(
+            integral_least_num_digits,
+            target_scale.saturating_neg().saturating_add(1),
+        );
+        (min(new_precision, max_precision) as u8, 0)
     } else {
         let new_scale = min(scale, target_scale);
-        let max_precision = if decimal_128 {
-            DECIMAL128_MAX_PRECISION
-        } else {
-            DECIMAL256_MAX_PRECISION
-        } as i32;
         (
             min(integral_least_num_digits + new_scale, max_precision) as u8,
             new_scale as i8,
@@ -96,6 +97,37 @@ pub fn spark_decimal_multiply_type(
     let precision = p1 as i32 + p2 as i32 + 1;
     let scale = s1 as i32 + s2 as i32;
     cap(precision, scale, allow_precision_loss)
+}
+
+/// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) + DECIMAL(p2,s2)` — also the rule
+/// for `-`, which Spark defines with the identical formula: scale `max(s1,s2)` and
+/// precision `max(p1-s1, p2-s2) + scale + 1`.
+///
+/// Arrow's own add/sub rule computes the same precision but caps it with a plain
+/// `min(_, 38)` that keeps the scale — i.e. Spark's `bounded`, never
+/// `adjustPrecisionScale`. So the two only diverge once the exact precision exceeds 38,
+/// and only under the default `allowPrecisionLoss = true`.
+/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L430-L438>
+pub fn spark_decimal_add_type(
+    p1: u8,
+    s1: i8,
+    p2: u8,
+    s2: i8,
+    allow_precision_loss: bool,
+) -> (u8, i8) {
+    let scale = max(s1 as i32, s2 as i32);
+    let precision = max(p1 as i32 - s1 as i32, p2 as i32 - s2 as i32) + scale + 1;
+    cap(precision, scale, allow_precision_loss)
+}
+
+/// Whether Spark's `+`/`-` rule and Arrow's disagree for these decimals.
+///
+/// They only differ once the exact precision exceeds 38: below that both return it
+/// unchanged, so the native kernel is already Spark-correct and must be left alone.
+pub fn spark_decimal_add_diverges(p1: u8, s1: i8, p2: u8, s2: i8) -> bool {
+    let scale = max(s1 as i32, s2 as i32);
+    let precision = max(p1 as i32 - s1 as i32, p2 as i32 - s2 as i32) + scale + 1;
+    precision > DECIMAL128_MAX_PRECISION as i32
 }
 
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) % DECIMAL(p2,s2)` — also the

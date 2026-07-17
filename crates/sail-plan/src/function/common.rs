@@ -15,10 +15,20 @@ use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIE
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
 
-/// The characters Spark's `UTF8String.trim()` strips before parsing a string as a
-/// number: ASCII whitespace and the control characters (every byte at or below the
-/// space, `0x20`). Arrow's numeric parser trims nothing.
-const SPARK_STRING_TRIM_CHARS: &str = " \t\n\r\x0b\x0c";
+/// Whether `c` is one of the bytes Spark's `UTF8String.trim()` strips before parsing a
+/// string as a number: every byte at or below the space (`0x20`), i.e. ASCII whitespace
+/// plus all C0 control characters including NUL. Validated byte-by-byte against Spark
+/// 4.1.1. Arrow's numeric parser trims nothing.
+fn is_spark_trim_char(c: char) -> bool {
+    c <= '\u{20}'
+}
+
+/// The same set as a literal for the `btrim` UDF, which takes a string of characters to
+/// strip: bytes `0x01..=0x20` (btrim cannot carry a NUL, but a NUL cannot appear in a SQL
+/// string operand either, so the column path never needs it).
+fn spark_trim_chars() -> String {
+    (1u8..=0x20).map(char::from).collect()
+}
 
 /// True for the string types Spark parses as numbers.
 pub fn is_string_type(data_type: &DataType) -> bool {
@@ -48,14 +58,10 @@ pub fn spark_string_to_numeric(
     // It also keeps the common case free of a per-row trim.
     let trimmed = match &expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => expr::Expr::Literal(
-            ScalarValue::Utf8(Some(
-                value
-                    .trim_matches(|c| SPARK_STRING_TRIM_CHARS.contains(c))
-                    .to_string(),
-            )),
+            ScalarValue::Utf8(Some(value.trim_matches(is_spark_trim_char).to_string())),
             metadata.clone(),
         ),
-        _ => datafusion::functions::expr_fn::btrim(vec![expr, lit(SPARK_STRING_TRIM_CHARS)]),
+        _ => datafusion::functions::expr_fn::btrim(vec![expr, lit(spark_trim_chars())]),
     };
     if null_on_failure {
         datafusion_expr::try_cast(trimmed, target)
