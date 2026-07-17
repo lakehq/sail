@@ -11,7 +11,7 @@ Feature: Lakehouse commits in distributed execution
         """
         CREATE TABLE distributed_delta_commit (id BIGINT)
         USING delta
-        LOCATION {{ location.uri }}
+        LOCATION {{ location.sql }}
         """
 
     Scenario: Delta commit runs on the driver after parallel file writing
