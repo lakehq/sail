@@ -656,13 +656,20 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # overflow on the native BinaryExpr is scoped as future work, with this PR limited to
     # type coercion.
 
+    # Both engines raise, so the behaviour agrees; only the error class diverges. Spark's
+    # message is "... cannot be represented as Decimal(38, 0)" (class NUMERIC_VALUE_OUT_OF_RANGE),
+    # which does not contain the word "overflow" — Sail reports its own Arrow overflow error.
+    # We assert Spark's class so this xfails on Sail; a lax `(?i)overflow` pattern would
+    # instead pass against Spark for the wrong reason (the word appears only in the JVM
+    # stack trace, not in the error message).
+    @sail-bug
     Scenario: a capped decimal sum that overflows raises under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT CAST(9e37 AS DECIMAL(38,0)) + CAST(9e37 AS DECIMAL(38,0)) AS r
         """
-      Then query error (?i)overflow
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
     @sail-bug
     Scenario: a capped decimal sum that overflows is NULL under ANSI off
@@ -675,13 +682,14 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r    |
         | NULL |
 
+    @sail-bug
     Scenario: a capped decimal difference that overflows raises under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT CAST(-9e37 AS DECIMAL(38,0)) - CAST(9e37 AS DECIMAL(38,0)) AS r
         """
-      Then query error (?i)overflow
+      Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
     @sail-bug
     Scenario: a capped decimal difference that overflows is NULL under ANSI off
@@ -1066,10 +1074,11 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | decimal(8,2) | NULL  |
 
   Rule: A BYTE literal is not narrowed — Spark narrows only Short, Int and Long
-    # `DecimalType.fromLiteral` narrows Short/Int/Long literals to their minimal
+    # `DataTypeUtils.fromLiteral` narrows Short/Int/Long literals to their minimal
     # decimal, but a Byte literal falls through to `forType(ByteType)` = decimal(3,0).
-    # The difference is only observable for `*`, whose result precision depends on the
-    # narrowed operand's precision.
+    # For the `decimal(10,2)` shapes below the difference shows up only in `*` (whose
+    # precision depends on the operand's precision); `+`/`/` happen to coincide here,
+    # though they can differ for other shapes.
 
     Scenario: decimal times a byte literal uses the type-based decimal(3,0)
       When query
@@ -1091,7 +1100,9 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             | s             |
         | decimal(12,2) | decimal(12,2) |
 
-    Scenario: a byte literal narrows the same as an int literal for plus and divide
+    Scenario: a byte literal gives the same plus and divide types as an int literal here
+      # Not because the byte narrows — it does not — but because for these decimal(10,2)
+      # shapes the type-based decimal(3,0) and the narrowed decimal happen to coincide.
       When query
         """
         SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) + 3Y) AS p,
@@ -1338,6 +1349,20 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r |
         | 5 |
 
+    @sail-bug
+    Scenario: the DEL control character is trimmed by a cast to integer
+      # Spark's integer parser trims a slightly wider set than 0x20 — DEL (0x7F) among the
+      # ISO controls — so Spark returns 5. Sail only trims 0x00..=0x20, so it yields NULL.
+      # A known minor gap of the string-to-integer surface.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(concat('5', char(127)) AS INT) AS r
+        """
+      Then query result
+        | r |
+        | 5 |
+
   Rule: A fractional string cast to a decimal rounds, in both ANSI modes
     Scenario: a fractional string cast to a decimal rounds under ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -1396,7 +1421,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | NULL |
 
     Scenario: a surrounding-whitespace string operand, ANSI off, still parses
-      # Spark trims before parsing (UTF8String.trim); Arrow does not. `CAST`, the type
+      # Spark trims before parsing, Arrow does not. `CAST`, the type
       # constructors and this coercion all share `spark_string_to_numeric` so they agree.
       Given config spark.sql.ansi.enabled = false
       When query

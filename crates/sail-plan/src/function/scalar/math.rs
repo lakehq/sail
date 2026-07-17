@@ -583,12 +583,12 @@ fn spark_decimal_literal_datatype(
 
 /// The integer value of a literal Spark narrows to its minimal decimal.
 ///
-/// `DecimalType.fromLiteral` only narrows Short, Int and Long literals; a Byte
+/// `DataTypeUtils.fromLiteral` only narrows Short, Int and Long literals; a Byte
 /// literal falls through to `forType(ByteType)` = `Decimal(3, 0)`, so `Int8` is
 /// deliberately absent here (`decimal(10,2) * 3Y` is `decimal(14,2)` in Spark, not
 /// `decimal(12,2)`). Byte operands are widened by [`coerce_integer_operand_to_decimal`]
 /// like any other integer column.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala>
+/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/types/DataTypeUtils.scala#L246-L251>
 fn scalar_integer_value(scalar: &ScalarValue) -> Option<i128> {
     Some(match scalar {
         ScalarValue::Int16(Some(v)) => i128::from(*v),

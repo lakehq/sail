@@ -15,10 +15,12 @@ use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIE
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
 
-/// Whether `c` is one of the bytes Spark's `UTF8String.trim()` strips before parsing a
-/// string as a number: every byte at or below the space (`0x20`), i.e. ASCII whitespace
-/// plus all C0 control characters including NUL. Validated byte-by-byte against Spark
-/// 4.1.1. Arrow's numeric parser trims nothing.
+/// Whether `c` is one of the bytes Spark strips before parsing a string as a number:
+/// every byte at or below the space (`0x20`), i.e. ASCII whitespace and the C0 control
+/// characters including NUL. This matches Spark's cast-to-double path (`String.trim`
+/// inside `Double.parseDouble`). Spark's cast-to-integer path trims a slightly wider set
+/// (`Character.isWhitespace || isISOControl`, which also strips e.g. DEL `0x7F`); that
+/// extra sliver is a known minor gap. Arrow's numeric parser trims nothing.
 fn is_spark_trim_char(c: char) -> bool {
     c <= '\u{20}'
 }
@@ -43,10 +45,11 @@ pub fn is_string_type(data_type: &DataType) -> bool {
 /// it: `CAST`/`TRY_CAST`, the `FLOAT(..)`/`DOUBLE(..)` constructors, and the operand
 /// coercion the arithmetic operators apply to a string operand.
 ///
-/// Spark parses via `UTF8String.toDouble`/`toLong`, which trim surrounding whitespace
-/// first and return null on a malformed input; Arrow's parser does neither, so `' 5 '`
-/// is rejected and `'not-a-number'` raises. Trim up front, then let the failure be a
-/// NULL unless ANSI mode (or an explicit `TRY_CAST`) says otherwise.
+/// Spark's numeric casts trim surrounding whitespace first (`Double.parseDouble` for
+/// fractional targets, `UTF8String.toLong`/`toInt` for integral ones) and return null on
+/// a malformed input; Arrow's parser does neither, so `' 5 '` is rejected and
+/// `'not-a-number'` raises. Trim up front, then let the failure be a NULL unless ANSI mode
+/// (or an explicit `TRY_CAST`) says otherwise.
 /// <https://github.com/apache/spark/blob/v4.1.1/common/unsafe/src/main/java/org/apache/spark/unsafe/types/UTF8String.java>
 pub fn spark_string_to_numeric(
     expr: expr::Expr,
