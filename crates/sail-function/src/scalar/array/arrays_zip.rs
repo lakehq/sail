@@ -2,13 +2,13 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray,
-    GenericListArray, NullArray, OffsetSizeTrait, StructArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, NullArray, OffsetSizeTrait,
+    StructArray, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, concat};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, arrow_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };

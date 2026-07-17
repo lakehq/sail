@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+    Array, ArrayRef, MapArray, StringArray, StructArray, new_empty_array,
 };
 use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -15,8 +15,8 @@ use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
 use crate::spec::{
-    parse_stats_json_array, stats_schema, Add, ColumnMappingMode, DataType,
-    DeltaError as DeltaTableError, DeltaResult, StructType,
+    Add, ColumnMappingMode, DataType, DeltaError as DeltaTableError, DeltaResult, StructType,
+    parse_stats_json_array, stats_schema,
 };
 
 impl DeltaSnapshot {

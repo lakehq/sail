@@ -2,18 +2,18 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion_common::extensions::Extensions;
-use futures::{stream, StreamExt, TryStreamExt};
-use object_store::path::{Path, DELIMITER};
+use futures::{StreamExt, TryStreamExt, stream};
+use object_store::path::{DELIMITER, Path};
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::context::PlannerContext;
@@ -241,7 +241,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
         (None, false) => {
             return Err(DataFusionError::Plan(
                 "no _delta_log files found to build log scan".to_string(),
-            ))
+            ));
         }
     };
 

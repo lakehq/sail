@@ -6,7 +6,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, TimestampMicrosecondArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;

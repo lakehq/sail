@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::datatypes::SchemaRef;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;

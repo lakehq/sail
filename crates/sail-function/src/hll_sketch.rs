@@ -1,9 +1,6 @@
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, Int32Array, Int64Array, LargeStringArray, StringArray,
-    StringViewArray,
-};
-use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datasketches::hash_value::{raw_bytes, sign_extend};
 use datasketches::hll::{HllSketch, HllType, HllUnion};
 
@@ -46,8 +43,51 @@ pub(crate) fn update_hll_sketch_from_array(
     sketch: &mut HllSketch,
     values: &ArrayRef,
 ) -> Result<()> {
-    for row in 0..values.len() {
-        update_hll_sketch_from_array_value(sketch, values.as_ref(), row)?;
+    // Downcast once outside the row loop (the data type and concrete array are
+    // loop-invariant); `iter().flatten()` skips nulls without a per-row branch.
+    match values.data_type() {
+        DataType::Int32 => {
+            for v in values.as_primitive::<Int32Type>().iter().flatten() {
+                sketch.update(sign_extend::from_i32(v));
+            }
+        }
+        DataType::Int64 => {
+            for v in values.as_primitive::<Int64Type>().iter().flatten() {
+                sketch.update(v);
+            }
+        }
+        DataType::Binary => {
+            for v in values.as_binary::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_slice(v));
+                }
+            }
+        }
+        DataType::Utf8 => {
+            for v in values.as_string::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::LargeUtf8 => {
+            for v in values.as_string::<i64>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::Utf8View => {
+            for v in values.as_string_view().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::Null => {}
+        data_type => {
+            return exec_err!("hll_sketch_agg does not support input type {data_type}");
+        }
     }
     Ok(())
 }
@@ -107,90 +147,6 @@ where
     Ok(union
         .map(|(_, union)| union.to_sketch(HllType::Hll8).serialize())
         .unwrap_or_else(empty_hll_sketch_bytes))
-}
-
-fn update_hll_sketch_from_array_value(
-    sketch: &mut HllSketch,
-    values: &dyn Array,
-    row: usize,
-) -> Result<()> {
-    if values.is_null(row) {
-        return Ok(());
-    }
-
-    match values.data_type() {
-        DataType::Int32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected Int32Array".to_string())
-                })?;
-            sketch.update(sign_extend::from_i32(values.value(row)));
-        }
-        DataType::Int64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected Int64Array".to_string())
-                })?;
-            sketch.update(values.value(row));
-        }
-        DataType::Binary => {
-            let values = values
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected BinaryArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_slice(value));
-            }
-        }
-        DataType::Utf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected StringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::LargeUtf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected LargeStringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::Utf8View => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("HLL sketch expected StringViewArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        DataType::Null => {}
-        data_type => {
-            return exec_err!("hll_sketch_agg does not support input type {data_type}");
-        }
-    }
-    Ok(())
 }
 
 fn deserialize_hll_sketch(bytes: &[u8], function_name: &str) -> Result<HllSketch> {

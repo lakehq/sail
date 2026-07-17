@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{Result, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
@@ -12,18 +12,18 @@ use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
+    PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
 
-use crate::plan::gen::extended_physical_expr_node::ExprKind;
-use crate::plan::gen::{
+use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
+use crate::plan::r#gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
-use crate::proto::decode::try_decode_higher_order_udf;
+use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
-pub struct RemotePhysicalProtoConverter;
+pub(super) struct RemotePhysicalProtoConverter;
 
 impl Debug for RemotePhysicalProtoConverter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -59,22 +59,13 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
             Some((ExprKind::LambdaVariable(node), _)) => {
+                let field = try_decode_field_ref(&node.field)?;
                 let index = usize::try_from(node.index).map_err(|_| {
                     plan_datafusion_err!(
                         "LambdaVariable index {} does not fit in usize",
                         node.index
                     )
                 })?;
-                let field = input_schema
-                    .fields()
-                    .get(index)
-                    .ok_or_else(|| {
-                        plan_datafusion_err!(
-                            "LambdaVariable index {index} out of bounds for schema with {} fields",
-                            input_schema.fields().len()
-                        )
-                    })?
-                    .clone();
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
             Some((ExprKind::Lambda(node), inputs)) => {
@@ -185,7 +176,7 @@ impl RemotePhysicalProtoConverter {
         let param_sets = match fun.lambda_parameters(0, &value_or_lambda)? {
             LambdaParametersProgress::Complete(params) => params,
             LambdaParametersProgress::Partial(_) => {
-                return plan_err!("`{}` returned partial lambda parameters", fun.name())
+                return plan_err!("`{}` returned partial lambda parameters", fun.name());
             }
         };
 

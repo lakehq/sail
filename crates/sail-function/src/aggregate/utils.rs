@@ -95,12 +95,11 @@ pub fn cast_to_type_with_safe(
 pub fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
-        Ok(s)
-    } else {
-        Err(DataFusionError::Internal(
+    match expr.evaluate(&batch)? {
+        ColumnarValue::Scalar(s) => Ok(s),
+        _ => Err(DataFusionError::Internal(
             "Didn't expect ColumnarValue::Array".to_string(),
-        ))
+        )),
     }
 }
 
@@ -118,7 +117,7 @@ pub fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
             return Err(DataFusionError::Plan(format!(
                 "Percentile value for 'PERCENTILE_DISC' must be Float32 or Float64 literal (got data type {})",
                 sv.data_type()
-            )))
+            )));
         }
     };
 
@@ -179,7 +178,7 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
         _ => {
             return Err(DataFusionError::Plan(format!(
                 "Cannot convert percentile literal {scalar:?} to f64"
-            )))
+            )));
         }
     };
     Ok(percentile)

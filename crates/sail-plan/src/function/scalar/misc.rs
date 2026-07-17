@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -33,7 +33,7 @@ fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         let col = arguments.one()?;
         (
             // Need to do this order to avoid the "value used after being moved" error.
-            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
+            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col)))),
             col,
         )
     } else if arguments.len() == 2 {
@@ -144,7 +144,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         count => {
             return Err(PlanError::invalid(format!(
                 "theta_union requires 2 or 3 arguments, got {count}"
-            )))
+            )));
         }
     };
     Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
@@ -168,7 +168,7 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         count => {
             return Err(PlanError::invalid(format!(
                 "hll_union requires 2 or 3 arguments, got {count}"
-            )))
+            )));
         }
     };
     Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bytes::Buf;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
-use datafusion::arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use datafusion::arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::JsonSource;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -15,7 +15,7 @@ use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::infer_listing_compression;
-use crate::options::gen::JsonReadOptions;
+use crate::options::r#gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct JsonReadFormat {

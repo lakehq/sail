@@ -4,7 +4,7 @@
 //! that carry the information about the marker and data retraction.
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 
 /// The name of the marker field in encoded an [`RecordBatch`] for
 /// flow events.

@@ -24,9 +24,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -36,7 +36,7 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
-    encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
+    CommitMeta, encode_add_data_files, encode_commit_meta, iceberg_action_schema,
 };
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
@@ -108,7 +108,8 @@ impl IcebergWriterExec {
                 Arc::new(datafusion::arrow::datatypes::Schema::empty())
             }
         };
-        let cache = Self::compute_properties(schema.clone());
+        let output_partitions = input.output_partitioning().partition_count().max(1);
+        let cache = Self::compute_properties(schema.clone(), output_partitions);
         Self {
             input,
             table_url,
@@ -121,10 +122,13 @@ impl IcebergWriterExec {
         }
     }
 
-    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> Arc<PlanProperties> {
+    fn compute_properties(
+        schema: datafusion::arrow::datatypes::SchemaRef,
+        output_partitions: usize,
+    ) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         ))
@@ -233,18 +237,17 @@ impl IcebergWriterExec {
         if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
             if prop_url.scheme() == table_url.scheme()
                 && prop_url.host_str() == table_url.host_str()
-            {
-                if let (Ok(prop_path), Some(base_path)) = (
+                && let (Ok(prop_path), Some(base_path)) = (
                     crate::utils::url_to_object_path(&prop_url),
                     base_path.as_ref(),
-                ) {
-                    let prop_str = prop_path.as_ref();
-                    let base_str = base_path.as_ref();
-                    if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
+                )
+            {
+                let prop_str = prop_path.as_ref();
+                let base_str = base_path.as_ref();
+                if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                    let rel = stripped.trim_start_matches('/').trim_matches('/');
+                    if !rel.is_empty() {
+                        return Some(rel.to_string());
                     }
                 }
             }
@@ -298,7 +301,7 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -328,18 +331,17 @@ impl ExecutionPlan for IcebergWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("IcebergWriterExec can only be executed in a single partition");
-        }
-
         let input_partitions = self.input.output_partitioning().partition_count();
-        if input_partitions != 1 {
+        if input_partitions == 0 {
+            return internal_err!("IcebergWriterExec requires at least one input partition");
+        }
+        if partition >= input_partitions {
             return internal_err!(
-                "IcebergWriterExec requires exactly one input partition, got {input_partitions}"
+                "IcebergWriterExec invalid partition {partition} (input partitions: {input_partitions})"
             );
         }
 
-        let stream = self.input.execute(0, Arc::clone(&context))?;
+        let stream = self.input.execute(partition, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();

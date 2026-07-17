@@ -6,7 +6,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     JsonReadOptions, JsonReadPartialOptions, JsonWriteOptions, JsonWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -93,8 +93,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
-    use crate::options::gen::{JsonReadOptions, JsonWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{JsonReadOptions, JsonWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_json_read_options() -> datafusion_common::Result<()> {

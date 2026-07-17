@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use datafusion::common::{plan_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, plan_err};
 use sail_common_datafusion::catalog::managed::{
-    is_metadata_location_key, PREVIOUS_METADATA_LOCATION_KEY,
+    PREVIOUS_METADATA_LOCATION_KEY, is_metadata_location_key,
 };
 
 use crate::spec::{FormatVersion, TableMetadata};

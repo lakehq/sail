@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
-use datafusion::common::{downcast_value, Result, ScalarValue};
+use datafusion::common::{Result, ScalarValue, downcast_value};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 

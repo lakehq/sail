@@ -9,9 +9,9 @@ use datafusion::common::plan_datafusion_err;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
-    create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
 
@@ -66,7 +66,16 @@ impl OptionLayer {
     /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .map(|(key, value)| {
+                    if let Some(key) = key.strip_prefix("option.") {
+                        (key.to_string(), value)
+                    } else {
+                        (key, value)
+                    }
+                })
+                .collect(),
             OptionLayer::OptionList { items } => items.into_iter().collect(),
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }
@@ -723,8 +732,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_jdbc_table_format_error_includes_registration_hint(
-    ) -> std::result::Result<(), String> {
+    fn missing_jdbc_table_format_error_includes_registration_hint()
+    -> std::result::Result<(), String> {
         let registry = TableFormatRegistry::new();
         let error = match registry.get("jdbc") {
             Ok(_) => return Err("expected missing jdbc table format error".to_string()),

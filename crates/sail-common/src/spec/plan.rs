@@ -290,6 +290,13 @@ pub enum CommandNode {
     HtmlString(HtmlString),
     // TODO: add all the "analyze" requests
     // TODO: should streaming query request be added here?
+    /// A command wrapped with referenced subquery plans (similar to QueryNode::WithRelations).
+    /// This is used when a command references DataFrames passed as named arguments
+    /// (e.g., `spark.sql("MERGE INTO t USING {df}", df=dataframe)`).
+    WithRelations {
+        root: Box<CommandPlan>,
+        references: Vec<QueryPlan>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -309,6 +316,12 @@ pub enum CommandNode {
     ShowTableExtended {
         database: Option<ObjectName>,
         pattern: String,
+    },
+    ShowFunctions {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -765,9 +778,9 @@ pub struct ShowString {
 #[serde(rename_all = "camelCase")]
 pub struct Pivot {
     pub input: Box<QueryPlan>,
-    /// The group-by columns for the pivot operation (only supported in the DataFrame API).
-    /// When the list is empty (for SQL statements), all the remaining columns are included.
-    pub grouping: Vec<Expr>,
+    /// The group-by columns for the pivot operation, set for the DataFrame API (possibly
+    /// empty). When `None` (for SQL statements), all the remaining columns are included.
+    pub grouping: Option<Vec<Expr>>,
     pub aggregate: Vec<Expr>,
     pub columns: Vec<Expr>,
     pub values: Vec<PivotValue>,

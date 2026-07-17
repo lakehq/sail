@@ -80,7 +80,7 @@ pub struct HiveCatalogFormat {
 impl HiveCatalogFormat {
     pub fn from_format(format: &str) -> CatalogResult<Self> {
         match format.trim().to_ascii_lowercase().as_str() {
-            "delta" | "deltalake" => Ok(Self {
+            "delta" => Ok(Self {
                 logical_format: "delta",
                 storage_format: HiveStorageFormat::parquet(),
             }),
@@ -179,7 +179,6 @@ mod tests {
     #![expect(clippy::unwrap_used)]
 
     use super::{HiveCatalogFormat, HiveDetectedFormat, HiveStorageFormat};
-
     #[test]
     fn test_textfile_storage_format_uses_lazy_simple_serde() {
         let format = HiveStorageFormat::textfile();
@@ -229,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_catalog_format_maps_delta_to_parquet_storage() {
-        let format = HiveCatalogFormat::from_format("deltalake").unwrap();
+        let format = HiveCatalogFormat::from_format("delta").unwrap();
         assert_eq!(format.logical_format, "delta");
         assert_eq!(format.storage_format, HiveStorageFormat::parquet());
     }

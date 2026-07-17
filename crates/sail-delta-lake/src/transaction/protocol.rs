@@ -22,8 +22,8 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::spec::{
-    contains_timestampntz, contains_variant, Action, CommitConflictError, DeltaOperation, Protocol,
-    Schema, TableFeature, TransactionError,
+    Action, CommitConflictError, DeltaOperation, Protocol, Schema, TableFeature, TransactionError,
+    contains_timestampntz, contains_variant,
 };
 use crate::table::DeltaSnapshot;
 
