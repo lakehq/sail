@@ -596,6 +596,8 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let result = CheckpointCommandResult {
         relation: Some(CachedRemoteRelation { relation_id }),
     };
+    // TODO: Run checkpoint commands through Executor so Spark Connect reattach and interrupt
+    // share the normal operation lifecycle.
     let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
         Box::new(result),
     ))];
