@@ -331,3 +331,33 @@ Feature: bround comprehensive tests
         | result |
         | 20.0   |
         | 40.0   |
+
+  Rule: bround — the argument must be foldable
+
+    @column_args
+    Scenario: bround with the argument as a literal
+      When query
+        """
+        SELECT bround(25, -1) AS result
+        """
+      Then query result ordered
+        | result |
+        | 20     |
+
+    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '25'].
+    @column_args @sail-bug
+    Scenario: bround takes argument 2 from a column holding two different values
+      When query
+        """
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, 0) AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
+
+    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '20'].
+    @column_args @sail-bug
+    Scenario: bround takes argument 2 from a column
+      When query
+        """
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
