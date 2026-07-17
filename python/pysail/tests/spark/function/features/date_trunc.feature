@@ -682,8 +682,7 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
         | result              |
         | 2015-03-01 00:00:00 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @column_args
     Scenario: date_trunc takes argument 1 from a column holding two different values
       When query
         """
@@ -694,8 +693,7 @@ Feature: DATE_TRUNC and TRUNC truncate to a unit
         | 2015-01-01 00:00:00 |
         | 2015-03-01 00:00:00 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @column_args
     Scenario: date_trunc takes argument 1 from a column
       When query
         """

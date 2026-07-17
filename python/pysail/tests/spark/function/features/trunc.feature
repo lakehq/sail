@@ -15,8 +15,7 @@ Feature: trunc with an argument coming from a column
         | result     |
         | 2009-02-01 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @column_args
     Scenario: trunc takes argument 2 from a column holding two different values
       When query
         """
@@ -27,8 +26,7 @@ Feature: trunc with an argument coming from a column
         | 2009-02-01 |
         | 2009-02-09 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @column_args
     Scenario: trunc takes argument 2 from a column
       When query
         """
