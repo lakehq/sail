@@ -7,13 +7,15 @@ use sail_python_udf::config::PySparkUdfConfig;
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
     SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_CASE_SENSITIVE, SPARK_SQL_CROSS_JOIN_ENABLED,
+    SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS,
     SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH, SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
     SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
-    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_PIVOT_MAX_VALUES,
+    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED,
+    SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION, SPARK_SQL_PIVOT_MAX_VALUES,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
     SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED, SPARK_SQL_WAREHOUSE_DIR,
 };
@@ -272,6 +274,22 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.ansi_mode = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.decimal_operations_allow_precision_loss = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.literal_pick_minimum_precision = value;
         }
 
         if let Some(value) = config

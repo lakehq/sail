@@ -10,6 +10,7 @@ pub mod spark_conv;
 pub mod spark_div;
 pub mod spark_negative;
 pub mod spark_pmod;
+pub mod spark_round;
 pub mod spark_signum;
 pub mod spark_try_add;
 pub mod spark_try_div;

@@ -40,6 +40,15 @@ pub struct PlanConfig {
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
     pub tvf_allow_multiple_table_arguments: bool,
+    /// Whether a decimal result whose precision exceeds 38 keeps its integer digits by
+    /// reducing the scale (`spark.sql.decimalOperations.allowPrecisionLoss`, default true).
+    /// When false, the precision and scale are merely clamped, so an unrepresentable result
+    /// becomes NULL instead of being rounded.
+    pub decimal_operations_allow_precision_loss: bool,
+    /// Whether an integer literal combined with a decimal narrows to the minimal decimal that
+    /// holds its *value* (`spark.sql.legacy.literal.pickMinimumPrecision`, default true).
+    /// When false, the literal widens to its *type*-based decimal, as any integer column does.
+    pub literal_pick_minimum_precision: bool,
 }
 
 impl PlanConfig {
@@ -66,6 +75,8 @@ impl Default for PlanConfig {
             case_sensitive: false,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
+            decimal_operations_allow_precision_loss: true,
+            literal_pick_minimum_precision: true,
         }
     }
 }

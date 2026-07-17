@@ -15,6 +15,55 @@ use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIE
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
 
+/// The characters Spark's `UTF8String.trim()` strips before parsing a string as a
+/// number: ASCII whitespace and the control characters (every byte at or below the
+/// space, `0x20`). Arrow's numeric parser trims nothing.
+const SPARK_STRING_TRIM_CHARS: &str = " \t\n\r\x0b\x0c";
+
+/// True for the string types Spark parses as numbers.
+pub fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+/// Casts a string to a numeric type the way Spark does, for the three places that need
+/// it: `CAST`/`TRY_CAST`, the `FLOAT(..)`/`DOUBLE(..)` constructors, and the operand
+/// coercion the arithmetic operators apply to a string operand.
+///
+/// Spark parses via `UTF8String.toDouble`/`toLong`, which trim surrounding whitespace
+/// first and return null on a malformed input; Arrow's parser does neither, so `' 5 '`
+/// is rejected and `'not-a-number'` raises. Trim up front, then let the failure be a
+/// NULL unless ANSI mode (or an explicit `TRY_CAST`) says otherwise.
+/// <https://github.com/apache/spark/blob/v4.1.1/common/unsafe/src/main/java/org/apache/spark/unsafe/types/UTF8String.java>
+pub fn spark_string_to_numeric(
+    expr: expr::Expr,
+    target: DataType,
+    null_on_failure: bool,
+) -> expr::Expr {
+    // Trim a literal here rather than wrapping it in `btrim`: the call would be a
+    // non-foldable node, and callers rely on `FLOAT('NaN')` and friends collapsing to a
+    // literal at plan time (e.g. `VALUES` infers its column type from the folded rows).
+    // It also keeps the common case free of a per-row trim.
+    let trimmed = match &expr {
+        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => expr::Expr::Literal(
+            ScalarValue::Utf8(Some(
+                value
+                    .trim_matches(|c| SPARK_STRING_TRIM_CHARS.contains(c))
+                    .to_string(),
+            )),
+            metadata.clone(),
+        ),
+        _ => datafusion::functions::expr_fn::btrim(vec![expr, lit(SPARK_STRING_TRIM_CHARS)]),
+    };
+    if null_on_failure {
+        datafusion_expr::try_cast(trimmed, target)
+    } else {
+        cast(trimmed, target)
+    }
+}
+
 pub struct FunctionContextInput<'a> {
     /// The names of function arguments.
     /// Most functions do not need this information, so it is
@@ -149,8 +198,24 @@ impl ScalarFunctionBuilder {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
-                      function_context: _,
-                  }| { Ok(cast(arguments.one()?, data_type.clone())) },
+                      function_context,
+                  }| {
+                let argument = arguments.one()?;
+                // The type constructors (`DOUBLE(x)`, `FLOAT(x)`, ...) are casts, so a
+                // string argument takes Spark's string-to-number semantics rather than
+                // Arrow's stricter parse.
+                let from = argument.get_type(function_context.schema);
+                match from {
+                    Ok(from) if is_string_type(&from) && data_type.is_numeric() => {
+                        Ok(spark_string_to_numeric(
+                            argument,
+                            data_type.clone(),
+                            !function_context.plan_config.ansi_mode,
+                        ))
+                    }
+                    _ => Ok(cast(argument, data_type.clone())),
+                }
+            },
         )
     }
 
