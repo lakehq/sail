@@ -93,6 +93,67 @@ def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
     assert "RepartitionExec: partitioning=Hash([" in hash_plan
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_pushes_column_projection_down_plan(spark, snapshot):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = df1.join(df2, df1.id1 == df2.id2).join(df3, df1.id1 == df3.id3).repartition(3).select("id1", "id2")
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+def test_explicit_repartition_pushes_column_projection_down_result(spark):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = (
+        df1.join(df2, df1.id1 == df2.id2)
+        .join(df3, df1.id1 == df3.id3)
+        .repartition(3)
+        .select("id1", "id2")
+        .orderBy("id1", "id2")
+    )
+    result = df.collect()
+
+    assert [(row["id1"], row["id2"]) for row in result] == [
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 5),
+    ]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown_plan(spark, snapshot):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = (
+        df1.join(df2, df1.id1 == df2.id2)
+        .join(df3, df1.id1 == df3.id3)
+        .repartition(3, "id1", "id2")
+        .select("id1", "id2")
+    )
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
+    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0)
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
 def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004
