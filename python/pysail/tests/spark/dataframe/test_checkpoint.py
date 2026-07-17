@@ -8,8 +8,8 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark import StorageLevel
 from pyspark.errors import PySparkException
+from pyspark.sql.connect import plan as connect_plan
 from pyspark.sql.connect.dataframe import DataFrame
-from pyspark.sql.connect.plan import CachedRemoteRelation, RemoveRemoteCachedRelation
 from pyspark.sql.functions import col, lit
 
 from pysail.testing.spark.session import spark_session_factory
@@ -48,7 +48,7 @@ def _cached_relation_id(dataframe):
 def _wait_for_cached_relation_removal(spark, relation_id):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        plan = CachedRemoteRelation(relation_id, spark)
+        plan = connect_plan.CachedRemoteRelation(relation_id, spark)
         probe = DataFrame(plan, spark)
         try:
             probe.count()
@@ -345,7 +345,7 @@ def test_dataframe_local_checkpoint_explicit_cleanup_removes_cached_relation(spa
     relation = checkpointed._plan  # noqa: SLF001
     client = spark._client  # noqa: SLF001
 
-    client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+    client.execute_command(connect_plan.RemoveRemoteCachedRelation(relation).command(client))
     relation._relation_id = None  # noqa: SLF001
 
     _wait_for_cached_relation_removal(spark, relation_id)

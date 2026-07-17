@@ -8,8 +8,8 @@ import pytest
 from pyspark import StorageLevel
 from pyspark.errors import PySparkException
 from pyspark.sql import SparkSession
+from pyspark.sql.connect import plan as connect_plan
 from pyspark.sql.connect import proto
-from pyspark.sql.connect.plan import CachedRemoteRelation, Checkpoint, RemoveRemoteCachedRelation
 
 from pysail.testing.spark.session import (
     configure_spark_session,
@@ -98,7 +98,7 @@ def _checkpoint(dataframe, kind, *, eager=True):
 def _remove_cached_relation(spark, dataframe):
     relation = dataframe._plan  # noqa: SLF001
     client = spark._client  # noqa: SLF001
-    client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+    client.execute_command(connect_plan.RemoveRemoteCachedRelation(relation).command(client))
     relation._relation_id = None  # noqa: SLF001
 
 
@@ -246,7 +246,7 @@ def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
 @SAIL_XFAIL
 def test_checkpoint_command_can_reattach(spark):
     client = spark._client  # noqa: SLF001
-    command = Checkpoint(spark.range(3)._plan, local=True, eager=False).command(client)  # noqa: SLF001
+    command = connect_plan.Checkpoint(spark.range(3)._plan, local=True, eager=False).command(client)  # noqa: SLF001
     request = client._execute_plan_request_with_metadata()  # noqa: SLF001
     request.operation_id = str(uuid.uuid4())
     request.plan.command.CopyFrom(command)
@@ -281,7 +281,7 @@ def test_checkpoint_command_can_reattach(spark):
 
 def test_checkpoint_command_preserves_operation_id(spark):
     client = spark._client  # noqa: SLF001
-    command = Checkpoint(spark.range(3)._plan, local=True, eager=True).command(client)  # noqa: SLF001
+    command = connect_plan.Checkpoint(spark.range(3)._plan, local=True, eager=True).command(client)  # noqa: SLF001
     operation_id = str(uuid.uuid4())
     request = client._execute_plan_request_with_metadata()  # noqa: SLF001
     request.operation_id = operation_id
@@ -294,9 +294,9 @@ def test_checkpoint_command_preserves_operation_id(spark):
     result = next(
         response.checkpoint_command_result for response in responses if response.HasField("checkpoint_command_result")
     )
-    relation = CachedRemoteRelation(result.relation.relation_id, spark)
+    relation = connect_plan.CachedRemoteRelation(result.relation.relation_id, spark)
     try:
-        client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+        client.execute_command(connect_plan.RemoveRemoteCachedRelation(relation).command(client))
     finally:
         relation._relation_id = None  # noqa: SLF001
 

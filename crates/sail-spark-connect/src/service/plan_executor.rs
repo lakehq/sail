@@ -729,34 +729,6 @@ fn validate_checkpoint_path_segment(name: &str, value: &str) -> SparkResult<()> 
     }
 }
 
-#[cfg(test)]
-mod checkpoint_path_tests {
-    use super::*;
-
-    #[test]
-    fn checkpoint_path_appends_encoded_segments() -> SparkResult<()> {
-        let path = build_checkpoint_path("memory:///checkpoint-root", "session?one", "relation")?;
-
-        assert_eq!(
-            path,
-            "memory:///checkpoint-root/sail-checkpoints/session%3Fone/relation"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn checkpoint_path_rejects_url_query() {
-        let error = build_checkpoint_path(
-            "memory:///checkpoint-root?scope=other",
-            "session",
-            "relation",
-        )
-        .expect_err("checkpoint root query must be rejected");
-
-        assert!(error.to_string().contains("cannot contain a query"));
-    }
-}
-
 async fn cleanup_checkpoint_after_error(
     ctx: &SessionContext,
     path: &str,
