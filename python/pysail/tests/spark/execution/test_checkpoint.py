@@ -145,7 +145,9 @@ def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, p
     _assert_payload(checkpointed, 16 * 1024)
 
 
-# FIXME: Local checkpoint payloads are embedded in every worker task definition.
+# FIXME: In local-cluster, this 64 MiB local checkpoint is embedded in every worker task definition and
+# serializes to 135,869,682 bytes, exceeding the 128 MiB gRPC decoding limit. A 132 MiB checkpoint
+# serialized to 280,225,527 bytes and raised peak process RSS to about 3.29 GB.
 @SAIL_XFAIL
 def test_local_checkpoint_large_payload_remains_executable_in_cluster(spark):
     checkpointed = _payload_dataframe(spark, 64 * 1024).localCheckpoint()
@@ -187,7 +189,8 @@ def test_checkpoint_cleanup_is_scoped_to_one_relation(spark, tmp_path):
         spark.conf.set("spark.checkpoint.dir", original_checkpoint_path)
 
 
-# FIXME: Completed local-cluster jobs retain checkpoint relation leases after DataFrame GC.
+# FIXME: In local-cluster, a completed job retains the checkpoint relation lease after DataFrame GC. All
+# four Arrow files remain after the five-second cleanup window and are released only when the session stops.
 @SAIL_XFAIL
 def test_checkpoint_gc_releases_completed_cluster_job_lease(spark, tmp_path):
     if is_jvm_spark():

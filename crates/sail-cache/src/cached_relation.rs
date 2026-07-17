@@ -99,7 +99,8 @@ enum CachedRelationPendingTarget {
 pub struct CachedRelationExec {
     input: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
-    // FIXME: Completed distributed jobs retain this lease and delay retired checkpoint cleanup.
+    // FIXME: Completed distributed jobs retain this lease after DataFrame GC, so checkpoint files
+    // remain until the job plans are released during session shutdown.
     relation_lease: Option<CachedRelation>,
 }
 
