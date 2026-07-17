@@ -1,0 +1,17 @@
+# serializer version: 1
+---
+name: "test_the_plan_folds_a_constant_expression_into_a_literal_path"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[xpath_string(column1@0, a/b) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_the_plan_for_a_literal_path"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[xpath_string(column1@0, a/b) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]

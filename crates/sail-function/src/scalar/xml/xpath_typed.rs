@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use xee_xpath::{Documents, Queries, Query};
+use xee_xpath::{Documents, Item, Queries, Query};
 
 use crate::functions_utils::make_scalar_function;
 
@@ -163,29 +163,59 @@ fn evaluate_xpath_boolean(xml: &str, path: &str) -> Result<Option<bool>> {
     Ok(Some(result))
 }
 
+/// XPath 1.0's number grammar: an optional minus, then digits with an optional fraction, or a bare
+/// fraction. **No exponent and no `INF`** — anything else is NaN. XPath 2.0, which `xee` implements,
+/// would happily read `INF` and `1.5e2`, so Spark and Sail disagree unless the string is parsed by
+/// the 1.0 rules.
+fn xpath1_number(value: &str) -> f64 {
+    let value = value.trim();
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    let well_formed = digits.chars().any(|c| c.is_ascii_digit())
+        && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && digits.matches('.').count() <= 1;
+    if well_formed {
+        value.parse::<f64>().unwrap_or(f64::NAN)
+    } else {
+        f64::NAN
+    }
+}
+
 fn evaluate_xpath_number(xml: &str, path: &str) -> Result<Option<f64>> {
     if xml.is_empty() || path.is_empty() {
         return Ok(None);
     }
-    let wrapped = format!("number({path})");
+    // Spark evaluates the path with XPath 1.0, where a node becomes a number through its string
+    // value (see `xpath1_number`), and where the node-set collapses to its FIRST node — XPath 2.0
+    // would reject a sequence of more than one item with XPTY0004. An atomic result (`sum()`,
+    // `count()`) is already a number and keeps its precision.
+    let wrapped = format!("({path})[1]");
     let mut documents = Documents::new();
     let document = documents
         .add_string_without_uri(xml)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
     let query = Queries::default()
-        .one(&wrapped, |_, item| Ok(item.try_into_value::<f64>()?))
+        .option(
+            &wrapped,
+            |documents: &mut Documents, item: &Item| match item {
+                Item::Node(node) => Ok(xpath1_number(&documents.xot().string_value(*node))),
+                _ => Ok(item.try_into_value::<f64>().unwrap_or(f64::NAN)),
+            },
+        )
         .map_err(|e| DataFusionError::Execution(format!("Invalid XPath '{path}': {e}")))?;
     let result = query
         .execute(&mut documents, document)
         .map_err(|e| DataFusionError::Execution(format!("Error evaluating XPath '{path}': {e}")))?;
-    Ok(Some(result))
+    // An empty node-set is NaN in XPath 1.0, not a missing value.
+    Ok(Some(result.unwrap_or(f64::NAN)))
 }
 
 fn evaluate_xpath_string(xml: &str, path: &str) -> Result<Option<String>> {
     if xml.is_empty() || path.is_empty() {
         return Ok(None);
     }
-    let wrapped = format!("string({path})");
+    // As in `evaluate_xpath_number`: XPath 1.0 `string()` takes the first node, XPath 2.0+ errors
+    // on a sequence of more than one item.
+    let wrapped = format!("string(({path})[1])");
     let mut documents = Documents::new();
     let document = documents
         .add_string_without_uri(xml)
@@ -281,7 +311,10 @@ fn build_int16_array(xmls: &StringArray, paths: &StringArray) -> Result<ArrayRef
             builder.append_null();
         } else {
             match evaluate_xpath_number(xmls.value(row), paths.value(row))? {
-                Some(v) => builder.append_value(v as i16),
+                // Spark narrows the double the Java way, `(short) (int) value`: `double -> int`
+                // saturates, and `int -> short` then truncates the bits. Rust's `as i16` would
+                // saturate at 32767 / -32768 instead, so 99999 must come out as -31073.
+                Some(v) => builder.append_value(v as i32 as i16),
                 None => builder.append_null(),
             }
         }
