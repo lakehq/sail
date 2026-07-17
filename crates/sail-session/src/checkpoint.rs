@@ -8,13 +8,14 @@ use datafusion::object_store::{ObjectMeta, ObjectStoreExt};
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use sail_cache::checkpoint::{CheckpointStore, ReliableCheckpoint};
 use sail_common_datafusion::array::record_batch::write_record_batches_file;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_object_store::{
-    ResolvedObjectStorePath, delete_object_store_prefix, resolve_object_store_path,
+    ResolvedObjectStorePath, delete_object_store_prefix, delete_object_store_prefix_objects,
+    resolve_object_store_path,
 };
 use sail_physical_plan::checkpoint::ReliableCheckpointExec;
 
@@ -169,18 +170,7 @@ async fn commit_checkpoint_attempts(
     }
 
     let temporary = checkpoint_path.child("_temporary");
-    let temporary_files = checkpoint_path
-        .store()
-        .list(Some(&temporary))
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
-    for file in temporary_files {
-        match checkpoint_path.store().delete(&file.location).await {
-            Ok(()) | Err(datafusion::object_store::Error::NotFound { .. }) => {}
-            Err(error) => return Err(DataFusionError::ObjectStore(Box::new(error))),
-        }
-    }
+    delete_object_store_prefix_objects(checkpoint_path.store().as_ref(), &temporary).await?;
     Ok(files)
 }
 

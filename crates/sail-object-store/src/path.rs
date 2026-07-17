@@ -4,7 +4,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion_common::{DataFusionError, Result};
-use futures::TryStreamExt;
+use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
 
@@ -44,20 +44,30 @@ impl ResolvedObjectStorePath {
     }
 
     pub async fn delete_prefix(&self) -> Result<()> {
-        let files = self
-            .store
-            .list(Some(&self.prefix))
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))?;
-        for file in files {
-            match self.store.delete(&file.location).await {
-                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-                Err(error) => return Err(DataFusionError::ObjectStore(Box::new(error))),
-            }
-        }
-        Ok(())
+        delete_object_store_prefix_objects(self.store.as_ref(), &self.prefix).await
     }
+}
+
+pub async fn delete_object_store_prefix_objects(
+    store: &dyn ObjectStore,
+    prefix: &Path,
+) -> Result<()> {
+    let locations = store.list(Some(prefix)).map(|result| {
+        result
+            .map(|object| object.location)
+            .map_err(|source| object_store::Error::Generic {
+                store: "object store listing",
+                source: Box::new(source),
+            })
+    });
+    let mut deleted = store.delete_stream(Box::pin(locations));
+    while let Some(result) = deleted.next().await {
+        match result {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => return Err(DataFusionError::ObjectStore(Box::new(error))),
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_object_store_path(
