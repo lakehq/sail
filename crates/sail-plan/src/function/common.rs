@@ -23,11 +23,12 @@ fn is_spark_trim_char(c: char) -> bool {
     c <= '\u{20}'
 }
 
-/// The same set as a literal for the `btrim` UDF, which takes a string of characters to
-/// strip: bytes `0x01..=0x20` (btrim cannot carry a NUL, but a NUL cannot appear in a SQL
-/// string operand either, so the column path never needs it).
+/// The same set as a literal for the `btrim` UDF, which takes a string of the characters
+/// to strip: bytes `0x00..=0x20`. Includes the NUL so this column/`btrim` path trims the
+/// same set as the literal path above (verified `btrim` accepts a NUL in its argument),
+/// matching Spark for a NUL-prefixed value such as `char(0)`.
 fn spark_trim_chars() -> String {
-    (1u8..=0x20).map(char::from).collect()
+    (0u8..=0x20).map(char::from).collect()
 }
 
 /// True for the string types Spark parses as numbers.

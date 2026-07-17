@@ -127,6 +127,26 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t              |
         | decimal(38,17) |
 
+    Scenario: a wide decimal sum over columns rounds the value per row
+      # The literal cases fold at plan time; this exercises the round+cast over a real
+      # batch, so the HALF_UP rounding to the reduced scale is proven at runtime.
+      When query
+        """
+        SELECT typeof(a + b) AS t, a + b AS r
+        FROM VALUES
+          (CAST(1.005 AS DECIMAL(38,10)), CAST(2.5 AS DECIMAL(38,2))),
+          (CAST(-1.005 AS DECIMAL(38,10)), CAST(2.5 AS DECIMAL(38,2))),
+          (CAST(1.0000005 AS DECIMAL(38,10)), CAST(0 AS DECIMAL(38,2))),
+          (CAST(NULL AS DECIMAL(38,10)), CAST(2.5 AS DECIMAL(38,2)))
+          AS t(a, b)
+        """
+      Then query result
+        | t             | r         |
+        | decimal(38,6) | 3.505000  |
+        | decimal(38,6) | 1.495000  |
+        | decimal(38,6) | 1.000001  |
+        | decimal(38,6) | NULL      |
+
     Scenario: a decimal sum that fits in 38 keeps the native type
       # Guards the gate: below precision 38 Arrow already agrees with Spark, so the
       # re-typing must not fire.
@@ -949,6 +969,23 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t            | r    |
         | decimal(3,2) | NULL |
 
+    Scenario: pmod remainder-type overflow over columns, ANSI off
+      # The literal forms fold at plan time; this drives the ANSI-off try_cast narrowing
+      # over a batch. A row that fits keeps its value, the overflowing row is NULL.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT pmod(a, b) AS r
+        FROM VALUES
+          (CAST(-5.00 AS DECIMAL(3,2)), CAST(99999 AS DECIMAL(5,0))),
+          (CAST(1.50 AS DECIMAL(3,2)), CAST(2 AS DECIMAL(5,0)))
+          AS t(a, b)
+        """
+      Then query result
+        | r    |
+        | NULL |
+        | 1.50 |
+
   Rule: The float x decimal promotion holds for columns, not just literals
     # This is the promotion the plan builder fixes, so a literal-only test would leave the
     # runtime path unproven: a literal pair is constant-folded away and the kernel never
@@ -1215,21 +1252,23 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | byte_t        | short_t       | int_t         | long_t        |
         | decimal(14,2) | decimal(12,2) | decimal(12,2) | decimal(12,2) |
 
-  Rule: A fractional string cast to an integer truncates under ANSI off
+  Rule: A fractional string cast to an integer truncates under ANSI off, raises under ANSI on
     # Spark parses with `UTF8String.toInt`, which reads the sign and digits, IGNORES the
-    # fractional part (truncating toward zero, never rounding) and rejects exponents —
-    # `'1e2'` is NULL even though `1e2` is a valid double. Arrow's parser instead rejects
-    # the whole string, so Sail yields NULL where Spark truncates. Under ANSI both raise,
-    # so only the ANSI-off half diverges.
-    # Note `CAST('1.5' AS DECIMAL(10,0))` is a different rule: it ROUNDS to 2, in both modes.
+    # fractional part (truncating toward zero, never rounding) and rejects exponents.
+    # Arrow's parser instead rejects the whole string, so Sail yields NULL under ANSI off
+    # where Spark truncates, and raises a different error class under ANSI on.
 
+    @sail-bug
     Scenario: a fractional string cast to an integer raises under ANSI on
+      # Both raise; Spark names the CAST_INVALID_INPUT class, Sail reports the Arrow cast
+      # error ("Cannot cast string '1.5' to value of Int32 type"). Asserted as Spark's
+      # class so it xfails until Sail grows Spark error classes, not as a shared substring.
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT CAST('1.5' AS INT) AS r
         """
-      Then query error (?i)cannot (be )?cast
+      Then query error CAST_INVALID_INPUT
 
     @sail-bug
     Scenario: a fractional string cast to an integer truncates under ANSI off
@@ -1246,23 +1285,11 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a | b | c  | d  |
         | 1 | 1 | -1 | -1 |
 
-    Scenario: a control-character prefix is trimmed like whitespace
-      # Spark's trim strips every byte at or below 0x20, not just the usual whitespace —
-      # e.g. the file separator 0x1C. Both a literal and a column go through the shared
-      # trim, so this covers both paths.
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT CAST(concat(char(28), '5') AS INT) AS lit,
-               CAST(concat(char(9), s) AS INT) AS col
-        FROM VALUES ('7') AS t(s)
-        """
-      Then query result
-        | lit | col |
-        | 5   | 7   |
+  Rule: An exponent string cast to an integer is rejected even though the value is integral
+    # Spark's integer parser rejects exponent notation: NULL under ANSI off, raises under
+    # ANSI on. Sail agrees on the ANSI-off NULL.
 
     Scenario: an exponent string cast to an integer is NULL under ANSI off
-      # Spark's integer parser rejects exponent notation even though the value is integral.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1272,8 +1299,58 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r    |
         | NULL |
 
-    Scenario: a fractional string cast to a decimal rounds in both ANSI modes
+    @sail-bug
+    Scenario: an exponent string cast to an integer raises under ANSI on
+      # Spark: CAST_INVALID_INPUT; Sail reports the Arrow cast error.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('1e2' AS INT) AS r
+        """
+      Then query error CAST_INVALID_INPUT
+
+  Rule: A control character at or below 0x20 is trimmed like whitespace
+    # Spark's trim strips every byte at or below 0x20, not just the usual whitespace — the
+    # file separator 0x1C and even the NUL 0x00. The literal and the column go through
+    # different trims (plan-time vs `btrim`), so both are exercised, and both ANSI modes
+    # agree because the trimmed value parses cleanly.
+
+    Scenario: control characters are trimmed under ANSI off
       Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(concat(char(28), '5') AS INT) AS lit,
+               CAST(concat(char(28), s) AS INT) AS fs_col,
+               CAST(concat(char(0), s) AS INT) AS nul_col
+        FROM VALUES ('7') AS t(s)
+        """
+      Then query result
+        | lit | fs_col | nul_col |
+        | 5   | 7      | 7       |
+
+    Scenario: control characters are trimmed under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(concat(char(28), '5') AS INT) AS r
+        """
+      Then query result
+        | r |
+        | 5 |
+
+  Rule: A fractional string cast to a decimal rounds, in both ANSI modes
+    Scenario: a fractional string cast to a decimal rounds under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('1.5' AS DECIMAL(10,0)) AS r
+        """
+      Then query result
+        | r |
+        | 2 |
+
+    Scenario: a fractional string cast to a decimal rounds under ANSI on
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT CAST('1.5' AS DECIMAL(10,0)) AS r

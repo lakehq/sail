@@ -99,14 +99,22 @@ pub fn spark_decimal_multiply_type(
     cap(precision, scale, allow_precision_loss)
 }
 
+/// The unclamped `(precision, scale)` of Spark's `+`/`-` rule, shared by the type and the
+/// divergence check so the formula lives in one place: scale `max(s1,s2)` and precision
+/// `max(p1-s1, p2-s2) + scale + 1`.
+fn spark_add_precision_scale(p1: u8, s1: i8, p2: u8, s2: i8) -> (i32, i32) {
+    let scale = max(s1 as i32, s2 as i32);
+    let precision = max(p1 as i32 - s1 as i32, p2 as i32 - s2 as i32) + scale + 1;
+    (precision, scale)
+}
+
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) + DECIMAL(p2,s2)` — also the rule
-/// for `-`, which Spark defines with the identical formula: scale `max(s1,s2)` and
-/// precision `max(p1-s1, p2-s2) + scale + 1`.
+/// for `-`, which Spark defines with the identical formula, capped per `allow_precision_loss`.
 ///
 /// Arrow's own add/sub rule computes the same precision but caps it with a plain
-/// `min(_, 38)` that keeps the scale — i.e. Spark's `bounded`, never
-/// `adjustPrecisionScale`. So the two only diverge once the exact precision exceeds 38,
-/// and only under the default `allowPrecisionLoss = true`.
+/// `min(_, 38)` that keeps the scale — i.e. Spark's `bounded`, never `adjustPrecisionScale`.
+/// So the two only diverge once the exact precision exceeds 38, and only under the default
+/// `allowPrecisionLoss = true`.
 /// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L430-L438>
 pub fn spark_decimal_add_type(
     p1: u8,
@@ -115,19 +123,27 @@ pub fn spark_decimal_add_type(
     s2: i8,
     allow_precision_loss: bool,
 ) -> (u8, i8) {
-    let scale = max(s1 as i32, s2 as i32);
-    let precision = max(p1 as i32 - s1 as i32, p2 as i32 - s2 as i32) + scale + 1;
+    let (precision, scale) = spark_add_precision_scale(p1, s1, p2, s2);
     cap(precision, scale, allow_precision_loss)
 }
 
-/// Whether Spark's `+`/`-` rule and Arrow's disagree for these decimals.
+/// Whether Spark's `+`/`-` result type actually differs from Arrow's for these decimals.
 ///
-/// They only differ once the exact precision exceeds 38: below that both return it
-/// unchanged, so the native kernel is already Spark-correct and must be left alone.
-pub fn spark_decimal_add_diverges(p1: u8, s1: i8, p2: u8, s2: i8) -> bool {
-    let scale = max(s1 as i32, s2 as i32);
-    let precision = max(p1 as i32 - s1 as i32, p2 as i32 - s2 as i32) + scale + 1;
-    precision > DECIMAL128_MAX_PRECISION as i32
+/// Arrow caps the same precision with a plain `min(_, 38)` that keeps the scale — exactly
+/// Spark's [`bounded`]. So the two agree whenever the precision fits in 38, AND whenever
+/// `allow_precision_loss` is false (both use `bounded`), AND when `adjustPrecisionScale`
+/// happens to leave the scale untouched (e.g. `decimal(38,2) + decimal(38,2)`). Re-typing
+/// only when they genuinely differ avoids a needless per-row `round`+`cast` on the common
+/// max-precision shapes.
+pub fn spark_decimal_add_diverges(
+    p1: u8,
+    s1: i8,
+    p2: u8,
+    s2: i8,
+    allow_precision_loss: bool,
+) -> bool {
+    let (precision, scale) = spark_add_precision_scale(p1, s1, p2, s2);
+    cap(precision, scale, allow_precision_loss) != bounded(precision, scale)
 }
 
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) % DECIMAL(p2,s2)` — also the

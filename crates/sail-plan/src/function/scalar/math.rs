@@ -100,7 +100,15 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 let sum = left + right;
                 match operands {
                     (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
-                        if spark_decimal_add_diverges(p1, s1, p2, s2) =>
+                        if spark_decimal_add_diverges(
+                            p1,
+                            s1,
+                            p2,
+                            s2,
+                            function_context
+                                .plan_config
+                                .decimal_operations_allow_precision_loss,
+                        ) =>
                     {
                         spark_decimal_add_retype(
                             sum,
@@ -183,7 +191,15 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 let sum = left - right;
                 match operands {
                     (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
-                        if spark_decimal_add_diverges(p1, s1, p2, s2) =>
+                        if spark_decimal_add_diverges(
+                            p1,
+                            s1,
+                            p2,
+                            s2,
+                            function_context
+                                .plan_config
+                                .decimal_operations_allow_precision_loss,
+                        ) =>
                     {
                         spark_decimal_add_retype(
                             sum,
@@ -308,10 +324,11 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// wrong type under the default `allowPrecisionLoss = true`.
 ///
 /// This only fixes the TYPE. The sum itself stays on the native kernel, so its overflow
-/// behaviour is untouched (that is the custom-`PhysicalExpr` follow-up's job): the sum is
-/// rounded HALF_UP to Spark's scale, and the final cast only ever WIDENS — rounding
-/// `decimal(38,s)` to scale `n` yields at most `(38-s+1)+n` digits, which is below the
-/// target precision — so no new error path is introduced.
+/// behaviour is untouched (that is the custom-`PhysicalExpr` follow-up's job). The final
+/// `cast` cannot add an error path: it is only reached when Spark's scale is strictly
+/// below the native one (the gate skips the equal case), so the round drops digits and the
+/// value fits `(38-s+1)+n <= 38` — it never narrows into an overflow the native sum did
+/// not already have.
 fn spark_decimal_add_retype(
     sum: Expr,
     p1: u8,
@@ -766,11 +783,15 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // Widening to i256 does NOT make the intermediate overflow-proof: Arrow's
         // decimal `div` rescales the numerator by `10^(result_scale - s1 + s2)`, which
         // is `10^(4 + s2)` here, so the intermediate carries
-        // `(p1 - s1) + dividend_scale + 4 + s2` digits against i256's ~76. Only take
-        // this path when that provably fits; beyond it (reachable only at extreme
-        // scales, e.g. `decimal(38,38) / decimal(38,38)`) fall back to the native
-        // divide, whose scale diverges from Spark — see the `@sail-bug` scenario in
-        // `arithmetic_coercion.feature`.
+        // `(p1 - s1) + dividend_scale + 4 + s2` digits against i256's ~76. The overflow
+        // is value-dependent, not type-dependent — only rows whose rescaled numerator
+        // exceeds i256 raise — so this path is always taken rather than gated on the
+        // type (rejecting the whole type would send every row to the native divide,
+        // which overflows i128 even sooner). The extreme case `decimal(38,38) /
+        // decimal(38,38)` is a known gap; see its `@sail-bug` scenario in
+        // `arithmetic_coercion.feature`. Emulating Spark exactly needs BigDecimal
+        // (`1e38 * 1e39 = 1e77` does not fit i256 either) — the custom PhysicalExpr
+        // follow-up.
         // https://github.com/apache/arrow-rs/blob/58.3.0/arrow-arith/src/numeric.rs (Op::Div)
         //
         // Performance: this path is heavier than the previous native i128 divide (it
