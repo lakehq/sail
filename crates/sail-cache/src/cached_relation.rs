@@ -8,6 +8,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
+use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::Partitioning;
@@ -18,6 +19,7 @@ use datafusion::physical_plan::{
     with_new_children_if_necessary,
 };
 use datafusion::prelude::SessionContext;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -69,14 +71,20 @@ enum CachedRelationMaterialized {
 struct CachedRelationLocalMaterialized {
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
-    memory_partitions: Option<Arc<Vec<Vec<RecordBatch>>>>,
-    serialized_memory_partitions: Option<Arc<Vec<Vec<Vec<u8>>>>>,
-    disk_partitions: Option<Arc<Vec<CachedRelationDiskPartition>>>,
+    partitions: Arc<Vec<Vec<CachedRelationLocalChunk>>>,
 }
 
 #[derive(Debug, Clone)]
-struct CachedRelationDiskPartition {
-    chunks: Vec<CachedRelationDiskChunk>,
+enum CachedRelationLocalChunk {
+    Deserialized {
+        batches: Vec<RecordBatch>,
+        _memory_reservation: Arc<MemoryReservation>,
+    },
+    Serialized {
+        bytes: Vec<u8>,
+        _memory_reservation: Arc<MemoryReservation>,
+    },
+    Disk(CachedRelationDiskChunk),
 }
 
 #[derive(Debug, Clone)]
@@ -581,21 +589,11 @@ impl CachedRelationLocalMaterialized {
             ));
         }
 
-        let mut memory_partitions = if use_deserialized_memory {
-            Some(partition_maps(partition_count))
-        } else {
-            None
-        };
-        let mut serialized_partitions = if use_serialized_memory {
-            Some(partition_maps(partition_count))
-        } else {
-            None
-        };
-        let mut disk_partitions = if use_disk {
-            Some(partition_maps(partition_count))
-        } else {
-            None
-        };
+        let runtime_env = ctx.runtime_env();
+        let memory_registration = Arc::new(
+            MemoryConsumer::new("local checkpoint cache").register(&runtime_env.memory_pool),
+        );
+        let mut partitions = partition_maps(partition_count);
         let mut sequences: Vec<BTreeSet<u64>> =
             (0..partition_count).map(|_| BTreeSet::new()).collect();
 
@@ -647,99 +645,63 @@ impl CachedRelationLocalMaterialized {
                     ));
                 }
                 let bytes = data_array.value(row);
-
-                if let Some(partitions) = memory_partitions.as_mut() {
-                    partitions[partition].insert(sequence, read_record_batches(bytes)?);
-                }
-                if let Some(partitions) = serialized_partitions.as_mut() {
-                    partitions[partition].insert(sequence, bytes.to_vec());
-                }
-                if let Some(partitions) = disk_partitions.as_mut() {
-                    partitions[partition].insert(
-                        sequence,
-                        write_disk_chunk(ctx, bytes, storage_level.replication).await?,
-                    );
-                }
+                let chunk = materialize_local_checkpoint_chunk(
+                    ctx,
+                    bytes,
+                    use_deserialized_memory,
+                    use_serialized_memory,
+                    use_disk,
+                    storage_level.replication,
+                    memory_registration.as_ref(),
+                )
+                .await?;
+                partitions[partition].insert(sequence, chunk);
             }
         }
 
         validate_partition_sequences(&sequences)?;
-        let memory_partitions = memory_partitions.map(|partitions| {
-            Arc::new(
-                partitions
-                    .into_iter()
-                    .map(|partition| partition.into_values().flatten().collect())
-                    .collect(),
-            )
-        });
-        let serialized_memory_partitions = serialized_partitions.map(|partitions| {
-            Arc::new(
-                partitions
-                    .into_iter()
-                    .map(|partition| partition.into_values().collect())
-                    .collect(),
-            )
-        });
-        let disk_partitions = disk_partitions.map(|partitions| {
-            Arc::new(
-                partitions
-                    .into_iter()
-                    .map(|partition| CachedRelationDiskPartition {
-                        chunks: partition.into_values().collect(),
-                    })
-                    .collect(),
-            )
-        });
+        let partitions = Arc::new(
+            partitions
+                .into_iter()
+                .map(|partition| partition.into_values().collect())
+                .collect(),
+        );
 
         Ok(Self {
             schema,
             properties,
-            memory_partitions,
-            serialized_memory_partitions,
-            disk_partitions,
+            partitions,
         })
     }
 
     async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = self.load_partitions().await?;
+        // FIXME: Serialized and disk chunks are eagerly decoded into MemorySource without a
+        // bounded scan reservation. A distributed cache source is needed for streaming scans.
         let plan: Arc<dyn ExecutionPlan> =
             MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&self.schema), None)?;
         Ok(plan)
     }
 
     async fn load_partitions(&self) -> Result<Vec<Vec<RecordBatch>>> {
-        if let Some(partitions) = &self.memory_partitions {
-            return Ok(partitions.as_ref().clone());
-        }
-        if let Some(partitions) = &self.serialized_memory_partitions {
-            let mut batches = Vec::with_capacity(partitions.len());
-            for partition in partitions.iter() {
-                let mut partition_batches = vec![];
-                for bytes in partition {
-                    partition_batches.extend(read_record_batches(bytes)?);
+        let mut batches = Vec::with_capacity(self.partitions.len());
+        for partition in self.partitions.iter() {
+            let mut partition_batches = vec![];
+            for chunk in partition {
+                match chunk {
+                    CachedRelationLocalChunk::Deserialized {
+                        batches: chunk_batches,
+                        ..
+                    } => partition_batches.extend(chunk_batches.iter().cloned()),
+                    CachedRelationLocalChunk::Serialized { bytes, .. } => {
+                        partition_batches.extend(read_record_batches(bytes)?);
+                    }
+                    CachedRelationLocalChunk::Disk(chunk) => {
+                        partition_batches.extend(chunk.read().await?);
+                    }
                 }
-                batches.push(partition_batches);
             }
-            return Ok(batches);
-        }
-        if let Some(partitions) = &self.disk_partitions {
-            let mut batches = Vec::with_capacity(partitions.len());
-            for partition in partitions.iter() {
-                batches.push(partition.read().await?);
-            }
-            return Ok(batches);
-        }
-        Err(internal_datafusion_err!(
-            "cached relation has no materialized data"
-        ))
-    }
-}
-
-impl CachedRelationDiskPartition {
-    async fn read(&self) -> Result<Vec<RecordBatch>> {
-        let mut batches = vec![];
-        for chunk in &self.chunks {
-            batches.extend(chunk.read().await?);
+            batches.push(partition_batches);
         }
         Ok(batches)
     }
@@ -766,6 +728,91 @@ impl CachedRelationDiskChunk {
 
 fn partition_maps<T>(partition_count: usize) -> Vec<BTreeMap<u64, T>> {
     (0..partition_count).map(|_| BTreeMap::new()).collect()
+}
+
+async fn materialize_local_checkpoint_chunk(
+    ctx: &SessionContext,
+    bytes: &[u8],
+    use_deserialized_memory: bool,
+    use_serialized_memory: bool,
+    use_disk: bool,
+    replication: usize,
+    memory_registration: &MemoryReservation,
+) -> Result<CachedRelationLocalChunk> {
+    if use_deserialized_memory {
+        let memory_reservation = Arc::new(memory_registration.new_empty());
+        match read_record_batches_with_reservation(bytes, memory_reservation.as_ref()) {
+            Ok(batches) => {
+                return Ok(CachedRelationLocalChunk::Deserialized {
+                    batches,
+                    _memory_reservation: memory_reservation,
+                });
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) if use_disk => {}
+            Err(error) => return Err(error),
+        }
+    } else if use_serialized_memory {
+        let memory_reservation = Arc::new(memory_registration.new_empty());
+        match memory_reservation.try_grow(bytes.len()) {
+            Ok(()) => {
+                return Ok(CachedRelationLocalChunk::Serialized {
+                    bytes: bytes.to_vec(),
+                    _memory_reservation: memory_reservation,
+                });
+            }
+            Err(error) if !use_disk => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    if use_disk {
+        return Ok(CachedRelationLocalChunk::Disk(
+            write_disk_chunk(ctx, bytes, replication).await?,
+        ));
+    }
+    Err(internal_datafusion_err!(
+        "local checkpoint chunk has no available storage"
+    ))
+}
+
+fn read_record_batches_with_reservation(
+    bytes: &[u8],
+    memory_reservation: &MemoryReservation,
+) -> Result<Vec<RecordBatch>> {
+    let anticipated_size = bytes.len();
+    memory_reservation.try_grow(anticipated_size)?;
+    let batches = match read_record_batches(bytes) {
+        Ok(batches) => batches,
+        Err(error) => {
+            memory_reservation.shrink(anticipated_size);
+            return Err(error);
+        }
+    };
+    let actual_size = match record_batches_memory_size(&batches) {
+        Ok(size) => size,
+        Err(error) => {
+            memory_reservation.shrink(anticipated_size);
+            return Err(error);
+        }
+    };
+    match actual_size.cmp(&anticipated_size) {
+        std::cmp::Ordering::Greater => {
+            if let Err(error) = memory_reservation.try_grow(actual_size - anticipated_size) {
+                memory_reservation.shrink(anticipated_size);
+                return Err(error);
+            }
+        }
+        std::cmp::Ordering::Less => memory_reservation.shrink(anticipated_size - actual_size),
+        std::cmp::Ordering::Equal => {}
+    }
+    Ok(batches)
+}
+
+fn record_batches_memory_size(batches: &[RecordBatch]) -> Result<usize> {
+    batches.iter().try_fold(0usize, |size, batch| {
+        size.checked_add(get_record_batch_memory_size(batch))
+            .ok_or_else(|| internal_datafusion_err!("checkpoint batch memory size is too large"))
+    })
 }
 
 fn validate_partition_sequences(sequences: &[BTreeSet<u64>]) -> Result<()> {
@@ -861,12 +908,13 @@ async fn materialize_reliable_checkpoint(
 }
 
 fn checkpoint_plan_properties(plan: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
-    Arc::new(PlanProperties::new(
-        plan.properties().eq_properties.clone(),
-        plan.output_partitioning().clone(),
-        EmissionType::Incremental,
-        Boundedness::Bounded,
-    ))
+    Arc::new(
+        plan.properties()
+            .as_ref()
+            .clone()
+            .with_emission_type(EmissionType::Incremental)
+            .with_boundedness(Boundedness::Bounded),
+    )
 }
 
 fn create_arrow_checkpoint_scan(
@@ -1012,8 +1060,11 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use datafusion::arrow::array::ArrayRef;
+    use datafusion::arrow::array::{ArrayRef, Int64Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::execution::context::SessionConfig;
+    use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{
         EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -1025,6 +1076,43 @@ mod tests {
 
     use super::*;
     use crate::checkpoint::{CheckpointStore, ReliableCheckpoint};
+
+    fn local_checkpoint_stream(
+        data_schema: &SchemaRef,
+        batches: &[RecordBatch],
+    ) -> Result<SendableRecordBatchStream> {
+        local_checkpoint_chunk_stream(data_schema, &[batches.to_vec()])
+    }
+
+    fn local_checkpoint_chunk_stream(
+        data_schema: &SchemaRef,
+        chunks: &[Vec<RecordBatch>],
+    ) -> Result<SendableRecordBatchStream> {
+        let bytes = chunks
+            .iter()
+            .map(|batches| write_record_batches(batches, data_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let checkpoint_schema = Arc::new(Schema::new(vec![
+            Field::new("partition", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("data", DataType::LargeBinary, false),
+        ]));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(UInt64Array::from(vec![0; bytes.len()])),
+            Arc::new(UInt64Array::from_iter_values(
+                0..u64::try_from(bytes.len())
+                    .map_err(|_| internal_datafusion_err!("checkpoint chunk count is too large"))?,
+            )),
+            Arc::new(LargeBinaryArray::from_iter_values(
+                bytes.iter().map(Vec::as_slice),
+            )),
+        ];
+        let batch = RecordBatch::try_new(Arc::clone(&checkpoint_schema), columns)?;
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            checkpoint_schema,
+            stream::iter(vec![Ok(batch)]),
+        )))
+    }
 
     #[test]
     fn cached_relation_rewrite_preserves_exact_properties() -> Result<()> {
@@ -1108,29 +1196,16 @@ mod tests {
     #[tokio::test]
     async fn disk_only_local_checkpoint_materializes_only_on_disk() -> Result<()> {
         let data_schema = Arc::new(Schema::empty());
-        let bytes = write_record_batches(&[], data_schema.as_ref())?;
-        let checkpoint_schema = Arc::new(Schema::new(vec![
-            Field::new("partition", DataType::UInt64, false),
-            Field::new("sequence", DataType::UInt64, false),
-            Field::new("data", DataType::LargeBinary, false),
-        ]));
-        let columns: Vec<ArrayRef> = vec![
-            Arc::new(UInt64Array::from(vec![0])),
-            Arc::new(UInt64Array::from(vec![0])),
-            Arc::new(LargeBinaryArray::from_vec(vec![bytes.as_slice()])),
-        ];
-        let batch = RecordBatch::try_new(Arc::clone(&checkpoint_schema), columns)?;
-        let stream: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            checkpoint_schema,
-            stream::iter(vec![Ok(batch)]),
-        ));
+        let stream = local_checkpoint_stream(&data_schema, &[])?;
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
         let storage_level: spec::StorageLevel = "DISK_ONLY"
             .parse()
             .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let ctx = SessionContext::new();
+        let memory_pool = Arc::clone(&ctx.runtime_env().memory_pool);
 
         let materialized = CachedRelationLocalMaterialized::try_new(
-            &SessionContext::new(),
+            &ctx,
             data_schema,
             checkpoint_plan_properties(&input),
             1,
@@ -1139,16 +1214,289 @@ mod tests {
         )
         .await?;
 
-        assert!(materialized.memory_partitions.is_none());
-        assert!(materialized.serialized_memory_partitions.is_none());
-        let disk_partitions = materialized
-            .disk_partitions
-            .as_ref()
-            .ok_or_else(|| internal_datafusion_err!("disk checkpoint partitions are missing"))?;
-        assert_eq!(disk_partitions.len(), 1);
-        assert_eq!(disk_partitions[0].chunks.len(), 1);
-        assert_eq!(disk_partitions[0].chunks[0].files.len(), 1);
+        assert_eq!(memory_pool.reserved(), 0);
+        assert_eq!(materialized.partitions.len(), 1);
+        assert_eq!(materialized.partitions[0].len(), 1);
+        let CachedRelationLocalChunk::Disk(chunk) = &materialized.partitions[0][0] else {
+            return Err(internal_datafusion_err!(
+                "disk-only checkpoint chunk was not stored on disk"
+            ));
+        };
+        assert_eq!(chunk.files.len(), 1);
         assert_eq!(materialized.load_partitions().await?, vec![vec![]]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_and_disk_local_checkpoint_uses_memory_without_disk_duplication() -> Result<()> {
+        let data_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let data_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let stream = local_checkpoint_stream(&data_schema, std::slice::from_ref(&data_batch))?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "MEMORY_AND_DISK"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let ctx = SessionContext::new();
+        let memory_pool = Arc::clone(&ctx.runtime_env().memory_pool);
+
+        let materialized = CachedRelationLocalMaterialized::try_new(
+            &ctx,
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await?;
+
+        assert!(memory_pool.reserved() > 0);
+        let CachedRelationLocalChunk::Deserialized {
+            _memory_reservation: first_reservation,
+            ..
+        } = &materialized.partitions[0][0]
+        else {
+            return Err(internal_datafusion_err!(
+                "first checkpoint chunk was not stored in memory"
+            ));
+        };
+        assert_eq!(memory_pool.reserved(), first_reservation.size());
+        assert_eq!(
+            materialized.load_partitions().await?,
+            vec![vec![data_batch]]
+        );
+        drop(materialized);
+        assert_eq!(memory_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn serialized_memory_local_checkpoint_tracks_reservation() -> Result<()> {
+        let data_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let data_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let encoded_size =
+            write_record_batches(std::slice::from_ref(&data_batch), data_schema.as_ref())?.len();
+        let stream = local_checkpoint_stream(&data_schema, std::slice::from_ref(&data_batch))?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "MEMORY_ONLY_SER"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let ctx = SessionContext::new();
+        let memory_pool = Arc::clone(&ctx.runtime_env().memory_pool);
+
+        let materialized = CachedRelationLocalMaterialized::try_new(
+            &ctx,
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await?;
+
+        let CachedRelationLocalChunk::Serialized {
+            _memory_reservation: reservation,
+            ..
+        } = &materialized.partitions[0][0]
+        else {
+            return Err(internal_datafusion_err!(
+                "serialized checkpoint chunk was not stored in memory"
+            ));
+        };
+        assert_eq!(reservation.size(), encoded_size);
+        assert_eq!(memory_pool.reserved(), encoded_size);
+        assert_eq!(
+            materialized.load_partitions().await?,
+            vec![vec![data_batch]]
+        );
+        drop(materialized);
+        assert_eq!(memory_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_and_disk_local_checkpoint_falls_back_to_disk_at_memory_limit() -> Result<()> {
+        let data_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let data_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let stream = local_checkpoint_stream(&data_schema, std::slice::from_ref(&data_batch))?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "MEMORY_AND_DISK"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1));
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::clone(&memory_pool))
+                .build()?,
+        );
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+
+        let materialized = CachedRelationLocalMaterialized::try_new(
+            &ctx,
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await?;
+
+        assert_eq!(memory_pool.reserved(), 0);
+        assert!(matches!(
+            materialized.partitions[0][0],
+            CachedRelationLocalChunk::Disk(_)
+        ));
+        drop(data_batch);
+        drop(materialized);
+        assert_eq!(memory_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_and_disk_local_checkpoint_can_mix_memory_and_disk_chunks() -> Result<()> {
+        let data_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let first_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let second_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![4, 5, 6]))],
+        )?;
+        let encoded =
+            write_record_batches(std::slice::from_ref(&first_batch), data_schema.as_ref())?;
+        let encoded_size = encoded.len();
+        let decoded_size = record_batches_memory_size(&read_record_batches(&encoded)?)?;
+        let memory_limit = decoded_size
+            .checked_add(encoded_size.checked_mul(2).ok_or_else(|| {
+                internal_datafusion_err!("checkpoint test memory limit is invalid")
+            })?)
+            .ok_or_else(|| internal_datafusion_err!("checkpoint test memory limit is invalid"))?;
+        let stream = local_checkpoint_chunk_stream(
+            &data_schema,
+            &[vec![first_batch.clone()], vec![second_batch.clone()]],
+        )?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "MEMORY_AND_DISK"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(memory_limit));
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::clone(&memory_pool))
+                .build()?,
+        );
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+        let execution_memory =
+            MemoryConsumer::new("checkpoint materialization input").register(&memory_pool);
+        execution_memory.try_grow(encoded_size + 1)?;
+
+        let materialized = CachedRelationLocalMaterialized::try_new(
+            &ctx,
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await?;
+
+        let CachedRelationLocalChunk::Deserialized {
+            _memory_reservation: first_reservation,
+            ..
+        } = &materialized.partitions[0][0]
+        else {
+            return Err(internal_datafusion_err!(
+                "first checkpoint chunk was not stored in memory"
+            ));
+        };
+        assert!(matches!(
+            materialized.partitions[0][1],
+            CachedRelationLocalChunk::Disk(_)
+        ));
+        assert_eq!(
+            memory_pool.reserved(),
+            first_reservation.size() + execution_memory.size()
+        );
+        drop(execution_memory);
+        assert_eq!(
+            materialized.load_partitions().await?,
+            vec![vec![first_batch, second_batch]]
+        );
+        assert_eq!(memory_pool.reserved(), first_reservation.size());
+        drop(materialized);
+        assert_eq!(memory_pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_only_checkpoint_releases_failed_reservation() -> Result<()> {
+        let data_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let data_batch = RecordBatch::try_new(
+            Arc::clone(&data_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let stream = local_checkpoint_stream(&data_schema, &[data_batch])?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "MEMORY_ONLY"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1));
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::clone(&memory_pool))
+                .build()?,
+        );
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+
+        let error = match CachedRelationLocalMaterialized::try_new(
+            &ctx,
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await
+        {
+            Ok(_) => {
+                return Err(internal_datafusion_err!(
+                    "memory-only checkpoint did not respect the memory limit"
+                ));
+            }
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, DataFusionError::ResourcesExhausted(_)));
+        assert_eq!(memory_pool.reserved(), 0);
         Ok(())
     }
 
