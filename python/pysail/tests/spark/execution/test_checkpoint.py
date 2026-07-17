@@ -9,13 +9,14 @@ from pyspark import StorageLevel
 from pyspark.errors import PySparkException
 from pyspark.sql import SparkSession
 from pyspark.sql.connect import proto
-from pyspark.sql.connect.plan import Checkpoint
+from pyspark.sql.connect.plan import CachedRemoteRelation, Checkpoint, RemoveRemoteCachedRelation
 
 from pysail.testing.spark.session import (
     configure_spark_session,
     patch_spark_connect_session,
     spark_connect_server,
 )
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 pytestmark = [
@@ -88,6 +89,25 @@ def _assert_large_payload(checkpointed, rows):
     assert actual.payload_bytes == rows * 1024
 
 
+def _checkpoint(dataframe, kind, *, eager=True):
+    if kind == "local":
+        return dataframe.localCheckpoint(eager=eager)
+    return dataframe.checkpoint(eager=eager)
+
+
+def _remove_cached_relation(spark, dataframe):
+    relation = dataframe._plan  # noqa: SLF001
+    client = spark._client  # noqa: SLF001
+    client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+    relation._relation_id = None  # noqa: SLF001
+
+
+def _hash_shuffle_count(plan):
+    if is_jvm_spark():
+        return plan.count("Exchange hashpartitioning")
+    return plan.count("RepartitionExec: partitioning=Hash")
+
+
 @pytest.fixture(scope="module")
 def retry_spark(spark, checkpoint_path):
     if is_jvm_spark():
@@ -142,7 +162,10 @@ def test_local_checkpoint_preserves_rows_after_cache_repartition(spark, eager, p
     else:
         checkpointed = source.localCheckpoint(eager=eager, storageLevel=storage_level)
 
-    _assert_payload(checkpointed, 16 * 1024)
+    try:
+        _assert_payload(checkpointed, 16 * 1024)
+    finally:
+        _remove_cached_relation(spark, checkpointed)
 
 
 # FIXME: In local-cluster, this 64 MiB local checkpoint is embedded in every worker task definition and
@@ -254,6 +277,132 @@ def test_checkpoint_command_can_reattach(spark):
     )
 
     assert any(response.HasField("result_complete") for response in responses)
+
+
+def test_checkpoint_command_preserves_operation_id(spark):
+    client = spark._client  # noqa: SLF001
+    command = Checkpoint(spark.range(3)._plan, local=True, eager=True).command(client)  # noqa: SLF001
+    operation_id = str(uuid.uuid4())
+    request = client._execute_plan_request_with_metadata()  # noqa: SLF001
+    request.operation_id = operation_id
+    request.plan.command.CopyFrom(command)
+
+    responses = list(client._stub.ExecutePlan(request, metadata=client._builder.metadata()))  # noqa: SLF001
+
+    assert responses
+    assert all(response.operation_id == operation_id for response in responses)
+    result = next(
+        response.checkpoint_command_result for response in responses if response.HasField("checkpoint_command_result")
+    )
+    relation = CachedRemoteRelation(result.relation.relation_id, spark)
+    try:
+        client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+    finally:
+        relation._relation_id = None  # noqa: SLF001
+
+
+def test_local_checkpoint_does_not_write_reliable_checkpoint_directory(spark, checkpoint_path):
+    files_before = {path.relative_to(checkpoint_path) for path in checkpoint_path.rglob("*") if path.is_file()}
+
+    checkpointed = spark.range(0, 32, numPartitions=4).localCheckpoint(
+        eager=True,
+        storageLevel=StorageLevel.DISK_ONLY,
+    )
+
+    assert checkpointed.count() == 32  # noqa: PLR2004
+    files_after = {path.relative_to(checkpoint_path) for path in checkpoint_path.rglob("*") if path.is_file()}
+    assert not files_after.difference(files_before)
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_checkpoint_preserves_exact_partition_count(spark, eager, kind):
+    source = spark.range(0, 1000, numPartitions=4).repartition(4)
+
+    checkpointed = _checkpoint(source, kind, eager=eager)
+
+    partition_ids = {row.pid for row in checkpointed.selectExpr("spark_partition_id() AS pid").distinct().collect()}
+    assert partition_ids == set(range(4))
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_checkpoint_preserves_rows_and_order_within_each_partition(spark, eager, kind):
+    source = (
+        spark.range(0, 100, numPartitions=4)
+        .selectExpr("id", "id % 4 AS key")
+        .repartition(4)
+        .sortWithinPartitions("key", "id")
+    )
+
+    checkpointed = _checkpoint(source, kind, eager=eager)
+    rows = checkpointed.selectExpr("id", "key", "spark_partition_id() AS pid").collect()
+
+    assert len(rows) == 100  # noqa: PLR2004
+    assert {row.pid for row in rows} == set(range(4))
+    for partition_id in range(4):
+        partition_rows = [(row.key, row.id) for row in rows if row.pid == partition_id]
+        assert partition_rows == sorted(partition_rows)
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_checkpoint_scalar_subquery_does_not_survive_plan_truncation(spark, eager, kind):
+    source = spark.sql("SELECT id FROM range(1000) WHERE id = (SELECT max(id) FROM range(10))")
+
+    checkpointed = _checkpoint(source, kind, eager=eager)
+    assert [row.id for row in checkpointed.collect()] == [9]
+    checkpoint_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+
+    assert "Subquery" not in checkpoint_plan
+    assert [row.id for row in checkpointed.collect()] == [9]
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+@pytest.mark.parametrize("kind", ["local", "reliable"])
+def test_checkpointed_aggregate_uses_preserved_hash_partitioning(spark, eager, kind):
+    source = spark.range(0, 128, numPartitions=4).selectExpr("id", "id % 16 AS key").repartition(4, "key")
+
+    checkpointed = _checkpoint(source, kind, eager=eager)
+    assert checkpointed.count() == 128  # noqa: PLR2004
+    aggregate = checkpointed.groupBy("key").count()
+    rows = aggregate.sort("key").collect()
+
+    assert [(row.key, row["count"]) for row in rows] == [(key, 8) for key in range(16)]
+    if not is_jvm_spark():
+        plan = normalize_plan_text(aggregate._explain_string())  # noqa: SLF001
+        assert "RepartitionExec" not in plan
+
+
+@pytest.mark.parametrize(
+    ("right_kind", "right_partitions", "sail_hash_shuffles"),
+    [("checkpoint", 4, 0), ("checkpoint", 3, 1), ("plain", None, 1)],
+    ids=["compatible", "incompatible", "unpartitioned-sibling"],
+)
+def test_checkpointed_join_inputs_keep_independent_partitioning(
+    spark, right_kind, right_partitions, sail_hash_shuffles
+):
+    original_threshold = spark.conf.get("spark.sql.autoBroadcastJoinThreshold")
+    spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "-1")
+    try:
+        left = (
+            spark.range(0, 64, numPartitions=4)
+            .selectExpr("id AS key", "id AS left_value")
+            .repartition(4, "key")
+            .checkpoint()
+        )
+        right = spark.range(0, 64, numPartitions=4).selectExpr("id AS key", "id AS right_value")
+        if right_kind == "checkpoint":
+            right = right.repartition(right_partitions, "key").checkpoint()
+
+        joined = left.join(right, "key").select("key", "left_value", "right_value")
+        plan = normalize_plan_text(joined._explain_string())  # noqa: SLF001
+
+        assert joined.count() == 64  # noqa: PLR2004
+        expected_hash_shuffles = 2 if is_jvm_spark() else sail_hash_shuffles
+        assert _hash_shuffle_count(plan) == expected_hash_shuffles
+    finally:
+        spark.conf.set("spark.sql.autoBroadcastJoinThreshold", original_threshold)
 
 
 @pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])

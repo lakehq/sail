@@ -7,6 +7,9 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark import StorageLevel
+from pyspark.errors import PySparkException
+from pyspark.sql.connect.dataframe import DataFrame
+from pyspark.sql.connect.plan import CachedRemoteRelation, RemoveRemoteCachedRelation
 from pyspark.sql.functions import col, lit
 
 from pysail.testing.spark.session import spark_session_factory
@@ -33,6 +36,30 @@ def _wait_for_checkpoint_files(checkpoint_path, *, present):
             return
         time.sleep(0.1)
     assert any(checkpoint_path.rglob("*.arrow")) == present
+
+
+def _cached_relation_id(dataframe):
+    relation_id = dataframe._plan._relation_id  # noqa: SLF001
+    assert isinstance(relation_id, str)
+    assert relation_id
+    return relation_id
+
+
+def _wait_for_cached_relation_removal(spark, relation_id):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        plan = CachedRemoteRelation(relation_id, spark)
+        probe = DataFrame(plan, spark)
+        try:
+            probe.count()
+        except PySparkException as error:
+            if f"No DataFrame with id {relation_id} is found" in str(error):
+                return
+            raise
+        finally:
+            plan._relation_id = None  # noqa: SLF001
+        time.sleep(0.1)
+    pytest.fail(f"cached relation {relation_id} was not removed")
 
 
 def test_dataframe_local_checkpoint_survives_source_removal(spark, tmp_path):
@@ -190,6 +217,22 @@ def test_dataframe_local_checkpoint_lazy_survives_source_removal_after_first_act
     )
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint materialization plan")
+def test_dataframe_local_checkpoint_lazy_storage_materialization_state(spark):
+    checkpointed = spark.range(0, 10, numPartitions=2).localCheckpoint(
+        eager=False,
+        storageLevel=StorageLevel.DISK_ONLY,
+    )
+
+    pending_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+    assert "PendingCachedRelationExec" in pending_plan
+
+    assert checkpointed.count() == 10  # noqa: PLR2004
+    materialized_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+    assert "PendingCachedRelationExec" not in materialized_plan
+    assert "DataSourceExec" in materialized_plan
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
 def test_dataframe_checkpoint_lazy(spark, tmp_path):
     source_path = tmp_path / "source"
@@ -286,6 +329,42 @@ def test_dataframe_checkpoint_cleanup_on_dataframe_gc(spark, tmp_path):
         spark.conf.unset("spark.checkpoint.dir")
 
 
+def test_dataframe_local_checkpoint_gc_removes_cached_relation(spark):
+    checkpointed = spark.range(0, 10).localCheckpoint()
+    relation_id = _cached_relation_id(checkpointed)
+
+    del checkpointed
+    gc.collect()
+
+    _wait_for_cached_relation_removal(spark, relation_id)
+
+
+def test_dataframe_local_checkpoint_explicit_cleanup_removes_cached_relation(spark):
+    checkpointed = spark.range(0, 10).localCheckpoint()
+    relation_id = _cached_relation_id(checkpointed)
+    relation = checkpointed._plan  # noqa: SLF001
+    client = spark._client  # noqa: SLF001
+
+    client.execute_command(RemoveRemoteCachedRelation(relation).command(client))
+    relation._relation_id = None  # noqa: SLF001
+
+    _wait_for_cached_relation_removal(spark, relation_id)
+
+
+def test_dataframe_local_checkpoint_cleanup_waits_for_derived_dataframe(spark):
+    checkpointed = spark.range(0, 10).localCheckpoint()
+    relation_id = _cached_relation_id(checkpointed)
+    derived = checkpointed.repartition(2)
+
+    del checkpointed
+    gc.collect()
+    assert derived.count() == 10  # noqa: PLR2004
+
+    del derived
+    gc.collect()
+    _wait_for_cached_relation_removal(spark, relation_id)
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific derived checkpoint cleanup")
 def test_dataframe_checkpoint_cleanup_waits_for_derived_dataframe(spark, tmp_path):
     checkpoint_path = tmp_path / "checkpoints"
@@ -309,7 +388,7 @@ def test_dataframe_checkpoint_cleanup_waits_for_derived_dataframe(spark, tmp_pat
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")
 @pytest.mark.parametrize("local", [True, False], ids=["local", "reliable"])
 def test_dataframe_checkpoint_preserves_multiple_output_partitions(spark, tmp_path, local):
-    df = spark.range(0, 100, numPartitions=4).repartition(4)
+    df = spark.range(0, 1000, numPartitions=4).repartition(4)
     if local:
         checkpointed = df.localCheckpoint()
     else:
@@ -321,7 +400,7 @@ def test_dataframe_checkpoint_preserves_multiple_output_partitions(spark, tmp_pa
             spark.conf.unset("spark.checkpoint.dir")
 
     partition_ids = {row.pid for row in checkpointed.selectExpr("spark_partition_id() AS pid").distinct().collect()}
-    assert len(partition_ids) > 1
+    assert partition_ids == set(range(4))
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")
@@ -365,11 +444,16 @@ def test_dataframe_checkpoint_preserves_partitioning_and_ordering(spark, tmp_pat
         finally:
             spark.conf.unset("spark.checkpoint.dir")
 
+    assert checkpointed.count() == 100  # noqa: PLR2004
     aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
     ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
+    rows = checkpointed.selectExpr("id", "key", "spark_partition_id() AS pid").collect()
 
     assert "RepartitionExec" not in aggregate_plan
     assert "SortExec" not in ordered_plan
+    for partition_id in range(4):
+        partition_rows = [(row.key, row.id) for row in rows if row.pid == partition_id]
+        assert partition_rows == sorted(partition_rows)
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names and stack configuration")

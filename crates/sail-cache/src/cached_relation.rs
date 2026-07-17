@@ -10,6 +10,7 @@ use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -167,12 +168,24 @@ impl ExecutionPlan for CachedRelationExec {
             ));
         }
         let input = Arc::clone(&children[0]);
+        let input_partitioning = input.output_partitioning();
+        let stored_partitioning = self.properties.output_partitioning();
+        // Checkpoint scans do not report their stored distribution, so retain it while the
+        // optimizer leaves the physical partition count unchanged.
+        let partitioning = match input_partitioning {
+            Partitioning::UnknownPartitioning(input_count)
+                if *input_count == stored_partitioning.partition_count() =>
+            {
+                stored_partitioning.clone()
+            }
+            _ => input_partitioning.clone(),
+        };
         Ok(Arc::new(Self {
             properties: Arc::new(
                 self.properties
                     .as_ref()
                     .clone()
-                    .with_partitioning(input.output_partitioning().clone()),
+                    .with_partitioning(partitioning),
             ),
             input,
             relation_lease: self.relation_lease.clone(),
@@ -999,25 +1012,143 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
+    use datafusion::arrow::array::ArrayRef;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{
+        EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+    };
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion_common::{Constraint, Constraints};
+    use futures::stream;
+    use sail_common_datafusion::array::record_batch::write_record_batches;
 
     use super::*;
     use crate::checkpoint::{CheckpointStore, ReliableCheckpoint};
 
     #[test]
-    fn cached_relation_rewrite_updates_partitioning() -> Result<()> {
-        let schema = Arc::new(Schema::empty());
+    fn cached_relation_rewrite_preserves_exact_properties() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let column = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&column)).desc(),
+        ])
+        .ok_or_else(|| internal_datafusion_err!("checkpoint ordering is empty"))?;
+        let equivalence =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), [ordering.clone()])
+                .with_constraints(Constraints::new_unverified(vec![Constraint::Unique(vec![
+                    0,
+                ])]));
+        let properties = Arc::new(PlanProperties::new(
+            equivalence,
+            Partitioning::Hash(vec![column], 2),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
         let original: Arc<dyn ExecutionPlan> =
             Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2));
-        let properties = checkpoint_plan_properties(&original);
         let cached = Arc::new(CachedRelationExec::new(original, properties));
-        let rewritten_input: Arc<dyn ExecutionPlan> =
+
+        let same_partition_count: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2));
+        let rewritten = Arc::clone(&cached).with_new_children(vec![same_partition_count])?;
+
+        assert!(matches!(
+            rewritten.output_partitioning(),
+            Partitioning::Hash(_, 2)
+        ));
+        assert_eq!(rewritten.output_ordering(), Some(&ordering));
+        assert_eq!(
+            rewritten.properties().eq_properties.constraints(),
+            &Constraints::new_unverified(vec![Constraint::Unique(vec![0])])
+        );
+
+        let changed_partition_count: Arc<dyn ExecutionPlan> =
             Arc::new(EmptyExec::new(schema).with_partitions(10));
+        let rewritten = cached.with_new_children(vec![changed_partition_count])?;
 
-        let rewritten = cached.with_new_children(vec![rewritten_input])?;
+        assert!(matches!(
+            rewritten.output_partitioning(),
+            Partitioning::UnknownPartitioning(10)
+        ));
+        assert_eq!(rewritten.output_ordering(), Some(&ordering));
+        Ok(())
+    }
 
-        assert_eq!(rewritten.output_partitioning().partition_count(), 10);
+    #[tokio::test]
+    async fn pending_local_checkpoint_tracks_storage_level() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let storage_level: spec::StorageLevel = "DISK_ONLY"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let relation = CachedRelation::new_pending_local_checkpoint(plan, storage_level.clone());
+        let data = relation.data.lock().await;
+
+        match &*data {
+            CachedRelationData::Pending(CachedRelationPending {
+                target:
+                    CachedRelationPendingTarget::Local {
+                        storage_level: actual,
+                    },
+                ..
+            }) => assert_eq!(actual, &storage_level),
+            other => {
+                return Err(internal_datafusion_err!(
+                    "unexpected cached relation data: {other:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disk_only_local_checkpoint_materializes_only_on_disk() -> Result<()> {
+        let data_schema = Arc::new(Schema::empty());
+        let bytes = write_record_batches(&[], data_schema.as_ref())?;
+        let checkpoint_schema = Arc::new(Schema::new(vec![
+            Field::new("partition", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("data", DataType::LargeBinary, false),
+        ]));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(UInt64Array::from(vec![0])),
+            Arc::new(UInt64Array::from(vec![0])),
+            Arc::new(LargeBinaryArray::from_vec(vec![bytes.as_slice()])),
+        ];
+        let batch = RecordBatch::try_new(Arc::clone(&checkpoint_schema), columns)?;
+        let stream: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            checkpoint_schema,
+            stream::iter(vec![Ok(batch)]),
+        ));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&data_schema)));
+        let storage_level: spec::StorageLevel = "DISK_ONLY"
+            .parse()
+            .map_err(|error| internal_datafusion_err!("{error}"))?;
+
+        let materialized = CachedRelationLocalMaterialized::try_new(
+            &SessionContext::new(),
+            data_schema,
+            checkpoint_plan_properties(&input),
+            1,
+            stream,
+            storage_level,
+        )
+        .await?;
+
+        assert!(materialized.memory_partitions.is_none());
+        assert!(materialized.serialized_memory_partitions.is_none());
+        let disk_partitions = materialized
+            .disk_partitions
+            .as_ref()
+            .ok_or_else(|| internal_datafusion_err!("disk checkpoint partitions are missing"))?;
+        assert_eq!(disk_partitions.len(), 1);
+        assert_eq!(disk_partitions[0].chunks.len(), 1);
+        assert_eq!(disk_partitions[0].chunks[0].files.len(), 1);
+        assert_eq!(materialized.load_partitions().await?, vec![vec![]]);
         Ok(())
     }
 
