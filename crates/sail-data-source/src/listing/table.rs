@@ -1,13 +1,14 @@
 // The listing table source is adapted from the DataFusion `ListingTable` implementation.
 // [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{Constraints, Result};
+use datafusion_common::{Constraints, Result, TableReference};
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::source::ReadFormat;
@@ -32,15 +33,80 @@ pub struct ListingTableSourceConfig {
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
+    statistics_cache_namespace: String,
 }
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        Ok(Self { config })
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for path in &config.table_paths {
+            path.to_string().hash(&mut hasher);
+        }
+        for field in config.schema.file_schema().fields() {
+            field.name().hash(&mut hasher);
+            field.data_type().to_string().hash(&mut hasher);
+            field.is_nullable().hash(&mut hasher);
+        }
+        format!("{:?}", config.read_format).hash(&mut hasher);
+        format!("{:?}", config.compression).hash(&mut hasher);
+        let statistics_cache_namespace = format!("listing_{:016x}", hasher.finish());
+
+        Ok(Self {
+            config,
+            statistics_cache_namespace,
+        })
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
         &self.config
+    }
+
+    pub(crate) fn statistics_cache_table(
+        &self,
+        statistics_columns: Option<&[usize]>,
+    ) -> TableReference {
+        let coverage = statistics_cache_coverage(statistics_columns);
+        TableReference::bare(format!("{}_{}", self.statistics_cache_namespace, coverage))
+    }
+}
+
+fn statistics_cache_coverage(statistics_columns: Option<&[usize]>) -> String {
+    match statistics_columns {
+        None => "all".to_string(),
+        Some([]) => "rows".to_string(),
+        Some(columns) => {
+            let mut columns = columns.to_vec();
+            columns.sort_unstable();
+            columns.dedup();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            columns.hash(&mut hasher);
+            format!("columns_{:016x}", hasher.finish())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statistics_cache_coverage_is_canonical_and_isolated() {
+        assert_ne!(
+            statistics_cache_coverage(None),
+            statistics_cache_coverage(Some(&[]))
+        );
+        assert_ne!(
+            statistics_cache_coverage(Some(&[])),
+            statistics_cache_coverage(Some(&[1]))
+        );
+        assert_ne!(
+            statistics_cache_coverage(Some(&[1])),
+            statistics_cache_coverage(Some(&[2]))
+        );
+        assert_eq!(
+            statistics_cache_coverage(Some(&[2, 1])),
+            statistics_cache_coverage(Some(&[1, 2, 2]))
+        );
     }
 }
 

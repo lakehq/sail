@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::{
 };
 use url::Url;
 
+use crate::listing::planner::prewarm_file_statistics;
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
     infer_partitions, rewrite_utf8view_fields, sample_listing_files, validate_partitions,
@@ -66,15 +67,17 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Infer file-level metadata needed for planning.
     /// The metadata includes statistics and ordering.
+    /// `statistics_columns` is `None` for all file columns and `Some` for a selected subset.
     async fn infer_file_meta(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         object: &ObjectMeta,
         file_schema: SchemaRef,
+        statistics_columns: Option<&[usize]>,
         compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, object, compression);
+        let _ = (ctx, store, object, statistics_columns, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,
@@ -239,6 +242,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             read_format: Arc::new(read_format),
             compression,
         })?;
+        if let Err(error) = prewarm_file_statistics(&source, ctx).await {
+            log::warn!("failed to prewarm listing file statistics: {error}");
+        }
         Ok(Arc::new(source))
     }
 
