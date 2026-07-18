@@ -81,10 +81,15 @@ impl SparkSession {
     }
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
-        let state = self.state.lock()?;
+        let mut state = self.state.lock()?;
+        if let Some(config) = &state.plan_config {
+            return Ok(Arc::clone(config));
+        }
         let mut config = PlanConfig::try_from(&state.config)?;
         config.session_user_id = self.user_id().to_string();
-        Ok(Arc::new(config))
+        let config = Arc::new(config);
+        state.plan_config = Some(Arc::clone(&config));
+        Ok(config)
     }
 
     pub(crate) fn get_config(&self, keys: Vec<String>) -> SparkResult<Vec<ConfigKeyValue>> {
@@ -129,6 +134,7 @@ impl SparkSession {
 
     pub(crate) fn set_config(&self, kv: Vec<ConfigKeyValue>) -> SparkResult<()> {
         let mut state = self.state.lock()?;
+        state.plan_config = None;
         for ConfigKeyValue { key, value } in kv {
             if let Some(value) = value {
                 state.config.set(key, value)?;
@@ -143,6 +149,7 @@ impl SparkSession {
 
     pub(crate) fn unset_config(&self, keys: Vec<String>) -> SparkResult<()> {
         let mut state = self.state.lock()?;
+        state.plan_config = None;
         for key in keys {
             state.config.unset(&key)?
         }
@@ -292,6 +299,7 @@ impl SparkSession {
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
+    plan_config: Option<Arc<PlanConfig>>,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
 }
@@ -300,6 +308,7 @@ impl SparkSessionState {
     fn new() -> Self {
         Self {
             config: SparkRuntimeConfig::new(),
+            plan_config: None,
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         }
