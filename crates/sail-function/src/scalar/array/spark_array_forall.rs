@@ -23,7 +23,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use super::lambda_utils::{coerce_single_list_arg, value_lambda_pair};
+use super::lambda_utils::{coerce_null_lambda_result, coerce_single_list_arg, value_lambda_pair};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayForall {
@@ -154,7 +154,7 @@ fn forall_reduce<O: OffsetSizeTrait>(
         return Ok(builder.finish());
     }
 
-    let predicate = predicate_output.clone().into_array(num_values)?;
+    let predicate = coerce_null_lambda_result(predicate_output.clone().into_array(num_values)?);
     let Some(predicate) = predicate.as_any().downcast_ref::<BooleanArray>() else {
         return exec_err!(
             "forall lambda must return boolean, got {}",

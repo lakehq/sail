@@ -98,7 +98,8 @@ impl PlanResolver<'_> {
         // (e.g. `array_sort(a)`) yields no positions and resolves as usual.
         let has_lambda_argument_position = is_higher_order_function(&canonical_function_name)
             && (arguments.iter().any(is_spec_lambda_argument)
-                || !lambda_argument_positions(&canonical_function_name, arguments.len()).is_empty());
+                || !lambda_argument_positions(&canonical_function_name, arguments.len())
+                    .is_empty());
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)

@@ -292,7 +292,6 @@ Feature: aggregate higher-order function
 
   Rule: Non-lambda expression in place of a lambda
 
-    @sail-bug
     Scenario: A constant merge lambda
       When query
         """
@@ -302,7 +301,6 @@ Feature: aggregate higher-order function
         | result |
         | 9      |
 
-    @sail-bug
     Scenario: A constant finish lambda
       When query
         """
@@ -312,7 +310,6 @@ Feature: aggregate higher-order function
         | result |
         | 99     |
 
-    @sail-bug
     Scenario: Both lambdas constant
       When query
         """
@@ -322,7 +319,6 @@ Feature: aggregate higher-order function
         | result |
         | 99     |
 
-    @sail-bug
     Scenario: A merge lambda that only references an outer column
       When query
         """
@@ -332,7 +328,6 @@ Feature: aggregate higher-order function
         | result |
         | 7      |
 
-    @sail-bug
     Scenario: The zero wins over a constant merge lambda on an empty array
       When query
         """
@@ -342,7 +337,6 @@ Feature: aggregate higher-order function
         | result |
         | 0      |
 
-    @sail-bug
     Scenario: A constant merge lambda over a NULL array
       When query
         """
@@ -352,7 +346,6 @@ Feature: aggregate higher-order function
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: A constant merge lambda over an array column resolves per row
       When query
         """
@@ -372,3 +365,32 @@ Feature: aggregate higher-order function
         SELECT aggregate(array(1, 2), 0, 'x') AS result
         """
       Then query error The third parameter requires the
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL merge lambda body
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: An untyped NULL in place of the merge lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: The zero survives an untyped NULL merge lambda on an empty array
+      When query
+        """
+        SELECT aggregate(array(), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | 0      |

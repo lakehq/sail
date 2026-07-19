@@ -31,7 +31,8 @@ use datafusion_expr::{
 };
 
 use crate::scalar::array::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
+    ListValuesResult, coerce_null_lambda_result, coerce_single_list_arg, extract_list_values,
+    index_array, value_lambda_pair,
 };
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
@@ -167,7 +168,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
             };
         }
 
-        let predicate = predicate_output.into_array(list_values.len())?;
+        let predicate = coerce_null_lambda_result(predicate_output.into_array(list_values.len())?);
         let Some(predicate) = predicate.as_any().downcast_ref::<BooleanArray>() else {
             return exec_err!(
                 "{} lambda must return boolean, got {}",

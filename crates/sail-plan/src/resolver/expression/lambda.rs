@@ -120,7 +120,9 @@ impl PlanResolver<'_> {
                     // in it can bind to the parameters declared below. They exist
                     // only to satisfy the arity the function expects and to give
                     // the evaluation batch its row count.
-                    let body = self.resolve_named_expression(expression, schema, state).await?;
+                    let body = self
+                        .resolve_named_expression(expression, schema, state)
+                        .await?;
                     let params: Vec<String> = (0..param_fields.len())
                         .map(|index| format!("__sail_unused_lambda_param_{index}"))
                         .collect();

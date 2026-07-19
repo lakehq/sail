@@ -807,7 +807,6 @@ Feature: array filter with lambda
 
   Rule: Non-lambda expression in place of the lambda
 
-    @sail-bug
     Scenario: A constant true predicate keeps every element
       When query
         """
@@ -817,7 +816,6 @@ Feature: array filter with lambda
         | result |
         | [1, 2] |
 
-    @sail-bug
     Scenario: A constant false predicate drops every element
       When query
         """
@@ -827,7 +825,6 @@ Feature: array filter with lambda
         | result |
         | []     |
 
-    @sail-bug
     Scenario: A constant NULL predicate drops every element
       When query
         """
@@ -837,7 +834,6 @@ Feature: array filter with lambda
         | result |
         | []     |
 
-    @sail-bug
     Scenario: A predicate that only references an outer column
       When query
         """
@@ -847,7 +843,6 @@ Feature: array filter with lambda
         | result |
         | [1, 2] |
 
-    @sail-bug
     Scenario: A constant predicate over an empty array
       When query
         """
@@ -857,7 +852,6 @@ Feature: array filter with lambda
         | result |
         | []     |
 
-    @sail-bug
     Scenario: A constant predicate over a NULL array
       When query
         """
@@ -867,7 +861,6 @@ Feature: array filter with lambda
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: A constant predicate over an array column resolves per row
       When query
         """
@@ -887,3 +880,31 @@ Feature: array filter with lambda
         SELECT filter(array(1, 2), 1) AS result
         """
       Then query error The second parameter requires the "BOOLEAN" type
+
+    @sail-bug
+    Scenario: A subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT filter(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: An untyped NULL in place of the lambda drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |

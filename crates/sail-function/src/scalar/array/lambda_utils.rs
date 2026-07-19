@@ -10,7 +10,9 @@
 /// (`index_array`/`offsets_to_indices`).
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int32Array, OffsetSizeTrait};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, Int32Array, OffsetSizeTrait,
+};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
@@ -95,6 +97,20 @@ pub(crate) fn extract_list_values(
     }
 
     Ok(ListValuesResult::Values(values))
+}
+
+/// Reinterprets a `Null`-typed lambda result as a boolean that is NULL everywhere.
+///
+/// An untyped `NULL` body (`x -> NULL`, or a bare `NULL` in a lambda position)
+/// carries the `Null` type rather than the boolean the predicate functions
+/// require. Spark coerces it to the required type, so the predicate is simply
+/// NULL for every element; without this the downcast below rejects it.
+pub(crate) fn coerce_null_lambda_result(result: ArrayRef) -> ArrayRef {
+    if result.data_type() == &DataType::Null {
+        Arc::new(BooleanArray::new_null(result.len()))
+    } else {
+        result
+    }
 }
 
 /// 0-based per-sublist positions aligned with the flattened values of `list_array`.

@@ -593,7 +593,6 @@ Feature: transform higher-order function
 
   Rule: Non-lambda expression in place of the lambda
 
-    @sail-bug
     Scenario: A constant integer body replaces every element
       When query
         """
@@ -603,7 +602,6 @@ Feature: transform higher-order function
         | result |
         | [9, 9] |
 
-    @sail-bug
     Scenario: A constant string body replaces every element
       When query
         """
@@ -613,7 +611,6 @@ Feature: transform higher-order function
         | result   |
         | [x, x]   |
 
-    @sail-bug
     Scenario: A constant NULL body replaces every element
       When query
         """
@@ -623,7 +620,6 @@ Feature: transform higher-order function
         | result       |
         | [NULL, NULL] |
 
-    @sail-bug
     Scenario: A constant boolean body is accepted because the body type is unconstrained
       When query
         """
@@ -633,7 +629,6 @@ Feature: transform higher-order function
         | result       |
         | [true, true] |
 
-    @sail-bug
     Scenario: A body that only references an outer column
       When query
         """
@@ -643,7 +638,6 @@ Feature: transform higher-order function
         | result |
         | [7, 7] |
 
-    @sail-bug
     Scenario: A constant body over an empty array
       When query
         """
@@ -653,7 +647,6 @@ Feature: transform higher-order function
         | result |
         | []     |
 
-    @sail-bug
     Scenario: A constant body over a NULL array
       When query
         """
@@ -663,7 +656,6 @@ Feature: transform higher-order function
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: A constant body over an array column resolves per row
       When query
         """
@@ -675,3 +667,23 @@ Feature: transform higher-order function
         | [9, 9] |
         | []     |
         | NULL   |
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body
+      When query
+        """
+        SELECT transform(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: An untyped NULL in place of the lambda
+      When query
+        """
+        SELECT transform(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |

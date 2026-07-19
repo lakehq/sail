@@ -12,7 +12,7 @@ use datafusion::arrow::array::{
     new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::take_arrays;
+use datafusion::arrow::compute::{cast, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
 use datafusion_common::{Result, exec_err, plan_err};
@@ -121,7 +121,12 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
         list_element_field(self.name(), list.data_type())?;
 
-        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type()) {
+        // An untyped `NULL` merge body carries the `Null` type. Spark coerces it
+        // to the accumulator type instead of rejecting it, so the fold runs and
+        // leaves the accumulator NULL once it reaches its first element.
+        if merge.data_type() != &DataType::Null
+            && !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type())
+        {
             return plan_err!(
                 "{} merge lambda result type must match zero value type, got {} and {}",
                 self.name(),
@@ -312,6 +317,11 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
                 Ok(take_arrays(arrays, &row_indices, None)?)
             })?
             .into_array(rows.len())?;
+        let next_acc = if next_acc.data_type() == &DataType::Null {
+            cast(&next_acc, acc.data_type())?
+        } else {
+            next_acc
+        };
 
         acc = scatter_updates(name, &acc, &next_acc, &rows)?;
     }

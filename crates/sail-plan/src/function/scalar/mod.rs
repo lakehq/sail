@@ -1,4 +1,6 @@
-pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function, lambda_argument_positions};
+pub(crate) use lambda::{
+    get_lambda_parameters, is_higher_order_function, lambda_argument_positions,
+};
 
 use crate::function::common::ScalarFunction;
 

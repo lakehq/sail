@@ -317,7 +317,6 @@ Feature: forall higher-order function
 
   Rule: Non-lambda expression in place of the lambda
 
-    @sail-bug
     Scenario: a constant true predicate
       When query
         """
@@ -327,7 +326,6 @@ Feature: forall higher-order function
         | result |
         | true   |
 
-    @sail-bug
     Scenario: a constant false predicate
       When query
         """
@@ -337,7 +335,6 @@ Feature: forall higher-order function
         | result |
         | false  |
 
-    @sail-bug
     Scenario: a constant NULL predicate
       When query
         """
@@ -347,7 +344,6 @@ Feature: forall higher-order function
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: a predicate that only references an outer column
       When query
         """
@@ -357,7 +353,6 @@ Feature: forall higher-order function
         | result |
         | true   |
 
-    @sail-bug
     Scenario: the empty array wins over a constant false predicate
       When query
         """
@@ -367,7 +362,6 @@ Feature: forall higher-order function
         | result |
         | true   |
 
-    @sail-bug
     Scenario: a NULL array wins over a constant false predicate
       When query
         """
@@ -377,7 +371,6 @@ Feature: forall higher-order function
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: a constant predicate over an array column resolves per row
       When query
         """
@@ -397,3 +390,23 @@ Feature: forall higher-order function
         SELECT forall(array(1, 2), 1) AS result
         """
       Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: Untyped NULL body
+
+    Scenario: an untyped NULL lambda body
+      When query
+        """
+        SELECT forall(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: an untyped NULL in place of the lambda
+      When query
+        """
+        SELECT forall(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

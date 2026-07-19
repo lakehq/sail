@@ -193,7 +193,6 @@ Feature: array_sort higher-order function
     # "less" produces a permutation that depends on the sort algorithm, which is
     # not a contract worth asserting.
 
-    @sail-bug
     Scenario: A constant positive comparator leaves the array untouched
       When query
         """
@@ -203,7 +202,6 @@ Feature: array_sort higher-order function
         | result    |
         | [3, 1, 2] |
 
-    @sail-bug
     Scenario: A constant zero comparator leaves the array untouched
       When query
         """
@@ -213,7 +211,6 @@ Feature: array_sort higher-order function
         | result    |
         | [3, 1, 2] |
 
-    @sail-bug
     Scenario: A constant comparator over an empty array
       When query
         """
@@ -223,7 +220,6 @@ Feature: array_sort higher-order function
         | result |
         | []     |
 
-    @sail-bug
     Scenario: A constant comparator over a NULL array
       When query
         """
@@ -233,7 +229,6 @@ Feature: array_sort higher-order function
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: A constant comparator over an array column resolves per row
       When query
         """
