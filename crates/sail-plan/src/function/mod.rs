@@ -19,7 +19,7 @@ mod table;
 mod window;
 
 pub(crate) use aggregate::get_built_in_aggregate_function;
-pub(crate) use scalar::{get_lambda_parameters, is_higher_order_function};
+pub(crate) use scalar::{get_lambda_parameters, is_higher_order_function, lambda_argument_positions};
 pub(crate) use window::get_built_in_window_function;
 
 lazy_static! {

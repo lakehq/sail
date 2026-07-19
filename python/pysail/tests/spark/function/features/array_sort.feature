@@ -1,4 +1,4 @@
-@array_sort
+@array_sort @lambda_hof
 Feature: array_sort higher-order function
 
   Rule: No-comparator form — natural ascending order, NULLs last
@@ -185,3 +185,71 @@ Feature: array_sort higher-order function
         SELECT array_sort(5, (l, r) -> 1) AS result
         """
       Then query error .*
+
+  Rule: Non-lambda expression in place of the comparator
+
+    # A constant comparator is not a consistent ordering, so only the values that
+    # leave the array untouched are pinned here. A comparator that always reports
+    # "less" produces a permutation that depends on the sort algorithm, which is
+    # not a contract worth asserting.
+
+    @sail-bug
+    Scenario: A constant positive comparator leaves the array untouched
+      When query
+        """
+        SELECT array_sort(array(3, 1, 2), 1) AS result
+        """
+      Then query result
+        | result    |
+        | [3, 1, 2] |
+
+    @sail-bug
+    Scenario: A constant zero comparator leaves the array untouched
+      When query
+        """
+        SELECT array_sort(array(3, 1, 2), 0) AS result
+        """
+      Then query result
+        | result    |
+        | [3, 1, 2] |
+
+    @sail-bug
+    Scenario: A constant comparator over an empty array
+      When query
+        """
+        SELECT array_sort(array(), 1) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    @sail-bug
+    Scenario: A constant comparator over a NULL array
+      When query
+        """
+        SELECT array_sort(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A constant comparator over an array column resolves per row
+      When query
+        """
+        SELECT array_sort(c, 1) AS result
+        FROM VALUES (array(2, 1)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [2, 1] |
+        | []     |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A comparator that does not return INT is still an error
+      When query
+        """
+        SELECT array_sort(array(2, 1), true) AS result
+        """
+      Then query error requires return "INT" type

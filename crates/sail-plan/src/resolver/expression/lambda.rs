@@ -7,7 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::get_lambda_parameters;
+use crate::function::{get_lambda_parameters, lambda_argument_positions};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -52,10 +52,16 @@ impl PlanResolver<'_> {
         enum Slot {
             Resolved(NamedExpr),
             Lambda(spec::Expr, Vec<spec::UnresolvedNamedLambdaVariable>),
+            /// A plain expression sitting in a lambda position, to be wrapped in
+            /// a lambda that declares the parameters the function expects and
+            /// references none of them.
+            WrappedLambda(spec::Expr),
         }
 
+        let lambda_positions = lambda_argument_positions(function_name, arguments.len());
+
         let mut slots: Vec<Slot> = Vec::with_capacity(arguments.len());
-        for argument in arguments {
+        for (position, argument) in arguments.into_iter().enumerate() {
             if is_spec_lambda_argument(&argument) {
                 let Some((function, arguments)) = take_spec_lambda_argument(argument) else {
                     return Err(PlanError::internal(
@@ -63,6 +69,8 @@ impl PlanResolver<'_> {
                     ));
                 };
                 slots.push(Slot::Lambda(function, arguments));
+            } else if lambda_positions.contains(&position) {
+                slots.push(Slot::WrappedLambda(argument));
             } else {
                 slots.push(Slot::Resolved(
                     self.resolve_named_expression(argument, schema, state)
@@ -76,7 +84,7 @@ impl PlanResolver<'_> {
             .map(|slot| {
                 Ok(match slot {
                     Slot::Resolved(named) => ValueOrLambda::Value(named.expr.to_field(schema)?.1),
-                    Slot::Lambda(..) => ValueOrLambda::Lambda(None),
+                    Slot::Lambda(..) | Slot::WrappedLambda(..) => ValueOrLambda::Lambda(None),
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
@@ -101,6 +109,26 @@ impl PlanResolver<'_> {
                         state,
                     )
                     .await?
+                }
+                Slot::WrappedLambda(expression) => {
+                    let param_fields = lambda_params.next().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "missing lambda parameters for a lambda argument of {function_name}"
+                        ))
+                    })?;
+                    // The body is resolved outside of a lambda scope, so nothing
+                    // in it can bind to the parameters declared below. They exist
+                    // only to satisfy the arity the function expects and to give
+                    // the evaluation batch its row count.
+                    let body = self.resolve_named_expression(expression, schema, state).await?;
+                    let params: Vec<String> = (0..param_fields.len())
+                        .map(|index| format!("__sail_unused_lambda_param_{index}"))
+                        .collect();
+                    let name = format!("lambdafunction({})", body.name.clone().one()?);
+                    NamedExpr::new(
+                        vec![name],
+                        expr::Expr::Lambda(Lambda::new(params, body.expr)),
+                    )
                 }
             };
             names.push(name.one()?);

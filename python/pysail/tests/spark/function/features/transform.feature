@@ -590,3 +590,88 @@ Feature: transform higher-order function
       Then query result
         | result          |
         | [3.0, 5.0, 7.0] |
+
+  Rule: Non-lambda expression in place of the lambda
+
+    @sail-bug
+    Scenario: A constant integer body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), 9) AS result
+        """
+      Then query result
+        | result |
+        | [9, 9] |
+
+    @sail-bug
+    Scenario: A constant string body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), 'x') AS result
+        """
+      Then query result
+        | result   |
+        | [x, x]   |
+
+    @sail-bug
+    Scenario: A constant NULL body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    @sail-bug
+    Scenario: A constant boolean body is accepted because the body type is unconstrained
+      When query
+        """
+        SELECT transform(array(1, 2), true) AS result
+        """
+      Then query result
+        | result       |
+        | [true, true] |
+
+    @sail-bug
+    Scenario: A body that only references an outer column
+      When query
+        """
+        SELECT transform(array(1, 2), v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | [7, 7] |
+
+    @sail-bug
+    Scenario: A constant body over an empty array
+      When query
+        """
+        SELECT transform(array(), 9) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    @sail-bug
+    Scenario: A constant body over a NULL array
+      When query
+        """
+        SELECT transform(CAST(NULL AS ARRAY<INT>), 9) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A constant body over an array column resolves per row
+      When query
+        """
+        SELECT transform(c, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [9, 9] |
+        | []     |
+        | NULL   |

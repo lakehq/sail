@@ -14,6 +14,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
+    lambda_argument_positions,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -91,12 +92,18 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
+        // A higher-order function also takes this path when no argument is a
+        // lambda syntactically, because Spark accepts a plain expression in a
+        // lambda position and wraps it. An arity that matches no lambda form
+        // (e.g. `array_sort(a)`) yields no positions and resolves as usual.
+        let has_lambda_argument_position = is_higher_order_function(&canonical_function_name)
+            && (arguments.iter().any(is_spec_lambda_argument)
+                || !lambda_argument_positions(&canonical_function_name, arguments.len()).is_empty());
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
-        } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
+        } else if has_lambda_argument_position {
             self.resolve_higher_order_function_arguments(
                 &canonical_function_name,
                 arguments,

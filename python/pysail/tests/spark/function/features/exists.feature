@@ -342,3 +342,86 @@ Feature: exists higher-order function
         SELECT exists(array(1, 2, 3), x -> x + 1) AS result
         """
       Then query error .*
+
+  Rule: Non-lambda expression in place of the lambda
+
+    @sail-bug
+    Scenario: a constant true predicate
+      When query
+        """
+        SELECT exists(array(1, 2), true) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: a constant false predicate
+      When query
+        """
+        SELECT exists(array(1, 2), false) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    @sail-bug
+    Scenario: a constant NULL predicate
+      When query
+        """
+        SELECT exists(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: a predicate that only references an outer column
+      When query
+        """
+        SELECT exists(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: the empty array wins over a constant true predicate
+      When query
+        """
+        SELECT exists(array(), true) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    @sail-bug
+    Scenario: a NULL array wins over a constant true predicate
+      When query
+        """
+        SELECT exists(CAST(NULL AS ARRAY<INT>), true) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: a constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT exists(c, true) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+        | NULL   |
+
+    @sail-bug
+    Scenario: a non-boolean constant is still a type error
+      When query
+        """
+        SELECT exists(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type

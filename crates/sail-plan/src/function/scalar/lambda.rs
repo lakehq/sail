@@ -64,6 +64,23 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
     )
 }
 
+/// Returns the argument positions where a built-in higher-order function expects
+/// a lambda, for a call with `arity` arguments.
+///
+/// Spark accepts a plain expression in any of these positions and wraps it in a
+/// lambda whose parameters go unused, so `exists(a, true)` means
+/// `exists(a, x -> true)`. The resolver needs the positions to do the same, and
+/// an arity that matches no form yields no positions so that the non-lambda
+/// overloads (e.g. `array_sort(a)`) keep resolving as ordinary functions.
+pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
+    match (function_name.trim().to_lowercase().as_str(), arity) {
+        ("aggregate" | "reduce", 3) => vec![2],
+        ("aggregate" | "reduce", 4) => vec![2, 3],
+        ("filter" | "transform" | "exists" | "forall" | "array_sort", 2) => vec![1],
+        _ => vec![],
+    }
+}
+
 /// Returns the lambda parameter fields of a built-in higher-order function, one
 /// set per lambda argument, given the fields of its arguments (`None` for the
 /// lambda arguments themselves). Used by the resolver to type lambda variables

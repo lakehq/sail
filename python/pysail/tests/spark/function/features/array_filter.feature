@@ -1,4 +1,5 @@
 @lambda_hof
+@filter
 Feature: array filter with lambda
 
   Rule: Filter array elements using lambda predicates
@@ -803,3 +804,86 @@ Feature: array filter with lambda
         SELECT filter(map('a', 1), x -> x > 0) AS result
         """
       Then query error .*
+
+  Rule: Non-lambda expression in place of the lambda
+
+    @sail-bug
+    Scenario: A constant true predicate keeps every element
+      When query
+        """
+        SELECT filter(array(1, 2), true) AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    @sail-bug
+    Scenario: A constant false predicate drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), false) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    @sail-bug
+    Scenario: A constant NULL predicate drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    @sail-bug
+    Scenario: A predicate that only references an outer column
+      When query
+        """
+        SELECT filter(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    @sail-bug
+    Scenario: A constant predicate over an empty array
+      When query
+        """
+        SELECT filter(array(), true) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    @sail-bug
+    Scenario: A constant predicate over a NULL array
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), true) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT filter(c, true) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1, 2] |
+        | []     |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A non-boolean constant is still a type error
+      When query
+        """
+        SELECT filter(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
