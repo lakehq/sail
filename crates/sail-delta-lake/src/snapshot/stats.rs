@@ -35,6 +35,7 @@ use datafusion::physical_plan::Accumulator;
 use log::warn;
 
 use super::DeltaSnapshot;
+use crate::datasource::pruning::widen_timestamp_max_stat;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
@@ -334,7 +335,17 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.pick_stats(column, STATS_FIELD_MAX_VALUES)
+        let values = self.pick_stats(column, STATS_FIELD_MAX_VALUES)?;
+        if self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+        {
+            Some(values)
+        } else {
+            Some(widen_timestamp_max_stat(values))
+        }
     }
 
     /// return the number of containers (e.g. row groups) being

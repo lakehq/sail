@@ -331,7 +331,7 @@ def test_delta_schema_timestamp_ntz_write_artifacts(spark, tmp_path, session_tim
         add = next(action["add"] for action in reversed(_delta_log_actions(delta_path)) if "add" in action)
         assert add["partitionValues"] == {"partition_time": partition_time}
         stats = json.loads(add["stats"])
-        expected_stat = "2024-07-01T23:45:12.654321"
+        expected_stat = "2024-07-01T23:45:12.654"
         assert stats["minValues"]["event_time"] == expected_stat
         assert stats["maxValues"]["event_time"] == expected_stat
         assert not stats["minValues"]["event_time"].endswith("Z")
