@@ -186,6 +186,45 @@ def test_merge_nested_struct_in_name_mode(spark, tmp_path: Path):
     ]
 
 
+def test_column_mapping_nested_struct_round_trip(spark, tmp_path: Path):
+    source_path = tmp_path / "delta_cm_nested_round_trip_source"
+    output_path = tmp_path / "delta_cm_nested_round_trip_output"
+    source_rows = [
+        Row(
+            id=1,
+            code="USD",
+            original_details=Row(amount=10, active=True),
+        )
+    ]
+
+    (
+        spark.createDataFrame(source_rows)
+        .write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", "name")
+        .save(str(source_path))
+    )
+
+    loaded = spark.read.format("delta").load(str(source_path))
+    assert [row.asDict(recursive=True) for row in loaded.collect()] == [
+        {
+            "id": 1,
+            "code": "USD",
+            "original_details": {"amount": 10, "active": True},
+        }
+    ]
+    assert loaded.select("original_details.amount").collect() == [Row(amount=10)]
+
+    rebuilt = loaded.select(F.struct(F.col("id"), F.col("code")).alias("details"))
+    (rebuilt.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(output_path)))
+
+    result = spark.read.format("delta").load(str(output_path))
+    assert [row.asDict(recursive=True) for row in result.collect()] == [{"details": {"id": 1, "code": "USD"}}]
+    target_schema = _latest_metadata(output_path)["schemaString"]
+    assert "PARQUET:field_id" not in target_schema
+    assert "parquet.field.id" not in target_schema
+
+
 def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
     base = tmp_path / "delta_cm_array_struct"
     df = spark.createDataFrame([Row(events=[Row(ts=1)])])

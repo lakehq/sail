@@ -18,7 +18,9 @@ use sail_data_source::options::ResolveOptions;
 use crate::datasource::scan::{
     FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
 };
-use crate::datasource::{DeltaScanConfig, df_logical_schema, simplify_expr};
+use crate::datasource::{
+    DeltaScanConfig, df_logical_schema, rewrite_predicate_for_column_mapping, simplify_expr,
+};
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
@@ -209,6 +211,18 @@ pub(crate) async fn plan_delta_scan(
     } else {
         None
     };
+    // The parquet scan resolves predicate columns against the physical file schema,
+    // so column-mapped tables need the predicate rewritten from logical to physical names.
+    let pushdown_filter = pushdown_filter
+        .map(|expr| {
+            rewrite_predicate_for_column_mapping(
+                expr,
+                &full_logical_schema,
+                kmode,
+                &table_partition_cols,
+            )
+        })
+        .transpose()?;
 
     // When the table protocol declares the deletionVectors feature, always use the
     // metadata-as-data path (DeltaScanByAddsExec) which loads a fresh snapshot and

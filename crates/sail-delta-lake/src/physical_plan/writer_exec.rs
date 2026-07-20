@@ -46,6 +46,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{StreamExt, once};
+use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
@@ -969,7 +970,13 @@ impl DeltaWriterExec {
         let batch_schema = batch.schema();
 
         // If schemas are identical, no adaptation needed
-        if batch_schema.as_ref() == final_schema.as_ref() {
+        if batch_schema.as_ref() == final_schema.as_ref()
+            && batch
+                .columns()
+                .iter()
+                .zip(final_schema.fields())
+                .all(|(column, field)| column.data_type() == field.data_type())
+        {
             return Ok(batch);
         }
 
@@ -987,21 +994,30 @@ impl DeltaWriterExec {
             };
 
             match batch_schema.column_with_name(lookup_name) {
-                Some((batch_index, batch_field)) => {
+                Some((batch_index, _)) => {
                     let batch_column = batch.column(batch_index);
 
-                    if batch_field.data_type() == final_field.data_type() {
+                    if batch_column.data_type() == final_field.data_type() {
                         adapted_columns.push(batch_column.clone());
                     } else {
                         // Types don't match, validate cast safety and attempt casting
-                        DeltaTypeConverter::validate_cast_safety(
-                            batch_field.data_type(),
-                            final_field.data_type(),
-                            final_field.name(),
-                        )?;
+                        if !matches!(
+                            (batch_column.data_type(), final_field.data_type()),
+                            (DataType::Struct(_), DataType::Struct(_))
+                                | (DataType::List(_), DataType::List(_))
+                                | (DataType::LargeList(_), DataType::LargeList(_))
+                                | (DataType::FixedSizeList(_, _), DataType::FixedSizeList(_, _))
+                                | (DataType::Map(_, _), DataType::Map(_, _))
+                        ) {
+                            DeltaTypeConverter::validate_cast_safety(
+                                batch_column.data_type(),
+                                final_field.data_type(),
+                                final_field.name(),
+                            )?;
+                        }
 
                         let casted_column =
-                            match (batch_field.data_type(), final_field.data_type(), timezone) {
+                            match (batch_column.data_type(), final_field.data_type(), timezone) {
                                 (
                                     DataType::Timestamp(unit_from, Some(_)),
                                     DataType::Timestamp(unit_to, Some(target_tz)),
@@ -1053,11 +1069,7 @@ impl DeltaWriterExec {
                                     )
                                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
                                 }
-                                _ => datafusion::arrow::compute::cast(
-                                    batch_column,
-                                    final_field.data_type(),
-                                )
-                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?,
+                                _ => cast_array_recursively(batch_column, final_field.data_type())?,
                             };
                         adapted_columns.push(casted_column);
                     }
@@ -1127,5 +1139,87 @@ impl DisplayAs for DeltaWriterExec {
                 write!(f, "table_path={}", self.table_url)
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StructArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatchOptions;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+    use super::*;
+
+    fn field_with_id(name: &str, metadata_key: &str, id: i64) -> Arc<Field> {
+        Arc::new(
+            Field::new(name, DataType::Int32, true)
+                .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
+        )
+    }
+
+    #[test]
+    fn adapt_batch_replaces_nested_field_metadata() -> Result<()> {
+        let source_fields = vec![
+            field_with_id("rate", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("exponent", PARQUET_FIELD_ID_META_KEY, 2),
+        ];
+        let details = Arc::new(StructArray::new(
+            source_fields.into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(Int32Array::from(vec![Some(2)])),
+            ],
+            None,
+        )) as ArrayRef;
+        let target_fields = vec![
+            field_with_id("rate", "delta.columnMapping.id", 2),
+            field_with_id("exponent", "delta.columnMapping.id", 3),
+        ];
+        let final_schema = Arc::new(Schema::new(vec![Field::new(
+            "details",
+            DataType::Struct(target_fields.clone().into()),
+            true,
+        )]));
+        let batch = RecordBatch::try_new_with_options(
+            final_schema.clone(),
+            vec![details],
+            &RecordBatchOptions::new().with_match_field_names(false),
+        )?;
+
+        let adapted = DeltaWriterExec::validate_and_adapt_batch(batch, &final_schema, None, None)?;
+        let details = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        assert_eq!(adapted.schema(), final_schema);
+        RecordBatch::try_new(adapted.schema(), adapted.columns().to_vec())?;
+        assert!(details.fields().iter().eq(target_fields.iter()));
+        assert_eq!(
+            details
+                .column_by_name("rate")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            10,
+        );
+        assert_eq!(
+            details
+                .column_by_name("exponent")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            2,
+        );
+        Ok(())
     }
 }

@@ -577,3 +577,60 @@ fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+    use super::*;
+    use crate::spec::{DataType, MetadataValue, StructField};
+
+    fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> StructField {
+        StructField::new(name, data_type, true).with_metadata([
+            ("delta.columnMapping.id", MetadataValue::Number(id)),
+            (
+                "delta.columnMapping.physicalName",
+                MetadataValue::String(physical_name.to_string()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn writer_schema_preserves_nested_parquet_field_ids() -> Result<()> {
+        let nested = StructType::try_new(vec![mapped_field("rate", "col-rate", 2, DataType::LONG)])
+            .expect("nested schema");
+        let logical = StructType::try_new(vec![mapped_field(
+            "details",
+            "col-details",
+            1,
+            DataType::Struct(Box::new(nested)),
+        )])
+        .expect("logical schema");
+        let context = DeltaWriteContext {
+            commit_context: DeltaCommitContext::default(),
+            final_schema: logical.clone(),
+            effective_column_mapping_mode: ColumnMappingMode::Name,
+            initial_actions: Vec::new(),
+            schema_actions: Vec::new(),
+            operation: None,
+            logical_kernel_for_mapping: Some(logical),
+            physical_partition_columns: Vec::new(),
+        };
+
+        let writer_schema = context.writer_schema()?;
+        let details = writer_schema.field_with_name("col-details")?;
+        let datafusion::arrow::datatypes::DataType::Struct(children) = details.data_type() else {
+            panic!("details must be a struct");
+        };
+        let rate = children.first().expect("nested rate field");
+
+        assert_eq!(
+            rate.metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .map(String::as_str),
+            Some("2")
+        );
+        Ok(())
+    }
+}
