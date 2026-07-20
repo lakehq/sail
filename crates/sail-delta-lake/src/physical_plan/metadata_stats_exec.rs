@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, StringArray, StructArray, new_null_array};
+use datafusion::arrow::array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
@@ -19,7 +19,10 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
-use crate::spec::fields::{FIELD_NAME_STATS_PARSED, STATS_FIELD_MIN_VALUES};
+use crate::datasource::pruning::widen_timestamp_max_stat;
+use crate::spec::fields::{
+    FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
+};
 
 /// The column name used by the replay pipeline for the raw JSON stats string.
 const REPLAY_STATS_JSON_COLUMN: &str = "stats_json";
@@ -86,7 +89,7 @@ impl DeltaMetadataStatsExec {
         if let Some(existing) = batch.column_by_name(FIELD_NAME_STATS_PARSED)
             && matches!(existing.data_type(), DataType::Struct(_))
         {
-            return Ok(Arc::clone(existing));
+            return Ok(widen_timestamp_max_values(Arc::clone(existing)));
         }
 
         // Priority 2: parse from the replay pipeline's `stats_json` column.
@@ -131,8 +134,51 @@ impl DeltaMetadataStatsExec {
             None => RecordBatch::new_empty(Arc::clone(&self.stats_schema)),
         };
         let stats_array: Arc<StructArray> = Arc::new(parsed_batch.into());
-        Ok(stats_array)
+        Ok(widen_timestamp_max_values(stats_array))
     }
+}
+
+fn widen_timestamp_max_values(stats: ArrayRef) -> ArrayRef {
+    let Some(stats_struct) = stats.as_any().downcast_ref::<StructArray>() else {
+        return stats;
+    };
+    let columns = stats_struct
+        .fields()
+        .iter()
+        .zip(stats_struct.columns())
+        .map(|(field, column)| {
+            if field.name() == STATS_FIELD_MAX_VALUES {
+                widen_timestamp_leaves(Arc::clone(column))
+            } else {
+                Arc::clone(column)
+            }
+        })
+        .collect();
+    Arc::new(StructArray::new(
+        stats_struct.fields().clone(),
+        columns,
+        stats_struct.nulls().cloned(),
+    ))
+}
+
+fn widen_timestamp_leaves(array: ArrayRef) -> ArrayRef {
+    if matches!(array.data_type(), DataType::Timestamp(_, _)) {
+        return widen_timestamp_max_stat(array);
+    }
+    let Some(struct_array) = array.as_any().downcast_ref::<StructArray>() else {
+        return array;
+    };
+    let columns = struct_array
+        .columns()
+        .iter()
+        .cloned()
+        .map(widen_timestamp_leaves)
+        .collect();
+    Arc::new(StructArray::new(
+        struct_array.fields().clone(),
+        columns,
+        struct_array.nulls().cloned(),
+    ))
 }
 
 #[async_trait]
@@ -229,7 +275,8 @@ impl Clone for DeltaMetadataStatsExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Array, Int32Array, Int64Array};
+    use datafusion::arrow::array::{Array, Int32Array, Int64Array, TimestampMicrosecondArray};
+    use datafusion::arrow::datatypes::TimeUnit;
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -347,6 +394,80 @@ mod tests {
                 DataFusionError::Internal("expected numRecords Int64 array".to_string())
             })?;
         assert_eq!(num_records.value(0), 42);
+        Ok(())
+    }
+
+    #[test]
+    fn widens_timestamp_maxima_in_existing_parsed_stats() -> Result<()> {
+        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let min_values = StructArray::from(vec![(
+            Arc::new(Field::new("event_time", timestamp_type.clone(), true)),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(10_654_000),
+                None,
+                Some(i64::MAX),
+            ])) as Arc<_>,
+        )]);
+        let max_values = StructArray::from(vec![(
+            Arc::new(Field::new("event_time", timestamp_type, true)),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(10_654_000),
+                None,
+                Some(i64::MAX),
+            ])) as Arc<_>,
+        )]);
+        let typed_stats = StructArray::from(vec![
+            (
+                Arc::new(Field::new(
+                    STATS_FIELD_MIN_VALUES,
+                    min_values.data_type().clone(),
+                    true,
+                )),
+                Arc::new(min_values) as Arc<_>,
+            ),
+            (
+                Arc::new(Field::new(
+                    STATS_FIELD_MAX_VALUES,
+                    max_values.data_type().clone(),
+                    true,
+                )),
+                Arc::new(max_values) as Arc<_>,
+            ),
+        ]);
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            FIELD_NAME_STATS_PARSED,
+            typed_stats.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&input_schema), vec![Arc::new(typed_stats)])
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let exec = DeltaMetadataStatsExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+            stats_schema(),
+        );
+
+        let parsed = exec.parse_stats_array(&batch)?;
+        let stats = parsed
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected stats struct".to_string()))?;
+        let min = stats
+            .column_by_name(STATS_FIELD_MIN_VALUES)
+            .and_then(|values| values.as_any().downcast_ref::<StructArray>())
+            .and_then(|values| values.column_by_name("event_time"))
+            .and_then(|values| values.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .ok_or_else(|| DataFusionError::Internal("expected timestamp min".to_string()))?;
+        let max = stats
+            .column_by_name(STATS_FIELD_MAX_VALUES)
+            .and_then(|values| values.as_any().downcast_ref::<StructArray>())
+            .and_then(|values| values.column_by_name("event_time"))
+            .and_then(|values| values.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .ok_or_else(|| DataFusionError::Internal("expected timestamp max".to_string()))?;
+
+        assert_eq!(min.value(0), 10_654_000);
+        assert_eq!(max.value(0), 10_655_000);
+        assert!(max.is_null(1));
+        assert_eq!(max.value(2), i64::MAX);
         Ok(())
     }
 }

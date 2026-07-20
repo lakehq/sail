@@ -68,6 +68,44 @@ pub(crate) fn widen_timestamp_max_stat(array: ArrayRef) -> ArrayRef {
     }
 }
 
+/// Widen a scalar timestamp max statistic by one millisecond while preserving
+/// the physical time unit and timezone.
+pub(crate) fn widen_timestamp_max_scalar(value: ScalarValue) -> ScalarValue {
+    match value {
+        ScalarValue::TimestampSecond(value, timezone) => {
+            ScalarValue::TimestampSecond(value.map(|value| value.saturating_add(1)), timezone)
+        }
+        ScalarValue::TimestampMillisecond(value, timezone) => {
+            ScalarValue::TimestampMillisecond(value.map(|value| value.saturating_add(1)), timezone)
+        }
+        ScalarValue::TimestampMicrosecond(value, timezone) => ScalarValue::TimestampMicrosecond(
+            value.map(|value| value.saturating_add(1_000)),
+            timezone,
+        ),
+        ScalarValue::TimestampNanosecond(value, timezone) => ScalarValue::TimestampNanosecond(
+            value.map(|value| value.saturating_add(1_000_000)),
+            timezone,
+        ),
+        value => value,
+    }
+}
+
+pub(crate) fn arrow_type_contains_timestamp(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Timestamp(_, _) => true,
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| arrow_type_contains_timestamp(field.data_type())),
+        DataType::List(element)
+        | DataType::ListView(element)
+        | DataType::LargeList(element)
+        | DataType::LargeListView(element)
+        | DataType::FixedSizeList(element, _) => arrow_type_contains_timestamp(element.data_type()),
+        DataType::Map(entries, _) => arrow_type_contains_timestamp(entries.data_type()),
+        _ => false,
+    }
+}
+
 /// Result of file pruning operation
 #[derive(Debug, Clone)]
 pub struct PruningResult {

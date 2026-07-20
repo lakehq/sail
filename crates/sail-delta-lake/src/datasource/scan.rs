@@ -38,6 +38,7 @@ use object_store::path::Path;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::conversion::ScalarConverter;
+use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
@@ -643,6 +644,24 @@ fn stats_for_add(
             }
         }
 
+        if arrow_type_contains_timestamp(field.data_type()) {
+            min_value = match min_value {
+                Precision::Exact(value) | Precision::Inexact(value) => Precision::Inexact(value),
+                Precision::Absent => Precision::Absent,
+            };
+            max_value = match max_value {
+                Precision::Exact(value) | Precision::Inexact(value) => {
+                    let value = if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
+                        widen_timestamp_max_scalar(value)
+                    } else {
+                        value
+                    };
+                    Precision::Inexact(value)
+                }
+                Precision::Absent => Precision::Absent,
+            };
+        }
+
         column_statistics.push(ColumnStatistics {
             null_count,
             max_value,
@@ -962,5 +981,51 @@ mod tests {
             Precision::Inexact(ScalarValue::Int32(Some(7)))
         );
         assert_eq!(column.null_count, Precision::Inexact(0));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn test_stats_for_add_widens_truncated_timestamp_maximum() {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(
+                r#"{"numRecords":1,"minValues":{"event_time":"2024-01-15T10:30:00.654Z"},"maxValues":{"event_time":"2024-01-15T10:30:00.654Z"},"nullCount":{"event_time":0}}"#
+                    .to_string(),
+            ),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        };
+
+        let stats = stats_for_add(&add, &file_schema, &HashMap::new())
+            .unwrap()
+            .expect("stats should be present");
+        let column = &stats.column_statistics[0];
+        let expected = 1_705_314_600_654_000_i64;
+
+        assert_eq!(
+            column.min_value,
+            Precision::Inexact(ScalarValue::TimestampMicrosecond(Some(expected), None))
+        );
+        assert_eq!(
+            column.max_value,
+            Precision::Inexact(ScalarValue::TimestampMicrosecond(
+                Some(expected + 1_000),
+                None,
+            ))
+        );
     }
 }
