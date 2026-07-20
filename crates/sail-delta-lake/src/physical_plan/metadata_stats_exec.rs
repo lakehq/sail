@@ -1,12 +1,10 @@
 use std::fmt;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -23,6 +21,7 @@ use crate::datasource::pruning::widen_timestamp_max_stat;
 use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
 };
+use crate::spec::parse_stats_json_array;
 
 /// The column name used by the replay pipeline for the raw JSON stats string.
 const REPLAY_STATS_JSON_COLUMN: &str = "stats_json";
@@ -111,29 +110,8 @@ impl DeltaMetadataStatsExec {
                 )
             })?;
 
-        let estimated_json_bytes = stats_json
-            .iter()
-            .map(|value| value.map_or(2, str::len) + 1)
-            .sum();
-        let mut json_lines = String::with_capacity(estimated_json_bytes);
-        for value in stats_json.iter() {
-            if let Some(value) = value {
-                json_lines.push_str(value);
-            } else {
-                json_lines.push_str("{}");
-            }
-            json_lines.push('\n');
-        }
-
-        let mut reader = JsonReaderBuilder::new(Arc::clone(&self.stats_schema))
-            .with_batch_size(batch.num_rows().max(1))
-            .build(Cursor::new(json_lines))
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let parsed_batch = match reader.next() {
-            Some(batch) => batch.map_err(|e| DataFusionError::External(Box::new(e)))?,
-            None => RecordBatch::new_empty(Arc::clone(&self.stats_schema)),
-        };
-        let stats_array: Arc<StructArray> = Arc::new(parsed_batch.into());
+        let stats_array: ArrayRef =
+            Arc::new(parse_stats_json_array(stats_json, &self.stats_schema)?);
         Ok(widen_timestamp_max_values(stats_array))
     }
 }
@@ -302,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_stats_json_into_typed_struct_column() -> Result<()> {
+    fn parses_stats_json_and_preserves_missing_rows() -> Result<()> {
         let input_schema = Arc::new(Schema::new(vec![
             Field::new(PATH_COLUMN, DataType::Utf8, false),
             Field::new(REPLAY_STATS_JSON_COLUMN, DataType::Utf8, true),
@@ -310,10 +288,16 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&input_schema),
             vec![
-                Arc::new(StringArray::from(vec![Some("file.parquet")])),
-                Arc::new(StringArray::from(vec![Some(
-                    r#"{"numRecords":3,"minValues":{"value":1},"maxValues":{"value":7}}"#,
-                )])),
+                Arc::new(StringArray::from(vec![
+                    Some("file.parquet"),
+                    Some("missing.parquet"),
+                    Some("empty.parquet"),
+                ])),
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"numRecords":3,"minValues":{"value":1},"maxValues":{"value":7}}"#),
+                    None,
+                    Some(""),
+                ])),
             ],
         )
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
@@ -350,6 +334,9 @@ mod tests {
 
         assert_eq!(num_records.value(0), 3);
         assert_eq!(min_value.value(0), 1);
+        assert!(!stats.is_null(0));
+        assert!(stats.is_null(1));
+        assert!(stats.is_null(2));
         Ok(())
     }
 

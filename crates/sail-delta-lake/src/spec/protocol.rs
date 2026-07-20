@@ -162,7 +162,7 @@ impl TableFeature {
 
 #[cfg(test)]
 mod tests {
-    use super::TableFeature;
+    use super::{Protocol, TableFeature};
 
     #[test]
     #[expect(clippy::unwrap_used)]
@@ -191,6 +191,25 @@ mod tests {
                 feature
             );
         }
+    }
+
+    #[test]
+    fn protocol_upgrade_preserves_feature_list_presence() {
+        let legacy = Protocol::new(1, 2, None, None);
+        assert_eq!(legacy.merge_upgrade_requirements(&legacy), legacy);
+
+        let empty_table_features = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
+        let merged = empty_table_features.merge_upgrade_requirements(&empty_table_features);
+        assert_eq!(merged.reader_features(), Some([].as_slice()));
+        assert_eq!(merged.writer_features(), Some([].as_slice()));
+
+        let writer_table_features = Protocol::new(1, 7, None, Some(vec![]));
+        let merged = legacy.merge_upgrade_requirements(&writer_table_features);
+        assert!(merged.reader_features().is_none());
+        assert_eq!(
+            merged.writer_features(),
+            Some([TableFeature::AppendOnly, TableFeature::Invariants].as_slice())
+        );
     }
 }
 
@@ -290,5 +309,47 @@ impl Protocol {
             push_writer_feature(TableFeature::IdentityColumns);
         }
         (reader_features, writer_features)
+    }
+
+    /// Merge protocol requirements without dropping versions or features already active on the
+    /// table. Legacy version-implied features are materialized when the result enters the table
+    /// features protocol.
+    pub(crate) fn merge_upgrade_requirements(&self, requirements: &Protocol) -> Protocol {
+        let min_reader_version = self
+            .min_reader_version()
+            .max(requirements.min_reader_version());
+        let min_writer_version = self
+            .min_writer_version()
+            .max(requirements.min_writer_version());
+        let (mut reader_features, mut writer_features) = self.table_features_for_upgrade();
+
+        let append_requirements =
+            |features: &mut Vec<TableFeature>, required: Option<&[TableFeature]>| {
+                for feature in required.unwrap_or_default() {
+                    if !features.contains(feature) {
+                        features.push(feature.clone());
+                    }
+                }
+            };
+
+        let reader_features = if min_reader_version >= 3 {
+            append_requirements(&mut reader_features, requirements.reader_features());
+            Some(reader_features)
+        } else {
+            self.reader_features().map(<[_]>::to_vec)
+        };
+        let writer_features = if min_writer_version >= 7 {
+            append_requirements(&mut writer_features, requirements.writer_features());
+            Some(writer_features)
+        } else {
+            self.writer_features().map(<[_]>::to_vec)
+        };
+
+        Protocol::new(
+            min_reader_version,
+            min_writer_version,
+            reader_features,
+            writer_features,
+        )
     }
 }

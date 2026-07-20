@@ -43,21 +43,20 @@ use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
+use crate::schema::manager::is_check_constraint_property;
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
     compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
     inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
-    protocol_for_create, schema_has_column_defaults, schema_has_generated_columns,
-    schema_has_identity_columns,
+    protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType, DeltaOperation,
     MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature, TableProperties,
-    canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
-    contains_variant_arrow, route_table_property_key,
+    canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
     DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
@@ -308,21 +307,6 @@ impl TableFormat for DeltaTableFormat {
             kernel_schema
         };
 
-        let mut protocol = protocol_for_create(
-            !matches!(effective_mode, ColumnMappingMode::None),
-            contains_timestampntz_arrow(normalized_schema.as_ref()),
-            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
-            schema_has_generated_columns(&metadata_schema),
-            schema_has_column_defaults(&metadata_schema),
-            schema_has_identity_columns(&metadata_schema),
-            contains_variant_arrow(normalized_schema.as_ref()),
-            &configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if catalog_managed_table_id.is_some() {
-            protocol = protocol_with_catalog_managed(&protocol);
-        }
-
         let partition_columns = partition_by
             .iter()
             .map(|field| field.column.clone())
@@ -336,6 +320,11 @@ impl TableFormat for DeltaTableFormat {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if let Some(comment) = comment {
             metadata = metadata.with_description(comment);
+        }
+        let mut protocol =
+            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if catalog_managed_table_id.is_some() {
+            protocol = protocol_with_catalog_managed(&protocol);
         }
         if let Some(table_id) = &catalog_managed_table_id {
             metadata = metadata_with_catalog_managed(metadata, table_id);
@@ -820,12 +809,11 @@ impl DeltaTableFormat {
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         if let Some((key, _)) = changes
             .iter()
-            .find(|(key, _)| is_delta_constraint_property(key))
+            .find(|(key, _)| is_check_constraint_property(key))
         {
             return plan_err!(
                 "[DELTA_ADD_CONSTRAINTS] Please use ALTER TABLE ADD CONSTRAINT to add CHECK constraints. Invalid property: {key}"
@@ -967,7 +955,6 @@ impl DeltaTableFormat {
         name: &str,
         expression: &str,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
@@ -1149,7 +1136,6 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
@@ -1500,70 +1486,7 @@ fn merge_protocol_for_upgrade(
     existing: &crate::spec::Protocol,
     desired: &crate::spec::Protocol,
 ) -> (crate::spec::Protocol, bool) {
-    use crate::spec::{Protocol, TableFeature};
-
-    let new_min_reader = existing
-        .min_reader_version()
-        .max(desired.min_reader_version());
-    let new_min_writer = existing
-        .min_writer_version()
-        .max(desired.min_writer_version());
-    let (existing_reader_features, existing_writer_features) =
-        existing.table_features_for_upgrade();
-
-    fn merge_features(
-        existing: Option<&[TableFeature]>,
-        desired: Option<&[TableFeature]>,
-    ) -> Option<Vec<TableFeature>> {
-        match (existing, desired) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.to_vec()),
-            (None, Some(b)) => {
-                if b.is_empty() {
-                    Some(Vec::new())
-                } else {
-                    Some(b.to_vec())
-                }
-            }
-            (Some(a), Some(b)) => {
-                let mut out = a.to_vec();
-                for f in b {
-                    if !out.contains(f) {
-                        out.push(f.clone());
-                    }
-                }
-                Some(out)
-            }
-        }
-    }
-
-    // Only attach explicit reader/writer feature lists if the corresponding version
-    // requires them (>=3 for readers, >=7 for writers) -- otherwise older clients may
-    // mis-interpret the table as being on the table-features protocol.
-    let reader_features = if new_min_reader >= 3 {
-        merge_features(
-            Some(existing_reader_features.as_slice()),
-            desired.reader_features(),
-        )
-    } else {
-        existing.reader_features().map(|s| s.to_vec())
-    };
-    let writer_features = if new_min_writer >= 7 {
-        merge_features(
-            Some(existing_writer_features.as_slice()),
-            desired.writer_features(),
-        )
-    } else {
-        existing.writer_features().map(|s| s.to_vec())
-    };
-
-    let merged = Protocol::new(
-        new_min_reader,
-        new_min_writer,
-        reader_features,
-        writer_features,
-    );
-
+    let merged = existing.merge_upgrade_requirements(desired);
     let upgraded = merged != *existing;
     (merged, upgraded)
 }
@@ -1825,13 +1748,6 @@ fn resolve_delta_metadata_configuration(
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str())),
     )
-}
-
-fn is_delta_constraint_property(key: &str) -> bool {
-    key.len() > "delta.constraints.".len()
-        && key
-            .get(.."delta.constraints.".len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("delta.constraints."))
 }
 
 pub fn split_delta_write_options_and_table_properties(

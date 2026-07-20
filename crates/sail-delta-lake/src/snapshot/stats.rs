@@ -226,21 +226,16 @@ impl<'a> SnapshotPruningStats<'a> {
             .field_with_name(name)
             .is_ok_and(|field| arrow_type_contains_timestamp(field.data_type()));
         if !is_partition && contains_timestamp {
-            min_value = match min_value {
-                Precision::Exact(value) | Precision::Inexact(value) => Precision::Inexact(value),
-                value => value,
-            };
-            max_value = match max_value {
-                Precision::Exact(value) | Precision::Inexact(value) => {
-                    let value = if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
+            min_value = min_value.to_inexact();
+            max_value = max_value
+                .map(|value| {
+                    if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
                         widen_timestamp_max_scalar(value)
                     } else {
                         value
-                    };
-                    Precision::Inexact(value)
-                }
-                value => value,
-            };
+                    }
+                })
+                .to_inexact();
         }
 
         Ok(ColumnStatistics {

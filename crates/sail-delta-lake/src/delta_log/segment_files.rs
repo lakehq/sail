@@ -62,13 +62,7 @@ pub async fn list_log_segment_files(
     let mut sidecar_files: Vec<String> = Vec::new();
 
     if let Some(meta) = checkpoint_meta {
-        let filename = meta
-            .location
-            .as_ref()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let filename = meta.location.filename().unwrap_or_default().to_string();
         checkpoint_files.push(filename.clone());
 
         // Classic-named checkpoints may also follow the V2 format and refer to sidecars.
@@ -83,25 +77,13 @@ pub async fn list_log_segment_files(
 
     let mut commit_files: Vec<String> = commit_metas
         .into_iter()
-        .filter_map(|(_, meta)| {
-            meta.location
-                .as_ref()
-                .rsplit('/')
-                .next()
-                .map(|s| s.to_string())
-        })
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
         .collect();
     commit_files.sort();
 
     let mut compaction_files: Vec<String> = compaction_metas
         .into_iter()
-        .filter_map(|(_, meta)| {
-            meta.location
-                .as_ref()
-                .rsplit('/')
-                .next()
-                .map(|s| s.to_string())
-        })
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
         .collect();
     compaction_files.sort();
 

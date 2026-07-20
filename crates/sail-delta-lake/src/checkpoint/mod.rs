@@ -18,7 +18,7 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -248,36 +248,59 @@ impl ReconciledCheckpointState {
         Ok((
             CheckpointBatchIter {
                 batch_size,
-                leading_rows: VecDeque::from([
-                    CheckpointActionRow {
-                        protocol: Some(protocol),
-                        ..Default::default()
-                    },
-                    CheckpointActionRow {
-                        metadata: Some(metadata),
-                        ..Default::default()
-                    },
-                ]),
-                txns: self
-                    .txns
+                rows: Box::new(
+                    [
+                        CheckpointActionRow {
+                            protocol: Some(protocol),
+                            ..Default::default()
+                        },
+                        CheckpointActionRow {
+                            metadata: Some(metadata),
+                            ..Default::default()
+                        },
+                    ]
                     .into_iter()
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter(),
-                domain_metadata: self
-                    .domain_metadata
-                    .into_iter()
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter(),
-                removes: self
-                    .removes
-                    .into_iter()
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter(),
-                adds: self
-                    .adds
-                    .into_iter()
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter(),
+                    .chain(
+                        self.txns
+                            .into_iter()
+                            .collect::<BTreeMap<_, _>>()
+                            .into_values()
+                            .map(|txn| CheckpointActionRow {
+                                txn: Some(txn),
+                                ..Default::default()
+                            }),
+                    )
+                    .chain(
+                        self.domain_metadata
+                            .into_iter()
+                            .collect::<BTreeMap<_, _>>()
+                            .into_values()
+                            .map(|domain_metadata| CheckpointActionRow {
+                                domain_metadata: Some(domain_metadata),
+                                ..Default::default()
+                            }),
+                    )
+                    .chain(
+                        self.removes
+                            .into_iter()
+                            .collect::<BTreeMap<_, _>>()
+                            .into_values()
+                            .map(|remove| CheckpointActionRow {
+                                remove: Some(remove),
+                                ..Default::default()
+                            }),
+                    )
+                    .chain(
+                        self.adds
+                            .into_iter()
+                            .collect::<BTreeMap<_, _>>()
+                            .into_values()
+                            .map(|add| CheckpointActionRow {
+                                add: Some(add),
+                                ..Default::default()
+                            }),
+                    ),
+                ),
                 augment,
             },
             add_count,
@@ -389,53 +412,13 @@ impl ReplayActionState for ReconciledHeaderState {
 
 struct CheckpointBatchIter {
     batch_size: usize,
-    leading_rows: VecDeque<CheckpointActionRow>,
-    txns: std::collections::btree_map::IntoIter<String, Transaction>,
-    domain_metadata: std::collections::btree_map::IntoIter<String, DomainMetadata>,
-    removes: std::collections::btree_map::IntoIter<LogicalFileKey, Remove>,
-    adds: std::collections::btree_map::IntoIter<LogicalFileKey, Add>,
+    rows: Box<dyn Iterator<Item = CheckpointActionRow> + Send>,
     augment: AddAugmentationConfig,
 }
 
 impl CheckpointBatchIter {
     fn next_batch(&mut self) -> DeltaResult<Option<RecordBatch>> {
-        let mut rows = Vec::with_capacity(self.batch_size);
-
-        while rows.len() < self.batch_size {
-            if let Some(row) = self.leading_rows.pop_front() {
-                rows.push(row);
-                continue;
-            }
-            if let Some((_, txn)) = self.txns.next() {
-                rows.push(CheckpointActionRow {
-                    txn: Some(txn),
-                    ..Default::default()
-                });
-                continue;
-            }
-            if let Some((_, domain_metadata)) = self.domain_metadata.next() {
-                rows.push(CheckpointActionRow {
-                    domain_metadata: Some(domain_metadata),
-                    ..Default::default()
-                });
-                continue;
-            }
-            if let Some((_, remove)) = self.removes.next() {
-                rows.push(CheckpointActionRow {
-                    remove: Some(remove),
-                    ..Default::default()
-                });
-                continue;
-            }
-            if let Some((_, add)) = self.adds.next() {
-                rows.push(CheckpointActionRow {
-                    add: Some(add),
-                    ..Default::default()
-                });
-                continue;
-            }
-            break;
-        }
+        let rows = self.rows.by_ref().take(self.batch_size).collect::<Vec<_>>();
 
         if rows.is_empty() {
             Ok(None)
@@ -445,42 +428,39 @@ impl CheckpointBatchIter {
     }
 }
 
-/// Batch iterator for sidecar (add/remove) actions in V2 checkpoint writes.
-/// Mirrors [`CheckpointBatchIter`] to avoid materializing all rows into a
-/// single `Vec`/`RecordBatch`.
-struct SidecarBatchIter {
-    batch_size: usize,
-    adds: std::collections::hash_map::IntoValues<LogicalFileKey, Add>,
-    removes: std::collections::hash_map::IntoValues<LogicalFileKey, Remove>,
-    augment: AddAugmentationConfig,
-}
+async fn write_checkpoint_batches(
+    store: Arc<dyn ObjectStore>,
+    path: object_store::path::Path,
+    mut batches: CheckpointBatchIter,
+) -> DeltaResult<Option<(ObjectMeta, i64)>> {
+    let Some(first_batch) = batches.next_batch()? else {
+        return Ok(None);
+    };
+    ensure_schema_supported_for_parquet(&first_batch)?;
+    let mut row_count = i64::try_from(first_batch.num_rows())
+        .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
-impl SidecarBatchIter {
-    fn next_batch(&mut self) -> DeltaResult<Option<RecordBatch>> {
-        let mut rows = Vec::with_capacity(self.batch_size);
-        while rows.len() < self.batch_size {
-            if let Some(add) = self.adds.next() {
-                rows.push(CheckpointActionRow {
-                    add: Some(add),
-                    ..Default::default()
-                });
-                continue;
-            }
-            if let Some(remove) = self.removes.next() {
-                rows.push(CheckpointActionRow {
-                    remove: Some(remove),
-                    ..Default::default()
-                });
-                continue;
-            }
-            break;
-        }
-        if rows.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(encode_checkpoint_rows(&rows, &self.augment)?))
-        }
+    let object_store_writer = ParquetObjectWriter::new(store.clone(), path.clone());
+    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
+        .map_err(DeltaTableError::generic_err)?;
+    writer
+        .write(&first_batch)
+        .await
+        .map_err(DeltaTableError::generic_err)?;
+    while let Some(batch) = batches.next_batch()? {
+        row_count = row_count
+            .checked_add(
+                i64::try_from(batch.num_rows())
+                    .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?,
+            )
+            .ok_or_else(|| DeltaTableError::generic("checkpoint action count overflow"))?;
+        writer
+            .write(&batch)
+            .await
+            .map_err(DeltaTableError::generic_err)?;
     }
+    let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
+    Ok(Some((store.head(&path).await?, row_count)))
 }
 
 #[derive(Debug, Clone)]
@@ -717,93 +697,69 @@ impl<'a> CheckpointManager<'a> {
         let sidecar_filename = format!("{sidecar_uuid}.parquet");
         let sidecar_path = sidecar_file_path(&sidecar_filename);
 
-        let mut sidecar_batches = SidecarBatchIter {
+        let sidecar_rows = state
+            .adds
+            .into_values()
+            .map(|add| CheckpointActionRow {
+                add: Some(add),
+                ..Default::default()
+            })
+            .chain(
+                state
+                    .removes
+                    .into_values()
+                    .map(|remove| CheckpointActionRow {
+                        remove: Some(remove),
+                        ..Default::default()
+                    }),
+            );
+        let sidecar_batches = CheckpointBatchIter {
             batch_size: SIDECAR_WRITE_BATCH_SIZE,
-            adds: state.adds.into_values(),
-            removes: state.removes.into_values(),
+            rows: Box::new(sidecar_rows),
             augment: sidecar_augment,
         };
 
-        let mut sidecar_action_count = 0_i64;
-        let sidecar_descriptor = match sidecar_batches.next_batch()? {
-            Some(first_batch) => {
-                sidecar_action_count = i64::try_from(first_batch.num_rows())
-                    .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
-                ensure_schema_supported_for_parquet(&first_batch)?;
-                let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
-                let mut writer =
-                    AsyncArrowWriter::try_new(sidecar_writer, first_batch.schema(), None)
-                        .map_err(DeltaTableError::generic_err)?;
-                writer
-                    .write(&first_batch)
-                    .await
-                    .map_err(DeltaTableError::generic_err)?;
-                while let Some(batch) = sidecar_batches.next_batch()? {
-                    sidecar_action_count = sidecar_action_count
-                        .checked_add(i64::try_from(batch.num_rows()).map_err(|_| {
-                            DeltaTableError::generic("checkpoint action count overflow")
-                        })?)
-                        .ok_or_else(|| {
-                            DeltaTableError::generic("checkpoint action count overflow")
-                        })?;
-                    writer
-                        .write(&batch)
-                        .await
-                        .map_err(DeltaTableError::generic_err)?;
-                }
-                let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
-                let sidecar_meta = store.head(&sidecar_path).await?;
+        let sidecar_file =
+            write_checkpoint_batches(store.clone(), sidecar_path, sidecar_batches).await?;
+        let (sidecar_descriptor, sidecar_action_count) = match sidecar_file {
+            Some((sidecar_meta, action_count)) => (
                 Some(Sidecar {
                     path: sidecar_filename,
                     size_in_bytes: i64::try_from(sidecar_meta.size)
                         .map_err(|_| DeltaTableError::generic("sidecar size overflow"))?,
                     modification_time: sidecar_meta.last_modified.timestamp_millis(),
                     tags: None,
-                })
-            }
-            _ => None,
+                }),
+                action_count,
+            ),
+            None => (None, 0),
         };
 
         // Step 2: Build the main V2 checkpoint with header actions + sidecar refs.
-        let mut main_rows: Vec<CheckpointActionRow> = Vec::new();
-
-        // V2 checkpoint marker
-        main_rows.push(CheckpointActionRow {
-            checkpoint_metadata: Some(CheckpointMetadata {
+        let mut main_rows = vec![
+            checkpoint_row_from_action(Action::CheckpointMetadata(CheckpointMetadata {
                 version,
                 tags: None,
-            }),
-            ..Default::default()
-        });
-        main_rows.push(CheckpointActionRow {
-            protocol: Some(protocol),
-            ..Default::default()
-        });
-        main_rows.push(CheckpointActionRow {
-            metadata: Some(metadata),
-            ..Default::default()
-        });
+            }))?,
+            checkpoint_row_from_action(Action::Protocol(protocol))?,
+            checkpoint_row_from_action(Action::Metadata(metadata))?,
+        ];
         for (_, txn) in state.txns.into_iter().collect::<BTreeMap<_, _>>() {
-            main_rows.push(CheckpointActionRow {
-                txn: Some(txn),
-                ..Default::default()
-            });
+            main_rows.push(checkpoint_row_from_action(Action::Txn(txn))?);
         }
         for (_, domain_metadata) in state
             .domain_metadata
             .into_iter()
             .collect::<BTreeMap<_, _>>()
         {
-            main_rows.push(CheckpointActionRow {
-                domain_metadata: Some(domain_metadata),
-                ..Default::default()
-            });
+            main_rows.push(checkpoint_row_from_action(Action::DomainMetadata(
+                domain_metadata,
+            ))?);
         }
         if let Some(sidecar) = &sidecar_descriptor {
-            main_rows.push(CheckpointActionRow {
-                sidecar: Some(sidecar.clone()),
-                ..Default::default()
-            });
+            main_rows.push(checkpoint_row_from_action(Action::Sidecar(
+                sidecar.clone(),
+            ))?);
         }
 
         let main_row_count = i64::try_from(main_rows.len())
@@ -864,38 +820,14 @@ pub(crate) async fn write_classic_checkpoint_file(
     store: Arc<dyn ObjectStore>,
 ) -> DeltaResult<(ObjectMeta, i64, i64)> {
     const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
-    let (mut checkpoint_batches, checkpoint_add_count) =
+    let (checkpoint_batches, checkpoint_add_count) =
         state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
-
-    let Some(first_batch) = checkpoint_batches.next_batch()? else {
+    let cp_path = checkpoint_path(version);
+    let Some((file_meta, checkpoint_row_count)) =
+        write_checkpoint_batches(store, cp_path, checkpoint_batches).await?
+    else {
         return Err(DeltaTableError::generic("No checkpoint rows to write"));
     };
-    ensure_schema_supported_for_parquet(&first_batch)?;
-    let mut checkpoint_row_count = i64::try_from(first_batch.num_rows())
-        .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
-
-    let cp_path = checkpoint_path(version);
-    let object_store_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
-        .map_err(DeltaTableError::generic_err)?;
-    writer
-        .write(&first_batch)
-        .await
-        .map_err(DeltaTableError::generic_err)?;
-    while let Some(batch) = checkpoint_batches.next_batch()? {
-        checkpoint_row_count = checkpoint_row_count
-            .checked_add(
-                i64::try_from(batch.num_rows())
-                    .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?,
-            )
-            .ok_or_else(|| DeltaTableError::generic("checkpoint action count overflow"))?;
-        writer
-            .write(&batch)
-            .await
-            .map_err(DeltaTableError::generic_err)?;
-    }
-    let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
-    let file_meta = store.head(&cp_path).await?;
     Ok((file_meta, checkpoint_row_count, checkpoint_add_count))
 }
 
@@ -1141,12 +1073,7 @@ pub(crate) async fn inspect_checkpoint_main_file(
             meta.location
         ))
     })?;
-    let filename = meta
-        .location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default();
+    let filename = meta.location.filename().unwrap_or_default();
     if is_json_checkpoint_filename(filename) {
         let rows = read_checkpoint_main_rows_from_checkpoint_file(root_store, meta).await?;
         return Ok(rows.into_iter().filter_map(|row| row.sidecar).collect());
@@ -1234,13 +1161,7 @@ pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
             meta.location
         ))
     })?;
-    let filename = meta
-        .location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let filename = meta.location.filename().unwrap_or_default().to_string();
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
     let rows = if is_json_checkpoint_filename(&filename) {
         decode_checkpoint_json_rows(version, &bytes)?
@@ -1419,17 +1340,13 @@ fn decode_checkpoint_json_rows(
     version: i64,
     bytes: &Bytes,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let actions = get_actions(version, bytes)?;
-    let mut rows = Vec::with_capacity(actions.len());
-    for action in actions {
-        if let Some(row) = checkpoint_row_from_action(action)? {
-            rows.push(row);
-        }
-    }
-    Ok(rows)
+    get_actions(version, bytes)?
+        .into_iter()
+        .map(checkpoint_row_from_action)
+        .collect()
 }
 
-fn checkpoint_row_from_action(action: Action) -> DeltaResult<Option<CheckpointActionRow>> {
+fn checkpoint_row_from_action(action: Action) -> DeltaResult<CheckpointActionRow> {
     let row = match action {
         Action::Add(add) => CheckpointActionRow {
             add: Some(add),
@@ -1469,7 +1386,7 @@ fn checkpoint_row_from_action(action: Action) -> DeltaResult<Option<CheckpointAc
             ));
         }
     };
-    Ok(Some(row))
+    Ok(row)
 }
 
 pub(crate) async fn replay_commit_header_actions(

@@ -12,13 +12,14 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexSet;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
-    Metadata, MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
-    contains_timestampntz, contains_variant,
+    CheckpointPolicy, ColumnMappingMode, ColumnMetadataKey, DataType,
+    DeltaError as DeltaTableError, DeltaResult, Metadata, MetadataValue, Protocol, StructField,
+    StructType, TableFeature, TableProperties, contains_timestampntz, contains_variant,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.
@@ -39,13 +40,17 @@ pub fn schema_has_column_defaults(schema: &StructType) -> bool {
 
 /// Check if a Delta metadata configuration contains table CHECK constraints.
 pub fn configuration_has_check_constraints(configuration: &HashMap<String, String>) -> bool {
+    configuration
+        .keys()
+        .any(|key| is_check_constraint_property(key))
+}
+
+pub(crate) fn is_check_constraint_property(key: &str) -> bool {
     const PREFIX: &str = "delta.constraints.";
-    configuration.keys().any(|key| {
-        key.len() > PREFIX.len()
-            && key
-                .get(..PREFIX.len())
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
-    })
+    key.len() > PREFIX.len()
+        && key
+            .get(..PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
 }
 
 pub fn schema_has_identity_columns(schema: &StructType) -> bool {
@@ -255,30 +260,24 @@ pub fn protocol_for_metadata(metadata: &Metadata) -> DeltaResult<Protocol> {
     )
 }
 
-fn push_feature(features: &mut Vec<TableFeature>, feature: TableFeature) {
-    if !features.contains(&feature) {
-        features.push(feature);
-    }
-}
-
-fn enable_legacy_writer_features(writer_features: &mut Vec<TableFeature>) {
-    push_feature(writer_features, TableFeature::AppendOnly);
-    push_feature(writer_features, TableFeature::Invariants);
+fn enable_legacy_writer_features(writer_features: &mut IndexSet<TableFeature>) {
+    writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::Invariants);
 }
 
 fn enable_variant_type_feature(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     feature: TableFeature,
 ) {
-    push_feature(reader_features, feature.clone());
-    push_feature(writer_features, feature);
+    reader_features.insert(feature.clone());
+    writer_features.insert(feature);
     enable_legacy_writer_features(writer_features);
 }
 
 fn enable_variant_type_features_for_schema(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     explicit_features: &[TableFeature],
 ) {
     let feature = if explicit_features.contains(&TableFeature::VariantTypePreview)
@@ -292,8 +291,8 @@ fn enable_variant_type_features_for_schema(
 }
 
 fn has_variant_shredding_feature(
-    reader_features: &[TableFeature],
-    writer_features: &[TableFeature],
+    reader_features: &IndexSet<TableFeature>,
+    writer_features: &IndexSet<TableFeature>,
 ) -> bool {
     reader_features
         .iter()
@@ -307,15 +306,15 @@ fn has_variant_shredding_feature(
 }
 
 fn enable_variant_shredding_feature(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     feature: TableFeature,
 ) {
     if feature == TableFeature::VariantShredding {
         enable_variant_type_feature(reader_features, writer_features, TableFeature::VariantType);
     }
-    push_feature(reader_features, feature.clone());
-    push_feature(writer_features, feature);
+    reader_features.insert(feature.clone());
+    writer_features.insert(feature);
     enable_legacy_writer_features(writer_features);
 }
 
@@ -359,31 +358,31 @@ pub fn protocol_for_create(
     enable_variant: bool,
     configuration: &HashMap<String, String>,
 ) -> DeltaResult<Protocol> {
-    let mut reader_features = Vec::new();
-    let mut writer_features = Vec::new();
+    let mut reader_features = IndexSet::new();
+    let mut writer_features = IndexSet::new();
     let has_check_constraints = configuration_has_check_constraints(configuration);
     let table_properties = TableProperties::from(configuration.iter());
     let explicit_features = explicit_table_features(configuration)?;
 
     if enable_column_mapping {
-        reader_features.push(TableFeature::ColumnMapping);
-        writer_features.push(TableFeature::ColumnMapping);
+        reader_features.insert(TableFeature::ColumnMapping);
+        writer_features.insert(TableFeature::ColumnMapping);
     }
     if enable_timestamp_ntz {
-        reader_features.push(TableFeature::TimestampWithoutTimezone);
-        writer_features.push(TableFeature::TimestampWithoutTimezone);
+        reader_features.insert(TableFeature::TimestampWithoutTimezone);
+        writer_features.insert(TableFeature::TimestampWithoutTimezone);
     }
     if enable_in_commit_timestamps {
-        writer_features.push(TableFeature::InCommitTimestamp);
+        writer_features.insert(TableFeature::InCommitTimestamp);
     }
     if enable_generated_columns {
-        writer_features.push(TableFeature::GeneratedColumns);
+        writer_features.insert(TableFeature::GeneratedColumns);
     }
     if enable_column_defaults {
-        writer_features.push(TableFeature::AllowColumnDefaults);
+        writer_features.insert(TableFeature::AllowColumnDefaults);
     }
     if enable_identity_columns {
-        writer_features.push(TableFeature::IdentityColumns);
+        writer_features.insert(TableFeature::IdentityColumns);
     }
     if enable_variant {
         enable_variant_type_features_for_schema(
@@ -406,9 +405,9 @@ pub fn protocol_for_create(
             }
             feature => {
                 if feature.is_reader_feature() {
-                    push_feature(&mut reader_features, feature.clone());
+                    reader_features.insert(feature.clone());
                 }
-                push_feature(&mut writer_features, feature);
+                writer_features.insert(feature);
             }
         }
     }
@@ -432,12 +431,8 @@ pub fn protocol_for_create(
         .get("delta.enableDeletionVectors")
         .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     {
-        if !reader_features.contains(&TableFeature::DeletionVectors) {
-            reader_features.push(TableFeature::DeletionVectors);
-        }
-        if !writer_features.contains(&TableFeature::DeletionVectors) {
-            writer_features.push(TableFeature::DeletionVectors);
-        }
+        reader_features.insert(TableFeature::DeletionVectors);
+        writer_features.insert(TableFeature::DeletionVectors);
     }
 
     // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature unless
@@ -445,26 +440,16 @@ pub fn protocol_for_create(
     if table_properties.enable_type_widening() {
         let preview_enabled = reader_features.contains(&TableFeature::TypeWideningPreview)
             || writer_features.contains(&TableFeature::TypeWideningPreview);
-        if !preview_enabled && !reader_features.contains(&TableFeature::TypeWidening) {
-            reader_features.push(TableFeature::TypeWidening);
-        }
-        if !preview_enabled && !writer_features.contains(&TableFeature::TypeWidening) {
-            writer_features.push(TableFeature::TypeWidening);
+        if !preview_enabled {
+            reader_features.insert(TableFeature::TypeWidening);
+            writer_features.insert(TableFeature::TypeWidening);
         }
     }
 
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
-    if configuration
-        .get("delta.checkpointPolicy")
-        .map(|v| v == "v2")
-        .unwrap_or(false)
-    {
-        if !reader_features.contains(&TableFeature::V2Checkpoint) {
-            reader_features.push(TableFeature::V2Checkpoint);
-        }
-        if !writer_features.contains(&TableFeature::V2Checkpoint) {
-            writer_features.push(TableFeature::V2Checkpoint);
-        }
+    if table_properties.checkpoint_policy() == CheckpointPolicy::V2 {
+        reader_features.insert(TableFeature::V2Checkpoint);
+        writer_features.insert(TableFeature::V2Checkpoint);
     }
 
     // appendOnly is a legacy writer-v2 feature. It is listed explicitly only when another
@@ -472,14 +457,11 @@ pub fn protocol_for_create(
     if table_properties.append_only()
         && (!reader_features.is_empty() || !writer_features.is_empty())
     {
-        push_feature(&mut writer_features, TableFeature::AppendOnly);
+        writer_features.insert(TableFeature::AppendOnly);
     }
 
-    if has_check_constraints
-        && !writer_features.is_empty()
-        && !writer_features.contains(&TableFeature::CheckConstraints)
-    {
-        writer_features.push(TableFeature::CheckConstraints);
+    if has_check_constraints && !writer_features.is_empty() {
+        writer_features.insert(TableFeature::CheckConstraints);
     }
 
     if reader_features.is_empty() && writer_features.is_empty() {
@@ -490,13 +472,13 @@ pub fn protocol_for_create(
     enable_legacy_writer_features(&mut writer_features);
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
-    let reader_features = (min_reader_version == 3).then_some(reader_features);
+    let reader_features = (min_reader_version == 3).then(|| reader_features.into_iter().collect());
 
     Ok(Protocol::new(
         min_reader_version,
         7,
         reader_features,
-        Some(writer_features),
+        Some(writer_features.into_iter().collect()),
     ))
 }
 

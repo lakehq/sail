@@ -496,27 +496,11 @@ fn sanitize_bound_for_type(
     bound: &Precision<ScalarValue>,
     data_type: &ArrowDataType,
 ) -> Precision<ScalarValue> {
-    let sanitize_value = |value: &ScalarValue| {
-        if value.is_null() {
-            return None;
-        }
-        if value.data_type() == *data_type {
-            return Some(value.clone());
-        }
-        value
-            .cast_to(data_type)
-            .ok()
-            .filter(|casted| !casted.is_null())
-    };
-
-    match bound {
-        Precision::Exact(value) => sanitize_value(value)
-            .map(Precision::Exact)
-            .unwrap_or(Precision::Absent),
-        Precision::Inexact(value) => sanitize_value(value)
-            .map(Precision::Inexact)
-            .unwrap_or(Precision::Absent),
-        Precision::Absent => Precision::Absent,
+    let sanitized = bound.cast_to(data_type).unwrap_or(Precision::Absent);
+    if sanitized.get_value().is_some_and(ScalarValue::is_null) {
+        Precision::Absent
+    } else {
+        sanitized
     }
 }
 
@@ -645,21 +629,16 @@ fn stats_for_add(
         }
 
         if arrow_type_contains_timestamp(field.data_type()) {
-            min_value = match min_value {
-                Precision::Exact(value) | Precision::Inexact(value) => Precision::Inexact(value),
-                Precision::Absent => Precision::Absent,
-            };
-            max_value = match max_value {
-                Precision::Exact(value) | Precision::Inexact(value) => {
-                    let value = if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
+            min_value = min_value.to_inexact();
+            max_value = max_value
+                .map(|value| {
+                    if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
                         widen_timestamp_max_scalar(value)
                     } else {
                         value
-                    };
-                    Precision::Inexact(value)
-                }
-                Precision::Absent => Precision::Absent,
-            };
+                    }
+                })
+                .to_inexact();
         }
 
         column_statistics.push(ColumnStatistics {

@@ -170,12 +170,7 @@ async fn ensure_v2_compat_classic_checkpoint(
         let Ok(meta) = meta else {
             continue;
         };
-        let filename = meta
-            .location
-            .as_ref()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default();
+        let filename = meta.location.filename().unwrap_or_default();
         if is_uuid_checkpoint_filename(filename)
             && let Some(v) = parse_checkpoint_version_from_location(&meta.location)
             && v == version
@@ -333,16 +328,12 @@ async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaR
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use std::fs::{File, FileTimes};
     use std::sync::Arc;
-    use std::time::{Duration, SystemTime};
 
     use futures::TryStreamExt;
-    use object_store::local::LocalFileSystem;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
-    use tempfile::TempDir;
     use url::Url;
 
     use super::*;
@@ -653,28 +644,13 @@ mod tests {
 
     #[tokio::test]
     async fn orphaned_sidecar_cleanup_fails_closed_on_unreadable_checkpoint() {
-        let temp_dir = TempDir::new().unwrap();
-        let store: Arc<dyn ObjectStore> =
-            Arc::new(LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         put_log_file(&store, checkpoint_path(2)).await;
 
         let sidecar_path = sidecar_file_path("old-orphan.parquet");
         store
             .put(&sidecar_path, b"orphan".to_vec().into())
             .await
-            .unwrap();
-        let sidecar_file = File::options()
-            .write(true)
-            .open(temp_dir.path().join(sidecar_path.as_ref()))
-            .unwrap();
-        sidecar_file
-            .set_times(
-                FileTimes::new().set_modified(
-                    SystemTime::now()
-                        .checked_sub(Duration::from_secs(2 * 86_400))
-                        .unwrap(),
-                ),
-            )
             .unwrap();
 
         assert!(cleanup_orphaned_sidecars(store.clone()).await.is_err());
@@ -683,26 +659,11 @@ mod tests {
 
     #[tokio::test]
     async fn orphaned_sidecar_cleanup_preserves_referenced_nested_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let store: Arc<dyn ObjectStore> =
-            Arc::new(LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let sidecar_path = sidecar_file_path("nested/kept.parquet");
         store
             .put(&sidecar_path, b"kept".to_vec().into())
             .await
-            .unwrap();
-        let sidecar_file = File::options()
-            .write(true)
-            .open(temp_dir.path().join(sidecar_path.as_ref()))
-            .unwrap();
-        sidecar_file
-            .set_times(
-                FileTimes::new().set_modified(
-                    SystemTime::now()
-                        .checked_sub(Duration::from_secs(2 * 86_400))
-                        .unwrap(),
-                ),
-            )
             .unwrap();
 
         let protocol = Protocol::new(
