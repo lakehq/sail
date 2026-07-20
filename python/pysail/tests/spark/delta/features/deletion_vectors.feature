@@ -147,7 +147,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
       Then delta log latest effective protocol and metadata contains
         | path                                                     | value               |
         | protocol.readerFeatures                                  | ["deletionVectors"] |
-        | protocol.writerFeatures                                  | ["deletionVectors"] |
+        | protocol.writerFeatures                                  | ["deletionVectors", "appendOnly", "invariants"] |
         | metaData.configuration['delta.enableDeletionVectors']    | "false"             |
       Given statement
         """

@@ -360,4 +360,4 @@ Feature: Delta Lake Variant support
     Then delta log latest effective protocol and metadata contains
       | path                    | value                                                           |
       | protocol.readerFeatures | ["variantType", "variantShredding"]                              |
-      | protocol.writerFeatures | ["variantType", "appendOnly", "invariants", "variantShredding"] |
+      | protocol.writerFeatures | ["appendOnly", "invariants", "variantType", "variantShredding"] |

@@ -59,14 +59,7 @@ pub(crate) fn catalog_managed_delta_table(kind: TableKind) -> Option<CatalogMana
 }
 
 pub(crate) fn protocol_with_catalog_managed(protocol: &Protocol) -> Protocol {
-    let mut reader_features = protocol
-        .reader_features()
-        .map(|features| features.to_vec())
-        .unwrap_or_default();
-    let mut writer_features = protocol
-        .writer_features()
-        .map(|features| features.to_vec())
-        .unwrap_or_default();
+    let (mut reader_features, mut writer_features) = protocol.table_features_for_upgrade();
     for feature in [
         TableFeature::CatalogManaged,
         TableFeature::VacuumProtocolCheck,
@@ -146,7 +139,40 @@ mod tests {
         assert!(protocol.has_reader_feature(&TableFeature::CatalogManaged));
         assert!(protocol.has_writer_feature(&TableFeature::CatalogManaged));
         assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         assert!(protocol.has_reader_feature(&TableFeature::VacuumProtocolCheck));
         assert!(protocol.has_writer_feature(&TableFeature::VacuumProtocolCheck));
+    }
+
+    #[test]
+    fn catalog_managed_protocol_materializes_all_legacy_features() {
+        let protocol = protocol_with_catalog_managed(&Protocol::new(2, 6, None, None));
+
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
+        assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
+        assert!(protocol.has_writer_feature(&TableFeature::ChangeDataFeed));
+        assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(protocol.has_reader_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_writer_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_writer_feature(&TableFeature::IdentityColumns));
+    }
+
+    #[test]
+    fn catalog_managed_protocol_does_not_invent_legacy_features_for_writer_seven() {
+        let protocol = protocol_with_catalog_managed(&Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![TableFeature::InCommitTimestamp]),
+        ));
+
+        assert!(!protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(!protocol.has_writer_feature(&TableFeature::Invariants));
+        assert!(!protocol.has_writer_feature(&TableFeature::CheckConstraints));
+        assert!(!protocol.has_writer_feature(&TableFeature::ChangeDataFeed));
+        assert!(!protocol.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(!protocol.has_writer_feature(&TableFeature::IdentityColumns));
     }
 }

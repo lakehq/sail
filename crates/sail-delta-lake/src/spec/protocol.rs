@@ -256,4 +256,39 @@ impl Protocol {
     pub fn is_in_commit_timestamps_enabled(&self, table_properties: &TableProperties) -> bool {
         self.supports_in_commit_timestamps() && table_properties.enable_in_commit_timestamps()
     }
+
+    pub(crate) fn table_features_for_upgrade(&self) -> (Vec<TableFeature>, Vec<TableFeature>) {
+        let mut reader_features = self.reader_features().unwrap_or(&[]).to_vec();
+        let mut writer_features = self.writer_features().unwrap_or(&[]).to_vec();
+        if self.min_writer_version() >= 7 {
+            return (reader_features, writer_features);
+        }
+
+        let mut push_writer_feature = |feature| {
+            if !writer_features.contains(&feature) {
+                writer_features.push(feature);
+            }
+        };
+        if self.min_writer_version() >= 2 {
+            push_writer_feature(TableFeature::AppendOnly);
+            push_writer_feature(TableFeature::Invariants);
+        }
+        if self.min_writer_version() >= 3 {
+            push_writer_feature(TableFeature::CheckConstraints);
+        }
+        if self.min_writer_version() >= 4 {
+            push_writer_feature(TableFeature::ChangeDataFeed);
+            push_writer_feature(TableFeature::GeneratedColumns);
+        }
+        if self.min_reader_version() >= 2 && self.min_writer_version() >= 5 {
+            if !reader_features.contains(&TableFeature::ColumnMapping) {
+                reader_features.push(TableFeature::ColumnMapping);
+            }
+            push_writer_feature(TableFeature::ColumnMapping);
+        }
+        if self.min_writer_version() >= 6 {
+            push_writer_feature(TableFeature::IdentityColumns);
+        }
+        (reader_features, writer_features)
+    }
 }

@@ -275,7 +275,7 @@ def test_delta_schema_timestamp_ntz_create_protocol(spark, tmp_path):
         assert ntz_protocol["minReaderVersion"] == 3  # noqa: PLR2004
         assert ntz_protocol["minWriterVersion"] == 7  # noqa: PLR2004
         assert ntz_protocol["readerFeatures"] == ["timestampNtz"]
-        assert ntz_protocol["writerFeatures"] == ["timestampNtz"]
+        assert ntz_protocol["writerFeatures"] == ["timestampNtz", "appendOnly", "invariants"]
 
         timestamp_protocol = next(
             action["protocol"] for action in _delta_log_actions(timestamp_path) if "protocol" in action

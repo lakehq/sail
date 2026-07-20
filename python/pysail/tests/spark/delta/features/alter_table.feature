@@ -96,7 +96,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
       Then delta log latest effective protocol and metadata contains
         | path                                                                       | value  |
         | protocol.minWriterVersion                                                  | 7      |
-        | protocol.writerFeatures                                                    | ["inCommitTimestamp"] |
+        | protocol.writerFeatures                                                    | ["appendOnly", "invariants", "inCommitTimestamp"] |
         | metaData.configuration['delta.enableInCommitTimestamps']                   | "true" |
 
     Scenario: Time travel ignores pre-enablement in-commit timestamps after ALTER TABLE enables ICT
@@ -151,7 +151,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                           | 3      |
         | protocol.minWriterVersion                           | 7      |
         | protocol.readerFeatures                             | ["typeWidening"] |
-        | protocol.writerFeatures                             | ["typeWidening"] |
+        | protocol.writerFeatures                             | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.configuration['delta.enableTypeWidening']  | "true" |
 
     Scenario: ALTER COLUMN TYPE applies Delta type widening and records metadata
@@ -235,7 +235,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                                       | 3         |
         | protocol.minWriterVersion                                       | 7         |
         | protocol.readerFeatures                                         | ["typeWidening"] |
-        | protocol.writerFeatures                                         | ["typeWidening"] |
+        | protocol.writerFeatures                                         | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.schemaString.fields[0].type                            | "long"    |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].fromType | "integer" |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].toType   | "long"    |

@@ -1508,6 +1508,8 @@ fn merge_protocol_for_upgrade(
     let new_min_writer = existing
         .min_writer_version()
         .max(desired.min_writer_version());
+    let (existing_reader_features, existing_writer_features) =
+        existing.table_features_for_upgrade();
 
     fn merge_features(
         existing: Option<&[TableFeature]>,
@@ -1539,12 +1541,18 @@ fn merge_protocol_for_upgrade(
     // requires them (>=3 for readers, >=7 for writers) -- otherwise older clients may
     // mis-interpret the table as being on the table-features protocol.
     let reader_features = if new_min_reader >= 3 {
-        merge_features(existing.reader_features(), desired.reader_features())
+        merge_features(
+            Some(existing_reader_features.as_slice()),
+            desired.reader_features(),
+        )
     } else {
         existing.reader_features().map(|s| s.to_vec())
     };
     let writer_features = if new_min_writer >= 7 {
-        merge_features(existing.writer_features(), desired.writer_features())
+        merge_features(
+            Some(existing_writer_features.as_slice()),
+            desired.writer_features(),
+        )
     } else {
         existing.writer_features().map(|s| s.to_vec())
     };
@@ -2089,6 +2097,28 @@ mod tests {
         assert!(merged.has_writer_feature(&TableFeature::V2Checkpoint));
         assert!(merged.has_writer_feature(&TableFeature::AppendOnly));
         Ok(())
+    }
+
+    #[test]
+    fn protocol_upgrade_materializes_features_implied_by_legacy_versions() {
+        let existing = Protocol::new(1, 4, None, None);
+        let desired = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+
+        let (merged, upgraded) = merge_protocol_for_upgrade(&existing, &desired);
+
+        assert!(upgraded);
+        assert!(merged.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(merged.has_writer_feature(&TableFeature::Invariants));
+        assert!(merged.has_writer_feature(&TableFeature::CheckConstraints));
+        assert!(merged.has_writer_feature(&TableFeature::ChangeDataFeed));
+        assert!(merged.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(merged.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(merged.has_writer_feature(&TableFeature::V2Checkpoint));
     }
 
     #[test]

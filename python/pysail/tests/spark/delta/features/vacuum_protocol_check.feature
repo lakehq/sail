@@ -29,7 +29,7 @@ Feature: Delta Lake VACUUM protocol check
       | protocol.minReaderVersion | 3                       |
       | protocol.minWriterVersion | 7                       |
       | protocol.readerFeatures   | ["vacuumProtocolCheck"] |
-      | protocol.writerFeatures   | ["vacuumProtocolCheck"] |
+      | protocol.writerFeatures   | ["vacuumProtocolCheck", "appendOnly", "invariants"] |
     When query
       """
       SELECT id, value FROM delta_vacuum_protocol_check ORDER BY id

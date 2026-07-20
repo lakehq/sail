@@ -456,7 +456,7 @@ pub fn protocol_for_create(
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
     if configuration
         .get("delta.checkpointPolicy")
-        .map(|v| v.eq_ignore_ascii_case("v2"))
+        .map(|v| v == "v2")
         .unwrap_or(false)
     {
         if !reader_features.contains(&TableFeature::V2Checkpoint) {
@@ -486,6 +486,8 @@ pub fn protocol_for_create(
         let min_writer_version = if has_check_constraints { 3 } else { 2 };
         return Ok(Protocol::new(1, min_writer_version, None, None));
     }
+
+    enable_legacy_writer_features(&mut writer_features);
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
     let reader_features = (min_reader_version == 3).then_some(reader_features);
@@ -663,10 +665,9 @@ mod tests {
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
-        assert_eq!(
-            protocol.writer_features(),
-            Some([TableFeature::InCommitTimestamp].as_slice())
-        );
+        assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
@@ -1063,10 +1064,8 @@ mod tests {
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
-        assert_eq!(
-            protocol.writer_features(),
-            Some([TableFeature::AppendOnly].as_slice())
-        );
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
@@ -1094,6 +1093,7 @@ mod tests {
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
@@ -1136,6 +1136,8 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
@@ -1147,6 +1149,26 @@ mod tests {
             protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 2);
+        assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_does_not_case_fold_checkpoint_policy() -> DeltaResult<()> {
+        let configuration =
+            HashMap::from([("delta.checkpointPolicy".to_string(), "V2".to_string())]);
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &configuration,
+        )?;
+
         assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         Ok(())

@@ -95,7 +95,7 @@ impl FromStr for CheckpointPolicy {
     type Err = DeltaTableError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
+        match value {
             "classic" => Ok(Self::Classic),
             "v2" => Ok(Self::V2),
             _ => Err(DeltaTableError::generic(format!(
@@ -517,9 +517,15 @@ mod tests {
             CheckpointPolicy::Classic
         );
         assert_eq!(
-            TableProperties::from([("delta.checkpointPolicy", "V2")]).checkpoint_policy(),
+            TableProperties::from([("delta.checkpointPolicy", "v2")]).checkpoint_policy(),
             CheckpointPolicy::V2
         );
+        for invalid in ["V2", "Classic", " v2", "v2 "] {
+            assert!(
+                canonicalize_and_validate_table_properties([("checkpoint_policy", invalid)])
+                    .is_err()
+            );
+        }
         assert!(
             canonicalize_and_validate_table_properties([("checkpoint_policy", "invalid")]).is_err()
         );
