@@ -976,7 +976,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         r#where: _,
                         condition,
                     } = x;
-                    from_ast_expression(condition)
+                    let source = condition.text();
+                    Ok::<_, SqlError>(spec::ExprWithSource {
+                        expr: from_ast_expression(condition)?,
+                        source: Some(source),
+                    })
                 })
                 .transpose()?;
             let node = spec::CommandNode::Update {

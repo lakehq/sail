@@ -50,7 +50,7 @@ impl PlanResolver<'_> {
         // Convert the condition expression if present
         let condition = if let Some(condition) = condition {
             let resolved_condition = self
-                .resolve_expression(condition, &df_schema_for_resolution, state)
+                .resolve_expression(condition.expr, &df_schema_for_resolution, state)
                 .await?;
             let rewritten_condition = expression_before_rename(
                 &resolved_condition,
@@ -58,7 +58,7 @@ impl PlanResolver<'_> {
                 &original_arrow_schema,
                 true
             )?;
-            Some(ExprWithSource::new(rewritten_condition, None))
+            Some(ExprWithSource::new(rewritten_condition, condition.source))
         } else {
             None
         };
