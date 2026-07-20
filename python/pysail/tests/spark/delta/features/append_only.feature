@@ -16,11 +16,10 @@ Feature: Delta Lake append-only tables
         TBLPROPERTIES ('delta.appendOnly' = 'true')
         """
       Then delta log first commit protocol and metadata contains
-        | path                                                | value          |
-        | protocol.minReaderVersion                           | 1              |
-        | protocol.minWriterVersion                           | 7              |
-        | protocol.writerFeatures                             | ["appendOnly"] |
-        | metaData.configuration['delta.appendOnly']          | "true"         |
+        | path                                                | value  |
+        | protocol.minReaderVersion                           | 1      |
+        | protocol.minWriterVersion                           | 2      |
+        | metaData.configuration['delta.appendOnly']          | "true" |
       Given statement
         """
         INSERT INTO delta_append_only_create_test VALUES (1)
@@ -59,11 +58,10 @@ Feature: Delta Lake append-only tables
         SET TBLPROPERTIES ('delta.appendOnly' = 'true')
         """
       Then delta log latest effective protocol and metadata contains
-        | path                                                | value          |
-        | protocol.minReaderVersion                           | 1              |
-        | protocol.minWriterVersion                           | 7              |
-        | protocol.writerFeatures                             | ["appendOnly"] |
-        | metaData.configuration['delta.appendOnly']          | "true"         |
+        | path                                                | value  |
+        | protocol.minReaderVersion                           | 1      |
+        | protocol.minWriterVersion                           | 2      |
+        | metaData.configuration['delta.appendOnly']          | "true" |
       Given statement with error Delta table is append-only
         """
         DELETE FROM delta_append_only_alter_test WHERE id = 1
@@ -103,10 +101,9 @@ Feature: Delta Lake append-only tables
         UNSET TBLPROPERTIES ('delta.appendOnly')
         """
       Then delta log latest effective protocol and metadata contains
-        | path                                                | value          |
-        | protocol.minReaderVersion                           | 1              |
-        | protocol.minWriterVersion                           | 7              |
-        | protocol.writerFeatures                             | ["appendOnly"] |
+        | path                                                | value |
+        | protocol.minReaderVersion                           | 1     |
+        | protocol.minWriterVersion                           | 2     |
       Given statement
         """
         DELETE FROM delta_append_only_unset_test WHERE id = 1

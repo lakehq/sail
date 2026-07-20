@@ -11,13 +11,13 @@ Feature: Delta Lake Variant support
       """
       CREATE TABLE delta_variant_partition_table (
         id INT,
-        payload VARIANT
+        Payload VARIANT
       )
       USING DELTA
       LOCATION {{ location.sql }}
       PARTITIONED BY (payload)
       """
-    Then query error (?s).*VARIANT column `payload` cannot be used as a partition column.*
+    Then query error (?s).*VARIANT column `Payload` cannot be used as a partition column.*
 
   Scenario: Write and read a Variant column
     Given variable location for temporary directory delta_variant

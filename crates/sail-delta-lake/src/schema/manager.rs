@@ -201,21 +201,34 @@ pub fn metadata_for_create_with_struct_type(
     created_time: i64,
     configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
-    for partition_column in &partition_columns {
-        if schema
-            .field(partition_column)
-            .is_some_and(|field| matches!(field.data_type(), DataType::Variant(_)))
-        {
+    let mut resolved_partition_columns = Vec::with_capacity(partition_columns.len());
+    for partition_column in partition_columns {
+        let mut matches = schema
+            .fields()
+            .filter(|field| field.name().eq_ignore_ascii_case(&partition_column));
+        let field = matches.next().ok_or_else(|| {
+            DeltaTableError::schema(format!(
+                "partition column `{partition_column}` is not present in the table schema"
+            ))
+        })?;
+        if matches.next().is_some() {
             return Err(DeltaTableError::schema(format!(
-                "VARIANT column `{partition_column}` cannot be used as a partition column"
+                "partition column `{partition_column}` is ambiguous under case-insensitive resolution"
             )));
         }
+        if matches!(field.data_type(), DataType::Variant(_)) {
+            return Err(DeltaTableError::schema(format!(
+                "VARIANT column `{}` cannot be used as a partition column",
+                field.name()
+            )));
+        }
+        resolved_partition_columns.push(field.name().to_string());
     }
     Metadata::try_new(
         None,
         None,
         schema,
-        partition_columns,
+        resolved_partition_columns,
         created_time,
         configuration,
     )
@@ -372,9 +385,6 @@ pub fn protocol_for_create(
     if enable_identity_columns {
         writer_features.push(TableFeature::IdentityColumns);
     }
-    if table_properties.append_only() {
-        writer_features.push(TableFeature::AppendOnly);
-    }
     if enable_variant {
         enable_variant_type_features_for_schema(
             &mut reader_features,
@@ -457,6 +467,14 @@ pub fn protocol_for_create(
         }
     }
 
+    // appendOnly is a legacy writer-v2 feature. It is listed explicitly only when another
+    // requirement already places the table on the writer-v7 table-features protocol.
+    if table_properties.append_only()
+        && (!reader_features.is_empty() || !writer_features.is_empty())
+    {
+        push_feature(&mut writer_features, TableFeature::AppendOnly);
+    }
+
     if has_check_constraints
         && !writer_features.is_empty()
         && !writer_features.contains(&TableFeature::CheckConstraints)
@@ -470,11 +488,12 @@ pub fn protocol_for_create(
     }
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
+    let reader_features = (min_reader_version == 3).then_some(reader_features);
 
     Ok(Protocol::new(
         min_reader_version,
         7,
-        Some(reader_features),
+        reader_features,
         Some(writer_features),
     ))
 }
@@ -542,6 +561,90 @@ mod tests {
 
         assert_eq!(metadata.parse_schema()?, schema);
         assert_eq!(metadata.partition_columns(), &["id".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_canonicalizes_partition_column_case() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("EventDate", DataType::DATE),
+            StructField::nullable("payload", DataType::STRING),
+        ])?;
+
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec!["eventdate".to_string()],
+            0,
+            HashMap::new(),
+        )?;
+
+        assert_eq!(metadata.partition_columns(), &["EventDate".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_rejects_case_mismatched_variant_partition_column() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable(
+            "Payload",
+            DataType::unshredded_variant(),
+        )])?;
+
+        let result = metadata_for_create_with_struct_type(
+            schema,
+            vec!["payload".to_string()],
+            0,
+            HashMap::new(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains(
+                "VARIANT column `Payload` cannot be used as a partition column"
+            )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_rejects_unknown_partition_column() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
+
+        let result = metadata_for_create_with_struct_type(
+            schema,
+            vec!["missing".to_string()],
+            0,
+            HashMap::new(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains(
+                "partition column `missing` is not present in the table schema"
+            )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_rejects_case_insensitive_partition_ambiguity() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("Category", DataType::STRING),
+            StructField::nullable("category", DataType::STRING),
+        ])?;
+
+        let result = metadata_for_create_with_struct_type(
+            schema,
+            vec!["CATEGORY".to_string()],
+            0,
+            HashMap::new(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains(
+                "partition column `CATEGORY` is ambiguous under case-insensitive resolution"
+            )
+        ));
         Ok(())
     }
 
@@ -899,12 +1002,63 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_metadata_activates_append_only_from_true_property() -> DeltaResult<()> {
+    fn protocol_for_metadata_keeps_plain_append_only_on_legacy_writer_version() -> DeltaResult<()> {
         let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
         let configuration = HashMap::from([("delta.appendOnly".to_string(), "true".to_string())]);
         let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
 
         let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 2);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_keeps_plain_append_only_on_legacy_writer_version() -> DeltaResult<()> {
+        let configuration = HashMap::from([("delta.appendOnly".to_string(), "true".to_string())]);
+
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &configuration,
+        )?;
+
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 2);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_lists_append_only_when_explicitly_enabled_as_feature() -> DeltaResult<()>
+    {
+        let configuration = HashMap::from([
+            ("delta.appendOnly".to_string(), "true".to_string()),
+            (
+                "delta.feature.appendOnly".to_string(),
+                "supported".to_string(),
+            ),
+        ]);
+
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &configuration,
+        )?;
 
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
@@ -913,6 +1067,33 @@ mod tests {
             protocol.writer_features(),
             Some([TableFeature::AppendOnly].as_slice())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_lists_append_only_when_another_feature_requires_writer_seven()
+    -> DeltaResult<()> {
+        let configuration = HashMap::from([
+            ("delta.appendOnly".to_string(), "true".to_string()),
+            ("delta.checkpointPolicy".to_string(), "v2".to_string()),
+        ]);
+
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &configuration,
+        )?;
+
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
         Ok(())
     }
 
