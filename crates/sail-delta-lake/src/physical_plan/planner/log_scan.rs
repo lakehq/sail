@@ -17,6 +17,7 @@ use object_store::path::{DELIMITER, Path};
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::context::PlannerContext;
+use crate::checkpoint::validate_checkpoint_sidecar_file;
 use crate::datasource::create_object_store_url;
 use crate::physical_plan::COL_LOG_VERSION;
 use crate::spec::{
@@ -249,6 +250,18 @@ pub async fn build_delta_log_datasource_scans_with_options(
         head_many(&store, table_root_path, &commit_files),
         head_many(&store, table_root_path, &sidecar_files)
     )?;
+    stream::iter(sidecar_metas.iter().cloned())
+        .map(|meta| {
+            let store = Arc::clone(&store);
+            async move {
+                validate_checkpoint_sidecar_file(store, meta)
+                    .await
+                    .map_err(|error| DataFusionError::External(Box::new(error)))
+            }
+        })
+        .buffer_unordered(16)
+        .try_collect::<Vec<_>>()
+        .await?;
     let (json_checkpoint_metas, parquet_checkpoint_metas): (Vec<_>, Vec<_>) =
         checkpoint_metas.into_iter().partition(|meta| {
             meta.location

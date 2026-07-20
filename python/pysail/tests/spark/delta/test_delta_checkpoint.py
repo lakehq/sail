@@ -82,6 +82,26 @@ def _drop_null_checkpoint_add_field(checkpoint: Path, field_name: str) -> None:
     )
 
 
+def _add_protocol_to_first_file_action(checkpoint: Path) -> None:
+    table = pq.read_table(checkpoint)
+    add = table.column("add").combine_chunks()
+    first_add = next(index for index, present in enumerate(add.is_valid().to_pylist()) if present)
+    protocol_index = table.schema.get_field_index("protocol")
+    protocol_field = table.schema.field(protocol_index)
+    values = [None] * table.num_rows
+    values[first_add] = {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2,
+        "readerFeatures": None,
+        "writerFeatures": None,
+    }
+    protocol = pa.array(values, type=protocol_field.type)
+    _write_checkpoint_replacement(
+        checkpoint,
+        table.set_column(protocol_index, protocol_field, protocol),
+    )
+
+
 def _require_legacy_partition_values_parsed(checkpoint: Path) -> None:
     table = pq.read_table(checkpoint)
     add_index = table.schema.get_field_index("add")
@@ -361,6 +381,36 @@ def test_v2_sparse_legacy_sidecar_replays_json_tail(spark, tmp_path: Path):
             for row in spark.sql(f"SELECT id FROM {table_name} ORDER BY id").collect()  # noqa: S608
         ]
         assert remaining_ids == [2, 4]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+
+def test_metadata_as_data_ignores_extra_protocol_in_sidecar(spark, tmp_path: Path):
+    table_path = tmp_path / "delta_v2_sidecar_extra_protocol"
+    table_name = "delta_v2_sidecar_extra_protocol"
+    location = escape_sql_string_literal(str(table_path))
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id BIGINT)
+            USING DELTA
+            LOCATION '{location}'
+            TBLPROPERTIES (
+              'delta.checkpointInterval' = '1',
+              'delta.checkpointPolicy' = 'v2'
+            )
+            """
+        ).collect()
+        spark.sql(f"INSERT INTO {table_name} VALUES (1)")  # noqa: S608
+        spark.sql(f"DROP TABLE {table_name}").collect()
+
+        sidecar = _v2_checkpoint_sidecar(table_path, 1)
+        _add_protocol_to_first_file_action(sidecar)
+
+        rows = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(table_path)).collect()
+        assert [row.id for row in rows] == [1]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
 
