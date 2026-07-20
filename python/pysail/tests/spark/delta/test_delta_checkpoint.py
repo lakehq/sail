@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -11,9 +11,6 @@ from pyspark.sql import Row
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _read_first_commit_metadata(table_path: Path) -> dict:
@@ -31,6 +28,21 @@ def _checkpoint_file(table_path: Path, version: int) -> Path:
     matches = sorted((table_path / "_delta_log").glob(f"{version:020d}.checkpoint*.parquet"))
     assert len(matches) == 1, f"expected one checkpoint for version {version}, found {matches}"
     return matches[0]
+
+
+def _v2_checkpoint_sidecar(table_path: Path, version: int) -> Path:
+    log_path = table_path / "_delta_log"
+    manifests = sorted(log_path.glob(f"{version:020d}.checkpoint.*.json"))
+    assert len(manifests) == 1, f"expected one V2 manifest for version {version}, found {manifests}"
+    sidecars = []
+    with manifests[0].open("r", encoding="utf-8") as manifest:
+        for line in manifest:
+            action = json.loads(line)
+            if "sidecar" in action:
+                sidecars.append(log_path / "_sidecars" / Path(action["sidecar"]["path"]).name)
+    assert len(sidecars) == 1, f"expected one V2 sidecar, found {sidecars}"
+    assert sidecars[0].is_file()
+    return sidecars[0]
 
 
 def _write_checkpoint_replacement(checkpoint: Path, table: pa.Table) -> None:
@@ -299,6 +311,58 @@ def test_legacy_nonnullable_parsed_checkpoint_replays_json_tail(spark, tmp_path:
     (replacement.write.format("delta").mode("overwrite").option("replaceWhere", "category = 'A'").save(str(table_path)))
     actual_ids = [row.id for row in spark.read.format("delta").load(str(table_path)).orderBy("id").collect()]
     assert actual_ids == [2, 4, 5, 10]
+
+
+def test_v2_sparse_legacy_sidecar_replays_json_tail(spark, tmp_path: Path):
+    table_path = tmp_path / "delta_v2_sparse_legacy_sidecar"
+    table_name = "delta_v2_sparse_legacy_sidecar"
+    location = escape_sql_string_literal(str(table_path))
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id BIGINT, category STRING)
+            USING DELTA
+            PARTITIONED BY (category)
+            LOCATION '{location}'
+            OPTIONS (metadataAsDataRead 'true')
+            TBLPROPERTIES (
+              'delta.checkpointInterval' = '2',
+              'delta.checkpointPolicy' = 'v2',
+              'delta.checkpoint.writeStatsAsStruct' = 'true'
+            )
+            """
+        ).collect()
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'A'), (2, 'B')")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_name} VALUES (3, 'A')")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_name} VALUES (4, 'C')")  # noqa: S608
+        assert (table_path / "_delta_log" / "00000000000000000003.json").is_file()
+
+        spark.sql(f"DROP TABLE {table_name}").collect()
+        sidecar = _v2_checkpoint_sidecar(table_path, 2)
+        _require_legacy_partition_values_parsed(sidecar)
+        _drop_null_checkpoint_add_field(sidecar, "deletionVector")
+
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name}
+            USING DELTA
+            LOCATION '{location}'
+            OPTIONS (metadataAsDataRead 'true')
+            """
+        ).collect()
+        actual_ids = [row.id for row in spark.sql(f"SELECT id FROM {table_name} ORDER BY id").collect()]  # noqa: S608
+        assert actual_ids == [1, 2, 3, 4]
+
+        spark.sql(f"DELETE FROM {table_name} WHERE category = 'A'")  # noqa: S608
+        remaining_ids = [
+            row.id
+            for row in spark.sql(f"SELECT id FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        ]
+        assert remaining_ids == [2, 4]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
 
 
 @pytest.mark.parametrize("omitted_action", ["add", "remove"])

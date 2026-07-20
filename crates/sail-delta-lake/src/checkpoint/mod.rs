@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
+use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
@@ -46,10 +47,11 @@ pub(crate) use crate::delta_log::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
 };
 use crate::spec::{
-    Action, Add, CheckpointActionRow, CheckpointMetadata, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, LastCheckpointHint, LastCheckpointV2, LogicalFileKey, Metadata,
-    Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction, checkpoint_path,
-    is_json_checkpoint_filename, last_checkpoint_path, logical_file_key, sidecar_file_path,
+    Action, Add, CheckpointActionRow, CheckpointMetadata, CheckpointPolicy,
+    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint,
+    LastCheckpointV2, LogicalFileKey, Metadata, Protocol, Remove, Sidecar, TableFeature,
+    TableProperties, Transaction, checkpoint_path, is_json_checkpoint_filename,
+    is_uuid_checkpoint_filename, last_checkpoint_path, logical_file_key, sidecar_file_path,
     uuid_json_checkpoint_path,
 };
 
@@ -505,6 +507,19 @@ pub(crate) fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<Che
     serde_arrow::from_record_batch(&batch).map_err(DeltaTableError::generic_err)
 }
 
+fn validate_forbidden_checkpoint_actions(batch: &RecordBatch, context: &str) -> DeltaResult<()> {
+    for action_name in ["commitInfo", "cdc"] {
+        if let Some((column_index, _)) = batch.schema().column_with_name(action_name)
+            && batch.column(column_index).null_count() != batch.num_rows()
+        {
+            return Err(DeltaTableError::generic(format!(
+                "{context} must not contain {action_name} actions"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn checkpoint_fields() -> DeltaResult<Vec<FieldRef>> {
     let schema = CheckpointActionRow::struct_type();
     schema
@@ -627,11 +642,22 @@ impl<'a> CheckpointManager<'a> {
         .await?;
         state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
 
-        // Check if the protocol enables V2 checkpoints.
-        let use_v2 = state
-            .protocol
-            .as_ref()
-            .is_some_and(|p| p.has_writer_feature(&TableFeature::V2Checkpoint));
+        // The feature permits V2 checkpoints, while the metadata policy selects them.
+        let use_v2 = state.metadata.as_ref().is_some_and(|metadata| {
+            TableProperties::from(metadata.configuration().iter()).checkpoint_policy()
+                == CheckpointPolicy::V2
+        });
+
+        if use_v2
+            && !state
+                .protocol
+                .as_ref()
+                .is_some_and(|protocol| protocol.has_writer_feature(&TableFeature::V2Checkpoint))
+        {
+            return Err(DeltaTableError::generic(
+                "delta.checkpointPolicy=v2 requires the v2Checkpoint writer feature",
+            ));
+        }
 
         if use_v2 {
             self.write_v2_checkpoint(version, state, store).await
@@ -829,7 +855,7 @@ impl<'a> CheckpointManager<'a> {
     }
 }
 
-async fn write_classic_checkpoint_file(
+pub(crate) async fn write_classic_checkpoint_file(
     version: i64,
     state: ReconciledCheckpointState,
     store: Arc<dyn ObjectStore>,
@@ -963,31 +989,36 @@ pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
             meta.location
         ))
     })?;
-    let bytes = root_store.get(&meta.location).await?.bytes().await?;
-    if meta
+    let filename = meta
         .location
         .as_ref()
         .rsplit('/')
         .next()
-        .is_some_and(is_json_checkpoint_filename)
-    {
-        return decode_checkpoint_json_rows(version, &bytes);
-    }
-    SpawnedTask::spawn_blocking(move || {
-        let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
-            .map_err(DeltaTableError::generic_err)?
-            .build()
-            .map_err(DeltaTableError::generic_err)?;
-        let mut rows = Vec::new();
-        for batch in &mut batches {
-            let batch = batch.map_err(DeltaTableError::generic_err)?;
-            let mut decoded = decode_checkpoint_rows(&batch)?;
-            rows.append(&mut decoded);
-        }
-        Ok::<_, DeltaTableError>(rows)
-    })
-    .await
-    .map_err(DeltaTableError::generic_err)?
+        .unwrap_or_default()
+        .to_string();
+    let bytes = root_store.get(&meta.location).await?.bytes().await?;
+    let rows = if is_json_checkpoint_filename(&filename) {
+        decode_checkpoint_json_rows(version, &bytes)?
+    } else {
+        SpawnedTask::spawn_blocking(move || {
+            let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                .map_err(DeltaTableError::generic_err)?
+                .build()
+                .map_err(DeltaTableError::generic_err)?;
+            let mut rows = Vec::new();
+            for batch in &mut batches {
+                let batch = batch.map_err(DeltaTableError::generic_err)?;
+                validate_forbidden_checkpoint_actions(&batch, "checkpoint")?;
+                let mut decoded = decode_checkpoint_rows(&batch)?;
+                rows.append(&mut decoded);
+            }
+            Ok::<_, DeltaTableError>(rows)
+        })
+        .await
+        .map_err(DeltaTableError::generic_err)??
+    };
+    validate_checkpoint_main_rows(version, is_uuid_checkpoint_filename(&filename), &rows)?;
+    Ok(rows)
 }
 
 pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
@@ -1012,6 +1043,7 @@ pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
                 let mut sidecar_rows = Vec::new();
                 for batch in &mut batches {
                     let batch = batch.map_err(DeltaTableError::generic_err)?;
+                    validate_forbidden_checkpoint_actions(&batch, "V2 checkpoint sidecar")?;
                     let mut decoded = decode_checkpoint_rows(&batch)?;
                     sidecar_rows.append(&mut decoded);
                 }
@@ -1019,11 +1051,107 @@ pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
             })
             .await
             .map_err(DeltaTableError::generic_err)??;
+            validate_checkpoint_sidecar_rows(&sidecar.path, &sidecar_rows)?;
             rows.extend(sidecar_rows);
         }
     }
 
     Ok(rows)
+}
+
+fn checkpoint_row_action_count(row: &CheckpointActionRow) -> usize {
+    [
+        row.add.is_some(),
+        row.remove.is_some(),
+        row.metadata.is_some(),
+        row.protocol.is_some(),
+        row.txn.is_some(),
+        row.domain_metadata.is_some(),
+        row.checkpoint_metadata.is_some(),
+        row.sidecar.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count()
+}
+
+/// Validate the invariants that can be established without loading sidecars.
+/// UUID-named checkpoints are always V2; classic names may contain either format.
+fn validate_checkpoint_main_rows(
+    version: i64,
+    uuid_named: bool,
+    rows: &[CheckpointActionRow],
+) -> DeltaResult<()> {
+    let checkpoint_metadata: Vec<&CheckpointMetadata> = rows
+        .iter()
+        .filter_map(|row| row.checkpoint_metadata.as_ref())
+        .collect();
+    let has_sidecars = rows.iter().any(|row| row.sidecar.is_some());
+    let is_v2 = uuid_named || !checkpoint_metadata.is_empty() || has_sidecars;
+    if !is_v2 {
+        return Ok(());
+    }
+
+    if checkpoint_metadata.len() != 1 {
+        return Err(DeltaTableError::generic(format!(
+            "V2 checkpoint at version {version} must contain exactly one checkpointMetadata action; found {}",
+            checkpoint_metadata.len()
+        )));
+    }
+    if checkpoint_metadata[0].version != version {
+        return Err(DeltaTableError::generic(format!(
+            "V2 checkpoint metadata version {} does not match checkpoint file version {version}",
+            checkpoint_metadata[0].version
+        )));
+    }
+    let protocols: Vec<&Protocol> = rows
+        .iter()
+        .filter_map(|row| row.protocol.as_ref())
+        .collect();
+    if protocols.len() != 1 {
+        return Err(DeltaTableError::generic(format!(
+            "V2 checkpoint at version {version} must contain exactly one protocol action; found {}",
+            protocols.len()
+        )));
+    }
+    if !(protocols[0].has_reader_feature(&TableFeature::V2Checkpoint)
+        && protocols[0].has_writer_feature(&TableFeature::V2Checkpoint))
+    {
+        return Err(DeltaTableError::generic(format!(
+            "V2 checkpoint at version {version} requires the v2Checkpoint reader and writer features"
+        )));
+    }
+    for row in rows {
+        if checkpoint_row_action_count(row) != 1 {
+            return Err(DeltaTableError::generic(format!(
+                "V2 checkpoint at version {version} must contain exactly one action per row"
+            )));
+        }
+    }
+    if has_sidecars
+        && rows
+            .iter()
+            .any(|row| row.add.is_some() || row.remove.is_some())
+    {
+        return Err(DeltaTableError::generic(format!(
+            "V2 checkpoint at version {version} must store all add and remove actions either in the main file or in sidecars"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_checkpoint_sidecar_rows(
+    sidecar_path: &str,
+    rows: &[CheckpointActionRow],
+) -> DeltaResult<()> {
+    for row in rows {
+        if checkpoint_row_action_count(row) != 1 || (row.add.is_none() && row.remove.is_none()) {
+            return Err(DeltaTableError::generic(format!(
+                "V2 checkpoint sidecar {sidecar_path} may contain only add or remove actions"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn decode_checkpoint_json_rows(
@@ -1435,7 +1563,7 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
-    use datafusion::arrow::array::{Array, ArrayRef, Int64Array, StructArray};
+    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StructArray};
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
     };
@@ -1450,22 +1578,50 @@ mod tests {
 
     use super::{
         CheckpointManager, ReconciledCheckpointState, ReconciledHeaderState, checkpoint_fields,
-        decode_checkpoint_rows, encode_checkpoint_rows, read_checkpoint_rows_from_checkpoint_file,
-        replay_commit_header_actions,
+        decode_checkpoint_rows, encode_checkpoint_rows,
+        read_checkpoint_main_rows_from_checkpoint_file, read_checkpoint_rows_from_checkpoint_file,
+        replay_commit_header_actions, validate_forbidden_checkpoint_actions,
     };
     use crate::checkpoint::action_fields::{
         AddAugmentationConfig, normalize_checkpoint_batch_for_decode,
     };
+    use crate::delta_log::segment_files::list_log_segment_files;
     use crate::delta_log::{StorageConfig, default_logstore};
     use crate::spec::{
         Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
         DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
-        Metadata, Protocol, Remove, Sidecar, StorageType, StructField, StructType, TableFeature,
-        Transaction, last_checkpoint_path, sidecar_file_path,
+        LastCheckpointHint, Metadata, Protocol, Remove, Sidecar, StorageType, StructField,
+        StructType, TableFeature, Transaction, last_checkpoint_path, sidecar_file_path,
     };
 
     fn encode_rows_for_test(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
         encode_rows_with_properties(rows, std::iter::empty())
+    }
+
+    #[test]
+    fn raw_checkpoint_rejects_commit_info_and_cdc_actions() -> DeltaResult<()> {
+        for action_name in ["commitInfo", "cdc"] {
+            let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                action_name,
+                ArrowDataType::Int32,
+                true,
+            )]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![Some(1)]))])?;
+
+            let error = validate_forbidden_checkpoint_actions(&batch, "checkpoint")
+                .err()
+                .ok_or_else(|| {
+                    DeltaTableError::generic(format!(
+                        "{action_name} should be rejected in a checkpoint"
+                    ))
+                })?;
+            assert!(
+                error.to_string().contains(action_name),
+                "unexpected error: {error}"
+            );
+        }
+        Ok(())
     }
 
     fn encode_rows_with_properties(
@@ -1585,9 +1741,9 @@ mod tests {
         )?)
     }
 
-    async fn put_commit(
+    async fn put_actions(
         store: &Arc<dyn ObjectStore>,
-        version: i64,
+        path: Path,
         actions: &[Action],
     ) -> DeltaResult<()> {
         let mut bytes = Vec::new();
@@ -1597,12 +1753,21 @@ mod tests {
             }
             serde_json::to_writer(&mut bytes, action)?;
         }
-        store
-            .put(
-                &Path::from(format!("_delta_log/{version:020}.json")),
-                bytes.into(),
-            )
-            .await?;
+        store.put(&path, bytes.into()).await?;
+        Ok(())
+    }
+
+    async fn put_commit(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        actions: &[Action],
+    ) -> DeltaResult<()> {
+        put_actions(
+            store,
+            Path::from(format!("_delta_log/{version:020}.json")),
+            actions,
+        )
+        .await?;
         Ok(())
     }
 
@@ -2087,6 +2252,262 @@ mod tests {
         assert_eq!(state.protocol.as_ref(), Some(&protocol));
         assert_eq!(state.metadata.as_ref(), Some(&metadata));
         assert!(state.adds.values().any(|entry| entry == &add));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn feature_support_without_v2_policy_writes_classic_checkpoint() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        for configuration in [
+            vec![("delta.feature.v2Checkpoint", "enabled")],
+            vec![
+                ("delta.feature.v2Checkpoint", "enabled"),
+                ("delta.checkpointPolicy", "classic"),
+            ],
+        ] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+            let log_store =
+                default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
+            let metadata = test_metadata(configuration)?;
+            put_commit(
+                &store,
+                0,
+                &[
+                    Action::Protocol(protocol.clone()),
+                    Action::Metadata(metadata),
+                ],
+            )
+            .await?;
+
+            CheckpointManager::new(log_store.as_ref(), Uuid::nil())
+                .create_checkpoint(0)
+                .await?;
+
+            store
+                .head(&Path::from(
+                    "_delta_log/00000000000000000000.checkpoint.parquet",
+                ))
+                .await?;
+            let hint_bytes = store.get(&last_checkpoint_path()).await?.bytes().await?;
+            let hint: LastCheckpointHint = serde_json::from_slice(&hint_bytes)?;
+            assert!(hint.v2_checkpoint.is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn classic_named_v2_checkpoint_loads_and_lists_sidecar_actions() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let metadata = test_metadata([("delta.checkpointPolicy", "v2")])?;
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        let add = Add {
+            path: "part-classic-v2.parquet".to_string(),
+            size: 10,
+            modification_time: 20,
+            data_change: true,
+            ..Default::default()
+        };
+        let sidecar_filename = "classic-v2-sidecar.parquet";
+        let sidecar_batch = encode_rows_for_test(&vec![CheckpointActionRow {
+            add: Some(add.clone()),
+            ..Default::default()
+        }])?;
+        put_parquet_batch(
+            store.clone(),
+            sidecar_file_path(sidecar_filename),
+            sidecar_batch,
+        )
+        .await?;
+
+        let checkpoint_path = Path::from("_delta_log/00000000000000000002.checkpoint.parquet");
+        let main_rows = vec![
+            CheckpointActionRow {
+                checkpoint_metadata: Some(CheckpointMetadata {
+                    version: 2,
+                    tags: None,
+                }),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                sidecar: Some(Sidecar {
+                    path: sidecar_filename.to_string(),
+                    size_in_bytes: 1,
+                    modification_time: 2,
+                    tags: None,
+                }),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                protocol: Some(protocol.clone()),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                metadata: Some(metadata.clone()),
+                ..Default::default()
+            },
+        ];
+        let main_batch = encode_rows_for_test(&main_rows)?;
+        put_parquet_batch(store.clone(), checkpoint_path.clone(), main_batch).await?;
+
+        let rows = read_checkpoint_rows_from_checkpoint_file(
+            store.clone(),
+            store.head(&checkpoint_path).await?,
+        )
+        .await?;
+        assert!(rows.iter().any(|row| row.add.as_ref() == Some(&add)));
+
+        let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
+        let segment = list_log_segment_files(&log_store, 2).await?;
+        assert_eq!(
+            segment.sidecar_files,
+            vec![format!("_sidecars/{sidecar_filename}")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn v2_checkpoint_rejects_invalid_main_structure() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let checkpoint_prefix = "_delta_log/00000000000000000002.checkpoint";
+        let invalid_cases = [
+            (
+                "c13805b3-8c9f-45f0-b1e4-a16b695fc041",
+                vec![Action::Protocol(Protocol::new(1, 2, None, None))],
+                "exactly one checkpointMetadata",
+            ),
+            (
+                "c13805b3-8c9f-45f0-b1e4-a16b695fc042",
+                vec![
+                    Action::CheckpointMetadata(CheckpointMetadata {
+                        version: 2,
+                        tags: None,
+                    }),
+                    Action::CheckpointMetadata(CheckpointMetadata {
+                        version: 2,
+                        tags: None,
+                    }),
+                ],
+                "exactly one checkpointMetadata",
+            ),
+            (
+                "c13805b3-8c9f-45f0-b1e4-a16b695fc043",
+                vec![Action::CheckpointMetadata(CheckpointMetadata {
+                    version: 1,
+                    tags: None,
+                })],
+                "does not match checkpoint file version 2",
+            ),
+            (
+                "c13805b3-8c9f-45f0-b1e4-a16b695fc044",
+                vec![
+                    Action::CheckpointMetadata(CheckpointMetadata {
+                        version: 2,
+                        tags: None,
+                    }),
+                    Action::Sidecar(Sidecar {
+                        path: "split.parquet".to_string(),
+                        size_in_bytes: 1,
+                        modification_time: 2,
+                        tags: None,
+                    }),
+                    Action::Protocol(Protocol::new(
+                        3,
+                        7,
+                        Some(vec![TableFeature::V2Checkpoint]),
+                        Some(vec![TableFeature::V2Checkpoint]),
+                    )),
+                    Action::Add(Add {
+                        path: "part-000.parquet".to_string(),
+                        data_change: true,
+                        ..Default::default()
+                    }),
+                ],
+                "either in the main file or in sidecars",
+            ),
+        ];
+
+        for (uuid, actions, expected_error) in invalid_cases {
+            let path = Path::from(format!("{checkpoint_prefix}.{uuid}.json"));
+            put_actions(&store, path.clone(), &actions).await?;
+            let result = read_checkpoint_main_rows_from_checkpoint_file(
+                store.clone(),
+                store.head(&path).await?,
+            )
+            .await;
+            let error = result.err().ok_or_else(|| {
+                DeltaTableError::generic("invalid V2 checkpoint should be rejected")
+            })?;
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected error: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn v2_checkpoint_rejects_non_file_action_in_sidecar() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let sidecar_filename = "invalid-sidecar.parquet";
+        let sidecar_batch = encode_rows_for_test(&vec![CheckpointActionRow {
+            protocol: Some(Protocol::new(1, 2, None, None)),
+            ..Default::default()
+        }])?;
+        put_parquet_batch(
+            store.clone(),
+            sidecar_file_path(sidecar_filename),
+            sidecar_batch,
+        )
+        .await?;
+
+        let checkpoint_path = Path::from(
+            "_delta_log/00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc045.json",
+        );
+        put_actions(
+            &store,
+            checkpoint_path.clone(),
+            &[
+                Action::CheckpointMetadata(CheckpointMetadata {
+                    version: 2,
+                    tags: None,
+                }),
+                Action::Sidecar(Sidecar {
+                    path: sidecar_filename.to_string(),
+                    size_in_bytes: 1,
+                    modification_time: 2,
+                    tags: None,
+                }),
+                Action::Protocol(Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::V2Checkpoint]),
+                    Some(vec![TableFeature::V2Checkpoint]),
+                )),
+            ],
+        )
+        .await?;
+
+        let result = read_checkpoint_rows_from_checkpoint_file(
+            store.clone(),
+            store.head(&checkpoint_path).await?,
+        )
+        .await;
+        let error = result.err().ok_or_else(|| {
+            DeltaTableError::generic("a sidecar containing non-file actions should be rejected")
+        })?;
+        assert!(error.to_string().contains("may contain only add or remove"));
         Ok(())
     }
 
