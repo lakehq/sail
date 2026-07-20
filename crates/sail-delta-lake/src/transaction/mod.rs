@@ -415,6 +415,13 @@ impl OperationMetrics {
                         self.num_target_deletion_vectors_updated;
                 }
             }
+            DeltaOperation::Update { .. } => {
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms
+                }
+                // TODO: numUpdatedRows and numCopiedRows require per-row condition
+                // tracking from the CASE projection.
+            }
             DeltaOperation::FileSystemCheck { .. } => {
                 self.num_added_files = None;
                 self.num_added_bytes = None;

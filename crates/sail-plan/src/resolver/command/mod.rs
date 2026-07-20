@@ -14,6 +14,7 @@ use crate::resolver::state::PlanResolverState;
 
 mod catalog;
 mod delete;
+mod update;
 mod delta;
 mod explain;
 mod function;
@@ -278,7 +279,20 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::Update {
+                table,
+                table_alias,
+                assignments,
+                condition
+             } => {
+                let update = spec::Update {
+                    table,
+                    table_alias,
+                    assignments,
+                    condition
+                };
+                self.resolve_command_update(update, state).await
+             },
             CommandNode::Delete {
                 table,
                 table_alias,

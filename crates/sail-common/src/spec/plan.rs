@@ -479,6 +479,7 @@ pub enum CommandNode {
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
+        // TODO: Consider Option<ExprWithSource> for condition
         condition: Option<Expr>,
     },
     Delete {
@@ -1403,6 +1404,15 @@ pub struct Delete {
     pub table: ObjectName,
     pub table_alias: Option<Identifier>,
     pub condition: Option<ExprWithSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Update {
+    pub table: ObjectName,
+    pub table_alias: Option<Identifier>,
+    pub assignments: Vec<(ObjectName, Expr)>,
+    pub condition: Option<Expr>
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

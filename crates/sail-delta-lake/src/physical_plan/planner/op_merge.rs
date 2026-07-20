@@ -25,6 +25,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{JoinType, NullEquality, not_impl_err};
+use datafusion_expr::Expr;
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{OptionLayer, PhysicalSinkMode, RowLevelCommand};
@@ -76,6 +77,8 @@ pub struct RowLevelWriteInfo {
     pub target: RowLevelTargetInfo,
     /// Condition for DELETE/UPDATE. `None` for MERGE.
     pub condition: Option<ExprWithSource>,
+    /// Assignments for UPDATE. empty for DELETE/MERGE.
+    pub assignments: Vec<(String, Expr)>,
     /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).

@@ -25,10 +25,7 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
-    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatMetadata, TableFormatRegistry, UpdateInfo, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -457,6 +454,37 @@ impl TableFormat for DeltaTableFormat {
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
+        }))
+    }
+
+    async fn create_updater(&self, _ctx: &dyn Session, info: UpdateInfo) -> Result<LogicalPlan> {
+        let UpdateInfo {
+            table_name,
+            path,
+            condition,
+            assignments,
+            lakehouse_table,
+            options,
+        } = info;
+        let write_node = RowLevelWriteNode::new_update(
+            Arc::new(LogicalPlan::EmptyRelation(
+                datafusion_expr::logical_plan::EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::new(DFSchema::empty())
+                }
+            )),
+            Arc::new(DFSchema::empty()),
+            condition,
+            assignments,
+            self.name().to_string(),
+            path,
+            table_name,
+            options,
+            lakehouse_table
+        );
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(write_node)
         }))
     }
 

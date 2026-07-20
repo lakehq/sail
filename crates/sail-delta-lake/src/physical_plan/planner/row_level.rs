@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
+use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
@@ -16,7 +16,7 @@ use url::Url;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo,
-    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor,
+    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update
 };
 use crate::table::open_table_with_object_store;
 use crate::table_format::{DeltaTableFormat, split_delta_write_options_and_table_properties};
@@ -41,6 +41,7 @@ pub async fn create_row_level_write_physical_plan(
                 command: RowLevelCommand::Delete,
                 target,
                 condition: node.condition().cloned(),
+                assignments: Vec::new(),
                 expanded_input: None,
                 touched_file_plan: None,
                 deletion_vector_plan: None,
@@ -80,6 +81,7 @@ pub async fn create_row_level_write_physical_plan(
                 command: RowLevelCommand::Merge,
                 target,
                 condition: None,
+                assignments: Vec::new(),
                 expanded_input: Some(physical_write),
                 touched_file_plan: if is_insert_only {
                     None
@@ -96,7 +98,20 @@ pub async fn create_row_level_write_physical_plan(
             };
             create_delta_row_level_writer(ctx, info).await
         }
-        RowLevelCommand::Update => internal_err!("UPDATE is not yet implemented"),
+        RowLevelCommand::Update => {
+            let info = RowLevelWriteInfo {
+                command: RowLevelCommand::Update,
+                target,
+                condition: node.condition().cloned(),
+                assignments: node.assignments().to_vec(),
+                expanded_input: None,
+                touched_file_plan: None,
+                deletion_vector_plan: None,
+                with_schema_evolution: false,
+                operation_override: None,
+            };
+            create_delta_row_level_writer(ctx, info).await
+        },
     }
 }
 
@@ -191,7 +206,20 @@ async fn create_delta_row_level_writer(
             plan_merge(&merge_ctx, info).await
         }
         (_, RowLevelCommand::Update) => {
-            not_impl_err!("UPDATE is not yet implemented for Delta Lake")
+            let table_url =
+                DeltaTableFormat::parse_table_url(ctx, vec![info.target.path]).await?;
+            let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
+            let update_config = DeltaPlannerConfig::new(
+                table_url,
+                delta_options,
+                HashMap::new(),
+                Vec::new(),
+                None,
+                true,
+            )
+            .with_lakehouse_table(lakehouse_table.clone());
+            let update_ctx = PlannerContext::new(ctx, update_config);
+            plan_update(&update_ctx, info.condition, info.assignments).await
         }
     }
 }
