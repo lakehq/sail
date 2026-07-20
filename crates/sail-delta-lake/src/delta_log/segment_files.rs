@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::checkpoint::inspect_checkpoint_main_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
 use crate::spec::{DeltaResult, sidecar_log_path};
@@ -72,11 +72,9 @@ pub async fn list_log_segment_files(
         checkpoint_files.push(filename.clone());
 
         // Classic-named checkpoints may also follow the V2 format and refer to sidecars.
-        let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
-        for row in &rows {
-            if let Some(ref sidecar) = row.sidecar {
-                sidecar_files.push(sidecar_log_path(&sidecar.path));
-            }
+        let sidecars = inspect_checkpoint_main_file(store, meta).await?;
+        for sidecar in sidecars {
+            sidecar_files.push(sidecar_log_path(&sidecar.path));
         }
     }
 

@@ -11,42 +11,34 @@ use crate::spec::{
 };
 
 pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {
-    let filename = meta.location.as_ref().rsplit('/').next()?;
-    parse_commit_version(filename)
-        .or_else(|| parse_checkpoint_version(filename))
-        .or_else(|| parse_compacted_json_versions(filename).map(|(_, end)| end))
+    parse_commit_version_from_location(&meta.location)
+        .or_else(|| parse_checkpoint_version_from_location(&meta.location))
+        .or_else(|| parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end))
+}
+
+fn delta_log_top_level_filename(location: &Path) -> Option<&str> {
+    let log_root = delta_log_root_path();
+    let relative = location
+        .as_ref()
+        .strip_prefix(log_root.as_ref())?
+        .strip_prefix('/')?;
+    (!relative.is_empty() && !relative.contains('/')).then_some(relative)
 }
 
 pub(crate) fn parse_checksum_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checksum_version)
+    delta_log_top_level_filename(location).and_then(parse_checksum_version)
 }
 
 pub(crate) fn parse_commit_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_commit_version)
+    delta_log_top_level_filename(location).and_then(parse_commit_version)
 }
 
 pub(crate) fn parse_checkpoint_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checkpoint_version)
+    delta_log_top_level_filename(location).and_then(parse_checkpoint_version)
 }
 
 pub(crate) fn parse_compacted_json_versions_from_location(location: &Path) -> Option<(i64, i64)> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_compacted_json_versions)
+    delta_log_top_level_filename(location).and_then(parse_compacted_json_versions)
 }
 
 pub(crate) async fn read_last_checkpoint_version_from_store(
@@ -83,7 +75,10 @@ pub(crate) async fn list_delta_log_entries_from(
         }
         Err(err) => return Err(err.into()),
     };
-    Ok(entries)
+    Ok(entries
+        .into_iter()
+        .filter(|meta| delta_log_top_level_filename(&meta.location).is_some())
+        .collect())
 }
 
 pub(crate) async fn latest_version_from_listing(
@@ -193,5 +188,32 @@ mod tests {
 
         let entries = list_delta_log_entries_from(store, 21).await.unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn listing_and_parsers_ignore_version_prefixed_sidecars() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let sidecar = Path::from(
+            "_delta_log/_sidecars/00000000000000000042.checkpoint.0000000001.0000000001.uuid.parquet",
+        );
+        store
+            .put(&sidecar, b"sidecar".to_vec().into())
+            .await
+            .unwrap();
+        store
+            .put(
+                &Path::from("_delta_log/00000000000000000007.json"),
+                b"{}".to_vec().into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(parse_checkpoint_version_from_location(&sidecar), None);
+        assert_eq!(
+            latest_version_from_listing(store.clone()).await.unwrap(),
+            Some(7)
+        );
+        let entries = list_delta_log_entries_from(store, 0).await.unwrap();
+        assert_eq!(entries.len(), 1);
     }
 }

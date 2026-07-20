@@ -5,13 +5,16 @@ use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
-use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
+use super::{
+    list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_checksum_version_from_location, parse_commit_version_from_location,
+    parse_compacted_json_versions_from_location, read_last_checkpoint_version_from_store,
+};
 use crate::delta_log::LogStore;
 use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_path};
 use crate::spec::{
     DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
-    checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions,
+    checksum_path,
 };
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
@@ -322,17 +325,12 @@ impl<'a> LogSegmentResolver<'a> {
 }
 
 fn cp_meta_version(meta: &ObjectMeta) -> DeltaResult<i64> {
-    meta.location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checkpoint_version)
-        .ok_or_else(|| {
-            DeltaError::generic(format!(
-                "checkpoint path does not contain a parseable version: {}",
-                meta.location
-            ))
-        })
+    parse_checkpoint_version_from_location(&meta.location).ok_or_else(|| {
+        DeltaError::generic(format!(
+            "checkpoint path does not contain a parseable version: {}",
+            meta.location
+        ))
+    })
 }
 
 async fn try_read_checksum_header(
@@ -413,29 +411,25 @@ pub(crate) async fn list_log_files(
     let mut compaction_candidates: Vec<((i64, i64), ObjectMeta)> = Vec::new();
 
     for meta in entries {
-        let filename = match meta.location.as_ref().rsplit('/').next() {
-            Some(f) => f,
-            None => continue,
-        };
-        if let Some(v) = parse_checkpoint_version(filename)
+        if let Some(v) = parse_checkpoint_version_from_location(&meta.location)
             && v <= max_version
         {
             checkpoint_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_commit_version(filename)
+        if let Some(v) = parse_commit_version_from_location(&meta.location)
             && v <= max_version
         {
             commit_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_checksum_version(filename)
+        if let Some(v) = parse_checksum_version_from_location(&meta.location)
             && v <= max_version
         {
             checksum_candidates.push((v, meta));
             continue;
         }
-        if let Some(versions) = parse_compacted_json_versions(filename) {
+        if let Some(versions) = parse_compacted_json_versions_from_location(&meta.location) {
             // Only include compactions whose end_version is within our range.
             if versions.1 <= max_version {
                 compaction_candidates.push((versions, meta));
