@@ -42,7 +42,8 @@ impl SparkPartitionIdExec {
         }
 
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
+            EquivalenceProperties::new(schema.clone())
+                .extend(input.equivalence_properties().clone())?,
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),

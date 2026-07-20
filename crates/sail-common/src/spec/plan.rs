@@ -778,9 +778,9 @@ pub struct ShowString {
 #[serde(rename_all = "camelCase")]
 pub struct Pivot {
     pub input: Box<QueryPlan>,
-    /// The group-by columns for the pivot operation (only supported in the DataFrame API).
-    /// When the list is empty (for SQL statements), all the remaining columns are included.
-    pub grouping: Vec<Expr>,
+    /// The group-by columns for the pivot operation, set for the DataFrame API (possibly
+    /// empty). When `None` (for SQL statements), all the remaining columns are included.
+    pub grouping: Option<Vec<Expr>>,
     pub aggregate: Vec<Expr>,
     pub columns: Vec<Expr>,
     pub values: Vec<PivotValue>,

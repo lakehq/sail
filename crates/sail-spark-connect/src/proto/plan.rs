@@ -454,7 +454,7 @@ impl TryFrom<RelType> for RelationNode {
                             .collect::<SparkResult<Vec<_>>>()?;
                         spec::QueryNode::Pivot(spec::Pivot {
                             input: Box::new(input),
-                            grouping,
+                            grouping: Some(grouping),
                             aggregate,
                             columns: vec![col.try_into()?],
                             values,

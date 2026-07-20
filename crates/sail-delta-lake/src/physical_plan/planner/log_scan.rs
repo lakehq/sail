@@ -1,6 +1,6 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -43,6 +43,59 @@ static DELTA_LOG_FILE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
         Field::new("txn", to_arrow(transaction_struct_type()), true),
     ]))
 });
+
+fn recursively_nullable_field(field: &Field) -> Field {
+    let data_type = match field.data_type() {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| Arc::new(recursively_nullable_field(field)))
+                .collect::<Fields>(),
+        ),
+        DataType::List(element) => DataType::List(Arc::new(recursively_nullable_field(element))),
+        DataType::LargeList(element) => {
+            DataType::LargeList(Arc::new(recursively_nullable_field(element)))
+        }
+        DataType::FixedSizeList(element, size) => {
+            DataType::FixedSizeList(Arc::new(recursively_nullable_field(element)), *size)
+        }
+        DataType::Map(entries, sorted) => {
+            let entries_type = match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    let key = Arc::clone(&fields[0]);
+                    let value = Arc::new(recursively_nullable_field(&fields[1]));
+                    DataType::Struct(Fields::from(vec![key, value]))
+                }
+                data_type => data_type.clone(),
+            };
+            DataType::Map(
+                Arc::new(
+                    Field::new(entries.name(), entries_type, false)
+                        .with_metadata(entries.metadata().clone()),
+                ),
+                *sorted,
+            )
+        }
+        data_type => data_type.clone(),
+    };
+    Field::new(field.name(), data_type, true).with_metadata(field.metadata().clone())
+}
+
+fn replay_scan_schema(checkpoint_schema: &Schema) -> Result<SchemaRef> {
+    // Checkpoint schemas may omit null action fields and contain checkpoint-only parsed fields.
+    // JSON tails must still be decoded with every canonical action field available.
+    let checkpoint_schema = Schema::new_with_metadata(
+        checkpoint_schema
+            .fields()
+            .iter()
+            .map(|field| Arc::new(recursively_nullable_field(field)) as FieldRef)
+            .collect::<Vec<_>>(),
+        checkpoint_schema.metadata().clone(),
+    );
+    let replay_schema =
+        Schema::try_merge([checkpoint_schema, DELTA_LOG_FILE_SCHEMA.as_ref().clone()])?;
+    Ok(Arc::new(replay_schema))
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct LogScanOptions {
@@ -233,13 +286,8 @@ pub async fn build_delta_log_datasource_scans_with_options(
     };
     let has_json_files = !json_checkpoint_metas.is_empty() || !commit_metas.is_empty();
 
-    let merged = match (parquet_schema, has_json_files) {
-        (Some(p), _) => {
-            // When a checkpoint (parquet) file is present, prefer its schema. The parquet
-            // checkpoint schema has proper Map types for fields like `add.partitionValues`,
-            // while JSON inference yields Struct types which are incompatible with `map_extract`.
-            p
-        }
+    let replay_schema = match (parquet_schema, has_json_files) {
+        (Some(p), _) => replay_scan_schema(&p)?,
         (None, true) => {
             // No parquet checkpoint exists (e.g. before the first checkpoint interval fires).
             // Use the canonical Delta log file schema so that `partitionValues` and other
@@ -258,7 +306,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
         if !projection.iter().any(|col| col == COL_LOG_VERSION) {
             projection.push(COL_LOG_VERSION.to_string());
         }
-        let file_schema_len = merged.fields().len();
+        let file_schema_len = replay_schema.fields().len();
         let mut indices = Vec::with_capacity(projection.len());
         for col in &projection {
             if col == COL_LOG_VERSION {
@@ -266,7 +314,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
                 continue;
             }
 
-            match merged.index_of(col) {
+            match replay_schema.index_of(col) {
                 Ok(idx) => indices.push(idx),
                 Err(_) => {
                     // Some Delta writers/checkpoint formats may omit an action column
@@ -283,7 +331,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
 
     let target_partitions = ctx.session().config().target_partitions();
     let table_schema = TableSchema::new(
-        Arc::clone(&merged),
+        Arc::clone(&replay_schema),
         vec![Arc::new(Field::new(
             COL_LOG_VERSION,
             DataType::Int64,
@@ -398,4 +446,56 @@ pub async fn build_delta_log_datasource_union_with_options(
     }
 
     Ok((UnionExec::try_new(inputs)?, checkpoint_files, commit_files))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn replay_schema_relaxes_checkpoint_fields_and_restores_log_fields() -> Result<()> {
+        let parsed = Field::new(
+            "partitionValues_parsed",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "category",
+                DataType::Utf8,
+                false,
+            ))])),
+            false,
+        );
+        let checkpoint = Schema::new(vec![Field::new(
+            "add",
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("path", DataType::Utf8, false)),
+                Arc::new(parsed),
+            ])),
+            true,
+        )]);
+
+        let replay = replay_scan_schema(&checkpoint).expect("replay schema should merge");
+        let add = replay
+            .field_with_name("add")
+            .expect("add should be present");
+        let DataType::Struct(add_fields) = add.data_type() else {
+            return Err(DataFusionError::Plan(
+                "add should remain a struct".to_string(),
+            ));
+        };
+        let parsed = add_fields
+            .find("partitionValues_parsed")
+            .map(|(_, field)| field)
+            .expect("parsed partition values should be present");
+        let DataType::Struct(parsed_fields) = parsed.data_type() else {
+            return Err(DataFusionError::Plan(
+                "parsed partition values should remain a struct".to_string(),
+            ));
+        };
+
+        assert!(parsed.is_nullable());
+        assert!(parsed_fields[0].is_nullable());
+        assert!(add_fields.find("deletionVector").is_some());
+        assert!(replay.field_with_name("remove").is_ok());
+        Ok(())
+    }
 }
