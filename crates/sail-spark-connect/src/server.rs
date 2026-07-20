@@ -100,8 +100,9 @@ async fn handle_command(
         CommandType::CheckpointCommand(checkpoint) => {
             service::handle_execute_checkpoint_command(ctx, checkpoint, metadata).await
         }
-        CommandType::RemoveCachedRemoteRelationCommand(_) => {
-            Err(SparkError::todo("remove cached remote relation command"))
+        CommandType::RemoveCachedRemoteRelationCommand(command) => {
+            service::handle_execute_remove_cached_remote_relation_command(ctx, command, metadata)
+                .await
         }
         CommandType::MergeIntoTableCommand(command) => {
             service::handle_execute_merge_into_table_command(ctx, command, metadata).await

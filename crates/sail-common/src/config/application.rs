@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub runtime: RuntimeConfig,
     pub cluster: ClusterConfig,
     pub execution: ExecutionConfig,
+    pub checkpoint: CheckpointConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
     pub catalog: CatalogConfig,
@@ -36,6 +37,16 @@ pub struct AppConfig {
     /// Such environment variables are ignored by application configuration.
     #[serde(skip_serializing, deserialize_with = "deserialize_unknown_unit")]
     pub internal: (),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub root: Option<String>,
 }
 
 /// A configuration provider that injects placeholder internal configuration.

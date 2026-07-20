@@ -67,7 +67,15 @@ message ExtendedPhysicalPlanNode {
     NoopSinkExecNode noop_sink = 52;
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
   }
+}
+
+message RemoteCheckpointWriteExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string prefix = 3;
+  bytes storage_schema = 4;
 }
 
 message ExtendedPhysicalExprNode {

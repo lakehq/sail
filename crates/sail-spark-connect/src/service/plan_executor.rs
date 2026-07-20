@@ -11,7 +11,8 @@ use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::resolve_and_execute_plan;
+use sail_plan::{resolve_and_execute_plan, resolve_and_execute_query};
+use sail_session::checkpoint::{RemoteCheckpointKind, RemoteCheckpointService};
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -26,10 +27,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult, relation,
@@ -92,6 +94,7 @@ impl Stream for ExecutePlanResponseStream {
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(*schema);
                     }
+                    ExecutorBatch::Heartbeat => {}
                     ExecutorBatch::Complete => {
                         response.response_type =
                             Some(ResponseType::ResultComplete(ResultComplete::default()));
@@ -515,19 +518,74 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
-    let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
-        Box::new(result),
-    ))];
-    if metadata.reattachable {
-        output.push(ExecutorOutput::complete());
+    let CheckpointCommand {
+        relation,
+        local,
+        eager,
+        storage_level,
+    } = checkpoint;
+    if !eager {
+        return Err(SparkError::unsupported("lazy DataFrame checkpoint"));
     }
+    if storage_level.is_some() {
+        return Err(SparkError::unsupported(
+            "checkpoint StorageLevel; Sail checkpoints are object-store backed",
+        ));
+    }
+    let relation = relation.required("checkpoint relation")?;
+    let query: spec::QueryPlan = relation.try_into()?;
+    let (plan, _, logical_schema) =
+        resolve_and_execute_query(ctx, spark.plan_config()?, query).await?;
+    let checkpoint = ctx.extension::<RemoteCheckpointService>()?;
+    let kind = if local {
+        RemoteCheckpointKind::LocalCheckpoint
+    } else {
+        RemoteCheckpointKind::Checkpoint
+    };
+    let operation_ctx = ctx.clone();
+    let operation = stream::once(async move {
+        let descriptor = checkpoint
+            .materialize(&operation_ctx, plan, logical_schema, kind)
+            .await?;
+        Ok(ExecutorBatch::CheckpointCommandResult(Box::new(
+            CheckpointCommandResult {
+                relation: Some(CachedRemoteRelation {
+                    relation_id: descriptor.relation_id.clone(),
+                }),
+            },
+        )))
+    });
+    let operation_id = metadata.operation_id.clone();
+    let executor = Executor::new_operation(
+        metadata,
+        Box::pin(operation),
+        spark.options().execution_heartbeat_interval,
+    );
+    let rx = executor.start()?;
+    spark.add_executor(executor)?;
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        operation_id,
+        Box::pin(rx),
+    ))
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    _command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = ctx.extension::<SparkSession>()?;
+    // Checkpoints have session lifetime so plans can safely share their immutable relation ID.
+    // The registry and object-store namespace are cleared together after the job runner stops.
+    let output = metadata
+        .reattachable
+        .then(ExecutorOutput::complete)
+        .into_iter();
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,

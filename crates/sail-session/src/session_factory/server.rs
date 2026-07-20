@@ -8,6 +8,7 @@ use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::AppConfig;
@@ -20,6 +21,7 @@ use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers}
 use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
+use crate::checkpoint::RemoteCheckpointService;
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -116,6 +118,11 @@ impl ServerSessionFactory {
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(RemoteCheckpointRegistry::default()))
+            .with_extension(Arc::new(RemoteCheckpointService::new(
+                self.config.checkpoint.root.clone(),
+                self.config.mode.clone(),
+            )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
             )))

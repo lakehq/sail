@@ -1,19 +1,31 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::common::config::TableParquetOptions;
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_expr::{LexOrdering, OrderingRequirements};
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, internal_err};
+use datafusion_common::stats::Precision;
+use datafusion_common::{DFSchema, Statistics, internal_err};
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::rename::physical_plan::{
+    rename_physical_plan, rename_projected_physical_plan,
+};
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -27,6 +39,7 @@ use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -99,8 +112,95 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<RemoteCheckpointRelationNode>()
         {
+            let registry = session_state.extension::<RemoteCheckpointRegistry>()?;
+            let descriptor = registry.get(node.relation_id())?.ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "checkpoint relation is not available: {}",
+                    node.relation_id()
+                ))
+            })?;
+            let parquet_options = TableParquetOptions {
+                global: session_state.config().options().execution.parquet.clone(),
+                ..Default::default()
+            };
+            let source = ParquetSource::new(TableSchema::new(
+                Arc::clone(&descriptor.storage_schema),
+                vec![],
+            ))
+            .with_table_parquet_options(parquet_options);
+            let file_groups = descriptor
+                .partitions
+                .iter()
+                .map(|partition| {
+                    let files = partition
+                        .file
+                        .as_ref()
+                        .map(|file| {
+                            let mut statistics =
+                                Statistics::new_unknown(descriptor.storage_schema.as_ref());
+                            statistics.num_rows = Precision::Exact(
+                                usize::try_from(file.row_count).map_err(|_| {
+                                    datafusion_common::DataFusionError::Plan(
+                                        "checkpoint row count is too large".to_string(),
+                                    )
+                                })?,
+                            );
+                            Ok(PartitionedFile::new(file.location.to_string(), file.size)
+                                .with_statistics(Arc::new(statistics)))
+                        })
+                        .into_iter()
+                        .collect::<datafusion_common::Result<Vec<_>>>()?;
+                    Ok(FileGroup::new(files))
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            let total_rows = descriptor
+                .partitions
+                .iter()
+                .try_fold(0_u64, |total, partition| {
+                    total
+                        .checked_add(
+                            partition
+                                .file
+                                .as_ref()
+                                .map(|file| file.row_count)
+                                .unwrap_or(0),
+                        )
+                        .ok_or_else(|| {
+                            datafusion_common::DataFusionError::Plan(
+                                "checkpoint row count overflow".to_string(),
+                            )
+                        })
+                })?;
+            let mut statistics = Statistics::new_unknown(descriptor.storage_schema.as_ref());
+            statistics.num_rows = Precision::Exact(usize::try_from(total_rows).map_err(|_| {
+                datafusion_common::DataFusionError::Plan(
+                    "checkpoint row count is too large".to_string(),
+                )
+            })?);
+            let scan =
+                FileScanConfigBuilder::new(descriptor.object_store_url.clone(), Arc::new(source))
+                    .with_file_groups(file_groups)
+                    .with_statistics(statistics)
+                    .with_preserve_order(true)
+                    .with_partitioned_by_file_group(true)
+                    .build();
+            let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan);
+            let names = UserDefinedLogicalNode::schema(node)
+                .fields()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect::<Vec<_>>();
+            if names.is_empty() {
+                Arc::new(ProjectionExec::try_new(
+                    Vec::<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)>::new(),
+                    scan,
+                )?)
+            } else {
+                rename_physical_plan(scan, &names)?
+            }
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
             Arc::new(RangeExec::try_new(

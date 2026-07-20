@@ -257,6 +257,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::remote_checkpoint::RemoteCheckpointWriteExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -451,6 +452,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .try_with_sort_information(sort_information)?
                         .with_limit(limit.map(|x| x as usize));
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::RemoteCheckpointWrite(r#gen::RemoteCheckpointWriteExecNode {
+                input,
+                object_store_url,
+                prefix,
+                storage_schema,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let prefix = object_store::path::Path::parse(prefix)
+                    .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
+                let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
+                    input,
+                    object_store_url,
+                    prefix,
+                    storage_schema,
+                )?))
             }
             NodeKind::Values(r#gen::ValuesExecNode { data, schema }) => {
                 let schema = try_decode_schema(&schema)?;
@@ -1507,6 +1527,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input: try_encode_physical_plan(self, map_partitions.input().clone())?,
                 udf: Some(udf),
                 schema,
+            })
+        } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointWriteExec>() {
+            NodeKind::RemoteCheckpointWrite(r#gen::RemoteCheckpointWriteExecNode {
+                input: try_encode_physical_plan(self, checkpoint.input().clone())?,
+                object_store_url: checkpoint.object_store_url().as_str().to_string(),
+                prefix: checkpoint.prefix().to_string(),
+                storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
             })
         } else if let Some(work_table) = node.downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
@@ -4773,6 +4800,47 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "logical_name",
+            DataType::Int64,
+            true,
+        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new(
+            "__sail_checkpoint_col_00000",
+            DataType::Int64,
+            true,
+        )]));
+        let checkpoint = RemoteCheckpointWriteExec::try_new(
+            Arc::new(EmptyExec::new(input_schema)),
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
+            object_store::path::Path::from("checkpoints/session/relation"),
+            Arc::clone(&storage_schema),
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RemoteCheckpointWriteExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a checkpoint writer"))?;
+
+        assert_eq!(
+            decoded.object_store_url().as_str(),
+            "s3://checkpoint-bucket/"
+        );
+        assert_eq!(
+            decoded.prefix(),
+            &object_store::path::Path::from("checkpoints/session/relation")
+        );
+        assert_eq!(decoded.storage_schema(), &storage_schema);
+        assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        Ok(())
     }
 
     #[test]

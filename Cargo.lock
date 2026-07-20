@@ -7349,10 +7349,12 @@ version = "0.6.6"
 dependencies = [
  "chrono",
  "datafusion",
+ "datafusion-common",
  "log",
  "moka",
  "object_store",
  "sail-common",
+ "sail-common-datafusion",
  "thiserror 2.0.18",
 ]
 
@@ -7923,11 +7925,15 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "lazy_static",
+ "log",
+ "object_store",
+ "parquet",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",
  "tokio",
  "tokio-stream",
+ "uuid",
 ]
 
 [[package]]
@@ -7958,6 +7964,7 @@ dependencies = [
  "rand 0.10.2",
  "regex",
  "ryu",
+ "sail-cache",
  "sail-catalog",
  "sail-catalog-memory",
  "sail-common",
@@ -8046,12 +8053,14 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-expr",
  "datafusion-physical-expr",
  "fastrace",
  "futures",
  "indexmap 2.14.0",
  "log",
+ "object_store",
  "readonly",
  "sail-cache",
  "sail-catalog",
@@ -8078,9 +8087,12 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-telemetry",
  "secrecy",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "uuid",
 ]
 
 [[package]]
