@@ -149,6 +149,10 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | protocol.readerFeatures                                  | ["deletionVectors"] |
         | protocol.writerFeatures                                  | ["deletionVectors"] |
         | metaData.configuration['delta.enableDeletionVectors']    | "false"             |
+      Given statement
+        """
+        INSERT INTO delta_dv_read VALUES (5, 'Epsilon')
+        """
       When query
         """
         SELECT * FROM delta_dv_read ORDER BY id
@@ -158,6 +162,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 1  | Alpha |
         | 3  | Gamma |
         | 4  | Delta |
+        | 5  | Epsilon |
 
     Scenario: Aggregation after DV delete
       Given statement
