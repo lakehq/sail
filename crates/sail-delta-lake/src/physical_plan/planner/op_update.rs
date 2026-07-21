@@ -16,10 +16,11 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion_expr::{ Expr, col, when};
+use datafusion_expr::{ Expr, col, lit, when};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion_common::ToDFSchema;
 use datafusion_physical_expr::{Partitioning, PhysicalExpr};
+use sail_common_datafusion::datasource::{OPERATION_COLUMN, RowLevelOperationType};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
@@ -174,6 +175,25 @@ pub async fn build_update_plan(
             projection_exprs.push((physical_expr, col_name))
         }
     }
+
+    // Add OPERATION_COLUMN for per-row tracking to determine whether a row is updated or copied
+    let op_tag_expr = if let Some(cond) = &condition{
+        let tag_expr = when(cond.expr.clone(), lit(RowLevelOperationType::Update.as_i32()))
+        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let physical_expr = ctx
+            .session()
+            .create_physical_expr(tag_expr, &table_df_schema)?;
+        adapter
+            .rewrite(physical_expr)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    } else {
+        ctx
+            .session()
+            .create_physical_expr(lit(RowLevelOperationType::Update.as_i32()), &scan_df_schema)?
+    };
+    projection_exprs.push((op_tag_expr, OPERATION_COLUMN.to_string()));
+
     let projection_exec: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(projection_exprs, scan_exec)?);
 

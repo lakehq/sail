@@ -798,6 +798,9 @@ impl DeltaWriterExec {
                 {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Update { .. })) {
+                operation_metrics.num_updated_rows = Some(merge_row_metrics.updated);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied)
             }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));

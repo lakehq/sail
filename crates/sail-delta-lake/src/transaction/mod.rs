@@ -419,8 +419,6 @@ impl OperationMetrics {
                 if self.rewrite_time_ms.is_none() {
                     self.rewrite_time_ms = self.write_time_ms
                 }
-                // TODO: numUpdatedRows and numCopiedRows require per-row condition
-                // tracking from the CASE projection.
             }
             DeltaOperation::FileSystemCheck { .. } => {
                 self.num_added_files = None;
@@ -440,8 +438,6 @@ impl OperationMetrics {
             | DeltaOperation::AddConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
                                                        //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
