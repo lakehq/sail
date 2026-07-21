@@ -5,15 +5,16 @@ use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
-use crate::id::WorkerId;
+use crate::id::{DriverId, WorkerId};
 use crate::worker_manager::WorkerLaunchOptions;
 
 #[readonly::make]
 pub struct WorkerOptions {
-    pub worker_id: WorkerId,
     pub enable_tls: bool,
+    pub driver_id: DriverId,
     pub driver_host: String,
     pub driver_port: u16,
+    pub worker_id: WorkerId,
     pub worker_listen_host: String,
     pub worker_listen_port: u16,
     pub worker_external_host: String,
@@ -29,14 +30,15 @@ pub struct WorkerOptions {
 impl WorkerOptions {
     pub fn new(config: &AppConfig, runtime: RuntimeHandle, session: SessionContext) -> Self {
         Self {
-            worker_id: config.cluster.worker_id.into(),
             enable_tls: config.cluster.enable_tls,
+            driver_id: config.cluster.driver_id.into(),
             driver_host: config.cluster.driver_external_host.clone(),
             driver_port: if config.cluster.driver_external_port > 0 {
                 config.cluster.driver_external_port
             } else {
                 config.cluster.driver_listen_port
             },
+            worker_id: config.cluster.worker_id.into(),
             worker_listen_host: config.cluster.worker_listen_host.clone(),
             worker_listen_port: config.cluster.worker_listen_port,
             worker_external_host: config.cluster.worker_external_host.clone(),
@@ -61,10 +63,11 @@ impl WorkerOptions {
         session: SessionContext,
     ) -> Self {
         WorkerOptions {
-            worker_id: id,
             enable_tls: options.enable_tls,
+            driver_id: options.driver_id,
             driver_host: options.driver_external_host,
             driver_port: options.driver_external_port,
+            worker_id: id,
             worker_listen_host: "127.0.0.1".to_string(),
             worker_listen_port: 0,
             worker_external_host: "127.0.0.1".to_string(),
