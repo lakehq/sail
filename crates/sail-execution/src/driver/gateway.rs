@@ -19,6 +19,17 @@ use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
 
+enum DriverGatewayState {
+    Pending {
+        listener: TcpListener,
+    },
+    Running {
+        signal: oneshot::Sender<()>,
+        handle: JoinHandle<ExecutionResult<()>>,
+    },
+    Stopped,
+}
+
 #[derive(Clone)]
 pub struct DriverGatewayOptions {
     pub listen_host: String,
@@ -78,9 +89,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
 
 pub struct DriverGateway {
     port: u16,
-    listener: Option<TcpListener>,
-    signal: Option<oneshot::Sender<()>>,
-    handle: Option<JoinHandle<ExecutionResult<()>>>,
+    state: DriverGatewayState,
 }
 
 impl DriverGateway {
@@ -89,14 +98,14 @@ impl DriverGateway {
         let port = listener.local_addr()?.port();
         Ok(Self {
             port,
-            listener: Some(listener),
-            signal: None,
-            handle: None,
+            state: DriverGatewayState::Pending { listener },
         })
     }
 
     pub fn start(&mut self, registry: Arc<dyn DriverRegistryAccessor>) {
-        let Some(listener) = self.listener.take() else {
+        let DriverGatewayState::Pending { listener } =
+            std::mem::replace(&mut self.state, DriverGatewayState::Stopped)
+        else {
             return;
         };
         let (tx, rx) = oneshot::channel();
@@ -129,19 +138,20 @@ impl DriverGateway {
                 .await
                 .map_err(|e| ExecutionError::InternalError(e.to_string()))
         });
-        self.signal = Some(tx);
-        self.handle = Some(handle);
+        self.state = DriverGatewayState::Running { signal: tx, handle };
     }
 
+    /// The local port that the driver server listens on.
+    /// This may be different from the port accessible from other nodes.
     pub fn port(&self) -> u16 {
         self.port
     }
 
-    pub async fn stop(mut self) {
-        if let Some(signal) = self.signal.take() {
+    pub async fn stop(&mut self) {
+        if let DriverGatewayState::Running { signal, handle } =
+            std::mem::replace(&mut self.state, DriverGatewayState::Stopped)
+        {
             let _ = signal.send(());
-        }
-        if let Some(handle) = self.handle.take() {
             let _ = handle.await;
         }
     }

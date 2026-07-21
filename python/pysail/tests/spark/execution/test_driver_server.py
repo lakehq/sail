@@ -38,5 +38,5 @@ def test_driver_gateway_startup_failure(monkeypatch):
         monkeypatch.setenv("SAIL_CLUSTER__DRIVER_LISTEN_PORT", str(driver_port))
 
         server = SparkConnectServer("127.0.0.1", 0)
-        with pytest.raises(RuntimeError, match="Address already in use"):
+        with pytest.raises(RuntimeError, match="failed to create driver gateway"):
             server.start(background=False)
