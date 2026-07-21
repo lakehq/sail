@@ -3,6 +3,9 @@ use std::borrow::Cow;
 use datafusion::prelude::SessionContext;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::SessionManagerObserver;
+use sail_execution::DriverId;
+use sail_execution::driver::DriverHandle;
+use sail_execution::error::ExecutionResult;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -34,6 +37,10 @@ pub enum SessionManagerEvent {
     ObserveState {
         observer: SessionManagerObserver,
     },
+    GetDriver {
+        driver_id: DriverId,
+        result: oneshot::Sender<ExecutionResult<DriverHandle>>,
+    },
 }
 
 pub struct SessionHistory {
@@ -49,6 +56,7 @@ impl SpanAssociation for SessionManagerEvent {
             SessionManagerEvent::SetSessionHistory { .. } => "SetSessionHistory",
             SessionManagerEvent::SetSessionFailure { .. } => "SetSessionFailure",
             SessionManagerEvent::ObserveState { .. } => "ObserveState",
+            SessionManagerEvent::GetDriver { .. } => "GetDriver",
         };
         name.into()
     }
@@ -75,6 +83,12 @@ impl SpanAssociation for SessionManagerEvent {
             }
             | SessionManagerEvent::SetSessionFailure { session_id } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
+            }
+            SessionManagerEvent::GetDriver {
+                driver_id,
+                result: _,
+            } => {
+                p.push(("driver_id", driver_id.to_string()));
             }
             SessionManagerEvent::ObserveState { observer: _ } => {}
         }

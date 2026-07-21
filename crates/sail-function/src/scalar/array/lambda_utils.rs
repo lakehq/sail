@@ -11,13 +11,16 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Int32Array, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Int32Array, OffsetSizeTrait,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
+use datafusion_common::utils::{
+    adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ValueOrLambda};
+use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
 
 use crate::error::generic_exec_err;
 
@@ -110,6 +113,102 @@ pub(crate) fn coerce_null_lambda_result(result: ArrayRef) -> ArrayRef {
         Arc::new(BooleanArray::new_null(result.len()))
     } else {
         result
+    }
+}
+
+/// Evaluates a boolean lambda element by element, stopping each row at the first
+/// `stop_on` value, and reduces with Spark's three-valued logic.
+///
+/// Spark's `ArrayExists`/`ArrayForAll` walk the elements in order and stop at the
+/// first `true`/`false`, so an element past the stopping point is never evaluated
+/// and can never raise. Evaluating the whole flattened batch at once — which is
+/// what the vectorized path does — raises on elements Spark would have skipped.
+/// This is the recovery path for exactly that case: it costs one lambda
+/// evaluation per element, so callers must only reach it once the vectorized
+/// evaluation has already failed.
+pub(crate) fn short_circuit_boolean_reduce(
+    name: &str,
+    list_array: &ArrayRef,
+    values: &ArrayRef,
+    lambda: &LambdaArgument,
+    stop_on: bool,
+) -> Result<BooleanArray> {
+    let (offsets, nulls) = match list_array.data_type() {
+        DataType::List(_) => {
+            let list = list_array.as_list::<i32>();
+            (
+                offsets_to_usize(&adjust_offsets_for_slice(list)),
+                list.nulls().cloned(),
+            )
+        }
+        DataType::LargeList(_) => {
+            let list = list_array.as_list::<i64>();
+            (
+                offsets_to_usize(&adjust_offsets_for_slice(list)),
+                list.nulls().cloned(),
+            )
+        }
+        other => return exec_err!("{name} expected list, got {other}"),
+    };
+
+    let row_numbers = list_values_row_number(list_array)?;
+    let num_rows = list_array.len();
+    let mut builder = BooleanBuilder::with_capacity(num_rows);
+
+    for row in 0..num_rows {
+        if nulls.as_ref().is_some_and(|n| n.is_null(row)) {
+            builder.append_null();
+            continue;
+        }
+        let mut stopped = false;
+        let mut any_null = false;
+        for index in offsets[row]..offsets[row + 1] {
+            let element = values.slice(index, 1);
+            let element_param = || Ok(Arc::clone(&element));
+            let params: [&dyn Fn() -> Result<ArrayRef>; 1] = [&element_param];
+            let output = lambda.evaluate(&params, |arrays| {
+                Ok(take_arrays(arrays, &row_numbers.slice(index, 1), None)?)
+            })?;
+            match single_boolean(name, &output)? {
+                Some(value) if value == stop_on => {
+                    stopped = true;
+                    break;
+                }
+                Some(_) => {}
+                None => any_null = true,
+            }
+        }
+        if stopped {
+            builder.append_value(stop_on);
+        } else if any_null {
+            builder.append_null();
+        } else {
+            builder.append_value(!stop_on);
+        }
+    }
+
+    Ok(builder.finish())
+}
+
+fn offsets_to_usize<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> Vec<usize> {
+    offsets.iter().map(|offset| offset.as_usize()).collect()
+}
+
+fn single_boolean(name: &str, output: &ColumnarValue) -> Result<Option<bool>> {
+    if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = output {
+        return Ok(*value);
+    }
+    let array = output.clone().into_array(1)?;
+    let Some(array) = array.as_any().downcast_ref::<BooleanArray>() else {
+        return exec_err!(
+            "{name} lambda must return boolean, got {}",
+            array.data_type()
+        );
+    };
+    if array.is_null(0) {
+        Ok(None)
+    } else {
+        Ok(Some(array.value(0)))
     }
 }
 

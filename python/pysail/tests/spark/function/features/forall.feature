@@ -315,6 +315,186 @@ Feature: forall higher-order function
         """
       Then query error .*
 
+  Rule: Array borne by a column rather than a literal
+
+    Scenario: distinct arrays per row are not broadcast from the first row
+      When query
+        """
+        SELECT forall(c, x -> x > 2) AS result
+        FROM VALUES (array(5)), (array(1)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+        | true   |
+
+    Scenario: non-empty, empty and NULL arrays in the same batch
+      When query
+        """
+        SELECT forall(c, x -> x > 2) AS result
+        FROM VALUES (array(3, 4)), (array(1, 2)), (CAST(NULL AS ARRAY<INT>)), (array()) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+        | NULL   |
+        | true   |
+
+    Scenario: three-valued logic resolved per row
+      When query
+        """
+        SELECT forall(c, x -> x > 2) AS result
+        FROM VALUES (array(3, NULL)), (array(1, NULL)), (array(NULL)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | false  |
+        | NULL   |
+
+    Scenario: every row is a NULL array
+      When query
+        """
+        SELECT forall(c, x -> x > 2) AS result
+        FROM VALUES (CAST(NULL AS ARRAY<INT>)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
+
+    Scenario: every row is an empty array
+      When query
+        """
+        SELECT forall(c, x -> x > 2) AS result
+        FROM VALUES (array()), (array()) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | true   |
+
+    Scenario: the captured column changes the predicate per row
+      When query
+        """
+        SELECT forall(c, x -> x > v) AS result
+        FROM VALUES (array(1, 2), 0), (array(1, 2), 5) AS t(c, v)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+
+  Rule: Short-circuit order under ANSI
+
+    Scenario: a false before the failing element stops evaluation under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT forall(array(100, 0, 2), x -> 10 / x > 4) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: a false before the failing element stops evaluation under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT forall(array(100, 0, 2), x -> 10 / x > 4) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: the failing element comes first so it is evaluated under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT forall(array(0, 100), x -> 10 / x > 4) AS result
+        """
+      Then query error Division by zero
+
+    Scenario: the failing element comes first so it is evaluated under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT forall(array(0, 100), x -> 10 / x > 4) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: a false only after the failing element does not save it under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT forall(array(1, 0, 100), x -> 10 / x > 4) AS result
+        """
+      Then query error Division by zero
+
+    Scenario: a false only after the failing element does not save it under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT forall(array(1, 0, 100), x -> 10 / x > 4) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: one row stops early while another does not under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT forall(c, x -> 10 / x > 4) AS result
+        FROM VALUES (array(100, 0)), (array(1, 2)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+
+    Scenario: one row stops early while another does not under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT forall(c, x -> 10 / x > 4) AS result
+        FROM VALUES (array(100, 0)), (array(1, 2)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null array literal yields a non-nullable boolean
+      When query
+        """
+        SELECT forall(array(1, 2), x -> x > 1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = false)
+        """
+
+    Scenario: a nullable array column yields a nullable boolean
+      When query
+        """
+        SELECT forall(c, x -> x > 1) AS result
+        FROM VALUES (array(1)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
   Rule: Non-lambda expression in place of the lambda
 
     Scenario: a constant true predicate
