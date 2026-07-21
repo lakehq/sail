@@ -924,6 +924,11 @@ impl DeltaTableFormat {
         );
 
         let existing_protocol = snapshot.protocol();
+        let desired_protocol = append_only_protocol_for_existing_table(
+            existing_protocol,
+            &desired_protocol,
+            &new_metadata,
+        );
         let (merged_protocol, protocol_upgraded) =
             merge_protocol_for_upgrade(existing_protocol, &desired_protocol);
 
@@ -987,12 +992,12 @@ impl DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
         ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ADD CONSTRAINT")?;
-        let key = format!("delta.constraints.{name}");
+        let key = format!("delta.constraints.{}", name.to_lowercase());
         if snapshot
             .metadata()
             .configuration()
             .keys()
-            .any(|existing| existing.eq_ignore_ascii_case(&key))
+            .any(|existing| existing.to_lowercase() == key)
         {
             return plan_err!("Delta constraint '{name}' already exists");
         }
@@ -1459,6 +1464,32 @@ fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
     } else {
         desired.clone()
     }
+}
+
+fn append_only_protocol_for_existing_table(
+    existing: &Protocol,
+    desired: &Protocol,
+    metadata: &crate::spec::Metadata,
+) -> Protocol {
+    let append_only = TableProperties::from(metadata.configuration().iter()).append_only();
+    let needs_explicit_feature = existing.min_writer_version() < 2
+        || existing.min_writer_version() >= 7
+        || desired.min_writer_version() >= 7;
+    if !append_only
+        || !needs_explicit_feature
+        || desired.has_writer_feature(&TableFeature::AppendOnly)
+    {
+        return desired.clone();
+    }
+
+    let mut writer_features = desired.writer_features().unwrap_or(&[]).to_vec();
+    writer_features.push(TableFeature::AppendOnly);
+    Protocol::new(
+        desired.min_reader_version(),
+        desired.min_writer_version().max(7),
+        desired.reader_features().map(<[_]>::to_vec),
+        Some(writer_features),
+    )
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and
@@ -2017,6 +2048,47 @@ mod tests {
         assert!(!adjusted.has_reader_feature(&TableFeature::TypeWidening));
         assert!(!adjusted.has_writer_feature(&TableFeature::TypeWidening));
         assert!(adjusted.has_writer_feature(&TableFeature::AllowColumnDefaults));
+    }
+
+    #[test]
+    fn append_only_protocol_upgrade_respects_legacy_and_table_feature_versions()
+    -> crate::spec::DeltaResult<()> {
+        let metadata = crate::schema::metadata_for_create_with_struct_type(
+            StructType::try_new([StructField::nullable("id", DeltaDataType::INTEGER)])?,
+            vec![],
+            0,
+            HashMap::from([("delta.appendOnly".to_string(), "true".to_string())]),
+        )?;
+        let desired = Protocol::new(1, 2, None, None);
+
+        let legacy_v2 = append_only_protocol_for_existing_table(
+            &Protocol::new(1, 2, None, None),
+            &desired,
+            &metadata,
+        );
+        assert_eq!(legacy_v2, desired);
+
+        let upgraded_v1 = append_only_protocol_for_existing_table(
+            &Protocol::new(1, 1, None, None),
+            &desired,
+            &metadata,
+        );
+        assert_eq!(upgraded_v1.min_writer_version(), 7);
+        assert!(upgraded_v1.has_writer_feature(&TableFeature::AppendOnly));
+
+        let existing_v7 = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        let explicit_v7 =
+            append_only_protocol_for_existing_table(&existing_v7, &desired, &metadata);
+        let (merged, upgraded) = merge_protocol_for_upgrade(&existing_v7, &explicit_v7);
+        assert!(upgraded);
+        assert!(merged.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(merged.has_writer_feature(&TableFeature::AppendOnly));
+        Ok(())
     }
 
     #[test]

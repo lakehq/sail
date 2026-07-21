@@ -67,12 +67,18 @@ pub(crate) fn protocol_with_catalog_managed(protocol: &Protocol) -> Protocol {
         .writer_features()
         .map(|features| features.to_vec())
         .unwrap_or_default();
-    if !reader_features.contains(&TableFeature::CatalogManaged) {
-        reader_features.push(TableFeature::CatalogManaged);
+    for feature in [
+        TableFeature::CatalogManaged,
+        TableFeature::VacuumProtocolCheck,
+    ] {
+        if !reader_features.contains(&feature) {
+            reader_features.push(feature);
+        }
     }
     for feature in [
         TableFeature::CatalogManaged,
         TableFeature::InCommitTimestamp,
+        TableFeature::VacuumProtocolCheck,
     ] {
         if !writer_features.contains(&feature) {
             writer_features.push(feature);
@@ -125,4 +131,22 @@ pub(crate) fn enable_catalog_managed_create_actions(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Protocol, TableFeature, protocol_with_catalog_managed};
+
+    #[test]
+    fn catalog_managed_protocol_includes_required_features() {
+        let protocol = protocol_with_catalog_managed(&Protocol::new(1, 2, None, None));
+
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::CatalogManaged));
+        assert!(protocol.has_writer_feature(&TableFeature::CatalogManaged));
+        assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_reader_feature(&TableFeature::VacuumProtocolCheck));
+        assert!(protocol.has_writer_feature(&TableFeature::VacuumProtocolCheck));
+    }
 }

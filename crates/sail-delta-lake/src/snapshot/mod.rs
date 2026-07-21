@@ -51,7 +51,8 @@ use crate::spec::fields::{
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
     DeltaResult, DomainMetadata, Metadata, Protocol, Remove, SchemaRef, StructType, TableFeature,
-    TableProperties, Transaction, TransactionError, VersionChecksum,
+    TableProperties, Transaction, TransactionError, VersionChecksum, contains_timestampntz,
+    contains_variant,
 };
 use crate::table::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -467,6 +468,22 @@ impl DeltaSnapshot {
             .map_err(map_read_protocol_error)?;
 
         let schema = StructType::try_from(self.schema())?;
+        if contains_timestampntz(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_timestamp_ntz_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains timestamp_ntz requires the timestampNtz reader and writer features"
+                    .to_string(),
+            ));
+        }
+        if contains_variant(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_variant_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains Variant requires matching variantType or variantType-preview reader and writer features"
+                    .to_string(),
+            ));
+        }
         let has_type_changes = schema_contains_type_widening_metadata(&schema);
         if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
             return Err(DeltaTableError::Unsupported(
@@ -1035,6 +1052,10 @@ mod tests {
         .unwrap()
     }
 
+    fn test_metadata_with_schema(schema: StructType) -> crate::spec::DeltaResult<Metadata> {
+        Metadata::try_new(None, None, schema, Vec::new(), 0, HashMap::new())
+    }
+
     fn test_snapshot(
         protocol: Protocol,
         metadata: Metadata,
@@ -1359,6 +1380,123 @@ mod tests {
     }
 
     #[test]
+    fn data_read_support_validates_timestamp_ntz_schema_features() -> crate::spec::DeltaResult<()> {
+        let metadata = test_metadata_with_schema(StructType::try_new([
+            StructField::not_null("id", DataType::LONG),
+            StructField::nullable("event_time", DataType::TIMESTAMP_NTZ),
+        ])?)?;
+
+        let legacy = test_snapshot(
+            Protocol::new(1, 2, None, None),
+            metadata.clone(),
+            Vec::new(),
+        );
+        let result = legacy.ensure_data_read_supported();
+        assert!(
+            matches!(result, Err(crate::spec::DeltaError::Unsupported(message)) if message.contains(
+                "schema contains timestamp_ntz requires the timestampNtz reader and writer features"
+            )),
+            "a timestamp_ntz schema without its protocol feature must be rejected"
+        );
+
+        let supported = test_snapshot(
+            Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::TimestampWithoutTimezone]),
+                Some(vec![TableFeature::TimestampWithoutTimezone]),
+            ),
+            metadata.clone(),
+            Vec::new(),
+        );
+        assert!(supported.ensure_data_read_supported().is_ok());
+
+        for protocol in [
+            Protocol::new(
+                1,
+                7,
+                None,
+                Some(vec![TableFeature::TimestampWithoutTimezone]),
+            ),
+            Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::TimestampWithoutTimezone]),
+                Some(Vec::new()),
+            ),
+        ] {
+            let missing_feature =
+                test_snapshot(protocol, metadata.clone(), Vec::new()).ensure_data_read_supported();
+            assert!(
+                missing_feature.is_err(),
+                "timestampNtz must be present in both protocol feature lists"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn data_read_support_validates_variant_schema_features() -> crate::spec::DeltaResult<()> {
+        let metadata = test_metadata_with_schema(StructType::try_new([
+            StructField::not_null("id", DataType::LONG),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+        ])?)?;
+
+        let legacy = test_snapshot(
+            Protocol::new(1, 2, None, None),
+            metadata.clone(),
+            Vec::new(),
+        );
+        let result = legacy.ensure_data_read_supported();
+        assert!(
+            matches!(result, Err(crate::spec::DeltaError::Unsupported(message)) if message.contains(
+                "schema contains Variant requires matching variantType or variantType-preview reader and writer features"
+            )),
+            "a Variant schema without its protocol feature must be rejected"
+        );
+
+        for feature in [TableFeature::VariantType, TableFeature::VariantTypePreview] {
+            let supported = test_snapshot(
+                Protocol::new(3, 7, Some(vec![feature.clone()]), Some(vec![feature])),
+                metadata.clone(),
+                Vec::new(),
+            );
+            assert!(supported.ensure_data_read_supported().is_ok());
+        }
+
+        for protocol in [
+            Protocol::new(1, 7, None, Some(vec![TableFeature::VariantType])),
+            Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::VariantType]),
+                Some(Vec::new()),
+            ),
+        ] {
+            let missing_feature =
+                test_snapshot(protocol, metadata.clone(), Vec::new()).ensure_data_read_supported();
+            assert!(
+                missing_feature.is_err(),
+                "the Variant feature must be present in both protocol feature lists"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn data_read_support_allows_ordinary_schema_with_legacy_protocol() {
+        let snapshot = test_snapshot(
+            Protocol::new(1, 2, None, None),
+            test_metadata([]),
+            Vec::new(),
+        );
+
+        assert!(snapshot.ensure_data_read_supported().is_ok());
+    }
+
+    #[test]
     fn data_read_support_rejects_catalog_managed_without_catalog_replay() {
         let protocol = Protocol::new(
             3,
@@ -1394,14 +1532,29 @@ mod tests {
     }
 
     #[test]
-    fn delta_table_source_rejects_unsupported_reader_features() {
-        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
-        // Use it to verify that the source correctly rejects tables with unsupported features.
+    fn delta_table_source_accepts_vacuum_protocol_check_feature() {
         let protocol = Protocol::new(
             3,
             7,
             Some(vec![TableFeature::VacuumProtocolCheck]),
             Some(vec![TableFeature::VacuumProtocolCheck]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        assert!(
+            DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
+                .is_ok(),
+            "ordinary table reads should accept vacuumProtocolCheck"
+        );
+    }
+
+    #[test]
+    fn delta_table_source_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1418,22 +1571,22 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
         ));
     }
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn version_checksum_skips_explicitly_known_but_unsupported_features() {
-        // TODO: support VacuumProtocolCheck
-        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
-        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
-
-        assert!(
-            snapshot
-                .build_version_checksum(None, None)
-                .unwrap()
-                .is_none()
+    fn version_checksum_includes_vacuum_protocol_check_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
+        let snapshot = test_snapshot(protocol.clone(), test_metadata([]), Vec::new());
+
+        let checksum = snapshot.build_version_checksum(None, None).unwrap();
+        assert_eq!(checksum.map(|checksum| checksum.protocol), Some(protocol));
     }
 }

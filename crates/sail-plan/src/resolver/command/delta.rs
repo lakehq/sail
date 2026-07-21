@@ -246,7 +246,7 @@ impl PlanResolver<'_> {
         })?;
         if delta_check_constraints_from_properties(&properties)
             .iter()
-            .any(|constraint| constraint.name.eq_ignore_ascii_case(&name))
+            .any(|constraint| delta_constraint_names_equal(&constraint.name, &name))
         {
             return Err(PlanError::invalid(format!(
                 "Delta constraint `{name}` already exists"
@@ -612,7 +612,7 @@ fn upsert_delta_check_constraints(
         };
         if let Some(existing) = constraints
             .iter_mut()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
+            .find(|constraint| delta_constraint_names_equal(&constraint.name, name))
         {
             existing.name = name.to_string();
             existing.expression = value.clone();
@@ -625,6 +625,10 @@ fn upsert_delta_check_constraints(
             });
         }
     }
+}
+
+fn delta_constraint_names_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
 }
 
 fn strip_delta_check_constraint_prefix(key: &str) -> Option<&str> {

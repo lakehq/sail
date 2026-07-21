@@ -194,8 +194,8 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
             "protocol": {
                 "minReaderVersion": 3,
                 "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged"],
-                "writerFeatures": ["catalogManaged", "inCommitTimestamp"],
+                "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+                "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
             }
         },
         {

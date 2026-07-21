@@ -1,6 +1,6 @@
 Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
 
-  Rule: V2 checkpoint with sidecars is created when v2Checkpoint table feature is enabled
+  Rule: v2Checkpoint feature support does not override the classic checkpoint policy
 
     Background:
       Given variable location for temporary directory delta_v2_checkpoint
@@ -28,7 +28,7 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         INSERT INTO delta_v2_checkpoint_test VALUES (2, 'b')
         """
 
-    Scenario: V2 checkpoint creates UUID-named checkpoint and sidecar files
+    Scenario: Feature-enabled table without v2 policy creates classic checkpoints
       When query
         """
         SELECT * FROM delta_v2_checkpoint_test ORDER BY id
@@ -39,15 +39,12 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         | 2  | b     |
       Then file tree in delta_log matches
         """
-        📂 _sidecars
-          📄 <uuid>.parquet
-          📄 <uuid>.parquet
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
-        📄 00000000000000000001.checkpoint.<uuid>.parquet
+        📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
-        📄 00000000000000000002.checkpoint.<uuid>.parquet
+        📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 _last_checkpoint
@@ -69,7 +66,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.checkpointInterval' = '1',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -83,6 +81,20 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
 
     Scenario: Latest read succeeds after v1 JSON log is deleted with V2 checkpoint present
       Given file 00000000000000000001.json in delta_log is deleted
+      Then file tree in delta_log matches
+        """
+        📂 _sidecars
+          📄 <uuid>.parquet
+          📄 <uuid>.parquet
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.checkpoint.<uuid>.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000002.checkpoint.<uuid>.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 _last_checkpoint
+        """
       When query
         """
         SELECT * FROM delta_v2_checkpoint_recovery_test ORDER BY id
@@ -109,7 +121,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -154,12 +167,12 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
-        📄 00000000000000000002.checkpoint.<uuid>.parquet
+        📄 00000000000000000002.checkpoint.<uuid>.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.crc
         📄 00000000000000000003.json
-        📄 00000000000000000004.checkpoint.<uuid>.parquet
+        📄 00000000000000000004.checkpoint.<uuid>.json
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
         📄 00000000000000000005.crc
@@ -211,10 +224,10 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
           📄 <uuid>.parquet
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
-        📄 00000000000000000001.checkpoint.<uuid>.parquet
+        📄 00000000000000000001.checkpoint.<uuid>.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
-        📄 00000000000000000002.checkpoint.<uuid>.parquet
+        📄 00000000000000000002.checkpoint.<uuid>.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 _last_checkpoint
@@ -236,7 +249,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -278,7 +292,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.checkpointInterval' = '1',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -313,7 +328,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         OPTIONS (metadataAsDataRead 'true')
         TBLPROPERTIES (
           'delta.checkpointInterval' = '1',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -348,7 +364,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         OPTIONS (metadataAsDataRead 'true')
         TBLPROPERTIES (
           'delta.checkpointInterval' = '1',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -387,7 +404,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         OPTIONS (metadataAsDataRead 'true')
         TBLPROPERTIES (
           'delta.checkpointInterval' = '1',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -401,6 +419,20 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
 
     Scenario: metadata-as-data read succeeds after v1 JSON log is deleted with V2 checkpoint
       Given file 00000000000000000001.json in delta_log is deleted
+      Then file tree in delta_log matches
+        """
+        📂 _sidecars
+          📄 <uuid>.parquet
+          📄 <uuid>.parquet
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.checkpoint.<uuid>.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000002.checkpoint.<uuid>.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 _last_checkpoint
+        """
       When query
         """
         SELECT * FROM delta_v2_ckpt_metadata_recovery_test ORDER BY id
@@ -429,7 +461,8 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true',
-          'delta.feature.v2Checkpoint' = 'enabled'
+          'delta.feature.v2Checkpoint' = 'enabled',
+          'delta.checkpointPolicy' = 'v2'
         )
         """
       Given statement
@@ -472,16 +505,19 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         📂 _sidecars
           📄 <uuid>.parquet
           📄 <uuid>.parquet
-        📄 00000000000000000002.checkpoint.<uuid>.parquet
+        📄 00000000000000000002.checkpoint.<uuid>.json
         📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.crc
         📄 00000000000000000003.json
-        📄 00000000000000000004.checkpoint.<uuid>.parquet
+        📄 00000000000000000004.checkpoint.<uuid>.json
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
         📄 00000000000000000005.crc
         📄 00000000000000000005.json
         📄 _last_checkpoint
         """
+      Then checkpoint parquet file 00000000000000000002.checkpoint.parquet in location contains add fields
+        | path       | value |
+        | dataChange | true  |

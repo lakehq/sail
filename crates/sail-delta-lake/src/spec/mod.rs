@@ -22,7 +22,7 @@ pub use actions::{
     DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
 };
 pub(crate) use actions::{LogicalFileKey, logical_file_key};
-pub use checkpoint::{CheckpointActionRow, LastCheckpointHint};
+pub use checkpoint::{CheckpointActionRow, LastCheckpointHint, LastCheckpointV2};
 pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
@@ -33,12 +33,12 @@ pub use log::{
     last_checkpoint_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions, parse_version_prefix, sidecar_file_name, sidecar_file_path,
     sidecar_log_path, sidecars_dir_path, staged_commit_path, temp_commit_path,
-    uuid_checkpoint_path,
+    uuid_checkpoint_path, uuid_json_checkpoint_path,
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use properties::{
-    DataSkippingNumIndexedCols, IsolationLevel, TableProperties,
+    CheckpointPolicy, DataSkippingNumIndexedCols, IsolationLevel, TableProperties,
     canonicalize_and_validate_table_properties, route_table_property_key,
 };
 pub use protocol::{Protocol, TableFeature};

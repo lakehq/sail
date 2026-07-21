@@ -20,8 +20,11 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, UInt64Array};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::{
+    ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt64Array,
+};
+use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
@@ -36,6 +39,34 @@ use crate::delta_log::LogStoreRef;
 use crate::spec::Add;
 use crate::spec::statistics::Stats;
 use crate::table::DeltaSnapshot;
+
+/// Delta timestamp JSON max statistics are truncated to milliseconds. Widen the upper bound
+/// by one millisecond (in the array's physical unit) so pruning remains conservative.
+pub(crate) fn widen_timestamp_max_stat(array: ArrayRef) -> ArrayRef {
+    let DataType::Timestamp(unit, timezone) = array.data_type().clone() else {
+        return array;
+    };
+
+    macro_rules! widen {
+        ($array_type:ty, $delta:expr) => {{
+            let Some(values) = array.as_any().downcast_ref::<$array_type>() else {
+                return array;
+            };
+            let widened = values
+                .iter()
+                .map(|value| value.map(|value| value.saturating_add($delta)))
+                .collect::<Vec<_>>();
+            Arc::new(<$array_type>::from(widened).with_timezone_opt(timezone)) as ArrayRef
+        }};
+    }
+
+    match unit {
+        TimeUnit::Second => widen!(TimestampSecondArray, 1),
+        TimeUnit::Millisecond => widen!(TimestampMillisecondArray, 1),
+        TimeUnit::Microsecond => widen!(TimestampMicrosecondArray, 1_000),
+        TimeUnit::Nanosecond => widen!(TimestampNanosecondArray, 1_000_000),
+    }
+}
 
 /// Result of file pruning operation
 #[derive(Debug, Clone)]
@@ -415,7 +446,7 @@ impl AddStatsPruningStatistics {
         }
         if let Some(array) = self.build_json_stat_array(column, |stats, name| stats.max_value(name))
         {
-            return Some(array);
+            return Some(widen_timestamp_max_stat(array));
         }
 
         self.build_array(column, false, |a, s, dt| {
@@ -433,6 +464,7 @@ impl AddStatsPruningStatistics {
             }
             Self::null_scalar(dt)
         })
+        .map(widen_timestamp_max_stat)
     }
 
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
@@ -504,12 +536,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use datafusion::arrow::array::UInt64Array;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::array::{ArrayRef, TimestampMicrosecondArray, UInt64Array};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column as PhysicalColumn, Literal};
     use datafusion_common::pruning::PruningStatistics;
-    use datafusion_common::{Column, DataFusionError, Result};
+    use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 
-    use super::AddStatsPruningStatistics;
+    use super::{AddStatsPruningStatistics, prune_adds_by_physical_predicate};
     use crate::spec::Add;
 
     fn add_with_stats(stats_json: &str) -> Add {
@@ -627,6 +662,145 @@ mod tests {
             .ok_or_else(|| DataFusionError::Internal("array should be Int32".to_string()))?;
         assert_eq!(values.value(0), 10);
         assert_eq!(values.value(1), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_json_max_values_are_widened_but_min_values_are_not() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new(
+                "timestamp_ntz_col",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+        ]));
+        let adds = vec![add_with_stats(
+            r#"{
+                "numRecords":1,
+                "minValues":{
+                    "timestamp_col":"2024-07-01T23:45:12.654Z",
+                    "timestamp_ntz_col":"2024-07-01T23:45:12.654"
+                },
+                "maxValues":{
+                    "timestamp_col":"2024-07-01T23:45:12.654Z",
+                    "timestamp_ntz_col":"2024-07-01T23:45:12.654"
+                }
+            }"#,
+        )];
+        let referenced_columns =
+            HashSet::from(["timestamp_col".to_string(), "timestamp_ntz_col".to_string()]);
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
+        let expected_min = chrono::DateTime::parse_from_rfc3339("2024-07-01T23:45:12.654Z")
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+            .timestamp_micros();
+
+        for column in ["timestamp_col", "timestamp_ntz_col"] {
+            let min_values = stats
+                .min_values(&Column::from_name(column))
+                .ok_or_else(|| DataFusionError::Internal("timestamp min missing".to_string()))?;
+            let max_values = stats
+                .max_values(&Column::from_name(column))
+                .ok_or_else(|| DataFusionError::Internal("timestamp max missing".to_string()))?;
+            let min_values = min_values
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| DataFusionError::Internal("timestamp min type".to_string()))?;
+            let max_values = max_values
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| DataFusionError::Internal("timestamp max type".to_string()))?;
+            assert_eq!(min_values.value(0), expected_min);
+            assert_eq!(max_values.value(0), expected_min + 1_000);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_json_max_widening_prevents_false_file_pruning() -> Result<()> {
+        let expected_max = chrono::DateTime::parse_from_rfc3339("2024-07-01T23:45:12.654Z")
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+            .timestamp_micros();
+
+        for timezone in [Some(Arc::from("UTC")), None] {
+            let table_schema = Arc::new(Schema::new(vec![Field::new(
+                "event_time",
+                DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()),
+                true,
+            )]));
+            let timezone_suffix = if timezone.is_some() { "Z" } else { "" };
+            let stats_json = format!(
+                r#"{{
+                    "numRecords":1,
+                    "minValues":{{"event_time":"2024-07-01T23:45:12.654{timezone_suffix}"}},
+                    "maxValues":{{"event_time":"2024-07-01T23:45:12.654{timezone_suffix}"}}
+                }}"#,
+            );
+            let add = add_with_stats(&stats_json);
+            let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+                Arc::new(PhysicalColumn::new("event_time", 0)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::TimestampMicrosecond(
+                    Some(expected_max + 100),
+                    timezone,
+                ))),
+            ));
+
+            assert_eq!(
+                prune_adds_by_physical_predicate(vec![add], table_schema, predicate)?,
+                vec![true]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_partition_max_values_keep_microsecond_precision() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "partition_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let adds = vec![add_with_partition_value(
+            "partition_time",
+            Some("2024-01-15 10:30:00.123456"),
+        )];
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            adds,
+            HashSet::from(["partition_time".to_string()]),
+        )?;
+        let max_values = stats
+            .max_values(&Column::from_name("partition_time"))
+            .ok_or_else(|| DataFusionError::Internal("partition max missing".to_string()))?;
+        let max_values = max_values
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("partition max type".to_string()))?;
+        let expected = chrono::NaiveDateTime::parse_from_str(
+            "2024-01-15 10:30:00.123456",
+            "%Y-%m-%d %H:%M:%S%.f",
+        )
+        .map_err(|error| DataFusionError::External(Box::new(error)))?
+        .and_utc()
+        .timestamp_micros();
+        assert_eq!(max_values.value(0), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_max_widening_saturates_on_overflow() -> Result<()> {
+        let array = Arc::new(TimestampMicrosecondArray::from(vec![Some(i64::MAX)])) as ArrayRef;
+        let widened = super::widen_timestamp_max_stat(array);
+        let widened = widened
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("timestamp array".to_string()))?;
+        assert_eq!(widened.value(0), i64::MAX);
         Ok(())
     }
 }

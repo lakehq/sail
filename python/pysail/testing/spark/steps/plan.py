@@ -89,9 +89,9 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Normalize Delta V2 UUID-named checkpoint files:
-    # e.g. 00000000000000000001.checkpoint.{uuid}.parquet -> 00000000000000000001.checkpoint.<uuid>.parquet
+    # e.g. 00000000000000000001.checkpoint.{uuid}.json -> 00000000000000000001.checkpoint.<uuid>.json
     text = re.sub(
-        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(?:parquet|json))",
         r"\1<uuid>\2",
         text,
         flags=re.IGNORECASE,

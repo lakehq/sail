@@ -216,8 +216,8 @@ impl Protocol {
         Self {
             min_reader_version,
             min_writer_version,
-            reader_features: reader_features.filter(|features| !features.is_empty()),
-            writer_features: writer_features.filter(|features| !features.is_empty()),
+            reader_features,
+            writer_features,
         }
     }
 

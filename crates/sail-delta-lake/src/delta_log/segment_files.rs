@@ -13,12 +13,13 @@
 use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::spec::{DeltaResult, is_uuid_checkpoint_filename, sidecar_log_path};
+use crate::spec::{DeltaResult, sidecar_log_path};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
 pub struct LogSegmentFiles {
-    /// Parquet checkpoint files for the latest checkpoint at or before `max_version`.
+    /// Checkpoint files for the latest checkpoint at or before `max_version`.
+    /// UUID-named V2 top-level files may be JSON or Parquet.
     pub checkpoint_files: Vec<String>,
     /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
     pub commit_files: Vec<String>,
@@ -40,7 +41,7 @@ pub struct LogSegmentResolveOptions {
 /// List all Delta log files up to `max_version` from the given log store.
 ///
 /// Returns a [`LogSegmentFiles`] containing:
-/// - all parquet files belonging to the **latest** checkpoint at or before `max_version`
+/// - all files belonging to the **latest** checkpoint at or before `max_version`
 /// - all commit JSON files at or before `max_version`
 ///
 /// Commit files are **not** filtered against the checkpoint here.
@@ -70,13 +71,11 @@ pub async fn list_log_segment_files(
             .to_string();
         checkpoint_files.push(filename.clone());
 
-        // Only UUID-named checkpoints (V2) can contain sidecar references.
-        if is_uuid_checkpoint_filename(&filename) {
-            let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
-            for row in &rows {
-                if let Some(ref sidecar) = row.sidecar {
-                    sidecar_files.push(sidecar_log_path(&sidecar.path));
-                }
+        // Classic-named checkpoints may also follow the V2 format and refer to sidecars.
+        let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
+        for row in &rows {
+            if let Some(ref sidecar) = row.sidecar {
+                sidecar_files.push(sidecar_log_path(&sidecar.path));
             }
         }
     }

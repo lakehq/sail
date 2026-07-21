@@ -54,8 +54,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                  |
       | protocol.minReaderVersion                              | 3                                      |
       | protocol.minWriterVersion                              | 7                                      |
-      | protocol.readerFeatures                                | ["catalogManaged"]                     |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"] |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                            |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |
 
@@ -178,8 +178,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                      |
       | protocol.minReaderVersion                              | 3                                          |
       | protocol.minWriterVersion                              | 7                                          |
-      | protocol.readerFeatures                                | ["catalogManaged"]                         |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"]     |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"]   |
+      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                                |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                    |
 
