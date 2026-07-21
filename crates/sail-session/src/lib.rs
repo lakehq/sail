@@ -1,7 +1,6 @@
 pub mod catalog;
 pub mod error;
 pub mod formats;
-pub mod input_files;
 pub mod observable;
 pub mod optimizer;
 pub mod planner;

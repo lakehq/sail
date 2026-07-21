@@ -8050,7 +8050,6 @@ dependencies = [
  "datafusion-physical-expr",
  "fastrace",
  "futures",
- "glob",
  "indexmap 2.14.0",
  "log",
  "readonly",
@@ -8082,7 +8081,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
- "url",
 ]
 
 [[package]]

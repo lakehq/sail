@@ -47,5 +47,3 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
-url = { workspace = true }
-glob = { workspace = true }

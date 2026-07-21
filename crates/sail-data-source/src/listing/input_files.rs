@@ -7,9 +7,10 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
 use glob::Pattern;
-use sail_data_source::listing::table::ListingTableSource;
-use sail_data_source::listing::utils::list_all_files;
 use url::Url;
+
+use crate::listing::table::ListingTableSource;
+use crate::listing::utils::list_all_files;
 
 /// Deduplicated, percent-encoded URIs of the files composing `plan` (Spark's `DataFrame.inputFiles`).
 pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<String>> {

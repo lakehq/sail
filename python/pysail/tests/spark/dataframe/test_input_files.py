@@ -107,6 +107,22 @@ def test_input_files_honors_path_glob_filter(spark, tmp_path):
     assert files[0].endswith("keep.png")
 
 
+def test_input_files_matches_scan_under_glob_alternation(spark, tmp_path):
+    """``inputFiles`` applies ``pathGlobFilter`` with the same matcher as the scan for ``{a,b}`` syntax.
+
+    The binary scan matches ``pathGlobFilter`` with ``glob::Pattern``, which treats ``{...}``
+    as literal characters rather than expanding the alternation. ``inputFiles`` mirrors that
+    matcher, so it must report exactly the files the scan reads -- never more.
+    """
+    (tmp_path / "a.png").write_bytes(b"\x89PNG")
+    (tmp_path / "b.jpg").write_bytes(b"\xff\xd8\xff")
+    df = spark.read.format("binaryFile").option("pathGlobFilter", "*.{png,jpg}").load(str(tmp_path))
+
+    # `{png,jpg}` is literal, so it matches neither file; the scan and inputFiles must still agree.
+    assert df.count() == len(df.inputFiles())
+    assert df.inputFiles() == []
+
+
 def test_input_files_rejects_invalid_path_glob_filter(spark, tmp_path):
     """A malformed ``pathGlobFilter`` surfaces as an error rather than being silently ignored."""
     (tmp_path / "a.png").write_bytes(b"\x89PNG")

@@ -124,7 +124,7 @@ pub(crate) async fn handle_analyze_input_files(
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
-    let files = sail_session::input_files::input_files(ctx, plan).await?;
+    let files = sail_data_source::listing::input_files::input_files(ctx, plan).await?;
     Ok(InputFilesResponse { files })
 }
 
