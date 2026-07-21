@@ -12,7 +12,7 @@ pub struct SessionManagerOptions {
     pub session_timeout: Duration,
     pub runtime: RuntimeHandle,
     pub system: Arc<Mutex<ActorSystem>>,
-    pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
+    pub session_factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
     pub job_runner_factory: Box<dyn Fn() -> Box<dyn SessionJobRunnerFactory> + Send>,
     pub driver_gateway: Option<DriverGateway>,
     /// The application configuration options as key-value pairs,
@@ -24,14 +24,14 @@ impl SessionManagerOptions {
     pub fn new(
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
-        factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
+        session_factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
         job_runner_factory: Box<dyn Fn() -> Box<dyn SessionJobRunnerFactory> + Send>,
     ) -> Self {
         Self {
             session_timeout: Duration::MAX,
             runtime,
             system,
-            factory,
+            session_factory,
             job_runner_factory,
             driver_gateway: None,
             options: Vec::new(),

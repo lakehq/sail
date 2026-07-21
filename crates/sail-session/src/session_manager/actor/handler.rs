@@ -57,13 +57,14 @@ impl SessionManagerActor {
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            let driver_id = DriverId::from(self.next_driver_id);
-            let Some(next_driver_id) = self.next_driver_id.checked_add(1) else {
-                let output = Err(SessionError::internal("driver ID overflow"));
-                let _ = result.send(output);
-                return ActorAction::Continue;
+            let driver_id = match self.driver_id_generator.generate() {
+                Ok(driver_id) => driver_id,
+                Err(e) => {
+                    let output = Err(SessionError::internal(e.to_string()));
+                    let _ = result.send(output);
+                    return ActorAction::Continue;
+                }
             };
-            self.next_driver_id = next_driver_id;
             let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
                 driver_id,
                 driver_server_port: self.gateway.as_ref().map(|x| x.port()),
@@ -77,7 +78,9 @@ impl SessionManagerActor {
                     {
                         let driver = driver.clone();
                         ctx.spawn(async move {
-                            let _ = driver.shutdown().await;
+                            if let Err(e) = driver.shutdown().await {
+                                warn!("failed to shut down driver {driver_id}: {e}");
+                            }
                         });
                         let output = Err(e.into());
                         let _ = result.send(output);
@@ -89,11 +92,13 @@ impl SessionManagerActor {
                         session_manager: ctx.handle().clone(),
                         job_runner: Some(runner),
                     };
-                    match self.factory.create(info) {
+                    match self.session_factory.create(info) {
                         Ok(context) => {
                             if let Some(driver) = driver {
                                 ctx.spawn(async move {
-                                    let _ = driver.activate().await;
+                                    if let Err(e) = driver.activate().await {
+                                        warn!("failed to activate driver {driver_id}: {e}");
+                                    }
                                 });
                             }
                             let session = ServerSession {
@@ -113,7 +118,9 @@ impl SessionManagerActor {
                                 && let Some(driver) = self.drivers.remove(driver_id)
                             {
                                 ctx.spawn(async move {
-                                    let _ = driver.shutdown().await;
+                                    if let Err(e) = driver.shutdown().await {
+                                        warn!("failed to shut down driver {driver_id}: {e}");
+                                    }
                                 });
                             }
                             Err(e.into())

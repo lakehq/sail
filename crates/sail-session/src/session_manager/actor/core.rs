@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use log::info;
-use sail_execution::DriverId;
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
+use sail_execution::{DriverId, IdGenerator};
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 
 use crate::session_manager::actor::SessionManagerActor;
@@ -40,17 +40,17 @@ impl Actor for SessionManagerActor {
     }
 
     fn new(mut options: Self::Options) -> Self {
-        let factory = (options.factory)();
+        let session_factory = (options.session_factory)();
         let job_runner_factory = (options.job_runner_factory)();
         let gateway = options.take_driver_gateway();
         Self {
             options,
-            factory,
+            session_factory,
             job_runner_factory,
             sessions: IndexMap::new(),
             drivers: Default::default(),
             gateway,
-            next_driver_id: 1,
+            driver_id_generator: IdGenerator::new(),
         }
     }
 
@@ -95,7 +95,7 @@ impl Actor for SessionManagerActor {
     }
 
     async fn stop(self, _ctx: &mut ActorContext<Self>) {
-        if let Some(gateway) = self.gateway {
+        if let Some(mut gateway) = self.gateway {
             gateway.stop().await;
             info!("driver server has stopped");
         }
