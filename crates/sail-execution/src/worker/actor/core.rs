@@ -24,11 +24,14 @@ impl Actor for WorkerActor {
     }
 
     fn new(options: WorkerOptions) -> Self {
-        let driver_client_set = DriverClientSet::new(ClientOptions {
-            enable_tls: options.enable_tls,
-            host: options.driver_host.clone(),
-            port: options.driver_port,
-        });
+        let driver_client_set = DriverClientSet::new(
+            options.driver_id,
+            ClientOptions {
+                enable_tls: options.enable_tls,
+                host: options.driver_host.clone(),
+                port: options.driver_port,
+            },
+        );
         let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
         let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {

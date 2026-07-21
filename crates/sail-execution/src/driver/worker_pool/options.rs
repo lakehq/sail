@@ -4,11 +4,14 @@ use std::time::Duration;
 use sail_server::RetryStrategy;
 
 use crate::driver::DriverOptions;
+use crate::id::DriverId;
 use crate::shuffle::ShuffleServiceKind;
 
 #[readonly::make]
 pub struct WorkerPoolOptions {
     pub enable_tls: bool,
+    pub driver_id: DriverId,
+    pub driver_server_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
     pub worker_max_idle_time: Duration,
@@ -25,6 +28,8 @@ impl From<&DriverOptions> for WorkerPoolOptions {
     fn from(options: &DriverOptions) -> Self {
         Self {
             enable_tls: options.enable_tls,
+            driver_id: options.driver_id,
+            driver_server_port: options.driver_server_port,
             driver_external_host: options.driver_external_host.clone(),
             driver_external_port: options.driver_external_port,
             worker_max_idle_time: options.worker_max_idle_time,

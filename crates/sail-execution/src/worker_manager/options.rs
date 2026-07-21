@@ -2,11 +2,13 @@ use std::time::Duration;
 
 use sail_server::RetryStrategy;
 
+use crate::id::DriverId;
 use crate::shuffle::ShuffleServiceKind;
 
 #[derive(Debug, Clone)]
 pub struct WorkerLaunchOptions {
     pub enable_tls: bool,
+    pub driver_id: DriverId,
     pub driver_external_host: String,
     pub driver_external_port: u16,
     pub worker_heartbeat_interval: Duration,

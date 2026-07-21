@@ -1,12 +1,11 @@
 use std::collections::HashSet;
-use std::mem;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -28,22 +27,8 @@ use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
-    pub(super) fn handle_server_ready(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        port: u16,
-        signal: oneshot::Sender<()>,
-    ) -> ActorAction {
-        let server = mem::take(&mut self.server);
-        self.server = match server.ready(signal) {
-            Ok(x) => x,
-            Err(e) => {
-                error!("{e}");
-                return ActorAction::Stop;
-            }
-        };
-        info!("driver server is ready on port {port}");
-        self.worker_pool.set_driver_server_port(port);
+    pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
+        info!("activating driver {}", self.options.driver_id);
         for _ in 0..self.options.worker_initial_count {
             self.worker_pool.start_worker(ctx);
         }

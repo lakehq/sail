@@ -96,6 +96,12 @@
     If the value is `0`, the port is assumed to be the same as the port
     on which the driver listens.
 
+- key: cluster.driver_id
+  type: number
+  default: "0"
+  description:
+  hidden: true
+
 - key: cluster.worker_id
   type: number
   default: "0"

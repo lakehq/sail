@@ -34,7 +34,7 @@ use crate::task::scheduling::{
 
 impl JobScheduler {
     fn next_job_id(&mut self) -> ExecutionResult<JobId> {
-        self.job_id_generator.next()
+        self.job_id_generator.generate()
     }
 
     pub fn accept_job(

@@ -24,7 +24,7 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
-    let session_manager = create_flight_session_manager(config, runtime)?;
+    let session_manager = create_flight_session_manager(config, runtime).await?;
     let service = SailFlightSqlService::new(session_manager);
     let flight_service = FlightServiceServer::new(service);
 

@@ -20,12 +20,7 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
 pub enum DriverEvent {
-    ServerReady {
-        /// The local port that the driver server listens on.
-        /// This may be different from the port accessible from other nodes.
-        port: u16,
-        signal: oneshot::Sender<()>,
-    },
+    Activate,
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
@@ -156,7 +151,7 @@ impl From<TaskStatus> for r#gen::TaskStatus {
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverEvent::ServerReady { .. } => "ServerReady",
+            DriverEvent::Activate => "Activate",
             DriverEvent::RegisterWorker { .. } => "RegisterWorker",
             DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
             DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
@@ -182,9 +177,7 @@ impl SpanAssociation for DriverEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverEvent::ServerReady { port, signal: _ } => {
-                p.push((SpanAttribute::CLUSTER_DRIVER_PORT, port.to_string()));
-            }
+            DriverEvent::Activate => {}
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
