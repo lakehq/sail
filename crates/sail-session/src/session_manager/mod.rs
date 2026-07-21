@@ -22,6 +22,9 @@ pub(crate) use crate::session_manager::actor::SessionManagerActor;
 pub(crate) use crate::session_manager::event::SessionManagerEvent;
 pub use crate::session_manager::options::SessionManagerOptions;
 
+pub type ServerSessionFactoryFn =
+    fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
+
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
 }
@@ -70,17 +73,14 @@ impl SessionManager {
 pub async fn create_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-    create_session_factory: fn(
-        Arc<AppConfig>,
-        RuntimeHandle,
-    ) -> Box<dyn SessionFactory<ServerSessionInfo>>,
+    session_factory_fn: ServerSessionFactoryFn,
     session_timeout: Duration,
 ) -> SessionResult<SessionManager> {
     let system = Arc::new(Mutex::new(ActorSystem::new()));
     let session_factory = {
         let config = config.clone();
         let runtime = runtime.clone();
-        Box::new(move || create_session_factory(config.clone(), runtime.clone()))
+        Box::new(move || session_factory_fn(config.clone(), runtime.clone()))
     };
     let job_runner_factory = {
         let config = config.clone();

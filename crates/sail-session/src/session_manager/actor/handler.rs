@@ -57,7 +57,7 @@ impl SessionManagerActor {
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            let driver_id = match self.driver_id_generator.next() {
+            let driver_id = match self.driver_id_generator.generate() {
                 Ok(driver_id) => driver_id,
                 Err(e) => {
                     let output = Err(SessionError::internal(e.to_string()));
