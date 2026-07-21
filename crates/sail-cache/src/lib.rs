@@ -1,5 +1,7 @@
 use log::error;
 
+pub mod cached_relation;
+pub mod checkpoint;
 pub mod error;
 pub mod file_listing_cache;
 pub mod file_metadata_cache;

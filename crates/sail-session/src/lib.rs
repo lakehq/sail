@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod checkpoint;
 pub mod error;
 pub mod formats;
 pub mod observable;

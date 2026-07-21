@@ -79,6 +79,7 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
+use sail_cache::cached_relation::CachedRelationExec;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{
@@ -251,6 +252,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::checkpoint::{LocalCheckpointExec, ReliableCheckpointExec};
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
@@ -451,6 +453,46 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .try_with_sort_information(sort_information)?
                         .with_limit(limit.map(|x| x as usize));
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::CachedRelation(r#gen::CachedRelationExecNode {
+                input,
+                eq_properties,
+                partitioning,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let eq_properties = match eq_properties {
+                    Some(properties) => self.try_decode_equivalence_properties(&properties, ctx)?,
+                    None => return plan_err!("no equivalence properties for CachedRelationExec"),
+                };
+                let partitioning =
+                    self.try_decode_partitioning(&partitioning, eq_properties.schema(), ctx)?;
+                let properties = Arc::new(PlanProperties::new(
+                    eq_properties,
+                    partitioning,
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                ));
+                Ok(Arc::new(CachedRelationExec::new(input, properties)))
+            }
+            NodeKind::LocalCheckpoint(r#gen::LocalCheckpointExecNode { input }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                Ok(Arc::new(LocalCheckpointExec::new(input)))
+            }
+            NodeKind::ReliableCheckpoint(r#gen::ReliableCheckpointExecNode {
+                input,
+                object_store_url,
+                path,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let path = object_store::path::Path::parse(path)
+                    .map_err(|e| plan_datafusion_err!("invalid checkpoint path: {e}"))?;
+                Ok(Arc::new(ReliableCheckpointExec::new(
+                    input,
+                    object_store_url,
+                    path,
+                )))
             }
             NodeKind::Values(r#gen::ValuesExecNode { data, schema }) => {
                 let schema = try_decode_schema(&schema)?;
@@ -1507,6 +1549,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input: try_encode_physical_plan(self, map_partitions.input().clone())?,
                 udf: Some(udf),
                 schema,
+            })
+        } else if let Some(cached_relation) = node.downcast_ref::<CachedRelationExec>() {
+            let input = try_encode_physical_plan(self, cached_relation.input().clone())?;
+            let eq_properties = self.try_encode_equivalence_properties(
+                cached_relation.properties().equivalence_properties(),
+            )?;
+            let partitioning =
+                self.try_encode_partitioning(cached_relation.properties().output_partitioning())?;
+            NodeKind::CachedRelation(r#gen::CachedRelationExecNode {
+                input,
+                eq_properties: Some(eq_properties),
+                partitioning,
+            })
+        } else if let Some(local_checkpoint) = node.downcast_ref::<LocalCheckpointExec>() {
+            let input = try_encode_physical_plan(self, local_checkpoint.input().clone())?;
+            NodeKind::LocalCheckpoint(r#gen::LocalCheckpointExecNode { input })
+        } else if let Some(reliable_checkpoint) = node.downcast_ref::<ReliableCheckpointExec>() {
+            let input = try_encode_physical_plan(self, reliable_checkpoint.input().clone())?;
+            NodeKind::ReliableCheckpoint(r#gen::ReliableCheckpointExecNode {
+                input,
+                object_store_url: reliable_checkpoint.object_store_url().as_str().to_string(),
+                path: reliable_checkpoint.path().to_string(),
             })
         } else if let Some(work_table) = node.downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();

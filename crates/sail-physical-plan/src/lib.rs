@@ -1,5 +1,6 @@
 pub mod barrier;
 pub mod catalog_command;
+pub mod checkpoint;
 pub mod coalesce;
 pub mod data_source;
 pub mod map_partitions;

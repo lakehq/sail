@@ -7347,13 +7347,22 @@ dependencies = [
 name = "sail-cache"
 version = "0.6.6"
 dependencies = [
+ "async-trait",
  "chrono",
  "datafusion",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-expr",
+ "futures",
  "log",
  "moka",
  "object_store",
  "sail-common",
+ "sail-common-datafusion",
+ "sail-logical-plan",
+ "sail-physical-plan",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -7694,6 +7703,7 @@ dependencies = [
  "prost-build",
  "rand 0.10.2",
  "readonly",
+ "sail-cache",
  "sail-catalog",
  "sail-catalog-system",
  "sail-common",
@@ -7923,11 +7933,13 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "lazy_static",
+ "object_store",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",
  "tokio",
  "tokio-stream",
+ "uuid",
 ]
 
 [[package]]
@@ -7958,6 +7970,7 @@ dependencies = [
  "rand 0.10.2",
  "regex",
  "ryu",
+ "sail-cache",
  "sail-catalog",
  "sail-catalog-memory",
  "sail-common",

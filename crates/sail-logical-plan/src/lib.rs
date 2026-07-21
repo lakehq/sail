@@ -1,4 +1,5 @@
 pub mod barrier;
+pub mod cached_relation;
 pub mod check_constraints;
 pub mod map_partitions;
 pub mod merge;

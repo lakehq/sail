@@ -1,6 +1,8 @@
 use async_recursion::async_recursion;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use sail_cache::cached_relation::CachedRelationRegistry;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -227,8 +229,14 @@ impl PlanResolver<'_> {
             QueryNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));
             }
-            QueryNode::CachedRemoteRelation { .. } => {
-                return Err(PlanError::todo("cached remote relation"));
+            QueryNode::CachedRemoteRelation { relation_id } => {
+                let registry = self.ctx.extension::<CachedRelationRegistry>()?;
+                let relation = registry.get(&relation_id)?.ok_or_else(|| {
+                    PlanError::invalid(format!("No DataFrame with id {relation_id} is found"))
+                })?;
+                let schema = relation.schema().await;
+                let names = state.register_fields(schema.fields());
+                relation.to_logical_plan(&relation_id, &names).await?
             }
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?

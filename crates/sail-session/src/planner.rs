@@ -11,9 +11,13 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use datafusion_common::{DFSchema, internal_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
+use sail_cache::cached_relation::CachedRelationRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::rename::physical_plan::{
+    rename_physical_plan, rename_projected_physical_plan,
+};
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -24,6 +28,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::cached_relation::CachedRelationNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
@@ -99,8 +104,23 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<CachedRelationNode>()
         {
+            let registry = session_state.extension::<CachedRelationRegistry>()?;
+            let relation = registry.get(node.relation_id())?.ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "No DataFrame with id {} is found",
+                    node.relation_id()
+                ))
+            })?;
+            let plan = relation.to_physical_plan(node.relation_id()).await?;
+            let names = UserDefinedLogicalNode::schema(node)
+                .fields()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect::<Vec<_>>();
+            rename_physical_plan(plan, &names)?
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
             Arc::new(RangeExec::try_new(

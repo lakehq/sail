@@ -1,20 +1,26 @@
+use std::path::{Component, Path};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use futures::stream;
 use log::{debug, warn};
+use sail_cache::cached_relation::{
+    CachedRelation, CachedRelationRegistry, cleanup_checkpoint_path, remove_cached_relation,
+};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::resolve_and_execute_plan;
+use sail_plan::{resolve_and_execute_plan, resolve_physical_plan};
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use uuid::Uuid;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
@@ -26,15 +32,18 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult, relation,
 };
 use crate::streaming::timeout_millis;
+
+const SPARK_CHECKPOINT_DIR: &str = "spark.checkpoint.dir";
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
@@ -515,13 +524,80 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
+    let CheckpointCommand {
+        relation,
+        local,
+        eager,
+        storage_level,
+    } = checkpoint;
+    let storage_level = if local {
+        Some(resolve_local_checkpoint_storage_level(storage_level)?)
+    } else if storage_level.is_some() {
+        return Err(SparkError::invalid(
+            "StorageLevel is only valid for localCheckpoint",
+        ));
+    } else {
+        None
+    };
+
+    let relation = relation.required("checkpoint relation")?;
+    let plan: spec::Plan = relation.try_into()?;
+    let relation_id = Uuid::new_v4().to_string();
+    let (relation, cleanup_on_insert_error) = if eager {
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
+        if local {
+            (
+                CachedRelation::new_local_checkpoint(
+                    ctx,
+                    physical_plan,
+                    storage_level.required("local checkpoint storage level")?,
+                )
+                .await?,
+                None,
+            )
+        } else {
+            let path = checkpoint_path(&spark, &relation_id)?;
+            (
+                CachedRelation::new_reliable_checkpoint(ctx, physical_plan, &path).await?,
+                Some(path),
+            )
+        }
+    } else if local {
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
+        (
+            CachedRelation::new_pending_local_checkpoint(
+                physical_plan,
+                storage_level.required("local checkpoint storage level")?,
+            ),
+            None,
+        )
+    } else {
+        let path = checkpoint_path(&spark, &relation_id)?;
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
+        (
+            CachedRelation::new_pending_reliable_checkpoint(physical_plan, path),
+            None,
+        )
+    };
+    if let Err(error) = ctx
+        .extension::<CachedRelationRegistry>()?
+        .insert(relation_id.clone(), relation)
+    {
+        let error = SparkError::from(error);
+        if let Some(path) = cleanup_on_insert_error {
+            return Err(cleanup_checkpoint_after_error(ctx, &path, error).await);
+        }
+        return Err(error);
+    }
+    let result = CheckpointCommandResult {
+        relation: Some(CachedRemoteRelation { relation_id }),
+    };
+    // TODO: Run checkpoint commands through Executor so Spark Connect reattach and interrupt
+    // share the normal operation lifecycle.
     let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
         Box::new(result),
     ))];
@@ -533,6 +609,137 @@ pub(crate) async fn handle_execute_checkpoint_command(
         metadata.operation_id,
         Box::pin(stream::iter(output)),
     ))
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let relation = command
+        .relation
+        .required("remove cached remote relation relation")?;
+    remove_cached_relation(ctx, &relation.relation_id).await?;
+    let output = if metadata.reattachable {
+        vec![ExecutorOutput::complete()]
+    } else {
+        vec![]
+    };
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
+}
+
+fn resolve_local_checkpoint_storage_level(
+    storage_level: Option<crate::spark::connect::StorageLevel>,
+) -> SparkResult<spec::StorageLevel> {
+    let mut storage_level: spec::StorageLevel = storage_level
+        .map(TryInto::try_into)
+        .transpose()?
+        .map(Ok)
+        .unwrap_or_else(|| "MEMORY_AND_DISK".parse().map_err(SparkError::from))?;
+
+    if !storage_level.use_disk && !storage_level.use_memory && !storage_level.use_off_heap {
+        storage_level = "MEMORY_AND_DISK".parse().map_err(SparkError::from)?;
+    } else {
+        // Spark localCheckpoint transforms every user-provided StorageLevel to one that
+        // uses disk, so cached partitions remain recoverable after memory eviction.
+        storage_level.use_disk = true;
+        storage_level.use_off_heap = false;
+    }
+    if storage_level.replication == 0 {
+        return Err(SparkError::invalid(
+            "localCheckpoint StorageLevel replication must be at least 1",
+        ));
+    }
+    if storage_level.replication >= 40 {
+        return Err(SparkError::invalid(
+            "localCheckpoint StorageLevel replication must be less than 40",
+        ));
+    }
+    Ok(storage_level)
+}
+
+fn checkpoint_path(spark: &SparkSession, relation_id: &str) -> SparkResult<String> {
+    let root = spark
+        .get_config_option(vec![SPARK_CHECKPOINT_DIR.to_string()])?
+        .into_iter()
+        .next()
+        .and_then(|kv| kv.value)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            SparkError::invalid(format!(
+                "checkpoint directory is not set; set {SPARK_CHECKPOINT_DIR}"
+            ))
+        })?;
+    build_checkpoint_path(&root, spark.session_id(), relation_id)
+}
+
+fn build_checkpoint_path(root: &str, session_id: &str, relation_id: &str) -> SparkResult<String> {
+    validate_checkpoint_directory(root)?;
+    validate_checkpoint_path_segment("session ID", session_id)?;
+    validate_checkpoint_path_segment("relation ID", relation_id)?;
+
+    let directory = format!("{}/", root.trim_end_matches('/'));
+    let checkpoint_root = ListingTableUrl::parse(directory)?;
+    let root_url = checkpoint_root.get_url();
+    if checkpoint_root.get_glob().is_some()
+        || root_url.query().is_some()
+        || root_url.fragment().is_some()
+    {
+        return Err(SparkError::invalid(
+            "checkpoint directory cannot contain a query, fragment, or glob",
+        ));
+    }
+
+    let mut checkpoint_url = root_url.clone();
+    checkpoint_url
+        .path_segments_mut()
+        .map_err(|()| SparkError::invalid("checkpoint directory must be a hierarchical URL"))?
+        .pop_if_empty()
+        .push("sail-checkpoints")
+        .push(session_id)
+        .push(relation_id);
+    Ok(checkpoint_url.into())
+}
+
+fn validate_checkpoint_directory(root: &str) -> SparkResult<()> {
+    if Path::new(root)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(SparkError::invalid(
+            "checkpoint directory cannot contain parent path components",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_checkpoint_path_segment(name: &str, value: &str) -> SparkResult<()> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => Err(SparkError::invalid(format!(
+            "checkpoint {name} must be a single path segment"
+        ))),
+    }
+}
+
+async fn cleanup_checkpoint_after_error(
+    ctx: &SessionContext,
+    path: &str,
+    error: SparkError,
+) -> SparkError {
+    match cleanup_checkpoint_path(ctx, path).await {
+        Ok(()) => error,
+        Err(cleanup_error) => SparkError::internal(format!(
+            "checkpoint failed: {error}; additionally failed to clean checkpoint path {path}: {cleanup_error}"
+        )),
+    }
 }
 
 pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {

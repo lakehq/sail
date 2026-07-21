@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
+use sail_cache::cached_relation::cleanup_cached_relations;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
@@ -401,8 +402,13 @@ impl SessionManagerActor {
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
+        let context = context.clone();
         ctx.spawn(async move {
             service.runner().stop(tx).await;
+            // FIXME: Await runner shutdown before removing checkpoint data still visible to tasks.
+            if let Err(error) = cleanup_cached_relations(&context).await {
+                warn!("failed to clean cached relations for session {session_id}: {error}");
+            }
             let message = match rx.await {
                 Ok(x) => SessionManagerEvent::SetSessionHistory {
                     session_id,

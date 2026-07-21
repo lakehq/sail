@@ -67,6 +67,9 @@ message ExtendedPhysicalPlanNode {
     NoopSinkExecNode noop_sink = 52;
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
+    CachedRelationExecNode cached_relation = 55;
+    LocalCheckpointExecNode local_checkpoint = 56;
+    ReliableCheckpointExecNode reliable_checkpoint = 57;
   }
 }
 
@@ -587,6 +590,22 @@ message MemoryExecNode {
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
   optional uint64 limit = 6;
+}
+
+message CachedRelationExecNode {
+  bytes input = 1;
+  EquivalenceProperties eq_properties = 2;
+  bytes partitioning = 3;
+}
+
+message LocalCheckpointExecNode {
+  bytes input = 1;
+}
+
+message ReliableCheckpointExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string path = 3;
 }
 
 message ValuesExecNode {
