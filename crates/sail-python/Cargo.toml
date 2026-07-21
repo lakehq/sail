@@ -6,6 +6,9 @@ edition = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-telemetry = { path = "../sail-telemetry" }
@@ -13,6 +16,10 @@ sail-flight = { path = "../sail-flight" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }
 
+# TODO: Drop "v2" after:
+#       - libmimalloc-sys vendors the fix for https://github.com/microsoft/mimalloc/issues/1287 and
+#       - exposes MI_TLS_MODEL_LOCAL for macOS coexistence https://github.com/microsoft/mimalloc/issues/1301
+mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls", "v2"] }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }

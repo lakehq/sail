@@ -7993,6 +7993,7 @@ version = "0.6.6"
 dependencies = [
  "fastrace",
  "log",
+ "mimalloc",
  "pyo3",
  "sail-cli",
  "sail-common",
