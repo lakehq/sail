@@ -168,7 +168,7 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let json_tuple_expr = df_json_tuple(arguments);
 
     // Wrap in array and explode with Inline
-    let array_expr = ScalarUDF::from(SparkArray::new()).call(vec![json_tuple_expr]);
+    let array_expr = ScalarUDF::from(SparkArray::new(false)).call(vec![json_tuple_expr]);
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![array_expr]))
 }
 

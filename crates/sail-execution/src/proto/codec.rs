@@ -2426,6 +2426,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
+            UdfKind::SparkArray(r#gen::SparkArrayUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkArray::new(ansi_mode))));
+            }
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2488,9 +2491,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
             "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
-            "spark_array" | "spark_make_array" | "array" => {
-                Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
-            }
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
@@ -2666,7 +2666,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
-            || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
@@ -2894,6 +2893,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkFloor>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkFloor(r#gen::SparkFloorUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkArray>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkArray(r#gen::SparkArrayUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try })

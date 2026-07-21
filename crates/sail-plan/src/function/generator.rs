@@ -49,7 +49,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let arrays = (0..num_cols)
         .map(|i| args.iter().skip(i).step_by(num_cols).cloned().collect())
-        .map(|col| ScalarUDF::from(SparkArray::new()).call(col))
+        .map(|col| ScalarUDF::from(SparkArray::new(false)).call(col))
         .collect::<Vec<_>>();
 
     let zipped = ScalarUDF::from(ArraysZip::new(field_names)).call(arrays);

@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
-    OffsetSizeTrait, make_array, new_empty_array, new_null_array,
+    make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,
+    GenericListArray, MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, plan_datafusion_err, plan_err};
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -22,23 +22,29 @@ use crate::functions_nested_utils::make_scalar_function;
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,
+    ansi_mode: bool,
 }
 
 impl Default for SparkArray {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkArray {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![TypeSignature::UserDefined, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("spark_make_array")],
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -107,29 +113,47 @@ impl ScalarUDFImpl for SparkArray {
         let first_type = arg_types.first().ok_or_else(|| {
             plan_datafusion_err!("Spark array function requires at least one argument")
         })?;
-        // Spark non-ANSI semantics: when mixing strings with other (non-null) types,
-        // coerce everything to string. DataFusion's `comparison_coercion` prefers
-        // numeric types, which would break Spark's string-wins behavior and cause
-        // runtime cast failures for values like `array('a', 1)`.
         let is_string_like = |dt: &DataType| {
             matches!(
                 dt,
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             )
         };
-        let has_string = arg_types.iter().any(is_string_like);
-        let has_non_string_non_null = arg_types
-            .iter()
-            .any(|dt| !is_string_like(dt) && !dt.is_null());
-        if has_string && has_non_string_non_null {
-            let string_type = if arg_types.iter().any(|dt| matches!(dt, DataType::LargeUtf8)) {
-                DataType::LargeUtf8
-            } else if arg_types.iter().any(|dt| matches!(dt, DataType::Utf8View)) {
-                DataType::Utf8View
-            } else {
-                DataType::Utf8
-            };
-            return Ok(vec![string_type; arg_types.len()]);
+        // Spark's legacy "string promotion" applies ONLY when ANSI is disabled, and only
+        // to a mix of STRING with atomic numeric/date/timestamp values — never BOOLEAN,
+        // BINARY, or nested types (those are rejected with DATATYPE_MISMATCH in both
+        // modes). Under ANSI, string promotion is off: Spark resolves a numeric common
+        // type and fails the cast at runtime for values like `array('a', 1)`. DataFusion's
+        // `comparison_coercion` prefers numeric types, matching the ANSI path.
+        let is_string_promotable = |dt: &DataType| {
+            dt.is_numeric()
+                || matches!(
+                    dt,
+                    DataType::Decimal128(_, _)
+                        | DataType::Decimal256(_, _)
+                        | DataType::Date32
+                        | DataType::Date64
+                        | DataType::Timestamp(_, _)
+                )
+        };
+        if !self.ansi_mode {
+            let has_string = arg_types.iter().any(is_string_like);
+            let has_non_string_non_null = arg_types
+                .iter()
+                .any(|dt| !is_string_like(dt) && !dt.is_null());
+            let others_all_promotable = arg_types
+                .iter()
+                .all(|dt| is_string_like(dt) || dt.is_null() || is_string_promotable(dt));
+            if has_string && has_non_string_non_null && others_all_promotable {
+                let string_type = if arg_types.iter().any(|dt| matches!(dt, DataType::LargeUtf8)) {
+                    DataType::LargeUtf8
+                } else if arg_types.iter().any(|dt| matches!(dt, DataType::Utf8View)) {
+                    DataType::Utf8View
+                } else {
+                    DataType::Utf8
+                };
+                return Ok(vec![string_type; arg_types.len()]);
+            }
         }
         let new_type = arg_types
             .iter()

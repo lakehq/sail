@@ -184,6 +184,7 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
+    SparkArrayUdf spark_array = 35;
   }
 }
 
@@ -323,6 +324,10 @@ message SparkPmodUdf {
 }
 
 message SparkNegativeUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkArrayUdf {
   bool ansi_mode = 1;
 }
 

@@ -50,6 +50,17 @@ fn array_compact(array: expr::Expr) -> expr::Expr {
     ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
 }
 
+/// Dispatch for `array(...)`.
+///
+/// Reads `PlanConfig::ansi_mode` at planning time and bakes it into the UDF so
+/// element coercion follows Spark: under ANSI the array resolves a numeric
+/// common type (failing the cast at runtime for `array('a', 1)`), while non-ANSI
+/// applies legacy string promotion.
+fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    Ok(ScalarUDF::from(SparkArray::new(ansi_mode)).call(input.arguments))
+}
+
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let field_names: Vec<String> = input
         .arguments
@@ -375,7 +386,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("array", F::udf(SparkArray::new())),
+        ("array", F::custom(array)),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(array_contains)),
