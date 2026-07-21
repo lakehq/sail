@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use datafusion::arrow::datatypes::{
     UInt32Type, UInt64Type,
 };
 use datafusion::common::cast::{as_list_array, as_primitive_array, as_string_array};
-use datafusion::common::{exec_err, not_impl_err};
+use datafusion::common::{HashMap, exec_err, not_impl_err};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
