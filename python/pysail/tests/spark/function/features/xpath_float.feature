@@ -1,3 +1,4 @@
+@xpath
 Feature: xpath_float with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -15,8 +16,7 @@ Feature: xpath_float with an argument coming from a column
         | result |
         | 3.0    |
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['3.0', 'NULL'].
-    @column_args @sail-bug
+    @column_args
     Scenario: xpath_float takes argument 2 from a column containing NULL
       When query
         """
@@ -24,8 +24,7 @@ Feature: xpath_float with an argument coming from a column
         """
       Then query error NON_FOLDABLE_INPUT
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['3.0', '3.0'].
-    @column_args @sail-bug
+    @column_args
     Scenario: xpath_float takes argument 2 from a column
       When query
         """
