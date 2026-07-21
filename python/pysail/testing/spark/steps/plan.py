@@ -74,6 +74,20 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Preserve checkpoint partition layout while removing generated identifiers.
+    checkpoint_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    text = re.sub(
+        rf"(_sail/checkpoints/v1/){checkpoint_uuid}/{checkpoint_uuid}",
+        r"\1<session>/<relation>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"(/attempts/partition-\d{{20}}/){checkpoint_uuid}(\.parquet)",
+        r"\1<attempt>\2",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",

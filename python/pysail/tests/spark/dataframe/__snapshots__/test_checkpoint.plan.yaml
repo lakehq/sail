@@ -1,0 +1,63 @@
+# serializer version: 1
+---
+name: "test_checkpoint_preserves_partitioning_and_ordering[checkpoint]"
+data:
+  |-
+    == Grouped Aggregate From Checkpoint ==
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as key, #3@1 as count]
+      ProjectionExec: expr=[#1@0 as #2, count(Int32(1))@1 as #3]
+        AggregateExec: mode=SinglePartitioned, gby=[#1@0 as #1], aggr=[count(Int32(1))], ordering_mode=Sorted
+          ProjectionExec: expr=[#1@1 as #1]
+            RemoteCheckpointScanExec
+              DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #0, __sail_checkpoint_col_00001@1 as #1], file_type=parquet
+
+    == Sort Within Partitions From Checkpoint ==
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id, #1@1 as key]
+      RemoteCheckpointScanExec
+        DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #0, __sail_checkpoint_col_00001@1 as #1], file_type=parquet
+---
+name: "test_checkpoint_preserves_partitioning_and_ordering[local-checkpoint]"
+data:
+  |-
+    == Grouped Aggregate From Checkpoint ==
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as key, #3@1 as count]
+      ProjectionExec: expr=[#1@0 as #2, count(Int32(1))@1 as #3]
+        AggregateExec: mode=SinglePartitioned, gby=[#1@0 as #1], aggr=[count(Int32(1))], ordering_mode=Sorted
+          ProjectionExec: expr=[#1@1 as #1]
+            RemoteCheckpointScanExec
+              DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #0, __sail_checkpoint_col_00001@1 as #1], file_type=parquet
+
+    == Sort Within Partitions From Checkpoint ==
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id, #1@1 as key]
+      RemoteCheckpointScanExec
+        DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #0, __sail_checkpoint_col_00001@1 as #1], file_type=parquet
+---
+name: "test_checkpoint_supports_iterative_weakly_connected_components"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#24@0 as node, #25@1 as label]
+      ProjectionExec: expr=[#0@0 as #24, least(#1@1, CASE WHEN #20@2 IS NOT NULL THEN #20@2 ELSE #1@1 END) as #25]
+        HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#0@0, #19@0)], projection=[#0@0, #1@1, #20@3]
+          CoalescePartitionsExec
+            RemoteCheckpointScanExec
+              DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #0, __sail_checkpoint_col_00001@1 as #1], file_type=parquet
+          ProjectionExec: expr=[#4@0 as #19, min(#13)@1 as #20]
+            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[min(#13)]
+              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[min(#13)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#12@0, #5@1)], projection=[#4@2, #13@1]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[#10@0 as #12, #11@1 as #13]
+                          RemoteCheckpointScanExec
+                            DataSourceExec: file_groups={4 groups: [[<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000000/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000001/<attempt>.parquet], [<tmp>/_sail/checkpoints/v1/<session>/<relation>/attempts/partition-00000000000000000003/<attempt>.parquet], []]}, projection=[__sail_checkpoint_col_00000@0 as #10, __sail_checkpoint_col_00001@1 as #11], file_type=parquet
+                      UnionExec
+                        ProjectionExec: expr=[a@0 as #4, b@1 as #5]
+                          DataSourceExec: partitions=1, partition_sizes=[1]
+                        ProjectionExec: expr=[b@1 as #4, a@0 as #5]
+                          DataSourceExec: partitions=1, partition_sizes=[1]

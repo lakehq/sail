@@ -76,8 +76,75 @@ def test_checkpoint_preserves_field_metadata(spark):
     assert checkpointed.schema["value"].metadata == {"source": "checkpoint-test"}
 
 
+def _weakly_connected_components(nodes, pairs, *, checkpoint):
+    forward = pairs.select(sf.col("a").alias("source"), sf.col("b").alias("target"))
+    reverse = pairs.select(sf.col("b").alias("source"), sf.col("a").alias("target"))
+    edges = forward.unionByName(reverse)
+    labels = nodes.select(sf.col("id").alias("node")).withColumn("label", sf.col("node"))
+
+    for _ in range(100):
+        neighbor_labels = labels.select(
+            sf.col("node").alias("target"),
+            sf.col("label").alias("target_label"),
+        )
+        neighbor_minimum = (
+            edges.join(neighbor_labels, on="target")
+            .groupBy("source")
+            .agg(sf.min("target_label").alias("neighbor_minimum"))
+            .select(sf.col("source").alias("node"), "neighbor_minimum")
+        )
+        next_labels = labels.join(neighbor_minimum, on="node", how="left").select(
+            "node",
+            sf.least(
+                "label",
+                sf.coalesce("neighbor_minimum", "label"),
+            ).alias("label"),
+        )
+        previous_labels = labels.select("node", sf.col("label").alias("previous_label"))
+        changed = (
+            next_labels.join(previous_labels, on="node")
+            .where(sf.col("label") != sf.col("previous_label"))
+            .limit(1)
+            .count()
+        )
+        labels = next_labels
+        if changed == 0:
+            break
+        if checkpoint:
+            labels = labels.checkpoint()
+    else:
+        pytest.fail("weakly connected components did not converge")
+
+    return labels
+
+
+def _component_partition(labels):
+    components = {}
+    for row in labels.collect():
+        components.setdefault(row.label, set()).add(row.node)
+    return {frozenset(members) for members in components.values()}
+
+
+@pytest.mark.yamlsnapshot(group="plan")
+def test_checkpoint_supports_iterative_weakly_connected_components(spark, snapshot):
+    nodes = spark.range(7)
+    pairs = spark.createDataFrame(
+        [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+        "a LONG, b LONG",
+    )
+
+    expected = {frozenset(range(6)), frozenset({6})}
+    baseline = _weakly_connected_components(nodes, pairs, checkpoint=False)
+    checkpointed = _weakly_connected_components(nodes, pairs, checkpoint=True)
+    checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+
+    assert _component_partition(checkpointed) == _component_partition(baseline) == expected
+    assert checkpointed_plan == snapshot
+
+
 @pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])
-def test_checkpoint_preserves_partitioning_and_ordering(spark, local):
+@pytest.mark.yamlsnapshot(group="plan")
+def test_checkpoint_preserves_partitioning_and_ordering(spark, local, snapshot):
     source = (
         spark.range(100, numPartitions=4)
         .withColumn("key", sf.col("id") % 4)
@@ -88,9 +155,14 @@ def test_checkpoint_preserves_partitioning_and_ordering(spark, local):
     checkpointed = source.localCheckpoint() if local else source.checkpoint()
     aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
     ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
+    consumer_plans = "\n".join(
+        [
+            f"== Grouped Aggregate From Checkpoint ==\n{aggregate_plan}",
+            f"== Sort Within Partitions From Checkpoint ==\n{ordered_plan}",
+        ]
+    )
 
-    assert "RepartitionExec" not in aggregate_plan
-    assert "SortExec" not in ordered_plan
+    assert consumer_plans == snapshot
 
 
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):
