@@ -22,7 +22,7 @@ struct WorkerTaskStreamFetcher {
 }
 
 #[async_trait]
-impl TaskStreamFetcher for WorkerTaskStreamFetcher {
+impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
     async fn fetch(
         &self,
         key: TaskStreamKey,
@@ -54,9 +54,10 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server = TaskStreamFlightServer::new(Box::new(WorkerTaskStreamFetcher {
-            handle: handle.clone(),
-        }));
+        let flight_server =
+            TaskStreamFlightServer::<TaskStreamKey>::new(Box::new(WorkerTaskStreamFetcher {
+                handle: handle.clone(),
+            }));
         let flight_service = FlightServiceServer::new(flight_server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)

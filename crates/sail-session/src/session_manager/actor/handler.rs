@@ -11,17 +11,29 @@ use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
 use sail_common_datafusion::system::predicate::PredicateExt;
+use sail_execution::DriverId;
+use sail_execution::driver::DriverHandle;
+use sail_execution::error::ExecutionResult;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SessionError, SessionResult};
-use crate::session_factory::ServerSessionInfo;
+use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
 
 impl SessionManagerActor {
+    pub(super) fn handle_get_driver(
+        &self,
+        driver_id: DriverId,
+        result: oneshot::Sender<ExecutionResult<DriverHandle>>,
+    ) -> ActorAction {
+        let _ = result.send(self.drivers.get(driver_id));
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_get_or_create_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -45,23 +57,68 @@ impl SessionManagerActor {
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            let info = ServerSessionInfo {
-                session_id: session_id.clone(),
-                user_id: user_id.clone(),
-                session_manager: ctx.handle().clone(),
+            let driver_id = DriverId::from(self.next_driver_id);
+            let Some(next_driver_id) = self.next_driver_id.checked_add(1) else {
+                let output = Err(SessionError::internal("driver ID overflow"));
+                let _ = result.send(output);
+                return ActorAction::Continue;
             };
-            match self.factory.create(info) {
-                Ok(context) => {
-                    let session = ServerSession {
-                        user_id,
-                        created_at: Utc::now(),
-                        deleted_at: None,
-                        state: ServerSessionState::Running {
-                            context: context.clone(),
-                        },
+            self.next_driver_id = next_driver_id;
+            let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
+                driver_id,
+                driver_server_port: self.gateway.as_ref().map(|x| x.port()),
+            });
+            match runner {
+                Ok(runner) => {
+                    let (runner, driver) = runner.into_parts();
+                    let registered_driver_id = driver.as_ref().map(|_| driver_id);
+                    if let Some(driver) = &driver
+                        && let Err(e) = self.drivers.insert(driver_id, driver.clone())
+                    {
+                        let driver = driver.clone();
+                        ctx.spawn(async move {
+                            let _ = driver.shutdown().await;
+                        });
+                        let output = Err(e.into());
+                        let _ = result.send(output);
+                        return ActorAction::Continue;
+                    }
+                    let info = ServerSessionInfo {
+                        session_id: session_id.clone(),
+                        user_id: user_id.clone(),
+                        session_manager: ctx.handle().clone(),
+                        job_runner: Some(runner),
                     };
-                    self.sessions.insert(session_id, session);
-                    Ok(context)
+                    match self.factory.create(info) {
+                        Ok(context) => {
+                            if let Some(driver) = driver {
+                                ctx.spawn(async move {
+                                    let _ = driver.activate().await;
+                                });
+                            }
+                            let session = ServerSession {
+                                user_id,
+                                created_at: Utc::now(),
+                                deleted_at: None,
+                                state: ServerSessionState::Running {
+                                    context: context.clone(),
+                                },
+                                driver_id: registered_driver_id,
+                            };
+                            self.sessions.insert(session_id, session);
+                            Ok(context)
+                        }
+                        Err(e) => {
+                            if let Some(driver_id) = registered_driver_id
+                                && let Some(driver) = self.drivers.remove(driver_id)
+                            {
+                                ctx.spawn(async move {
+                                    let _ = driver.shutdown().await;
+                                });
+                            }
+                            Err(e.into())
+                        }
+                    }
                 }
                 Err(e) => Err(e.into()),
             }
@@ -141,6 +198,9 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
+        if let Some(driver_id) = session.driver_id.take() {
+            self.drivers.remove(driver_id);
+        }
         if matches!(session.state, ServerSessionState::Deleting) {
             session.state = ServerSessionState::Deleted {
                 history: Arc::new(history),
@@ -153,13 +213,22 @@ impl SessionManagerActor {
 
     pub(super) fn handle_set_session_failure(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         session_id: String,
     ) -> ActorAction {
         let Some(session) = self.sessions.get_mut(&session_id) else {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
+        if let Some(driver_id) = session.driver_id.take()
+            && let Some(driver) = self.drivers.remove(driver_id)
+        {
+            ctx.spawn(async move {
+                if let Err(e) = driver.shutdown().await {
+                    warn!("failed to shut down driver {driver_id}: {e}");
+                }
+            });
+        }
         session.state = ServerSessionState::Failed;
         ActorAction::Continue
     }

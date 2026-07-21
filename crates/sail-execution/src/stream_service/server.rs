@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::fmt::Debug;
 use std::pin::Pin;
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -19,21 +19,54 @@ use crate::id::TaskStreamKey;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
 
+pub trait TaskStreamKeyDecoder: Debug + Send + 'static {
+    fn decode(bytes: &[u8]) -> Result<Self, Status>
+    where
+        Self: Sized;
+}
+
+impl From<TaskStreamTicket> for TaskStreamKey {
+    fn from(ticket: TaskStreamTicket) -> Self {
+        let TaskStreamTicket {
+            job_id,
+            stage,
+            partition,
+            attempt,
+            channel,
+        } = ticket;
+        Self {
+            job_id: job_id.into(),
+            stage: stage as usize,
+            partition: partition as usize,
+            attempt: attempt as usize,
+            channel: channel as usize,
+        }
+    }
+}
+
+impl TaskStreamKeyDecoder for TaskStreamKey {
+    fn decode(bytes: &[u8]) -> Result<Self, Status> {
+        TaskStreamTicket::decode(bytes)
+            .map(Into::into)
+            .map_err(|e| Status::invalid_argument(e.to_string()))
+    }
+}
+
 #[async_trait]
-pub trait TaskStreamFetcher: Send + Sync {
+pub trait TaskStreamFetcher<K>: Send + Sync {
     async fn fetch(
         &self,
-        key: TaskStreamKey,
+        key: K,
         sender: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()>;
 }
 
-pub struct TaskStreamFlightServer {
-    fetcher: Box<dyn TaskStreamFetcher>,
+pub struct TaskStreamFlightServer<K> {
+    fetcher: Box<dyn TaskStreamFetcher<K>>,
 }
 
-impl TaskStreamFlightServer {
-    pub fn new(fetcher: Box<dyn TaskStreamFetcher>) -> Self {
+impl<K> TaskStreamFlightServer<K> {
+    pub fn new(fetcher: Box<dyn TaskStreamFetcher<K>>) -> Self {
         Self { fetcher }
     }
 }
@@ -41,7 +74,10 @@ impl TaskStreamFlightServer {
 type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 #[async_trait]
-impl FlightService for TaskStreamFlightServer {
+impl<K> FlightService for TaskStreamFlightServer<K>
+where
+    K: TaskStreamKeyDecoder,
+{
     type HandshakeStream = BoxedFlightStream<HandshakeResponse>;
 
     async fn handshake(
@@ -88,27 +124,9 @@ impl FlightService for TaskStreamFlightServer {
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let Ticket { ticket } = request.into_inner();
-        let ticket = {
-            let mut buf = Cursor::new(&ticket);
-            TaskStreamTicket::decode(&mut buf)
-                .map_err(|e| Status::invalid_argument(e.to_string()))?
-        };
-        debug!("{ticket:?}");
-        let TaskStreamTicket {
-            job_id,
-            stage,
-            partition,
-            attempt,
-            channel,
-        } = ticket;
+        let key = K::decode(&ticket)?;
+        debug!("{key:?}");
         let (tx, rx) = oneshot::channel();
-        let key = TaskStreamKey {
-            job_id: job_id.into(),
-            stage: stage as usize,
-            partition: partition as usize,
-            attempt: attempt as usize,
-            channel: channel as usize,
-        };
         self.fetcher.fetch(key, tx).await?;
         let stream = rx
             .await

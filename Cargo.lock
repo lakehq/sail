@@ -7734,6 +7734,7 @@ dependencies = [
  "sail-catalog-memory",
  "sail-common",
  "sail-common-datafusion",
+ "sail-execution",
  "sail-plan",
  "sail-server",
  "sail-session",
