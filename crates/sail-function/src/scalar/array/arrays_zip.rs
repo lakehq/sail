@@ -346,6 +346,10 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
     offsets.push(zero_offset);
     let mut last_offset = zero_offset;
 
+    // Reused across rows to avoid a per-row allocation of the two scratch vectors.
+    let mut arrays_one_row: Vec<ArrayRef> = Vec::with_capacity(lists.len());
+    let mut lens_one_row: Vec<O> = Vec::with_capacity(lists.len());
+
     for row_idx in 0..num_rows {
         if validity_mask_opt
             .as_ref()
@@ -355,8 +359,8 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
             continue;
         }
 
-        let mut arrays_one_row: Vec<ArrayRef> = Vec::with_capacity(lists.len());
-        let mut lens_one_row: Vec<O> = Vec::with_capacity(lists.len());
+        arrays_one_row.clear();
+        lens_one_row.clear();
         let mut max_len_one_row = zero_offset;
         let mut all_uniform = true;
         for arg in &lists {
@@ -372,10 +376,10 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
             lens_one_row.push(len);
         }
 
-        let arrays_padded = if all_uniform {
-            arrays_one_row
+        let struct_array = if all_uniform {
+            to_struct_array(arrays_one_row.as_slice(), field_names.as_slice(), &arg_fields)?
         } else {
-            arrays_one_row
+            let arrays_padded = arrays_one_row
                 .iter()
                 .zip(lens_one_row.iter())
                 .map(|(arr, len)| {
@@ -387,14 +391,9 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
                         ])?),
                     })
                 })
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?;
+            to_struct_array(arrays_padded.as_slice(), field_names.as_slice(), &arg_fields)?
         };
-
-        let struct_array = to_struct_array(
-            arrays_padded.as_slice(),
-            field_names.as_slice(),
-            &arg_fields,
-        )?;
         let offset = O::from_usize(struct_array.len()).ok_or_else(|| {
             DataFusionError::Execution("`arrays_zip` offset overflow error".to_string())
         })?;
