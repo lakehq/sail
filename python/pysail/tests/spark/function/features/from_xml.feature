@@ -1,3 +1,4 @@
+@from_xml
 Feature: from_xml parses an XML string into a struct value
 
   Rule: Primitive types
@@ -391,3 +392,42 @@ Feature: from_xml parses an XML string into a struct value
       Then query result
         | result         |
         | [1.10, 2.20]   |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null xml literal yields a struct
+      When query
+        """
+        SELECT from_xml('<r><a>1</a></r>', 'a INT') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    Scenario: a non-null xml column yields a struct
+      When query
+        """
+        SELECT from_xml(CONCAT('<r><a>', CAST(id AS STRING), '</a></r>'), 'a INT') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    Scenario: a nullable xml column stays nullable
+      When query
+        """
+        SELECT from_xml(c, 'a INT') AS result FROM VALUES ('<r><a>1</a></r>'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """

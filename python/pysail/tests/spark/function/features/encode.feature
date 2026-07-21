@@ -1,3 +1,4 @@
+@encode
 Feature: encode with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -49,3 +50,39 @@ Feature: encode with an argument coming from a column
         | result       |
         | 6162         |
         | FEFF00610062 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null string literal is nullable (encode is inherently nullable in Spark)
+      When query
+        """
+        SELECT encode('abc', 'utf-8') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT encode(c, 'utf-8') AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+    Scenario: a non-null string column is nullable (encode is inherently nullable in Spark)
+      When query
+        """
+        SELECT encode(CAST(id AS STRING), 'utf-8') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """

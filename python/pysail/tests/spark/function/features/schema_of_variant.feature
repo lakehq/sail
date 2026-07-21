@@ -1,4 +1,5 @@
 @spark-4
+@schema_of_variant
 Feature: schema_of_variant
 
   Rule: Primitive types
@@ -298,3 +299,29 @@ Feature: schema_of_variant
       Then query result
         | result                 |
         | ARRAY<OBJECT<a: BIGINT>> |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to schema_of_variant yields the schema Spark declares
+      When query
+        """
+        SELECT schema_of_variant(parse_json('null')) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable column input to schema_of_variant stays nullable
+      When query
+        """
+        SELECT schema_of_variant(c) AS result FROM VALUES (parse_json('null')), (CAST(NULL AS VARIANT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

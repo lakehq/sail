@@ -1,3 +1,4 @@
+@parse_url
 Feature: parse_url() extracts URL component
 
   Rule: Basic usage
@@ -273,3 +274,39 @@ Feature: parse_url() extracts URL component
       Then query result
         | result |
         | NULL   |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null url literal yields a string
+      When query
+        """
+        SELECT parse_url('http://a.com/p', 'HOST') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null url column yields a string
+      When query
+        """
+        SELECT parse_url(CONCAT('http://a', CAST(id AS STRING), '.com'), 'HOST') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable url column stays nullable
+      When query
+        """
+        SELECT parse_url(c, 'HOST') AS result FROM VALUES ('http://a.com'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

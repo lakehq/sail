@@ -1,3 +1,4 @@
+@xpath_long
 Feature: xpath_long with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -32,3 +33,39 @@ Feature: xpath_long with an argument coming from a column
         SELECT xpath_long('<a><b>1</b><b>2</b></a>', c) AS result FROM VALUES (1, 'sum(a/b)'), (2, 'sum(a/b)') AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to xpath_long yields the schema Spark declares
+      When query
+        """
+        SELECT xpath_long('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: a non-null column input to xpath_long yields the schema Spark declares
+      When query
+        """
+        SELECT xpath_long(CAST(id AS STRING), 'sum(a/b)') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: a nullable column input to xpath_long stays nullable
+      When query
+        """
+        SELECT xpath_long(c, 'sum(a/b)') AS result FROM VALUES ('<a><b>1</b><b>2</b></a>'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """

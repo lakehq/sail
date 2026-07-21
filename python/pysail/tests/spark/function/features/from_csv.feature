@@ -1,3 +1,4 @@
+@from_csv
 Feature: from_csv column display name matches Spark
 
   Spark renders `from_csv` as a UnaryExpression: only the input column
@@ -97,3 +98,45 @@ Feature: from_csv column display name matches Spark
     Then query result
       | last_value(x) |
       | 1             |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null csv literal yields a struct
+      When query
+        """
+        SELECT from_csv('1,2', 'a INT, b INT') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- a: integer (nullable = true)
+         |    |-- b: integer (nullable = true)
+        """
+
+    @sail-bug
+Scenario: a non-null csv column yields a struct
+      When query
+        """
+        SELECT from_csv(CAST(id AS STRING), 'a INT') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- a: integer (nullable = true)
+        """
+
+    Scenario: a nullable csv column stays nullable
+      When query
+        """
+        SELECT from_csv(c, 'a INT') AS result FROM VALUES ('1'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """

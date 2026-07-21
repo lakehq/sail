@@ -1,3 +1,4 @@
+@from_json
 Feature: from_json function parses JSON strings into structured types
 
   Rule: Basic struct parsing
@@ -1368,3 +1369,42 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
       Then query result
         | result |
         | NULL   |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null json literal yields a struct
+      When query
+        """
+        SELECT from_json('{"a":1}', 'a INT') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    Scenario: a non-null json column yields a struct
+      When query
+        """
+        SELECT from_json(CONCAT('{"n":', CAST(id AS STRING), '}'), 'n INT') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- n: integer (nullable = true)
+        """
+
+    Scenario: a nullable json column stays nullable
+      When query
+        """
+        SELECT from_json(c, 'a INT') AS result FROM VALUES ('{"a":1}'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """

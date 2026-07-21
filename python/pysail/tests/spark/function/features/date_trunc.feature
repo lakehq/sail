@@ -1,3 +1,4 @@
+@date_trunc
 Feature: DATE_TRUNC preserves timestamp type
 
   Rule: date_trunc on timestamp preserves type
@@ -128,3 +129,39 @@ Feature: DATE_TRUNC preserves timestamp type
         | result              |
         | 2015-01-01 00:00:00 |
         | 2015-01-01 00:00:00 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null timestamp literal yields a timestamp
+      When query
+        """
+        SELECT date_trunc('year', TIMESTAMP '2024-01-15 10:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    Scenario: a non-null timestamp column yields a timestamp
+      When query
+        """
+        SELECT date_trunc('year', CAST(id AS TIMESTAMP)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    Scenario: a nullable timestamp column stays nullable
+      When query
+        """
+        SELECT date_trunc('year', c) AS result FROM VALUES (TIMESTAMP '2024-01-15 10:00:00'), (CAST(NULL AS TIMESTAMP)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """

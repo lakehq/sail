@@ -1,4 +1,5 @@
 @spark-4
+@try_parse_json
 Feature: try_parse_json comprehensive tests
 
   Rule: Argument count validation
@@ -721,3 +722,39 @@ Feature: try_parse_json comprehensive tests
         | NULL   |
         | NULL   |
         | NULL   |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: try_parse_json stays nullable because it returns NULL on invalid input
+      When query
+        """
+        SELECT try_parse_json('{"a":1}') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = true)
+        """
+
+    Scenario: try_parse_json of a non-null column stays nullable because it can NULL on invalid input
+      When query
+        """
+        SELECT try_parse_json(CAST(id AS STRING)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = true)
+        """
+
+    Scenario: try_parse_json of a nullable column stays nullable
+      When query
+        """
+        SELECT try_parse_json(c) AS result FROM VALUES ('{"a":1}'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = true)
+        """

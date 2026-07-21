@@ -1,3 +1,4 @@
+@year
 Feature: year
 
   Rule: Basic year extraction
@@ -436,3 +437,41 @@ Feature: year
         WHERE year(d) = 9999
         """
       Then query plan matches snapshot
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null date literal yields a non-nullable integer
+      When query
+        """
+        SELECT year(DATE '2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null date column yields a non-nullable integer
+      When query
+        """
+        SELECT year(CAST(CAST(id AS TIMESTAMP) AS DATE)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a nullable date column stays nullable
+      When query
+        """
+        SELECT year(c) AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

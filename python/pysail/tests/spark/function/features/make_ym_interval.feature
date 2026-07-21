@@ -148,3 +148,41 @@ Feature: make_ym_interval builds a year-month interval from years and months
         SELECT make_ym_interval(200000000, 0) AS result
         """
       Then query error INTERVAL_ARITHMETIC_OVERFLOW
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to make_ym_interval yields the schema Spark declares
+      When query
+        """
+        SELECT make_ym_interval(1, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null column input to make_ym_interval yields the schema Spark declares
+      When query
+        """
+        SELECT make_ym_interval(CAST(id AS INT), 2) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = false)
+        """
+
+    Scenario: a nullable column input to make_ym_interval stays nullable
+      When query
+        """
+        SELECT make_ym_interval(c, 2) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = true)
+        """

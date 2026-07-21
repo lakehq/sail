@@ -211,3 +211,39 @@ Feature: to_timestamp (strict variant)
         | result              |
         | 2024-01-15 10:30:00 |
         | 2024-01-15 10:30:00 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null string literal yields a timestamp
+      When query
+        """
+        SELECT to_timestamp('2024-01-15 10:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    Scenario: a non-null string column yields a timestamp
+      When query
+        """
+        SELECT to_timestamp(date_format(CAST(id AS TIMESTAMP), 'yyyy-MM-dd HH:mm:ss')) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT to_timestamp(c) AS result FROM VALUES ('2024-01-15 10:00:00'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """

@@ -1,3 +1,4 @@
+@variant_get
 Feature: variant_get with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -38,3 +39,28 @@ Feature: variant_get with an argument coming from a column
         | result  |
         | "hello" |
         | "hello" |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to variant_get yields the schema Spark declares
+      When query
+        """
+        SELECT variant_get(parse_json('{"a": 1}'), '$.a', 'int') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: a nullable column input to variant_get stays nullable
+      When query
+        """
+        SELECT variant_get(c, '$.a', 'int') AS result FROM VALUES (parse_json('{"a": 1}')), (CAST(NULL AS VARIANT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

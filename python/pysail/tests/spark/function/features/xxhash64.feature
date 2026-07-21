@@ -1,3 +1,4 @@
+@xxhash64
 Feature: xxhash64() returns 64-bit xxHash
 
   Rule: Basic usage
@@ -139,3 +140,39 @@ Feature: xxhash64() returns 64-bit xxHash
       Then query result
         | result              |
         | 8510603489595372987 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal yields a non-nullable bigint
+      When query
+        """
+        SELECT xxhash64('a') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: a non-null column yields a non-nullable bigint
+      When query
+        """
+        SELECT xxhash64(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: a nullable column: xxhash64 is still non-nullable
+      When query
+        """
+        SELECT xxhash64(c) AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """

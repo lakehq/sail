@@ -360,3 +360,39 @@ Feature: length() returns character length for strings and byte length for binar
         SELECT length(array(1, 2, 3)) AS result
         """
       Then query error .*
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null string literal yields a non-nullable integer
+      When query
+        """
+        SELECT length('Spark SQL') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null string column yields a non-nullable integer
+      When query
+        """
+        SELECT length(CAST(id AS STRING)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT length(c) AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

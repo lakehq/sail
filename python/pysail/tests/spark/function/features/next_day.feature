@@ -380,3 +380,39 @@ Feature: next_day comprehensive tests
         | result     |
         | 2015-01-20 |
         | 2015-01-16 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null date literal yields a date
+      When query
+        """
+        SELECT next_day(DATE '2024-01-15', 'MON') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    Scenario: a non-null date column yields a date
+      When query
+        """
+        SELECT next_day(CAST(CAST(id AS TIMESTAMP) AS DATE), 'MON') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    Scenario: a nullable date column stays nullable
+      When query
+        """
+        SELECT next_day(c, 'MON') AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """

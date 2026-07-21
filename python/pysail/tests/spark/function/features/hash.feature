@@ -1,3 +1,4 @@
+@hash
 Feature: hash() returns murmur3 hash
 
   Rule: Basic usage
@@ -39,3 +40,42 @@ Feature: hash() returns murmur3 hash
       Then query result
         | result |
         | 42     |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal yields a non-nullable integer
+      When query
+        """
+        SELECT hash('a') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null column yields a non-nullable integer
+      When query
+        """
+        SELECT hash(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a nullable column: hash is still non-nullable (hash of NULL is defined)
+      When query
+        """
+        SELECT hash(c) AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """

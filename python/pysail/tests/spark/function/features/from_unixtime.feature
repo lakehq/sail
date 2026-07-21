@@ -1,3 +1,4 @@
+@from_unixtime
 Feature: from_unixtime with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -37,3 +38,39 @@ Feature: from_unixtime with an argument coming from a column
         | result |
         | 1970   |
         | 01     |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null bigint literal yields a string
+      When query
+        """
+        SELECT from_unixtime(0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null bigint column yields a string
+      When query
+        """
+        SELECT from_unixtime(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable bigint column stays nullable
+      When query
+        """
+        SELECT from_unixtime(c) AS result FROM VALUES (CAST(0 AS BIGINT)), (CAST(NULL AS BIGINT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

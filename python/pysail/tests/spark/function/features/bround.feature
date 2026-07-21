@@ -361,3 +361,40 @@ Feature: bround comprehensive tests
         SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
+      When query
+        """
+        SELECT bround(2.5, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,0) (nullable = true)
+        """
+
+Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
+      When query
+        """
+        SELECT bround(id, 0) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+Scenario: a nullable numeric column stays nullable
+      When query
+        """
+        SELECT bround(c, 1) AS result FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(NULL AS DOUBLE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """

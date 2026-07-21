@@ -1,4 +1,5 @@
 @spark-4
+@parse_json
 Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Valid JSON parsing
@@ -268,3 +269,41 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | NULL   |
         | NULL   |
         | NULL   |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: strict parse_json of a non-null literal yields a non-nullable variant
+      When query
+        """
+        SELECT parse_json('{"a":1}') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = false)
+        """
+
+    Scenario: strict parse_json of a nullable column stays nullable
+      When query
+        """
+        SELECT parse_json(c) AS result FROM VALUES ('{"a":1}'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = true)
+        """
+
+    @sail-bug
+Scenario: strict parse_json of a non-null column yields a non-nullable variant
+      When query
+        """
+        SELECT parse_json(CONCAT('{"n":', CAST(id AS STRING), '}')) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = false)
+        """

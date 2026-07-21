@@ -1,3 +1,4 @@
+@coalesce
 Feature: coalesce returns the first non-null argument
 
   Rule: Spark-compatible coercion for mixed string and temporal arguments
@@ -113,3 +114,39 @@ Feature: coalesce returns the first non-null argument
       Then query result
       | result | result_type |
       | NULL   | string      |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null argument yields a non-nullable value
+      When query
+        """
+        SELECT coalesce(1, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null column argument yields a non-nullable value
+      When query
+        """
+        SELECT coalesce(id, 0) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: all-nullable arguments stay nullable
+      When query
+        """
+        SELECT coalesce(c, d) AS result FROM VALUES (CAST(NULL AS INT), CAST(NULL AS INT)) AS t(c, d)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

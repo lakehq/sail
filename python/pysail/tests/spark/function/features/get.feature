@@ -1,3 +1,4 @@
+@get
 Feature: get with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -37,3 +38,29 @@ Feature: get with an argument coming from a column
         | result |
         | 10     |
         | 30     |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to get yields the schema Spark declares
+      When query
+        """
+        SELECT get(array(1, 2, 3), 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a nullable column input to get stays nullable
+      When query
+        """
+        SELECT get(c, 0) AS result FROM VALUES (array(1, 2, 3)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

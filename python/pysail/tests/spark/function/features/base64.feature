@@ -1,3 +1,4 @@
+@base64
 Feature: base64 functions encode and decode binary strings
 
   Rule: Null propagation
@@ -138,3 +139,41 @@ Feature: base64 functions encode and decode binary strings
       | []         |
       | [62 61 72] |
       | [66 6F 6F] |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null binary literal yields a non-nullable string
+      When query
+        """
+        SELECT base64(X'48656C6C6F') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable binary column stays nullable
+      When query
+        """
+        SELECT base64(c) AS result FROM VALUES (X'48'), (CAST(NULL AS BINARY)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    @sail-bug
+Scenario: a non-null binary column yields a non-nullable string
+      When query
+        """
+        SELECT base64(CAST(CAST(id AS STRING) AS BINARY)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """

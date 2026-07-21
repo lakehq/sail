@@ -479,6 +479,7 @@ Feature: forall higher-order function
         | false  |
         | true   |
 
+  @spark_null
   Rule: Output schema
 
     @sail-bug
@@ -503,4 +504,16 @@ Feature: forall higher-order function
         """
         root
          |-- result: boolean (nullable = true)
+        """
+
+    @sail-bug
+Scenario: a non-null array column yields a non-nullable boolean
+      When query
+        """
+        SELECT forall(array(id), x -> x > 0) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = false)
         """

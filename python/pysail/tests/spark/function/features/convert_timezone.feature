@@ -1,3 +1,4 @@
+@convert_timezone
 Feature: convert_timezone
 
   Rule: Type coercion
@@ -64,3 +65,41 @@ Feature: convert_timezone
         | '2025-03-09 03:30:00' | 'America/Los_Angeles' | 'Europe/Amsterdam'    | 2025-03-09 11:30:00 |
         | '2025-03-09 10:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 01:30:00 |
         | '2025-03-09 11:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 03:30:00 |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to convert_timezone yields the schema Spark declares
+      When query
+        """
+        SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null column input to convert_timezone yields the schema Spark declares
+      When query
+        """
+        SELECT convert_timezone(CAST(id AS STRING), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = false)
+        """
+
+    Scenario: a nullable column input to convert_timezone stays nullable
+      When query
+        """
+        SELECT convert_timezone(c, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') AS result FROM VALUES ('Europe/Brussels'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp_ntz (nullable = true)
+        """

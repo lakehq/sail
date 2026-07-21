@@ -1,3 +1,4 @@
+@negative
 Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the minimum integral value overflows
@@ -294,3 +295,40 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         SELECT -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS result
         """
       Then query error (?i)out.of.range
+
+  @spark_null
+  Rule: Output schema
+
+Scenario: a non-null integer literal yields a non-nullable integer
+      When query
+        """
+        SELECT negative(5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null integer column yields a non-nullable integer
+      When query
+        """
+        SELECT negative(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+Scenario: a nullable integer column stays nullable
+      When query
+        """
+        SELECT negative(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

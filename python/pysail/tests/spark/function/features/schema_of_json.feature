@@ -1321,3 +1321,17 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Then query result
         | result            |
         | STRUCT<a: BIGINT> |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to schema_of_json yields the schema Spark declares
+      When query
+        """
+        SELECT schema_of_json('[{"col":0}]') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """

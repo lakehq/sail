@@ -1,3 +1,4 @@
+@try_parse_url
 Feature: try_parse_url migration tests
   Tests exposing differences between Sail and DataFusion fork implementations.
   Fork inherits parse_url limitations: fewer string type combinations (3 vs 27).
@@ -137,3 +138,39 @@ Feature: try_parse_url migration tests
       Then query result
       | result        |
       | /path?query=1 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to try_parse_url yields the schema Spark declares
+      When query
+        """
+        SELECT try_parse_url('http://spark.apache.org/path?query=1', 'HOST') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null column input to try_parse_url yields the schema Spark declares
+      When query
+        """
+        SELECT try_parse_url(CAST(id AS STRING), 'HOST') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable column input to try_parse_url stays nullable
+      When query
+        """
+        SELECT try_parse_url(c, 'HOST') AS result FROM VALUES ('http://spark.apache.org/path?query=1'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

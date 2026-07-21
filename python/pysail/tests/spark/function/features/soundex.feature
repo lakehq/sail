@@ -1,3 +1,4 @@
+@soundex
 Feature: soundex() returns the Soundex code of a string
 
   Rule: Basic usage
@@ -168,3 +169,41 @@ Feature: soundex() returns the Soundex code of a string
         | H400   |
         | NULL   |
         | W643   |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null string literal yields a non-nullable string
+      When query
+        """
+        SELECT soundex('Miller') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a non-null string column yields a non-nullable string
+      When query
+        """
+        SELECT soundex(CAST(id AS STRING)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT soundex(c) AS result FROM VALUES ('Miller'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

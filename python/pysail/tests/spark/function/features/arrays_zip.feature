@@ -508,3 +508,65 @@ Feature: arrays_zip comprehensive tests
         SELECT arrays_zip(array(1,2), 'hello') AS result
         """
       Then query error .*
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: non-null array literals yield a non-nullable array
+      When query
+        """
+        SELECT arrays_zip(array(1, 2), array(3, 4)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- 0: integer (nullable = true)
+         |    |    |-- 1: integer (nullable = true)
+        """
+
+    @sail-bug
+Scenario: a non-null array column yields a non-nullable array
+      When query
+        """
+        SELECT arrays_zip(array(id), array(id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- 0: long (nullable = true)
+         |    |    |-- 1: long (nullable = true)
+        """
+
+    Scenario: a nullable array column stays nullable
+      When query
+        """
+        SELECT arrays_zip(c, c) AS result FROM VALUES (array(1)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- c: integer (nullable = true)
+         |    |    |-- c: integer (nullable = true)
+        """
+
+    @sail-bug
+Scenario: nullable input elements propagate into the struct fields
+      When query
+        """
+        SELECT arrays_zip(c, c) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- c: integer (nullable = true)
+         |    |    |-- c: integer (nullable = true)
+        """

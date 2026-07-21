@@ -884,3 +884,38 @@ Feature: to_xml converts a struct value to an XML string
         | r                                                                    |
         | <ROW>~    <m>~        <val>10</val>~        <val>20</val>~    </m>~</ROW> |
 
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null struct literal is nullable (to_xml is inherently nullable in Spark)
+      When query
+        """
+        SELECT to_xml(struct(1, 'a')) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null struct column is nullable (to_xml is inherently nullable in Spark)
+      When query
+        """
+        SELECT to_xml(struct(id, id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable struct column stays nullable
+      When query
+        """
+        SELECT to_xml(c) AS result FROM VALUES (named_struct('a', 1)), (CAST(NULL AS STRUCT<a:INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

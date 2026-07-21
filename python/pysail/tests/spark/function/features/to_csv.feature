@@ -1,3 +1,4 @@
+@to_csv
 Feature: to_csv converts a struct value to a CSV string
 
   Rule: Basic serialization
@@ -278,3 +279,39 @@ Feature: to_csv converts a struct value to a CSV string
       Then query result
         | result     |
         | [61 62 63] |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null struct literal is nullable (to_csv is inherently nullable in Spark)
+      When query
+        """
+        SELECT to_csv(struct(1, 'a')) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null struct column is nullable (to_csv is inherently nullable in Spark)
+      When query
+        """
+        SELECT to_csv(struct(id, id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable struct column stays nullable
+      When query
+        """
+        SELECT to_csv(c) AS result FROM VALUES (named_struct('a', 1)), (CAST(NULL AS STRUCT<a:INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

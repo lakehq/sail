@@ -1,3 +1,4 @@
+@xpath
 Feature: xpath() extracts XML nodes with Spark-compatible semantics
 
   Rule: Node selection returns arrays of string-like values
@@ -107,3 +108,42 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>', c) AS result FROM VALUES (1, 'a/b'), (2, 'a/b') AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null xml literal yields an array
+      When query
+        """
+        SELECT xpath('<a><b>1</b><b>2</b></a>', 'a/b/text()') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """
+
+    Scenario: a non-null xml column yields an array
+      When query
+        """
+        SELECT xpath(CONCAT('<a><b>', CAST(id AS STRING), '</b></a>'), 'a/b/text()') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """
+
+    Scenario: a nullable xml column stays nullable
+      When query
+        """
+        SELECT xpath(c, 'a/b/text()') AS result FROM VALUES ('<a><b>1</b></a>'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """

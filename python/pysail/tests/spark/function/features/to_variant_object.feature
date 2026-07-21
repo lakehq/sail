@@ -1,4 +1,5 @@
 @spark-4
+@to_variant_object
 Feature: to_variant_object
 
   Rule: Struct input
@@ -234,3 +235,19 @@ Feature: to_variant_object
         SELECT to_variant_object(map()) AS result
         """
       Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT|VOID)
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to to_variant_object yields the schema Spark declares
+      When query
+        """
+        SELECT to_variant_object(named_struct('a', 1, 'b', 2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: variant (nullable = false)
+        """
+

@@ -1,3 +1,4 @@
+@substring
 Feature: substring() and substr() extract substrings
 
   Rule: Basic usage with positive positions (1-based)
@@ -134,3 +135,41 @@ Feature: substring() and substr() extract substrings
       Then query result
         | result          |
         | abcdefghijklmno |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null string literal yields a non-nullable string
+      When query
+        """
+        SELECT substring('Spark', 1, 3) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a non-null string column yields a non-nullable string
+      When query
+        """
+        SELECT substring(CAST(id AS STRING), 1, 1) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT substring(c, 1, 1) AS result FROM VALUES ('abc'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

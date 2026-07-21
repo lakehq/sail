@@ -1,3 +1,4 @@
+@to_char
 Feature: to_char with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -58,3 +59,40 @@ Feature: to_char with an argument coming from a column
         | result |
         | 2026   |
         | 02     |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null numeric literal yields a non-nullable string
+      When query
+        """
+        SELECT to_char(78.12, '99D99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable numeric column stays nullable
+      When query
+        """
+        SELECT to_char(c, '99D99') AS result FROM VALUES (CAST(78.12 AS DECIMAL(4,2))), (CAST(NULL AS DECIMAL(4,2))) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null numeric column yields a non-nullable string
+      When query
+        """
+        SELECT to_char(CAST(id AS DECIMAL(3,0)), '999') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

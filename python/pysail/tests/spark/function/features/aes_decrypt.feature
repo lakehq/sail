@@ -1,3 +1,4 @@
+@aes_decrypt
 Feature: aes_decrypt with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -50,3 +51,39 @@ Feature: aes_decrypt with an argument coming from a column
         | result     |
         | 537061726B |
         | 537061726B |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal yields binary
+      When query
+        """
+        SELECT aes_decrypt(aes_encrypt('hello', '1234567890123456'), '1234567890123456') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+    Scenario: a nullable column stays nullable
+      When query
+        """
+        SELECT aes_decrypt(c, '1234567890123456') AS result FROM VALUES (aes_encrypt('hi','1234567890123456')), (CAST(NULL AS BINARY)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+    Scenario: a non-null column yields binary
+      When query
+        """
+        SELECT aes_decrypt(aes_encrypt(CAST(id AS STRING), '1234567890123456'), '1234567890123456') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """

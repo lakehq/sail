@@ -1,3 +1,4 @@
+@decode
 Feature: decode with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -38,3 +39,39 @@ Feature: decode with an argument coming from a column
         | result |
         | abc    |
         | abc    |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null binary literal is nullable (decode is inherently nullable in Spark)
+      When query
+        """
+        SELECT decode(X'616263', 'utf-8') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable binary column stays nullable
+      When query
+        """
+        SELECT decode(c, 'utf-8') AS result FROM VALUES (X'61'), (CAST(NULL AS BINARY)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null binary column is nullable (decode is inherently nullable in Spark)
+      When query
+        """
+        SELECT decode(CAST(CAST(id AS STRING) AS BINARY), 'utf-8') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

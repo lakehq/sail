@@ -1,3 +1,4 @@
+@last_day
 Feature: last_day comprehensive tests
 
   Rule: Argument count validation
@@ -606,3 +607,41 @@ Feature: last_day comprehensive tests
         EXPLAIN SELECT d FROM explain_last_day_neq_parquet WHERE last_day(d) != DATE '2024-04-30'
         """
       Then query plan matches snapshot
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null date literal yields a date
+      When query
+        """
+        SELECT last_day(DATE '2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null date column yields a date
+      When query
+        """
+        SELECT last_day(CAST(CAST(id AS TIMESTAMP) AS DATE)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+    Scenario: a nullable date column stays nullable
+      When query
+        """
+        SELECT last_day(c) AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """

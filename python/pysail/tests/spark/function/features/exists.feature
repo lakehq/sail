@@ -504,6 +504,7 @@ Feature: exists higher-order function
         | true   |
         | false  |
 
+  @spark_null
   Rule: Output schema
 
     @sail-bug

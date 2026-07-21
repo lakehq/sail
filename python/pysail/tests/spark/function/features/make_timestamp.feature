@@ -236,3 +236,41 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
       | NULL                |
       | NULL                |
       | 2020-01-01 00:00:00 |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: non-null components yield a timestamp
+      When query
+        """
+        SELECT make_timestamp(2024, 1, 15, 10, 0, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+    @sail-bug
+Scenario: non-null component columns yield a timestamp
+      When query
+        """
+        SELECT make_timestamp(2024, 1, 15, 10, 0, CAST(id AS INT)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+    Scenario: a nullable component column stays nullable
+      When query
+        """
+        SELECT make_timestamp(2024, 1, 15, 10, 0, c) AS result FROM VALUES (CAST(0 AS INT)), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """

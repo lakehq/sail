@@ -1,3 +1,4 @@
+@concat_ws
 Feature: concat_ws function
 
   Rule: concat_ws with scalar arguments
@@ -263,3 +264,39 @@ Feature: concat_ws function
       Then query result
         | result |
         |        |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null separator yields a non-nullable string
+      When query
+        """
+        SELECT concat_ws(',', 'a', 'b') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a non-null separator column yields a non-nullable string
+      When query
+        """
+        SELECT concat_ws(CAST(id AS STRING), 'a', 'b') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable separator column stays nullable
+      When query
+        """
+        SELECT concat_ws(c, 'a', 'b') AS result FROM VALUES (','), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

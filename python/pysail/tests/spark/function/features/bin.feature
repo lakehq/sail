@@ -1,3 +1,4 @@
+@bin
 Feature: bin converts integral values to binary strings
 
   Rule: String arguments follow Spark cast semantics
@@ -355,3 +356,41 @@ Feature: bin converts integral values to binary strings
       Then query result
         | result                                                          |
         | 111111111111111111111111111111111111111111111111111111111111111 |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null integer literal yields a non-nullable string
+      When query
+        """
+        SELECT bin(5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null integer column yields a non-nullable string
+      When query
+        """
+        SELECT bin(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+Scenario: a nullable integer column stays nullable
+      When query
+        """
+        SELECT bin(c) AS result FROM VALUES (5), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

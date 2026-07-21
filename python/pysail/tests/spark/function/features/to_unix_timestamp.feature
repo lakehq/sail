@@ -1,3 +1,4 @@
+@to_unix_timestamp
 Feature: to_unix_timestamp with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -26,3 +27,41 @@ Feature: to_unix_timestamp with an argument coming from a column
         | result     |
         | 1460073600 |
         | 1460073600 |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null literal input to to_unix_timestamp yields the schema Spark declares
+      When query
+        """
+        SELECT to_unix_timestamp('2016-04-08', 'yyyy-MM-dd') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null column input to to_unix_timestamp yields the schema Spark declares
+      When query
+        """
+        SELECT to_unix_timestamp(CAST(id AS STRING), 'yyyy-MM-dd') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: a nullable column input to to_unix_timestamp stays nullable
+      When query
+        """
+        SELECT to_unix_timestamp(c, 'yyyy-MM-dd') AS result FROM VALUES ('2016-04-08'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """

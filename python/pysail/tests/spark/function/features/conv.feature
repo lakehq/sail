@@ -1,3 +1,4 @@
+@conv
 Feature: conv with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -50,3 +51,39 @@ Feature: conv with an argument coming from a column
         | result |
         | 4      |
         | 4      |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null string literal is nullable (conv is inherently nullable in Spark)
+      When query
+        """
+        SELECT conv('11', 2, 10) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT conv(c, 2, 10) AS result FROM VALUES ('11'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null string column is nullable (conv is inherently nullable in Spark)
+      When query
+        """
+        SELECT conv(CAST(id AS STRING), 10, 2) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

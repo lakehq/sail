@@ -1,3 +1,4 @@
+@concat
 Feature: concat function
 
   Rule: Basic concatenation
@@ -686,3 +687,39 @@ Feature: concat function
       Then query result
         | result              |
         | 2024-01-15 12:00:00 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: non-null string literals yield a non-nullable string
+      When query
+        """
+        SELECT concat('a', 'b') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a non-null string column yields a non-nullable string
+      When query
+        """
+        SELECT concat(CAST(id AS STRING), 'x') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT concat(c, 'x') AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

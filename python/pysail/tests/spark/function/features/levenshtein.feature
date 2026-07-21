@@ -1,3 +1,4 @@
+@levenshtein
 Feature: levenshtein() returns edit distance between two strings
 
   Rule: Basic usage
@@ -293,3 +294,40 @@ Feature: levenshtein() returns edit distance between two strings
         | result |
         | 100    |
 
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: non-null string literals yield a non-nullable integer
+      When query
+        """
+        SELECT levenshtein('kitten', 'sitting') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: non-null string columns yield a non-nullable integer
+      When query
+        """
+        SELECT levenshtein(CAST(id AS STRING), 'x') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT levenshtein(c, 'x') AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

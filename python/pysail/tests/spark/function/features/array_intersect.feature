@@ -1,3 +1,4 @@
+@array_intersect
 Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Source-of-truth examples
@@ -194,3 +195,56 @@ Feature: array_intersect() returns common array elements without duplicates
         SELECT array_intersect(array(1), array('1')) AS result
         """
       Then query error .*
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: non-null array literals yield a non-nullable array
+      When query
+        """
+        SELECT array_intersect(array(1, 2), array(2, 3)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    Scenario: a non-null array column yields a non-nullable array
+      When query
+        """
+        SELECT array_intersect(array(id), array(id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: long (containsNull = false)
+        """
+
+    @sail-bug
+Scenario: a nullable array column stays nullable
+      When query
+        """
+        SELECT array_intersect(c, array(2)) AS result FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    @sail-bug
+Scenario: nullable input elements propagate to the element nullability
+      When query
+        """
+        SELECT array_intersect(c, array(1)) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """

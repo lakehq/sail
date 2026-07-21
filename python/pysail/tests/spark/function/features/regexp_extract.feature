@@ -1,3 +1,4 @@
+@regexp_extract
 Feature: regexp_extract() extracts regex capture groups from strings
 
   Rule: Basic extraction
@@ -113,3 +114,41 @@ Feature: regexp_extract() extracts regex capture groups from strings
       Then query result
       | result |
       | 123    |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null string literal yields a non-nullable string
+      When query
+        """
+        SELECT regexp_extract('abc123', '[0-9]+', 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a non-null string column yields a non-nullable string
+      When query
+        """
+        SELECT regexp_extract(CAST(id AS STRING), '[0-9]', 0) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT regexp_extract(c, '[0-9]', 0) AS result FROM VALUES ('a1'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

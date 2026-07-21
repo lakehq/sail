@@ -1,3 +1,4 @@
+@pmod
 Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
 
   # Spark `pmod(a, b)` returns the positive remainder of `a / b` (always in
@@ -141,3 +142,39 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
       Then query result
         | result |
         | NaN    |
+
+  @spark_null
+  Rule: Output schema
+
+Scenario: a non-null integer literal is nullable (inherently nullable in Spark)
+      When query
+        """
+        SELECT pmod(10, 3) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+Scenario: a non-null integer column is nullable (inherently nullable in Spark)
+      When query
+        """
+        SELECT pmod(id, 3) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+Scenario: a nullable integer column stays nullable
+      When query
+        """
+        SELECT pmod(c, 3) AS result FROM VALUES (10), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

@@ -1,3 +1,4 @@
+@trunc
 Feature: trunc with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -38,3 +39,41 @@ Feature: trunc with an argument coming from a column
         | result     |
         | 2019-07-29 |
         | 2019-07-29 |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null date literal yields a date
+      When query
+        """
+        SELECT trunc(DATE '2024-01-15', 'YEAR') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    @sail-bug
+Scenario: a non-null date column yields a date
+      When query
+        """
+        SELECT trunc(CAST(CAST(id AS TIMESTAMP) AS DATE), 'YEAR') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+    Scenario: a nullable date column stays nullable
+      When query
+        """
+        SELECT trunc(c, 'YEAR') AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """

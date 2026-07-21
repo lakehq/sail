@@ -1,3 +1,4 @@
+@array_remove
 Feature: array_remove with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -37,3 +38,55 @@ Feature: array_remove with an argument coming from a column
         | result |
         | [2, 3] |
         | [1, 2] |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null array literal yields a non-nullable array
+      When query
+        """
+        SELECT array_remove(array(1, 2, 3), 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    Scenario: a non-null array column yields a non-nullable array
+      When query
+        """
+        SELECT array_remove(array(id), 2) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: long (containsNull = false)
+        """
+
+    Scenario: a nullable array column stays nullable
+      When query
+        """
+        SELECT array_remove(c, 2) AS result FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: integer (containsNull = true)
+        """
+
+    @sail-bug
+Scenario: nullable input elements propagate to the element nullability
+      When query
+        """
+        SELECT array_remove(c, 2) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = true)
+        """

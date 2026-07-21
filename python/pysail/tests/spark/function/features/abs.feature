@@ -1,3 +1,4 @@
+@abs
 Feature: abs comprehensive tests
 
   Rule: Argument count validation
@@ -893,3 +894,41 @@ Feature: abs comprehensive tests
         """
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
         | 5      |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null integer literal yields a non-nullable integer
+      When query
+        """
+        SELECT abs(-5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null integer column yields a non-nullable integer
+      When query
+        """
+        SELECT abs(id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+Scenario: a nullable integer column stays nullable
+      When query
+        """
+        SELECT abs(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

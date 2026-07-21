@@ -1,3 +1,4 @@
+@date_format
 Feature: date_format with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -37,3 +38,41 @@ Feature: date_format with an argument coming from a column
         | result |
         | 2026   |
         | 02     |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null timestamp literal yields a string
+      When query
+        """
+        SELECT date_format(TIMESTAMP '2024-01-15 10:00:00', 'yyyy-MM') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null timestamp column yields a string
+      When query
+        """
+        SELECT date_format(CAST(id AS TIMESTAMP), 'yyyy') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a nullable timestamp column stays nullable
+      When query
+        """
+        SELECT date_format(c, 'yyyy') AS result FROM VALUES (TIMESTAMP '2024-01-15 10:00:00'), (CAST(NULL AS TIMESTAMP)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

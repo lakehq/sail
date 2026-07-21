@@ -1,3 +1,4 @@
+@get_json_object
 Feature: get_json_object extracts values via a Spark JSONPath
 
   # Spark `get_json_object(json, path)` walks a JSONPath subset: a leading `$`,
@@ -251,3 +252,39 @@ Feature: get_json_object extracts values via a Spark JSONPath
         | result |
         | b      |
         | b      |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null json literal yields a string
+      When query
+        """
+        SELECT get_json_object('{"a":1}', '$.a') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null json column yields a string
+      When query
+        """
+        SELECT get_json_object(CONCAT('{"n":', CAST(id AS STRING), '}'), '$.n') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a nullable json column stays nullable
+      When query
+        """
+        SELECT get_json_object(c, '$.a') AS result FROM VALUES ('{"a":1}'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

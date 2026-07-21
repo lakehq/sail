@@ -1,3 +1,4 @@
+@regexp_extract_all
 Feature: regexp_extract_all() extracts all regex capture group matches from strings
 
   Rule: Basic extraction with group index
@@ -88,3 +89,44 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
       Then query result
       | result |
       | NULL   |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+    Scenario: a non-null string literal yields a non-nullable array
+      When query
+        """
+        SELECT regexp_extract_all('a1b2', '[0-9]', 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: string (containsNull = true)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT regexp_extract_all(c, '[0-9]', 0) AS result FROM VALUES ('a1'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """
+
+    @sail-bug
+Scenario: a non-null string column yields a non-nullable array
+      When query
+        """
+        SELECT regexp_extract_all(CAST(id AS STRING), '[0-9]', 0) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: string (containsNull = true)
+        """

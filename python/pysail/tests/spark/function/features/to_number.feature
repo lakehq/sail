@@ -1,3 +1,4 @@
+@to_number
 Feature: to_number comprehensive tests
 
   Rule: Argument count validation
@@ -558,3 +559,41 @@ Feature: to_number comprehensive tests
         SELECT to_number('123', fmt) AS result FROM VALUES ('$999') AS t(fmt)
         """
       Then query error .*
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null string literal yields a decimal
+      When query
+        """
+        SELECT to_number('123', '999') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(3,0) (nullable = false)
+        """
+
+    @sail-bug
+Scenario: a non-null string column yields a decimal
+      When query
+        """
+        SELECT to_number(CAST(id AS STRING), '9') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(1,0) (nullable = false)
+        """
+
+    Scenario: a nullable string column stays nullable
+      When query
+        """
+        SELECT to_number(c, '999') AS result FROM VALUES ('123'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(3,0) (nullable = true)
+        """

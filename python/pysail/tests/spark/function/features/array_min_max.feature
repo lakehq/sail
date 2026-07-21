@@ -1,3 +1,4 @@
+@array_min
 Feature: array_min and array_max functions
 
   Rule: Basic usage
@@ -388,3 +389,72 @@ Feature: array_min and array_max functions
         | 1  | 10      | 30      |
         | 2  | 5       | 25      |
         | 3  | 100     | 100     |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: array_min of a non-null array literal
+      When query
+        """
+        SELECT array_min(array(3, 1, 2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: array_min of a non-null array column
+      When query
+        """
+        SELECT array_min(array(id, id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: array_min of a nullable array column stays nullable
+      When query
+        """
+        SELECT array_min(c) AS result FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: array_max of a non-null array literal
+      When query
+        """
+        SELECT array_max(array(3, 1, 2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: array_max of a non-null array column
+      When query
+        """
+        SELECT array_max(array(id, id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: array_max of a nullable array column stays nullable
+      When query
+        """
+        SELECT array_max(c) AS result FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

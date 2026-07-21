@@ -1,3 +1,4 @@
+@position
 Feature: position() finds the position of a substring in a string
 
   Rule: Basic usage
@@ -68,3 +69,39 @@ Feature: position() finds the position of a substring in a string
       Then query result
       | v |
       | 0 |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to position yields the schema Spark declares
+      When query
+        """
+        SELECT position('bar', 'foobarbar') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null column input to position yields the schema Spark declares
+      When query
+        """
+        SELECT position(CAST(id AS STRING), 'foobarbar') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a nullable column input to position stays nullable
+      When query
+        """
+        SELECT position(c, 'foobarbar') AS result FROM VALUES ('bar'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

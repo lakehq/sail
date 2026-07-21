@@ -1,3 +1,4 @@
+@try_aes_decrypt
 Feature: try_aes_decrypt with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -62,3 +63,28 @@ Feature: try_aes_decrypt with an argument coming from a column
         | result             |
         | 537061726B2053514C |
         | 537061726B2053514C |
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to try_aes_decrypt yields the schema Spark declares
+      When query
+        """
+        SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """
+
+    Scenario: a nullable column input to try_aes_decrypt stays nullable
+      When query
+        """
+        SELECT try_aes_decrypt(c, '0000111122223333', 'GCM') AS result FROM VALUES (unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210')), (CAST(NULL AS BINARY)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: binary (nullable = true)
+        """

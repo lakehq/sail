@@ -1,3 +1,4 @@
+@array_compact
 Feature: array_compact() removes null values from an array
 
   Rule: Basic usage
@@ -127,3 +128,58 @@ Feature: array_compact() removes null values from an array
       Then query result
         | result       |
         | [true, false] |
+
+  @spark_null
+  Rule: Output schema
+
+    @sail-bug
+Scenario: a non-null array literal yields a non-nullable array
+      When query
+        """
+        SELECT array_compact(array(1, NULL, 2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    @sail-bug
+Scenario: a non-null array column yields a non-nullable array
+      When query
+        """
+        SELECT array_compact(array(id)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: long (containsNull = false)
+        """
+
+    @sail-bug
+Scenario: a nullable array column stays nullable
+      When query
+        """
+        SELECT array_compact(c) AS result FROM VALUES (array(1)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    @sail-bug
+Scenario: removing NULLs makes the element non-nullable regardless of input
+      When query
+        """
+        SELECT array_compact(c) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = false)
+        """
