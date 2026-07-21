@@ -22,19 +22,8 @@ use sail_physical_plan::remote_checkpoint::{
     LOCATION_COLUMN, PARTITION_COLUMN, ROW_COUNT_COLUMN, ROW_MARKER_COLUMN,
     RemoteCheckpointWriteExec, SIZE_COLUMN,
 };
-use serde::Serialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-
-const CHECKPOINT_FORMAT_VERSION: u32 = 1;
-const MANIFEST_FILE: &str = "manifest.json";
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RemoteCheckpointKind {
-    Checkpoint,
-    LocalCheckpoint,
-}
 
 #[derive(Debug)]
 pub struct RemoteCheckpointService {
@@ -64,7 +53,6 @@ impl RemoteCheckpointService {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
         logical_schema: SchemaRef,
-        kind: RemoteCheckpointKind,
     ) -> Result<Arc<RemoteCheckpointDescriptor>> {
         let lifecycle = self.lifecycle.read().await;
         if lifecycle.closed {
@@ -83,7 +71,6 @@ impl RemoteCheckpointService {
                 ctx,
                 plan,
                 logical_schema,
-                kind,
                 relation_id.as_str(),
                 &root,
                 relation_prefix.clone(),
@@ -145,7 +132,6 @@ impl RemoteCheckpointService {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
         logical_schema: SchemaRef,
-        kind: RemoteCheckpointKind,
         relation_id: &str,
         root: &ResolvedObjectStorePath,
         relation_prefix: Path,
@@ -163,30 +149,10 @@ impl RemoteCheckpointService {
         let stream = service.runner().execute(ctx, Arc::new(checkpoint)).await?;
         let partitions =
             collect_checkpoint_partitions(stream, partition_count, &relation_prefix).await?;
-        let manifest_path = relation_prefix.clone().join(MANIFEST_FILE);
-        let manifest = RemoteCheckpointManifest {
-            format_version: CHECKPOINT_FORMAT_VERSION,
-            kind,
-            relation_id,
-            object_store_url: root.object_store_url().to_string(),
-            prefix: relation_prefix.to_string(),
-            manifest: manifest_path.to_string(),
-            logical_schema: logical_schema.as_ref(),
-            storage_schema: storage_schema.as_ref(),
-            partitions: partitions
-                .iter()
-                .map(RemoteCheckpointManifestPartition::from)
-                .collect(),
-        };
-        let bytes = serde_json::to_vec(&manifest)
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        root.put_bytes(&manifest_path, bytes).await?;
-
         let descriptor = RemoteCheckpointDescriptor {
             relation_id: relation_id.to_string(),
             object_store_url: root.object_store_url().clone(),
             prefix: relation_prefix,
-            manifest: manifest_path,
             logical_schema,
             storage_schema,
             partitions,
@@ -394,42 +360,6 @@ fn validate_attempt_location(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct RemoteCheckpointManifest<'a> {
-    format_version: u32,
-    kind: RemoteCheckpointKind,
-    relation_id: &'a str,
-    object_store_url: String,
-    prefix: String,
-    manifest: String,
-    logical_schema: &'a Schema,
-    storage_schema: &'a Schema,
-    partitions: Vec<RemoteCheckpointManifestPartition>,
-}
-
-#[derive(Serialize)]
-struct RemoteCheckpointManifestPartition {
-    partition: usize,
-    location: Option<String>,
-    size: u64,
-    row_count: u64,
-}
-
-impl From<&RemoteCheckpointPartition> for RemoteCheckpointManifestPartition {
-    fn from(value: &RemoteCheckpointPartition) -> Self {
-        let (location, size, row_count) = match &value.file {
-            Some(file) => (Some(file.location.to_string()), file.size, file.row_count),
-            None => (None, 0, 0),
-        };
-        Self {
-            partition: value.partition,
-            location,
-            size,
-            row_count,
-        }
-    }
-}
-
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
@@ -442,7 +372,6 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::prelude::SessionConfig;
     use datafusion_expr::{Extension, LogicalPlan};
-    use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use sail_execution::job_runner::LocalJobRunner;
     use sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode;
@@ -480,7 +409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commits_manifest_and_reads_checkpoint_as_parquet() -> Result<()> {
+    async fn publishes_descriptor_and_reads_checkpoint_as_parquet() -> Result<()> {
         let runtime_env = Arc::new(RuntimeEnv::default());
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
         runtime_env.register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
@@ -517,29 +446,29 @@ mod tests {
         )?;
 
         let descriptor = checkpoint
-            .materialize(
-                &ctx,
-                input,
-                Arc::clone(&logical_schema),
-                RemoteCheckpointKind::Checkpoint,
-            )
+            .materialize(&ctx, input, Arc::clone(&logical_schema))
             .await?;
 
         assert_eq!(descriptor.partitions.len(), 2);
         assert!(descriptor.partitions[0].file.is_some());
         assert!(descriptor.partitions[1].file.is_none());
         let store = runtime_env.object_store(&descriptor.object_store_url)?;
-        let manifest = store
-            .get(&descriptor.manifest)
+        let objects = store
+            .list(Some(&descriptor.prefix))
+            .collect::<Vec<_>>()
             .await
-            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?
-            .bytes()
-            .await
+            .into_iter()
+            .collect::<std::result::Result<Vec<_>, object_store::Error>>()
             .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
-        let manifest: serde_json::Value = serde_json::from_slice(&manifest)
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        assert_eq!(manifest["format_version"], CHECKPOINT_FORMAT_VERSION);
-        assert_eq!(manifest["partitions"].as_array().map(Vec::len), Some(2));
+        assert_eq!(objects.len(), 1);
+        assert_eq!(
+            objects[0].location,
+            descriptor.partitions[0]
+                .file
+                .as_ref()
+                .expect("non-empty partition must have a file")
+                .location
+        );
 
         let logical = LogicalPlan::Extension(Extension {
             node: Arc::new(RemoteCheckpointRelationNode::try_new(
@@ -570,7 +499,6 @@ mod tests {
                 &ctx,
                 Arc::new(EmptyExec::new(Arc::clone(&logical_schema))),
                 Arc::clone(&logical_schema),
-                RemoteCheckpointKind::Checkpoint,
             )
             .await
             .expect_err("materialization must not restart after session cleanup");

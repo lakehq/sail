@@ -17,8 +17,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use futures::StreamExt;
-use futures::stream;
+use futures::{StreamExt, stream};
 use log::warn;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;

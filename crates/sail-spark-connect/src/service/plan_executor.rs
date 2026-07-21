@@ -12,7 +12,7 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::{resolve_and_execute_plan, resolve_and_execute_query};
-use sail_session::checkpoint::{RemoteCheckpointKind, RemoteCheckpointService};
+use sail_session::checkpoint::RemoteCheckpointService;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -524,7 +524,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let spark = ctx.extension::<SparkSession>()?;
     let CheckpointCommand {
         relation,
-        local,
+        local: _,
         eager,
         storage_level,
     } = checkpoint;
@@ -541,15 +541,10 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let (plan, _, logical_schema) =
         resolve_and_execute_query(ctx, spark.plan_config()?, query).await?;
     let checkpoint = ctx.extension::<RemoteCheckpointService>()?;
-    let kind = if local {
-        RemoteCheckpointKind::LocalCheckpoint
-    } else {
-        RemoteCheckpointKind::Checkpoint
-    };
     let operation_ctx = ctx.clone();
     let operation = stream::once(async move {
         let descriptor = checkpoint
-            .materialize(&operation_ctx, plan, logical_schema, kind)
+            .materialize(&operation_ctx, plan, logical_schema)
             .await?;
         Ok(ExecutorBatch::CheckpointCommandResult(Box::new(
             CheckpointCommandResult {
