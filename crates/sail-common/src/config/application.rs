@@ -303,7 +303,7 @@ pub struct StorageShuffleService {
     pub compression: ShuffleCompression,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShuffleCompression {
     None,
@@ -584,7 +584,7 @@ pub struct OptimizerConfig {
     pub expand_views_at_output: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OneLakeApi {
     Delta,

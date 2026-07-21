@@ -255,6 +255,7 @@
   default: "none"
   description: |
     The shuffle service type. Valid values are `none` and `storage`.
+    The `none` shuffle service uses pipelined shuffle where shuffle data is streamed directly among tasks.
     The `storage` shuffle service materializes merged shuffle partitions in object storage
     before running dependent stages.
   experimental: true
@@ -263,7 +264,7 @@
   type: string
   default: "file:///tmp/sail/shuffle"
   description: |
-    The object storage URL and optional path prefix for storage-backed shuffle data.
+    The object storage base URL for storage-backed shuffle data.
     This is only used when `cluster.shuffle_service.type` is `storage`.
   experimental: true
 

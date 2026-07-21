@@ -15,7 +15,7 @@ impl From<&sail_common::config::ShuffleService> for ShuffleServiceKind {
             sail_common::config::ShuffleService::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
                 max_file_size: storage.max_file_size,
-                compression: storage.compression.into(),
+                compression: storage.compression.clone().into(),
             },
         }
     }
