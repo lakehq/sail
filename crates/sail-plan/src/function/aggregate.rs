@@ -227,15 +227,13 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let args = input
-        .arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `KurtosisFunction::coerce_types` governs
+    // the accepted input types (numeric, decimal and numeric strings are coerced
+    // to DOUBLE, while e.g. BOOLEAN is rejected like Spark).
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
         params: AggregateFunctionParams {
-            args,
+            args: input.arguments,
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
@@ -245,15 +243,13 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let args = input
-        .arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `ProductFunction::coerce_types` governs
+    // the accepted input types (numeric, decimal and numeric strings are coerced
+    // to DOUBLE, while e.g. BOOLEAN is rejected like Spark).
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ProductFunction::new())),
         params: AggregateFunctionParams {
-            args,
+            args: input.arguments,
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
@@ -363,15 +359,13 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let args = input
-        .arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `SkewnessFunc::coerce_types` governs the
+    // accepted input types (numeric, decimal and numeric strings are coerced to
+    // DOUBLE, while e.g. BOOLEAN is rejected like Spark).
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
         params: AggregateFunctionParams {
-            args,
+            args: input.arguments,
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
