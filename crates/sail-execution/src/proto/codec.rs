@@ -257,7 +257,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::remote_checkpoint::RemoteCheckpointWriteExec;
+use sail_physical_plan::remote_checkpoint::{RemoteCheckpointScanExec, RemoteCheckpointWriteExec};
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -471,6 +471,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     prefix,
                     storage_schema,
                 )?))
+            }
+            NodeKind::RemoteCheckpointScan(r#gen::RemoteCheckpointScanExecNode {
+                input,
+                output_partitioning,
+                output_ordering,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let output_partitioning = self.try_decode_partitioning(
+                    &output_partitioning,
+                    input.schema().as_ref(),
+                    ctx,
+                )?;
+                let output_ordering = output_ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(&ordering, input.schema().as_ref(), ctx)
+                    })
+                    .transpose()?;
+                Ok(Arc::new(RemoteCheckpointScanExec::new(
+                    input,
+                    output_partitioning,
+                    output_ordering,
+                )))
             }
             NodeKind::Values(r#gen::ValuesExecNode { data, schema }) => {
                 let schema = try_decode_schema(&schema)?;
@@ -1534,6 +1556,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+            })
+        } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointScanExec>() {
+            NodeKind::RemoteCheckpointScan(r#gen::RemoteCheckpointScanExecNode {
+                input: try_encode_physical_plan(self, checkpoint.input().clone())?,
+                output_partitioning: self
+                    .try_encode_partitioning(checkpoint.properties().output_partitioning())?,
+                output_ordering: checkpoint
+                    .properties()
+                    .output_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering))
+                    .transpose()?,
             })
         } else if let Some(work_table) = node.downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
@@ -4840,6 +4873,49 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_remote_checkpoint_scan_properties() -> Result<()> {
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&key))])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty checkpoint ordering"))?;
+        let checkpoint = RemoteCheckpointScanExec::new(
+            Arc::new(EmptyExec::new(schema)),
+            Partitioning::Hash(vec![key], 4),
+            Some(ordering),
+        );
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RemoteCheckpointScanExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a checkpoint scan"))?;
+
+        let Partitioning::Hash(expressions, 4) = decoded.properties().output_partitioning() else {
+            return plan_err!("expected checkpoint hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("checkpoint hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "key");
+        assert_eq!(partition_column.index(), 0);
+        let ordering = decoded
+            .properties()
+            .output_ordering()
+            .ok_or_else(|| plan_datafusion_err!("checkpoint ordering is missing"))?;
+        let ordering_column = ordering[0]
+            .expr
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("checkpoint ordering key is not a column"))?;
+        assert_eq!(ordering_column.name(), "key");
+        assert_eq!(ordering_column.index(), 0);
         Ok(())
     }
 

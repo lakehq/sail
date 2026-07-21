@@ -5,6 +5,7 @@ from pyspark import StorageLevel
 from pyspark.sql import functions as sf
 
 from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import pyspark_version
 
 pytestmark = pytest.mark.skipif(
@@ -73,6 +74,23 @@ def test_checkpoint_preserves_field_metadata(spark):
     )
 
     assert checkpointed.schema["value"].metadata == {"source": "checkpoint-test"}
+
+
+@pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])
+def test_checkpoint_preserves_partitioning_and_ordering(spark, local):
+    source = (
+        spark.range(100, numPartitions=4)
+        .withColumn("key", sf.col("id") % 4)
+        .repartition(4, "key")
+        .sortWithinPartitions("key", "id")
+    )
+
+    checkpointed = source.localCheckpoint() if local else source.checkpoint()
+    aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
+    ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
+
+    assert "RepartitionExec" not in aggregate_plan
+    assert "SortExec" not in ordered_plan
 
 
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):

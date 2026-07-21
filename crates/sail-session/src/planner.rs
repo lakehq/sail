@@ -5,14 +5,18 @@ use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
-use datafusion::physical_expr::{LexOrdering, OrderingRequirements};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{DFSchema, Statistics, internal_err};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{DFSchema, Statistics, internal_datafusion_err, internal_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
@@ -55,6 +59,7 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::remote_checkpoint::RemoteCheckpointScanExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -125,6 +130,13 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 global: session_state.config().options().execution.parquet.clone(),
                 ..Default::default()
             };
+            let storage_output_ordering = descriptor
+                .output_ordering
+                .as_ref()
+                .map(|ordering| {
+                    checkpoint_schema_ordering(ordering, descriptor.storage_schema.as_ref())
+                })
+                .transpose()?;
             let source = ParquetSource::new(TableSchema::new(
                 Arc::clone(&descriptor.storage_schema),
                 vec![],
@@ -183,6 +195,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 FileScanConfigBuilder::new(descriptor.object_store_url.clone(), Arc::new(source))
                     .with_file_groups(file_groups)
                     .with_statistics(statistics)
+                    .with_output_ordering(storage_output_ordering.into_iter().collect())
                     .with_preserve_order(true)
                     .with_partitioned_by_file_group(true)
                     .build();
@@ -192,14 +205,28 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 .iter()
                 .map(|field| field.name().to_string())
                 .collect::<Vec<_>>();
-            if names.is_empty() {
+            let scan = if names.is_empty() {
                 Arc::new(ProjectionExec::try_new(
                     Vec::<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)>::new(),
                     scan,
-                )?)
+                )?) as Arc<dyn ExecutionPlan>
             } else {
                 rename_physical_plan(scan, &names)?
-            }
+            };
+            let output_partitioning = checkpoint_schema_partitioning(
+                &descriptor.output_partitioning,
+                scan.schema().as_ref(),
+            )?;
+            let output_ordering = descriptor
+                .output_ordering
+                .as_ref()
+                .map(|ordering| checkpoint_schema_ordering(ordering, scan.schema().as_ref()))
+                .transpose()?;
+            Arc::new(RemoteCheckpointScanExec::new(
+                scan,
+                output_partitioning,
+                output_ordering,
+            ))
         } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
@@ -383,6 +410,65 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
     }
 }
 
+fn checkpoint_schema_partitioning(
+    partitioning: &Partitioning,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Partitioning> {
+    match partitioning {
+        Partitioning::RoundRobinBatch(partitions) => Ok(Partitioning::RoundRobinBatch(*partitions)),
+        Partitioning::Hash(expressions, partitions) => Ok(Partitioning::Hash(
+            expressions
+                .iter()
+                .map(|expression| checkpoint_schema_expression(Arc::clone(expression), schema))
+                .collect::<datafusion_common::Result<Vec<_>>>()?,
+            *partitions,
+        )),
+        Partitioning::UnknownPartitioning(partitions) => {
+            Ok(Partitioning::UnknownPartitioning(*partitions))
+        }
+    }
+}
+
+fn checkpoint_schema_ordering(
+    ordering: &LexOrdering,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<LexOrdering> {
+    let expressions = ordering
+        .iter()
+        .map(|sort| {
+            Ok(PhysicalSortExpr::new(
+                checkpoint_schema_expression(Arc::clone(&sort.expr), schema)?,
+                sort.options,
+            ))
+        })
+        .collect::<datafusion_common::Result<Vec<_>>>()?;
+    LexOrdering::new(expressions)
+        .ok_or_else(|| internal_datafusion_err!("checkpoint output ordering cannot be empty"))
+}
+
+fn checkpoint_schema_expression(
+    expression: Arc<dyn PhysicalExpr>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_down(|expression| {
+            let Some(column) = expression.downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expression));
+            };
+            let field = schema.fields().get(column.index()).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "checkpoint property references column {} at invalid index {}",
+                    column.name(),
+                    column.index()
+                )
+            })?;
+            Ok(Transformed::yes(
+                Arc::new(Column::new(field.name(), column.index())) as Arc<dyn PhysicalExpr>,
+            ))
+        })
+        .data()
+}
+
 /// Plans the explicit repartitioning emitted by the logical planner.
 /// Empty expressions keep round-robin explicit here, while hash repartitioning
 /// and `UnknownPartitioning(1)` are normalized later by `RewriteExplicitRepartition`.
@@ -442,6 +528,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::prelude::SessionContext;
@@ -452,6 +540,32 @@ mod tests {
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
+    }
+
+    #[test]
+    fn checkpoint_properties_map_columns_to_target_schema_by_position() {
+        let target_schema = Schema::new(vec![
+            Field::new("__sail_checkpoint_col_00000", DataType::Int64, false),
+            Field::new("__sail_checkpoint_col_00001", DataType::Int64, false),
+        ]);
+        let first = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+        let second = Arc::new(Column::new("value", 1)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(first)]).unwrap();
+
+        let partitioning =
+            checkpoint_schema_partitioning(&Partitioning::Hash(vec![second], 2), &target_schema)
+                .unwrap();
+        let ordering = checkpoint_schema_ordering(&ordering, &target_schema).unwrap();
+
+        let Partitioning::Hash(expressions, 2) = partitioning else {
+            panic!("expected hash partitioning");
+        };
+        let partition_column = expressions[0].downcast_ref::<Column>().unwrap();
+        assert_eq!(partition_column.name(), "__sail_checkpoint_col_00001");
+        assert_eq!(partition_column.index(), 1);
+        let ordering_column = ordering.first().expr.downcast_ref::<Column>().unwrap();
+        assert_eq!(ordering_column.name(), "__sail_checkpoint_col_00000");
+        assert_eq!(ordering_column.index(), 0);
     }
 
     fn plan_partitioning(

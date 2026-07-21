@@ -139,6 +139,8 @@ impl RemoteCheckpointService {
         let registry = ctx.extension::<RemoteCheckpointRegistry>()?;
         let storage_schema = checkpoint_storage_schema(&logical_schema);
         let partition_count = plan.output_partitioning().partition_count();
+        let output_partitioning = plan.output_partitioning().clone();
+        let output_ordering = plan.output_ordering().cloned();
         let checkpoint = RemoteCheckpointWriteExec::try_new(
             plan,
             root.object_store_url().clone(),
@@ -155,6 +157,8 @@ impl RemoteCheckpointService {
             prefix: relation_prefix,
             logical_schema,
             storage_schema,
+            output_partitioning,
+            output_ordering,
             partitions,
         };
         registry.insert(descriptor)?;

@@ -68,6 +68,7 @@ message ExtendedPhysicalPlanNode {
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
     RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
+    RemoteCheckpointScanExecNode remote_checkpoint_scan = 56;
   }
 }
 
@@ -76,6 +77,12 @@ message RemoteCheckpointWriteExecNode {
   string object_store_url = 2;
   string prefix = 3;
   bytes storage_schema = 4;
+}
+
+message RemoteCheckpointScanExecNode {
+  bytes input = 1;
+  bytes output_partitioning = 2;
+  LexOrdering output_ordering = 3;
 }
 
 message ExtendedPhysicalExprNode {

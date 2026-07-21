@@ -10,13 +10,13 @@ use datafusion::common::config::TableParquetOptions;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use futures::{StreamExt, stream};
 use log::warn;
 use object_store::buffered::BufWriter;
@@ -34,6 +34,116 @@ pub const LOCATION_COLUMN: &str = "location";
 pub const SIZE_COLUMN: &str = "size";
 pub const ROW_COUNT_COLUMN: &str = "row_count";
 pub const ROW_MARKER_COLUMN: &str = "__sail_checkpoint_row_marker";
+
+/// Pass-through scan boundary that reports properties captured at checkpoint materialization.
+#[derive(Debug)]
+pub struct RemoteCheckpointScanExec {
+    input: Arc<dyn ExecutionPlan>,
+    properties: Arc<PlanProperties>,
+}
+
+impl RemoteCheckpointScanExec {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        output_partitioning: Partitioning,
+        output_ordering: Option<LexOrdering>,
+    ) -> Self {
+        let mut equivalence_properties = input.equivalence_properties().clone();
+        if let Some(ordering) = output_ordering {
+            equivalence_properties.add_ordering(ordering);
+        }
+        let properties = Arc::new(PlanProperties::new(
+            equivalence_properties,
+            output_partitioning,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Self { input, properties }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+}
+
+impl DisplayAs for RemoteCheckpointScanExec {
+    fn fmt_as(&self, _display_type: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "RemoteCheckpointScanExec")
+    }
+}
+
+impl ExecutionPlan for RemoteCheckpointScanExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [input] = children.as_slice() else {
+            return Err(internal_datafusion_err!(
+                "RemoteCheckpointScanExec must have exactly one child"
+            ));
+        };
+        if input.schema() != self.schema() {
+            return Err(internal_datafusion_err!(
+                "RemoteCheckpointScanExec child rewrite changed the checkpoint schema"
+            ));
+        }
+        let input_partitioning = input.output_partitioning();
+        let stored_partitioning = self.properties.output_partitioning();
+        // Scan rewrites can lose a known distribution while retaining the physical partitions.
+        let retains_stored_properties = matches!(
+            input_partitioning,
+            Partitioning::UnknownPartitioning(input_count)
+                if *input_count == stored_partitioning.partition_count()
+        );
+        let output_partitioning = if retains_stored_properties {
+            stored_partitioning.clone()
+        } else {
+            input_partitioning.clone()
+        };
+        let output_ordering = input.output_ordering().cloned().or_else(|| {
+            retains_stored_properties
+                .then(|| self.properties.output_ordering().cloned())
+                .flatten()
+        });
+        Ok(Arc::new(Self::new(
+            Arc::clone(input),
+            output_partitioning,
+            output_ordering,
+        )))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.input.partition_statistics(partition)
+    }
+}
 
 fn checkpoint_commit_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -437,12 +547,66 @@ mod tests {
 
     use datafusion::arrow::array::{Array, Int32Array};
     use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::SessionContext;
     use object_store::local::LocalFileSystem;
     use object_store::memory::InMemory;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::*;
+
+    #[test]
+    fn scan_rewrite_retains_checkpoint_properties_for_the_same_partition_count() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)]));
+        let key =
+            Arc::new(Column::new("key", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let ordering =
+            LexOrdering::new([datafusion::physical_expr::PhysicalSortExpr::new_default(
+                Arc::clone(&key),
+            )]);
+        let scan = Arc::new(RemoteCheckpointScanExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Partitioning::Hash(vec![key], 1),
+            ordering,
+        ));
+
+        let rewritten = scan.with_new_children(vec![Arc::new(EmptyExec::new(schema))])?;
+
+        assert!(matches!(
+            rewritten.output_partitioning(),
+            Partitioning::Hash(_, 1)
+        ));
+        assert!(rewritten.output_ordering().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn scan_rewrite_adopts_ordering_added_to_its_child() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)]));
+        let key =
+            Arc::new(Column::new("key", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let ordering =
+            LexOrdering::new([datafusion::physical_expr::PhysicalSortExpr::new_default(
+                key,
+            )])
+            .expect("non-empty ordering");
+        let scan = Arc::new(RemoteCheckpointScanExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Partitioning::UnknownPartitioning(1),
+            None,
+        ));
+        let sorted: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+            ordering.clone(),
+            Arc::new(EmptyExec::new(schema)),
+        ));
+
+        let rewritten = scan.with_new_children(vec![sorted])?;
+
+        assert_eq!(rewritten.output_ordering(), Some(&ordering));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn writes_a_partition_directly_to_object_storage() -> Result<()> {

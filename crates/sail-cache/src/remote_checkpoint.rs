@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::physical_expr::{LexOrdering, Partitioning};
 use datafusion_common::{Result, internal_datafusion_err};
 use object_store::path::Path;
 use sail_common_datafusion::extension::SessionExtension;
@@ -28,6 +29,8 @@ pub struct RemoteCheckpointDescriptor {
     pub prefix: Path,
     pub logical_schema: SchemaRef,
     pub storage_schema: SchemaRef,
+    pub output_partitioning: Partitioning,
+    pub output_ordering: Option<LexOrdering>,
     pub partitions: Vec<RemoteCheckpointPartition>,
 }
 
@@ -92,6 +95,8 @@ mod tests {
             prefix: Path::from("checkpoint"),
             logical_schema: Arc::clone(&schema),
             storage_schema: schema,
+            output_partitioning: Partitioning::UnknownPartitioning(1),
+            output_ordering: None,
             partitions: vec![],
         }
     }
