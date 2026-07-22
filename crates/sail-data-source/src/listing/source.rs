@@ -158,10 +158,12 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             read_case_sensitive,
         } = info;
 
+        let partition_base_path = resolve_partition_base_path(ctx, &options).await?;
         let read_format = T::read(ctx, options)?;
         let urls = resolve_listing_urls(ctx, paths).await?;
         let sampled_files = sample_listing_files(ctx, &urls).await?;
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
+        let partition_base_path_ref = partition_base_path.as_ref();
 
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
@@ -189,7 +191,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 // are treated as file columns, and the file reader fails
                 // because the file itself does not contain them.
                 let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
+                    infer_partitions(&sampled_files, partition_base_path_ref)?
                         .into_iter()
                         .filter(|name| {
                             schema
@@ -212,7 +214,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 let schema = rewrite_utf8view_fields(schema);
 
                 let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
+                    infer_partitions(&sampled_files, partition_base_path_ref)?
                 } else {
                     partition_by
                 };
@@ -227,10 +229,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             }
         };
 
-        validate_partitions(&sampled_files, &partition_fields)?;
+        validate_partitions(&sampled_files, partition_base_path_ref, &partition_fields)?;
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: urls,
+            partition_base_path,
             schema: TableSchema::new(schema, partition_fields),
             constraints,
             file_sort_order: vec![sort_order],
@@ -297,6 +300,44 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         }))
     }
 }
+
+async fn resolve_partition_base_path(
+    ctx: &dyn Session,
+    options: &[OptionLayer],
+) -> Result<Option<ListingTableUrl>> {
+    let Some(path) = find_option_value(options, &["basePath", "base_path"]) else {
+        return Ok(None);
+    };
+    let urls = resolve_listing_urls(ctx, vec![path.clone()]).await?;
+    let mut urls = urls.into_iter();
+    let Some(url) = urls.next() else {
+        return plan_err!("basePath must resolve to exactly one directory path: {path}");
+    };
+    if urls.next().is_some() || !url.is_collection() {
+        return plan_err!("basePath must resolve to exactly one directory path: {path}");
+    };
+    Ok(Some(url))
+}
+
+fn find_option_value(options: &[OptionLayer], keys: &[&str]) -> Option<String> {
+    for layer in options.iter().rev() {
+        let items = match layer {
+            OptionLayer::OptionList { items } | OptionLayer::TablePropertyList { items } => items,
+            _ => continue,
+        };
+        if let Some(value) = items.iter().find_map(|(key, value)| {
+            keys.iter()
+                .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                .then(|| value.clone())
+        }) {
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file"

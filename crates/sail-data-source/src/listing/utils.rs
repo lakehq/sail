@@ -110,18 +110,20 @@ pub async fn sample_listing_files<'a>(
 
 pub fn validate_partitions(
     files: &[ListingFileSample<'_>],
+    partition_base_url: Option<&ListingTableUrl>,
     table_partition_fields: &[FieldRef],
 ) -> Result<()> {
     if table_partition_fields.is_empty() {
         return Ok(());
     }
-    let inferred = infer_partitions(files)?;
+    let inferred = infer_partitions(files, partition_base_url)?;
     if inferred.is_empty() {
         return Ok(());
     }
 
     for group in files {
-        if !group.url.is_collection() {
+        let url = partition_base_url.unwrap_or(group.url);
+        if !url.is_collection() {
             return plan_err!(
                 "Can't create a partitioned table backed by a single file, \
             perhaps the URL is missing a trailing slash?"
@@ -155,16 +157,19 @@ pub fn validate_partitions(
     Ok(())
 }
 
-pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
+pub fn infer_partitions(
+    files: &[ListingFileSample<'_>],
+    partition_base_url: Option<&ListingTableUrl>,
+) -> Result<Vec<String>> {
     let mut inferred: Option<Vec<String>> = None;
     for group in files {
         for file in &group.objects {
-            let path_parts = group
-                .url
+            let url = partition_base_url.unwrap_or(group.url);
+            let path_parts = url
                 .strip_prefix(&file.location)
                 .ok_or_else(|| {
                     internal_datafusion_err!(
-                        "failed to strip listing prefix from object location: {}",
+                        "failed to strip partition base path from object location: {}",
                         file.location
                     )
                 })?

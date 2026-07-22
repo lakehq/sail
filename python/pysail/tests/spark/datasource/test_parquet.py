@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -386,6 +387,72 @@ def test_parquet_read_uppercase_extension_partitioned_directory_with_schema(spar
         Row(id=2, val="b", part="x"),
         Row(id=3, val="c", part="y"),
     ]
+
+
+def test_parquet_read_partition_subtree_with_base_path_discovers_partition_column(spark, tmp_path):
+    df_in = spark.createDataFrame(
+        [
+            ("row1", 1, date(2026, 1, 1)),
+            ("row2", 2, date(2026, 12, 15)),
+        ],
+        "id STRING, value INT, delivery_date DATE",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("delivery_date").parquet(str(src), mode="overwrite")
+
+    df = (
+        spark.read.format("parquet")
+        .option("basePath", str(src))
+        .load(str(src / "delivery_date=2026-01-01"))
+    )
+
+    assert df.columns == ["id", "value", "delivery_date"]
+    assert df.schema["delivery_date"].dataType.simpleString() == "string"
+    assert df.collect() == [Row(id="row1", value=1, delivery_date="2026-01-01")]
+
+
+def test_parquet_read_partition_subtree_with_base_path_and_schema_uses_schema_type(spark, tmp_path):
+    df_in = spark.createDataFrame(
+        [
+            ("row1", 1, date(2026, 1, 1)),
+            ("row2", 2, date(2026, 12, 15)),
+        ],
+        "id STRING, value INT, delivery_date DATE",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("delivery_date").parquet(str(src), mode="overwrite")
+
+    df = (
+        spark.read.format("parquet")
+        .schema("id STRING, value INT, delivery_date DATE")
+        .option("basePath", str(src))
+        .load(str(src / "delivery_date=2026-01-01"))
+    )
+
+    assert df.columns == ["id", "value", "delivery_date"]
+    assert df.schema["delivery_date"].dataType.simpleString() == "date"
+    assert df.collect() == [Row(id="row1", value=1, delivery_date=date(2026, 1, 1))]
+
+
+def test_parquet_read_nested_partition_subtree_with_base_path(spark, tmp_path):
+    df_in = spark.createDataFrame(
+        [
+            (1, "female", "CN"),
+            (2, "female", "US"),
+            (3, "male", "CN"),
+        ],
+        "id INT, gender STRING, country STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("gender", "country").parquet(str(src), mode="overwrite")
+
+    df = (
+        spark.read.format("parquet")
+        .option("basePath", str(src))
+        .load(str(src / "gender=female" / "country=CN"))
+    )
+
+    assert df.collect() == [Row(id=1, gender="female", country="CN")]
 
 
 def test_parquet_hidden_files_are_excluded(spark, sample_df, tmp_path):

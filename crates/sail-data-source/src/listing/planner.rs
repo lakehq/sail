@@ -21,11 +21,13 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    ScalarValue, Statistics, internal_datafusion_err, internal_err, plan_err, project_schema,
+};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use futures::{Stream, StreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
@@ -350,12 +352,18 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
+    let pruning_filters = if source.config().partition_base_path.is_some() {
+        &[]
+    } else {
+        filters
+    };
+
     let file_list = future::try_join_all(source.config().table_paths.iter().map(|table_path| {
         pruned_partition_list(
             ctx,
             store.as_ref(),
             table_path,
-            filters,
+            pruning_filters,
             "",
             &partition_cols,
         )
@@ -367,7 +375,10 @@ async fn list_files_for_scan<'a>(
 
     let files = file_list
         .map(|part_file| async {
-            let part_file = part_file?;
+            let mut part_file = part_file?;
+            if let Some(base_path) = source.config().partition_base_path.as_ref() {
+                part_file = rewrite_partition_values(part_file, base_path, &partition_cols)?;
+            }
             let (statistics, ordering) = if source.config().collect_stat {
                 do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
             } else {
@@ -498,6 +509,61 @@ fn statistics_cache_table_ref(
         "{table}_{:016x}",
         std::hash::Hasher::finish(&hasher)
     ))
+}
+
+fn rewrite_partition_values(
+    mut file: PartitionedFile,
+    partition_base_path: &ListingTableUrl,
+    partition_cols: &[(String, DataType)],
+) -> datafusion_common::Result<PartitionedFile> {
+    if partition_cols.is_empty() {
+        file.partition_values.clear();
+        return Ok(file);
+    }
+
+    file.partition_values = partition_values_from_path(
+        partition_base_path,
+        &file.object_meta.location,
+        partition_cols,
+    )?;
+    Ok(file)
+}
+
+fn partition_values_from_path(
+    partition_base_path: &ListingTableUrl,
+    location: &object_store::path::Path,
+    partition_cols: &[(String, DataType)],
+) -> datafusion_common::Result<Vec<ScalarValue>> {
+    let path_parts = partition_base_path
+        .strip_prefix(location)
+        .ok_or_else(|| {
+            internal_datafusion_err!(
+                "failed to strip partition base path from object location: {}",
+                location
+            )
+        })?
+        .collect::<Vec<_>>();
+
+    let partitions = path_parts
+        .into_iter()
+        .rev()
+        .skip(1)
+        .rev()
+        .filter_map(|part| part.split_once('='))
+        .collect::<Vec<_>>();
+
+    partition_cols
+        .iter()
+        .map(|(name, data_type)| {
+            let value = partitions
+                .iter()
+                .find_map(|(key, value)| (*key == name).then_some(*value));
+            match value {
+                Some(value) => ScalarValue::try_from_string(value.to_string(), data_type),
+                None => ScalarValue::try_new_null(data_type),
+            }
+        })
+        .collect()
 }
 
 async fn get_files_with_limit(
