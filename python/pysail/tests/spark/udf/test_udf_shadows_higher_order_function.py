@@ -1,3 +1,5 @@
+import math
+
 import pytest
 from pyspark.sql import Row
 from pyspark.sql.functions import col, udf
@@ -65,7 +67,7 @@ def test_shadowing_udf_runs_over_a_column_with_null_and_nan(spark):
     def exists(x):
         if x is None:
             return "null"
-        if x != x:  # NaN is the only value not equal to itself
+        if math.isnan(x):
             return "nan"
         return f"{x:g}"
 
