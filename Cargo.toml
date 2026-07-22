@@ -128,6 +128,7 @@ pilota = "0.13.1"
 volo = "0.12.3"
 volo-build = "0.12.3"
 volo-thrift = "0.12.4"
+insta = { version = "1.48.0", features = ["glob", "filters"] }
 
 ######
 # The versions of the following dependencies are managed manually.
