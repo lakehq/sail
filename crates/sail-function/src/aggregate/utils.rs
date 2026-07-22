@@ -269,3 +269,26 @@ pub fn calculate_percentile_disc<T: ArrowNumericType>(
     let (_, value, _) = values.select_nth_unstable_by(index, cmp);
     Some(*value)
 }
+
+/// Returns the discrete percentile for each requested fraction, sorting the
+/// values once instead of re-selecting (and cloning) the whole vector per
+/// percentile. Returns `None` when there are no values (the caller maps this to
+/// a NULL result). The output preserves the order of `percentiles`.
+pub fn calculate_percentiles_disc<T: ArrowNumericType>(
+    mut values: Vec<T::Native>,
+    percentiles: &[f64],
+) -> Option<Vec<T::Native>> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+
+    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
+    values.sort_unstable_by(cmp);
+    Some(
+        percentiles
+            .iter()
+            .map(|percentile| values[percentile_disc_index(len, *percentile, false)])
+            .collect(),
+    )
+}
