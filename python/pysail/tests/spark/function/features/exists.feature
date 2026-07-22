@@ -496,7 +496,6 @@ Feature: exists higher-order function
 
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -599,7 +598,6 @@ Feature: exists higher-order function
         | false  |
         | NULL   |
 
-    @sail-bug
     Scenario: a non-boolean constant is still a type error
       When query
         """
@@ -607,7 +605,6 @@ Feature: exists higher-order function
         """
       Then query error The second parameter requires the "BOOLEAN" type
 
-    @sail-bug
     Scenario: a subquery in place of the lambda is rejected
       When query
         """
@@ -616,7 +613,6 @@ Feature: exists higher-order function
       Then query error Subquery expressions are not supported within higher-order functions
 
 
-    @sail-bug
     Scenario: a subquery inside a lambda body is rejected
       When query
         """
@@ -643,3 +639,39 @@ Feature: exists higher-order function
       Then query result
         | result |
         | NULL   |
+
+  Rule: The predicate type is validated at analysis time even in a dead branch
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, exists(array(1), 1), false) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    @sail-bug
+    Scenario: exists with a seeded rand short-circuits per row
+      When query
+        """
+        SELECT exists(c, rand(42) > 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | true   |
+        | false  |
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT exists(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT exists(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type

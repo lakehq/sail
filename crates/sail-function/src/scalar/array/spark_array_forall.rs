@@ -24,8 +24,8 @@ use datafusion_expr::{
 };
 
 use super::lambda_utils::{
-    coerce_null_lambda_result, coerce_single_list_arg, short_circuit_boolean_reduce,
-    value_lambda_pair,
+    coerce_null_lambda_result, coerce_single_list_arg, require_boolean_predicate,
+    short_circuit_boolean_reduce, value_lambda_pair,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -73,10 +73,13 @@ impl HigherOrderUDFImpl for SparkArrayForall {
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (_list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-        // Boolean per row, nullable: three-valued logic can yield NULL even when
-        // the input array column is not nullable.
-        Ok(Arc::new(Field::new("", DataType::Boolean, true)))
+        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        require_boolean_predicate(self.name(), lambda.data_type())?;
+        // Spark (`ArrayForAll.nullable`, three-valued logic): nullable when the
+        // array or the predicate is; the predicate also carries element
+        // nullability through the resolved lambda body.
+        let nullable = list.is_nullable() || lambda.is_nullable();
+        Ok(Arc::new(Field::new("", DataType::Boolean, nullable)))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {

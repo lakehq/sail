@@ -92,11 +92,20 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
+        // A user-defined function shadows a built-in higher-order function of the
+        // same name (Spark gives temporary/user functions precedence), so it must
+        // NOT be intercepted by the HOF path — `transform(1, 2)` against a
+        // registered `transform(INT, INT)` UDF has to reach the UDF below.
+        let shadowed_by_udf = catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_some_and(|udf| udf.inner().is::<PySparkUnresolvedUDF>());
+
         // A higher-order function also takes this path when no argument is a
         // lambda syntactically, because Spark accepts a plain expression in a
         // lambda position and wraps it. An arity that matches no lambda form
         // (e.g. `array_sort(a)`) yields no positions and resolves as usual.
-        let has_lambda_argument_position = is_higher_order_function(&canonical_function_name)
+        let has_lambda_argument_position = !shadowed_by_udf
+            && is_higher_order_function(&canonical_function_name)
             && (arguments.iter().any(is_spec_lambda_argument)
                 || !lambda_argument_positions(&canonical_function_name, arguments.len())
                     .is_empty());

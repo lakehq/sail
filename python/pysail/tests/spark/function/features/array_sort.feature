@@ -248,3 +248,33 @@ Feature: array_sort higher-order function
         SELECT array_sort(array(2, 1), true) AS result
         """
       Then query error requires return "INT" type
+
+  Rule: A NullType array skips the comparator entirely
+
+    Scenario: a comparator that would error is never evaluated for an all-NULL untyped array
+      When query
+        """
+        SELECT array_sort(array(NULL, NULL), CAST(raise_error('boom') AS INT)) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: a comparator is never evaluated for a single-element NULL array
+      When query
+        """
+        SELECT array_sort(array(NULL), CAST(raise_error('boom') AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | [NULL] |
+
+    Scenario: a comparator is never evaluated for NULL arrays coming from a column
+      When query
+        """
+        SELECT array_sort(c, CAST(raise_error('boom') AS INT)) AS result FROM VALUES (array(NULL, NULL)), (array(NULL)) AS t(c)
+        """
+      Then query result ordered
+        | result       |
+        | [NULL, NULL] |
+        | [NULL]       |

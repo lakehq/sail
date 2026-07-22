@@ -471,7 +471,6 @@ Feature: forall higher-order function
 
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -563,7 +562,6 @@ Feature: forall higher-order function
         | true   |
         | NULL   |
 
-    @sail-bug
     Scenario: a non-boolean constant is still a type error
       When query
         """
@@ -590,3 +588,39 @@ Feature: forall higher-order function
       Then query result
         | result |
         | NULL   |
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    @sail-bug
+    Scenario: forall with a seeded rand short-circuits per row
+      When query
+        """
+        SELECT forall(c, rand(42) < 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT forall(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT forall(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, forall(array(1), 1), false) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type

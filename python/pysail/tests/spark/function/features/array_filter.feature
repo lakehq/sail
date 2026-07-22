@@ -873,7 +873,6 @@ Feature: array filter with lambda
         | []     |
         | NULL   |
 
-    @sail-bug
     Scenario: A non-boolean constant is still a type error
       When query
         """
@@ -881,7 +880,6 @@ Feature: array filter with lambda
         """
       Then query error The second parameter requires the "BOOLEAN" type
 
-    @sail-bug
     Scenario: A subquery in place of the lambda is rejected
       When query
         """
@@ -908,3 +906,38 @@ Feature: array filter with lambda
       Then query result
         | result |
         | []     |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT filter(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, filter(array(1), 1), array(0)) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    Scenario: filter with a seeded rand keeps elements per row in order
+      When query
+        """
+        SELECT filter(c, rand(42) > 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1]    |
+        | [3]    |

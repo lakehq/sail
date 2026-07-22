@@ -140,6 +140,18 @@ impl HigherOrderUDFImpl for SparkArraySort {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
         let list_array = list.to_array(args.number_rows)?;
 
+        // Spark skips sorting a `NullType` array entirely — every element is NULL,
+        // so the comparator is never evaluated (even one that would raise). Return
+        // the input unchanged before touching the lambda.
+        let element_is_null = matches!(
+            list_array.data_type(),
+            DataType::List(field) | DataType::LargeList(field)
+                if field.data_type() == &DataType::Null
+        );
+        if element_is_null {
+            return Ok(ColumnarValue::Array(list_array));
+        }
+
         let list_values = match extract_list_values(&list_array, args.return_type())? {
             ListValuesResult::EarlyReturn(v) => return Ok(v),
             ListValuesResult::Values(v) => v,

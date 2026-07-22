@@ -107,6 +107,24 @@ pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Ve
         .collect()
 }
 
+/// Returns how many parameters to declare when wrapping a bare (non-lambda)
+/// expression in a lambda for `function_name`, given the `available` parameters
+/// the function's lambda supports.
+///
+/// The wrapped body references no parameters, so only the minimum arity Spark
+/// declares is needed. Spark wraps the element-wise higher-order functions with
+/// a single hidden element parameter (see `higherOrderFunctions.scala`);
+/// declaring the optional extras (e.g. `transform`/`filter`'s index) would only
+/// force DataFusion to materialize an unused per-element column. `array_sort`
+/// and `aggregate` genuinely require their full comparator/accumulator arity, so
+/// they keep every available parameter.
+pub(crate) fn wrapped_lambda_param_count(function_name: &str, available: usize) -> usize {
+    match function_name.trim().to_lowercase().as_str() {
+        "transform" | "filter" | "exists" | "forall" => 1,
+        _ => available,
+    }
+}
+
 /// Returns the lambda parameter fields of a built-in higher-order function, one
 /// set per lambda argument, given the fields of its arguments (`None` for the
 /// lambda arguments themselves). Used by the resolver to type lambda variables

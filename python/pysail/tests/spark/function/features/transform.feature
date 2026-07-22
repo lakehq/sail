@@ -668,6 +668,47 @@ Feature: transform higher-order function
         | []     |
         | NULL   |
 
+  Rule: Non-deterministic non-lambda body is evaluated per element
+    # The wrapped non-lambda body must run once per element, not be folded to a
+    # single value and broadcast. Asserted through deterministic properties
+    # because the values themselves are random.
+
+    Scenario: A rand() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), rand()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A uuid() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), uuid()))) = 5 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A randn() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Every rand() element falls within the unit interval
+      When query
+        """
+        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: Untyped NULL body
 
     Scenario: An untyped NULL lambda body
@@ -687,3 +728,14 @@ Feature: transform higher-order function
       Then query result
         | result       |
         | [NULL, NULL] |
+
+  Rule: Non-lambda wrapping must not capture outer lambda variables
+
+    Scenario: a generated lambda parameter does not shadow an outer variable of the same name
+      When query
+        """
+        SELECT transform(array(1), __sail_unused_lambda_param_0 -> transform(array(2), __sail_unused_lambda_param_0)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |

@@ -32,7 +32,7 @@ use datafusion_expr::{
 
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_null_lambda_result, coerce_single_list_arg, extract_list_values,
-    index_array, value_lambda_pair,
+    index_array, require_boolean_predicate, value_lambda_pair,
 };
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
@@ -116,7 +116,8 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        require_boolean_predicate(self.name(), lambda.data_type())?;
         Ok(Arc::new(Field::new(
             "",
             list.data_type().clone(),
