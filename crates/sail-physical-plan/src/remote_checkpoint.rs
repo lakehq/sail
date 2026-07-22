@@ -48,6 +48,7 @@ impl RemoteCheckpointScanExec {
         output_partitioning: Partitioning,
         output_ordering: Option<LexOrdering>,
     ) -> Self {
+        // Keep child equivalences; the descriptor only supplements partitioning and ordering.
         let mut equivalence_properties = input.equivalence_properties().clone();
         if let Some(ordering) = output_ordering {
             equivalence_properties.add_ordering(ordering);
@@ -274,6 +275,7 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let store = context.runtime_env().object_store(&self.object_store_url)?;
+        // Attempt-unique immutable objects make retries safe without rename or copy.
         let location = self
             .prefix
             .clone()
@@ -350,6 +352,8 @@ impl CheckpointUpload {
             .options()
             .execution
             .objectstore_writer_buffer_size;
+        // Parquet trades encode/decode CPU for typically smaller object-store I/O and
+        // row-group/page pruning metadata; Arrow IPC favors low-overhead interchange.
         let mut parquet_options = TableParquetOptions {
             global: context.session_config().options().execution.parquet.clone(),
             ..Default::default()
@@ -370,6 +374,7 @@ impl CheckpointUpload {
             shutdown_started: false,
         };
         let writer = AsyncArrowWriter::try_new_with_options(buffer, schema, options)?;
+        // Charge both object-store buffering and Parquet's live encoding state to the task pool.
         let reservation = MemoryConsumer::new(format!("RemoteCheckpoint[{location}]"))
             .register(context.memory_pool());
         reservation.try_resize(object_store_buffer_size)?;
@@ -518,6 +523,7 @@ async fn write_checkpoint_partition(
         }
     }
 
+    // An empty partition stays in the descriptor but does not allocate an object.
     let (location, size) = if let Some(upload) = &mut upload {
         match upload.finish().await {
             Ok(size) => (Some(location.to_string()), size),

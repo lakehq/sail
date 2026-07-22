@@ -34,6 +34,8 @@ pub struct RemoteCheckpointDescriptor {
     pub partitions: Vec<RemoteCheckpointPartition>,
 }
 
+/// Session-local publication index for complete checkpoints; object-store contents are not
+/// reloaded after a process restart.
 #[derive(Debug, Default)]
 pub struct RemoteCheckpointRegistry {
     relations: RwLock<HashMap<String, Arc<RemoteCheckpointDescriptor>>>,

@@ -142,6 +142,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 vec![],
             ))
             .with_table_parquet_options(parquet_options);
+            // One file group per source partition, including empty partitions, keeps the saved
+            // physical properties sound.
             let file_groups = descriptor
                 .partitions
                 .iter()
@@ -410,6 +412,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
     }
 }
 
+// Column ordinals survive logical/storage renames; names may be duplicated or synthetic.
 fn checkpoint_schema_partitioning(
     partitioning: &Partitioning,
     schema: &datafusion::arrow::datatypes::Schema,

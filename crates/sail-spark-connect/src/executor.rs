@@ -234,6 +234,7 @@ impl Executor {
         tx: mpsc::Sender<ExecutorOutput>,
     ) -> SparkResult<()> {
         let replay = context.replay_outputs()?;
+        // A replayed completion is terminal; reattach must not poll the consumed input again.
         let completed = replay
             .last()
             .is_some_and(|output| matches!(&output.batch, ExecutorBatch::Complete));

@@ -407,6 +407,7 @@ impl SessionManagerActor {
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         ctx.spawn(async move {
+            // Stop tasks before deleting the namespace so late attempts cannot recreate objects.
             service.runner().stop(tx).await;
             let history = rx.await;
             if let (Some(checkpoint), Some(checkpoint_registry)) = (checkpoint, checkpoint_registry)

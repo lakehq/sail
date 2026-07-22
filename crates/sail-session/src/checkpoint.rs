@@ -54,6 +54,7 @@ impl RemoteCheckpointService {
         plan: Arc<dyn ExecutionPlan>,
         logical_schema: SchemaRef,
     ) -> Result<Arc<RemoteCheckpointDescriptor>> {
+        // This read lock is a session lease: cleanup waits for every in-flight publication.
         let lifecycle = self.lifecycle.read().await;
         if lifecycle.closed {
             return Err(DataFusionError::Plan(
@@ -161,6 +162,7 @@ impl RemoteCheckpointService {
             output_ordering,
             partitions,
         };
+        // Registry insertion is the publication point; readers never observe partial output.
         registry.insert(descriptor)?;
         registry.get(relation_id)?.ok_or_else(|| {
             internal_datafusion_err!(
@@ -195,6 +197,7 @@ impl RemoteCheckpointService {
     }
 
     fn session_prefix(&self, root: &Path) -> Path {
+        // `v1` versions the object layout only; checkpoint discovery remains session-local.
         root.clone()
             .join("_sail")
             .join("checkpoints")
@@ -223,11 +226,14 @@ impl SessionExtension for RemoteCheckpointService {
 
 fn checkpoint_storage_schema(logical_schema: &SchemaRef) -> SchemaRef {
     if logical_schema.fields().is_empty() {
+        // A marker column lets Parquet carry row counts for zero-column relations.
         return Arc::new(Schema::new_with_metadata(
             vec![Field::new(ROW_MARKER_COLUMN, DataType::UInt8, false)],
             logical_schema.metadata().clone(),
         ));
     }
+    // Positional storage names preserve duplicate logical names and make property rebinding
+    // unambiguous.
     let fields = logical_schema
         .fields()
         .iter()
