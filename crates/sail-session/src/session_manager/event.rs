@@ -88,7 +88,7 @@ impl SpanAssociation for SessionManagerEvent {
                 driver_id,
                 result: _,
             } => {
-                p.push(("driver_id", driver_id.to_string()));
+                p.push((SpanAttribute::CLUSTER_DRIVER_ID, driver_id.to_string()));
             }
             SessionManagerEvent::ObserveState { observer: _ } => {}
         }
