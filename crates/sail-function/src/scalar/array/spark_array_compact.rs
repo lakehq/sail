@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, as_large_list_array,
-    as_list_array,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
+    as_large_list_array, as_list_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
@@ -86,9 +86,14 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
     let values = list.values();
     let offsets = list.offsets();
 
-    // Build a boolean filter mask for the flattened values array.
-    // We keep a value if its parent row is not null AND the value itself is not null.
-    let mut keep: Vec<bool> = Vec::with_capacity(values.len());
+    // Validity of the flattened values, fetched once instead of a per-element vtable
+    // `is_valid` call.
+    let value_nulls = values.nulls();
+
+    // Build the keep mask directly as a bit-packed boolean buffer (no intermediate
+    // `Vec<bool>` that then gets repacked into bits). We keep a value if its parent row
+    // is not null AND the value itself is not null.
+    let mut keep = BooleanBufferBuilder::new(values.len());
     // New offsets after compaction: one entry per row, counting retained values.
     let mut new_offsets: Vec<O> = Vec::with_capacity(list.len() + 1);
     new_offsets.push(O::usize_as(0));
@@ -100,23 +105,22 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
 
         if list.is_null(i) {
             // Null row: mark all values in the range as not kept.
-            keep.extend(std::iter::repeat_n(false, end - start));
-            // Null row: offset stays the same (empty slice).
-            new_offsets.push(O::usize_as(total_kept));
+            keep.append_n(end - start, false);
         } else {
             // Non-null row: keep only non-null values.
             for j in start..end {
-                let keep_value = values.is_valid(j);
-                keep.push(keep_value);
+                let keep_value = value_nulls.is_none_or(|n| n.is_valid(j));
+                keep.append(keep_value);
                 if keep_value {
                     total_kept += 1;
                 }
             }
-            new_offsets.push(O::usize_as(total_kept));
         }
+        // Offset stays put for a null row (empty slice) and advances by the retained count otherwise.
+        new_offsets.push(O::usize_as(total_kept));
     }
 
-    let keep_mask = BooleanArray::from(keep);
+    let keep_mask = BooleanArray::new(keep.finish(), None);
     let new_values = compute::filter(values.as_ref(), &keep_mask)?;
 
     let field = match list.data_type() {
