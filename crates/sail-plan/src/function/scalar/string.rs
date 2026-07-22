@@ -252,7 +252,13 @@ fn try_validate_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn is_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(try_validate_utf8(input)?.is_not_null())
+    let schema = input.function_context.schema;
+    let arg = input.arguments.one()?;
+    let validated = cast_to_logical_string_or_try(arg.clone(), schema, true)?;
+    // Spark returns NULL for a NULL input. `try_cast` nulls out both a NULL input and
+    // invalid bytes, so `IS NOT NULL` alone would turn NULL into `false`; re-propagate
+    // the input NULL explicitly.
+    Ok(when(arg.is_null(), lit(ScalarValue::Boolean(None))).otherwise(validated.is_not_null())?)
 }
 
 fn in_str_str_out_bool(
