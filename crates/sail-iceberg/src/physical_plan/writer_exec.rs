@@ -220,73 +220,65 @@ impl IcebergWriterExec {
         }
     }
 
-    fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
-        Self::resolve_data_dir_from_properties(&table_meta.properties, table_url)
+    fn resolve_data_location(table_meta: &TableMetadata, table_url: &Url) -> Result<Url> {
+        Self::resolve_data_location_from_properties(&table_meta.properties, table_url)
     }
 
-    fn resolve_data_dir_from_property_value(
+    fn resolve_data_location_from_property_value(
         value: Option<&str>,
         table_url: &Url,
-    ) -> Option<String> {
-        let raw = value?.trim();
+    ) -> Result<Option<Url>> {
+        let Some(raw) = value.map(str::trim) else {
+            return Ok(None);
+        };
         if raw.is_empty() {
-            return None;
+            return Ok(None);
         }
 
-        let base_path = crate::utils::url_to_object_path(table_url).ok();
-        if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
-            if prop_url.scheme() == table_url.scheme()
-                && prop_url.host_str() == table_url.host_str()
-                && let (Ok(prop_path), Some(base_path)) = (
-                    crate::utils::url_to_object_path(&prop_url),
-                    base_path.as_ref(),
-                )
-            {
-                let prop_str = prop_path.as_ref();
-                let base_str = base_path.as_ref();
-                if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                    let rel = stripped.trim_start_matches('/').trim_matches('/');
-                    if !rel.is_empty() {
-                        return Some(rel.to_string());
-                    }
-                }
-            }
-        } else {
-            let prop_path = raw.replace('\\', "/");
-            if prop_path.starts_with('/') {
-                if let Some(base_path) = base_path.as_ref() {
-                    let base_str = base_path.as_ref();
-                    let prop_no_leading = prop_path.trim_start_matches('/');
-                    if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
-                    }
-                }
-            } else {
-                let rel = prop_path.trim_matches('/');
-                if !rel.is_empty() {
-                    return Some(rel.to_string());
-                }
-            }
+        let normalized_path = raw.replace('\\', "/");
+        let mut data_url = match (
+            crate::utils::parse_absolute_url(raw),
+            crate::utils::file_url_from_absolute_path(&normalized_path),
+        ) {
+            (Some(prop_url), _) => prop_url,
+            (None, Some(file_url)) => file_url,
+            (None, None) => table_url
+                .join(&normalized_path)
+                .map_err(|e| DataFusionError::Plan(format!("Invalid Iceberg data path: {e}")))?,
+        };
+
+        if data_url.scheme() != table_url.scheme() || data_url.authority() != table_url.authority()
+        {
+            return Err(DataFusionError::Plan(format!(
+                "Iceberg data path must use the same object store as the table location: {data_url}"
+            )));
         }
 
-        None
+        if !data_url.path().ends_with('/') {
+            data_url.set_path(&format!("{}/", data_url.path()));
+        }
+        Ok(Some(data_url))
     }
 
-    fn resolve_data_dir_from_properties(
+    fn resolve_data_location_from_properties(
         properties: &std::collections::HashMap<String, String>,
         table_url: &Url,
-    ) -> String {
-        Self::resolve_data_dir_from_property_value(
+    ) -> Result<Url> {
+        Self::resolve_data_location_from_property_value(
             properties
                 .get("write.data.path")
                 .or_else(|| properties.get("write.folder-storage.path"))
                 .map(String::as_str),
             table_url,
+        )?
+        .map_or_else(
+            || {
+                table_url.join("data/").map_err(|e| {
+                    DataFusionError::Plan(format!("Invalid default Iceberg data path: {e}"))
+                })
+            },
+            Ok,
         )
-        .unwrap_or_else(|| "data".to_string())
     }
 }
 
@@ -376,14 +368,14 @@ impl ExecutionPlan for IcebergWriterExec {
                 }
             }
 
-            let object_store = get_object_store_from_context(&context, &table_url)?;
+            let table_object_store = get_object_store_from_context(&context, &table_url)?;
             let input_schema = input_schema.clone();
 
             let (
                 iceberg_schema,
                 table_schema,
                 default_spec,
-                data_dir,
+                data_location,
                 spec_id_val,
                 commit_schema,
                 commit_requirements,
@@ -394,21 +386,25 @@ impl ExecutionPlan for IcebergWriterExec {
                         match metadata_location_from_properties(&options.table_properties) {
                             Some(location) => metadata_location_to_object_path_string(&location)?,
                             None => {
-                                crate::table::find_latest_metadata_file(&object_store, &table_url)
-                                    .await?
+                                crate::table::find_latest_metadata_file(
+                                    &table_object_store,
+                                    &table_url,
+                                )
+                                .await?
                             }
                         }
                     } else {
-                        crate::table::find_latest_metadata_file(&object_store, &table_url).await?
+                        crate::table::find_latest_metadata_file(&table_object_store, &table_url)
+                            .await?
                     };
                 let bytes = crate::table::metadata_loader::load_metadata_file_bytes(
-                    &object_store,
+                    &table_object_store,
                     &latest_meta,
                 )
                 .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let data_location = Self::resolve_data_location(&table_meta, &table_url)?;
                 let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
@@ -478,7 +474,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     schema_outcome.iceberg_schema,
                     schema_outcome.arrow_schema,
                     default_spec,
-                    data_dir,
+                    data_location,
                     spec_id_val,
                     commit_schema,
                     requirements,
@@ -522,16 +518,19 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    Self::resolve_data_dir_from_property_value(
+                    match Self::resolve_data_location_from_property_value(
                         options
                             .write_data_path
                             .as_deref()
                             .or(options.write_folder_storage_path.as_deref()),
                         &table_url,
-                    )
-                    .unwrap_or_else(|| {
-                        Self::resolve_data_dir_from_properties(&metadata_properties, &table_url)
-                    }),
+                    )? {
+                        Some(data_location) => data_location,
+                        None => Self::resolve_data_location_from_properties(
+                            &metadata_properties,
+                            &table_url,
+                        )?,
+                    },
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
@@ -568,15 +567,15 @@ impl ExecutionPlan for IcebergWriterExec {
                 variant_shredding,
             };
 
-            let writer_root = crate::utils::url_to_object_path(&table_url)
+            let data_object_store = get_object_store_from_context(&context, &data_location)?;
+            let writer_root = crate::utils::url_to_object_path(&data_location)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
             let mut writer = IcebergTableWriter::new(
-                object_store.clone(),
+                data_object_store,
                 writer_root,
                 writer_config,
                 spec_id_val,
-                data_dir,
-                table_url.clone(),
+                data_location,
             );
 
             let mut total_rows = 0u64;

@@ -22,7 +22,6 @@ pub trait LocationGenerator {
 
 pub struct DefaultLocationGenerator {
     base: ObjectPath,
-    data_dir: String,
     counter: AtomicU64,
 }
 
@@ -30,15 +29,6 @@ impl DefaultLocationGenerator {
     pub fn new(base: ObjectPath) -> Self {
         Self {
             base,
-            data_dir: "data".to_string(),
-            counter: AtomicU64::new(0),
-        }
-    }
-
-    pub fn new_with_data_dir(base: ObjectPath, data_dir: String) -> Self {
-        Self {
-            base,
-            data_dir: data_dir.trim_matches('/').to_string(),
             counter: AtomicU64::new(0),
         }
     }
@@ -53,10 +43,8 @@ impl LocationGenerator for DefaultLocationGenerator {
         let id = self.counter.fetch_add(1, Ordering::Relaxed);
         let file = format!("part-{}-{:020}.parquet", Uuid::new_v4(), id);
         let rel_unencoded = match partition_dir {
-            Some(dir) if !dir.is_empty() => {
-                format!("{}/{}/{}", self.data_dir, dir.trim_matches('/'), file)
-            }
-            _ => format!("{}/{}", self.data_dir, file),
+            Some(dir) if !dir.is_empty() => format!("{}/{}", dir.trim_matches('/'), file),
+            _ => file,
         };
         // Join each component to avoid encoding '/' into '%2F'
         let mut full = self.base.clone();
