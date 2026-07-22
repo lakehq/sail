@@ -8,10 +8,10 @@ data:
       SortPreservingMergeExec: [#16@0 ASC, #17@1 ASC]
         SortExec: expr=[#16@0 ASC, #17@1 ASC], preserve_partitioning=[true]
           ProjectionExec: expr=[#8@0 as #16, #9@1 as #17, sum(lineitem.#4)@2 as #18, sum(lineitem.#5)@3 as #19, sum(lineitem.#5 * Int32(1) - lineitem.#6)@4 as #20, sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7)@5 as #21, avg(lineitem.#4)@6 as #22, avg(lineitem.#5)@7 as #23, avg(lineitem.#6)@8 as #24, count(Int64(1))@9 as #25]
-            AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8, #9@1 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * Some(1),10,0 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
+            AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8, #9@1 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * Some(1),1,0 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
               RepartitionExec: partitioning=Hash([#8@0, #9@1], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#8@5 as #8, #9@6 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * Some(1),10,0 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
-                  ProjectionExec: expr=[#21@1 * (Some(1),10,0 - #22@2) as __common_expr_1, #20@0 as #4, #21@1 as #5, #22@2 as #6, #23@3 as #7, #24@4 as #8, #25@5 as #9]
+                AggregateExec: mode=Partial, gby=[#8@5 as #8, #9@6 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * Some(1),1,0 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
+                  ProjectionExec: expr=[#21@1 * (Some(1),1,0 - #22@2) as __common_expr_1, #20@0 as #4, #21@1 as #5, #22@2 as #6, #23@3 as #7, #24@4 as #8, #25@5 as #9]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       ProjectionExec: expr=[_4@0 as #20, _5@1 as #21, _6@2 as #22, _7@3 as #23, _8@4 as #24, _9@5 as #25]
                         FilterExec: _10@6 <= 1998-09-24, projection=[_4@0, _5@1, _6@2, _7@3, _8@4, _9@5]
@@ -72,9 +72,9 @@ data:
       SortPreservingMergeExec: [#34@1 DESC NULLS LAST, #35@2 ASC], fetch=10
         SortExec: TopK(fetch=10), expr=[#34@1 DESC NULLS LAST, #35@2 ASC], preserve_partitioning=[true]
           ProjectionExec: expr=[#17@0 as #33, sum(lineitem.#22 * Int32(1) - lineitem.#23)@3 as #34, #12@1 as #35, #15@2 as #36]
-            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17, #12@1 as #12, #15@2 as #15], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17, #12@1 as #12, #15@2 as #15], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
               RepartitionExec: partitioning=Hash([#17@0, #12@1, #15@2], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#17@2 as #17, #12@0 as #12, #15@1 as #15], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+                AggregateExec: mode=Partial, gby=[#17@2 as #17, #12@0 as #12, #15@1 as #15], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#8@0, #17@0)], projection=[#12@1, #15@2, #17@3, #22@4, #23@5]
                     CoalescePartitionsExec
                       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #9@1)], projection=[#8@1, #12@3, #15@4]
@@ -118,9 +118,9 @@ data:
       SortPreservingMergeExec: [#48@1 DESC NULLS LAST]
         SortExec: expr=[#48@1 DESC NULLS LAST], preserve_partitioning=[true]
           ProjectionExec: expr=[#41@0 as #47, sum(lineitem.#22 * Int32(1) - lineitem.#23)@1 as #48]
-            AggregateExec: mode=FinalPartitioned, gby=[#41@0 as #41], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+            AggregateExec: mode=FinalPartitioned, gby=[#41@0 as #41], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
               RepartitionExec: partitioning=Hash([#41@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#41@2 as #41], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+                AggregateExec: mode=Partial, gby=[#41@2 as #41], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#44@0, #42@3)], projection=[#22@1, #23@2, #41@3]
                     ProjectionExec: expr=[_0@0 as #44]
                       FilterExec: _1@1 = AFRICA, projection=[_0@0]
@@ -171,7 +171,7 @@ data:
             AggregateExec: mode=FinalPartitioned, gby=[#48@0 as #48, #49@1 as #49, #50@2 as #50], aggr=[sum(shipping.#51)]
               RepartitionExec: partitioning=Hash([#48@0, #49@1, #50@2], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#48@0 as #48, #49@1 as #49, #50@2 as #50], aggr=[sum(shipping.#51)]
-                  ProjectionExec: expr=[#41@0 as #48, #45@1 as #49, date_part(year, #17@2) as #50, #12@3 * (Some(1),10,0 - #13@4) as #51]
+                  ProjectionExec: expr=[#41@0 as #48, #45@1 as #49, date_part(year, #17@2) as #50, #12@3 * (Some(1),1,0 - #13@4) as #51]
                     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#35@3, #44@0)], filter=#41@0 = GERMANY AND #45@1 = IRAQ OR #41@0 = IRAQ AND #45@1 = GERMANY, projection=[#41@4, #45@6, #17@2, #12@0, #13@1]
                       CoalescePartitionsExec
                         HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#3@0, #40@0)], projection=[#12@1, #13@2, #17@3, #35@4, #41@6]
@@ -205,11 +205,11 @@ data:
     ProjectionExec: expr=[#63@0 as o_year, #64@1 as mkt_share]
       SortPreservingMergeExec: [#63@0 ASC]
         SortExec: expr=[#63@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#60@0 as #63, sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 / CASE WHEN sum(all_nations.#61)@2 = Some(0),31,4 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(all_nations.#61)@2 END as #64]
-            AggregateExec: mode=FinalPartitioned, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE Some(0),21,4 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
+          ProjectionExec: expr=[#60@0 as #63, sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 / CASE WHEN sum(all_nations.#61)@2 = Some(0),22,4 THEN CAST(raise_error(Division by zero) AS Decimal128(22, 4)) ELSE sum(all_nations.#61)@2 END as #64]
+            AggregateExec: mode=FinalPartitioned, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE Some(0),14,4 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
               RepartitionExec: partitioning=Hash([#60@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE Some(0),21,4 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
-                  ProjectionExec: expr=[date_part(year, #36@0) as #60, #21@1 * (Some(1),10,0 - #22@2) as #61, #54@3 as #62]
+                AggregateExec: mode=Partial, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE Some(0),14,4 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
+                  ProjectionExec: expr=[date_part(year, #36@0) as #60, #21@1 * (Some(1),1,0 - #22@2) as #61, #54@3 as #62]
                     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#57@0, #51@3)], projection=[#36@3, #21@1, #22@2, #54@5]
                       ProjectionExec: expr=[_0@0 as #57]
                         FilterExec: _1@1 = MIDDLE EAST, projection=[_0@0]
@@ -255,7 +255,7 @@ data:
             AggregateExec: mode=FinalPartitioned, gby=[#50@0 as #50, #51@1 as #51], aggr=[sum(profit.#52)]
               RepartitionExec: partitioning=Hash([#50@0, #51@1], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#50@0 as #50, #51@1 as #51], aggr=[sum(profit.#52)]
-                  ProjectionExec: expr=[#47@7 as #50, date_part(year, #41@5) as #51, #21@1 * (Some(1),10,0 - #22@2) - #35@4 * #20@0 as #52]
+                  ProjectionExec: expr=[#47@7 as #50, date_part(year, #41@5) as #51, #21@1 * (Some(1),1,0 - #22@2) - #35@4 * #20@0 as #52]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#12@3, #46@0)]
                         HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #37@0)], projection=[#20@1, #21@2, #22@3, #12@4, #35@5, #41@7]
@@ -286,9 +286,9 @@ data:
       SortPreservingMergeExec: [#39@2 DESC NULLS LAST], fetch=20
         SortExec: TopK(fetch=20), expr=[#39@2 DESC NULLS LAST], preserve_partitioning=[true]
           ProjectionExec: expr=[#0@0 as #37, #1@1 as #38, sum(lineitem.#22 * Int32(1) - lineitem.#23)@7 as #39, #5@2 as #40, #34@4 as #41, #2@5 as #42, #4@3 as #43, #7@6 as #44]
-            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0, #1@1 as #1, #5@2 as #5, #4@3 as #4, #34@4 as #34, #2@5 as #2, #7@6 as #7], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0, #1@1 as #1, #5@2 as #5, #4@3 as #4, #34@4 as #34, #2@5 as #2, #7@6 as #7], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
               RepartitionExec: partitioning=Hash([#0@0, #1@1, #5@2, #4@3, #34@4, #2@5, #7@6], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[#0@0 as #0, #1@1 as #1, #5@4 as #5, #4@3 as #4, #34@8 as #34, #2@2 as #2, #7@5 as #7], aggr=[sum(lineitem.#22 * Some(1),10,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
+                AggregateExec: mode=Partial, gby=[#0@0 as #0, #1@1 as #1, #5@4 as #5, #4@3 as #4, #34@8 as #34, #2@2 as #2, #7@5 as #7], aggr=[sum(lineitem.#22 * Some(1),1,0 - lineitem.#23) as sum(lineitem.#22 * Int32(1) - lineitem.#23)]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#33@0, #3@3)], projection=[#0@2, #1@3, #2@4, #4@6, #5@7, #7@8, #22@9, #23@10, #34@1]
                     ProjectionExec: expr=[_0@0 as #33, _1@1 as #34]
                       DataSourceExec: partitions=1, partition_sizes=[1]
@@ -389,11 +389,11 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#25@0 as promo_revenue]
-      ProjectionExec: expr=[Some(10000),5,2 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 / CASE WHEN sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = Some(0),31,4 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 END as #25]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE Some(0),21,4 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+      ProjectionExec: expr=[Some(10000),5,2 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 / CASE WHEN sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = Some(0),22,4 THEN CAST(raise_error(Division by zero) AS Decimal128(22, 4)) ELSE sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 END as #25]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE Some(0),14,4 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE Some(0),21,4 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
-              ProjectionExec: expr=[#5@0 * (Some(1),10,0 - #6@1) as __common_expr_1, #20@2 as #20]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE Some(0),14,4 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+              ProjectionExec: expr=[#5@0 * (Some(1),1,0 - #6@1) as __common_expr_1, #20@2 as #20]
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #1@0)], projection=[#5@3, #6@4, #20@1]
                   ProjectionExec: expr=[_0@0 as #16, _4@1 as #20]
                     DataSourceExec: partitions=1, partition_sizes=[1]
@@ -424,9 +424,9 @@ data:
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[#2@0 as #7, sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 as #8]
                   FilterExec: sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = scalar_subquery(<pending>)
-                    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+                    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
                       RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+                        AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             ProjectionExec: expr=[_2@0 as #2, _5@1 as #5, _6@2 as #6]
                               FilterExec: _10@3 >= 1996-08-01 AND _10@3 < 1996-11-01, projection=[_2@0, _5@1, _6@2]
@@ -436,9 +436,9 @@ data:
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[max(revenue0.#10)]
                 ProjectionExec: expr=[sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 as #10]
-                  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
                     RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
-                      AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+                      AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           ProjectionExec: expr=[_2@0 as #2, _5@1 as #5, _6@2 as #6]
                             FilterExec: _10@3 >= 1996-08-01 AND _10@3 < 1996-11-01, projection=[_2@0, _5@1, _6@2]
@@ -537,9 +537,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#25@0 as revenue]
       ProjectionExec: expr=[sum(lineitem.#5 * Int32(1) - lineitem.#6)@0 as #25]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5 * Some(1),1,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #1@0)], filter=#19@1 = Brand#21 AND #22@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND #4@0 >= Some(800),4,2 AND #4@0 <= Some(1800),4,2 AND #21@2 <= 5 OR #19@1 = Brand#13 AND #22@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND #4@0 >= Some(2000),4,2 AND #4@0 <= Some(3000),4,2 AND #21@2 <= 10 OR #19@1 = Brand#52 AND #22@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND #4@0 >= Some(3000),4,2 AND #4@0 <= Some(4000),4,2 AND #21@2 <= 15, projection=[#5@6, #6@7]
                 ProjectionExec: expr=[_0@0 as #16, _3@1 as #19, _5@2 as #21, _6@3 as #22]
                   FilterExec: _5@2 >= 1 AND (_3@1 = Brand#21 AND _6@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND _5@2 <= 5 OR _3@1 = Brand#13 AND _6@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND _5@2 <= 10 OR _3@1 = Brand#52 AND _6@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND _5@2 <= 15)
