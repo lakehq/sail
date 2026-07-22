@@ -7,7 +7,9 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_keys::SparkMapKeys;
 use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::error::{PlanError, PlanResult};
@@ -34,8 +36,8 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    let keys = ScalarUDF::from(SparkArray::new()).call(keys);
+    let values = ScalarUDF::from(SparkArray::new()).call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
@@ -293,7 +295,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),
-        ("map_keys", F::unary(expr_fn::map_keys)),
+        ("map_keys", F::udf(SparkMapKeys::new())),
         ("map_values", F::custom(map_values)),
         ("str_to_map", F::custom(str_to_map)),
     ]
