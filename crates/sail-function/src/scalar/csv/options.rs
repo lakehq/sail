@@ -26,8 +26,9 @@ impl CsvFunction {
     }
 }
 
-/// The boolean options that Spark's `CSVOptions` parses with `getBool`.
-const BOOL_OPTIONS: [&str; 7] = [
+/// The boolean options that Spark's `CSVOptions` parses with `getBool`, which reports
+/// `<option> flag can be true or false.` on a non-boolean value.
+const BOOL_OPTIONS: [&str; 9] = [
     "header",
     "inferSchema",
     "ignoreLeadingWhiteSpace",
@@ -35,20 +36,28 @@ const BOOL_OPTIONS: [&str; 7] = [
     "escapeQuotes",
     "quoteAll",
     "enforceSchema",
+    "preferDate",
+    "columnPruning",
 ];
 
-/// Spark reads `multiLine` with Scala's `String.toBoolean` rather than `CSVOptions.getBool`. Both
-/// accept exactly `true` and `false` case-insensitively, but they report different errors.
-const MULTI_LINE_OPTION: &str = "multiLine";
+/// Boolean options Spark reads with Scala's `String.toBoolean` instead of `getBool`, so a bad
+/// value is reported as `For input string: "<value>"`. `multiLine` is one of these; the rest are
+/// inherited from the file-source options and validated just as eagerly.
+const TO_BOOLEAN_OPTIONS: [&str; 4] = [
+    "multiLine",
+    "enableDateTimeParsingFallback",
+    "ignoreCorruptFiles",
+    "ignoreMissingFiles",
+];
 
 /// Options Spark reads with `CSVOptions.getChar`. An empty value means "no character" and is
 /// accepted; anything longer than one character is rejected.
 const SINGLE_CHAR_OPTIONS: [&str; 4] = ["quote", "escape", "comment", "charToEscapeQuoteEscaping"];
 
-/// The field separator, which may be several characters long but not empty.
-const SEP_OPTIONS: [&str; 2] = ["sep", "delimiter"];
-
+/// Integer options Spark reads with `getInt`, reporting `<option> should be an integer. Found <v>.`.
 const INT_OPTIONS: [&str; 2] = ["maxColumns", "maxCharsPerColumn"];
+/// Integer options Spark reads with a bare `.toInt`, reporting `For input string: "<value>"`.
+const TO_INT_OPTIONS: [&str; 1] = ["inputBufferSize"];
 const SAMPLING_RATIO_OPTION: &str = "samplingRatio";
 const UNESCAPED_QUOTE_HANDLING_OPTION: &str = "unescapedQuoteHandling";
 const UNESCAPED_QUOTE_HANDLING_VALUES: [&str; 5] = [
@@ -88,33 +97,33 @@ fn first_row_entries(map: &MapArray) -> Option<(&StringArray, &StringArray, Rang
     Some((keys, values, start..end))
 }
 
-/// Returns the value of the `key` option, or `None` when the map does not carry it.
+/// Returns the effective value of the `key` option, or `None` when the map does not carry it.
 ///
-/// Spark reads CSV options through a case-insensitive map, so `SEP` selects the same option as
-/// `sep`. A null value yields `None` rather than an empty string, though [`validate_options`]
-/// rejects the call before that can be observed.
+/// Spark reads CSV options through a `CaseInsensitiveMap`, so `SEP` selects the same option as
+/// `sep` and a later case-variant of a key SHADOWS an earlier one — the LAST match wins. A null
+/// value yields `None` rather than an empty string.
 pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
     let (keys, values, entries) = first_row_entries(map)?;
     keys.iter()
         .zip(values.iter())
         .take(entries.end)
         .skip(entries.start)
-        .find_map(|(entry_key, entry_value)| match entry_key {
-            Some(entry_key) if entry_key.eq_ignore_ascii_case(key) => entry_value,
+        .filter_map(|(entry_key, entry_value)| match entry_key {
+            Some(entry_key) if entry_key.eq_ignore_ascii_case(key) => Some(entry_value),
             _ => None,
         })
+        .last()
+        .flatten()
 }
 
-/// Rejects an invalid value for any CSV option present in `map`.
+/// Rejects a structurally invalid options map — a NULL key or value — the way Spark does during
+/// map conversion, before any input row is evaluated.
 ///
-/// Spark builds `CSVOptions` eagerly, so every option is parsed as soon as the map is read, even
-/// by a function that never uses the resulting value: `from_csv` rejects a bad `quoteAll` and
-/// `to_csv` rejects a bad `header`. Unknown keys are ignored, also matching Spark, which only
-/// looks up the options it knows and never validates the rest.
-///
-/// A NULL value is the exception to that: Spark fails the call for any NULL, even under a key it
-/// does not know, so it is a property of the map rather than of the individual option.
-pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<()> {
+/// This is the ONLY part of option handling that is eager: Spark fails the call for a NULL entry
+/// even when the input is NULL and even under a key it does not know, because the failure happens
+/// while building the options, not while parsing a row. Value validation, by contrast, is lazy
+/// (see [`validate_options`]).
+pub(super) fn reject_null_entries(map: &MapArray, function: CsvFunction) -> Result<()> {
     let Some((keys, values, entries)) = first_row_entries(map) else {
         return Ok(());
     };
@@ -124,74 +133,129 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
         .take(entries.end)
         .skip(entries.start)
     {
-        let (Some(key), Some(value)) = (key, value) else {
+        if key.is_none() || value.is_none() {
             return exec_err!(
                 "Failed preparing of the function `{}` for call. Please, double check function's arguments.",
                 function.name()
             );
-        };
-        validate_option(key, value, function)?;
+        }
     }
     Ok(())
 }
 
-/// Spark reads options through a case-insensitive map but always reports the canonical option
-/// name back to the user, never the key as it was written.
-fn validate_option(key: &str, value: &str, function: CsvFunction) -> Result<()> {
-    if let Some(option) = BOOL_OPTIONS.iter().find(|x| key.eq_ignore_ascii_case(x)) {
-        parse_bool_option(Some(value), option, false)?;
-    } else if key.eq_ignore_ascii_case(MULTI_LINE_OPTION) {
-        validate_multi_line_option(value)?;
-    } else if let Some(option) = SINGLE_CHAR_OPTIONS
-        .iter()
-        .find(|x| key.eq_ignore_ascii_case(x))
-    {
-        // Spark measures the value with Java's `String.length`, which counts UTF-16 code units:
-        // an emoji is two units and is rejected, while `ñ` is one and is accepted.
-        if value.encode_utf16().count() > 1 {
-            return exec_err!("{option} cannot be more than one character.");
+/// Rejects an invalid VALUE for any CSV option present in `map`.
+///
+/// Read-driven, matching Spark: each canonical option is validated by READING its effective value
+/// from the case-insensitive map (last case-variant wins, via [`find_option`]), NOT by scanning raw
+/// entries. A shadowed value — an earlier case-variant, or the losing side of an alias such as
+/// `delimiter` when `sep` is present — is never read and therefore never validated.
+///
+/// Spark builds `CSVOptions` eagerly relative to other options — so `from_csv` rejects a bad
+/// `quoteAll` and `to_csv` rejects a bad `header` — but LAZILY relative to the input: a bad value is
+/// not seen when every input row is NULL. Callers therefore invoke this only when the input has at
+/// least one non-null row; the structural NULL-entry check ([`reject_null_entries`]) runs
+/// unconditionally instead. Unknown keys are ignored, also matching Spark.
+pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<()> {
+    for option in BOOL_OPTIONS {
+        if let Some(value) = find_option(map, option) {
+            parse_bool_option(Some(value), option, false)?;
         }
-    } else if SEP_OPTIONS.iter().any(|x| key.eq_ignore_ascii_case(x)) {
-        if value.is_empty() {
-            return exec_err!("Delimiter cannot be empty");
-        }
-    } else if let Some(option) = INT_OPTIONS.iter().find(|x| key.eq_ignore_ascii_case(x)) {
-        if value.parse::<i32>().is_err() {
-            return exec_err!("{option} should be an integer. Found {value}.");
-        }
-    } else if key.eq_ignore_ascii_case(SAMPLING_RATIO_OPTION) {
-        if value.parse::<f64>().is_err() {
+    }
+    // Read with Scala's `String.toBoolean`, which quotes the value instead of naming the option.
+    for option in TO_BOOLEAN_OPTIONS {
+        if let Some(value) = find_option(map, option)
+            && !fold_eq(value, "true")
+            && !fold_eq(value, "false")
+        {
             return exec_err!("For input string: \"{value}\"");
         }
-    } else if key.eq_ignore_ascii_case(UNESCAPED_QUOTE_HANDLING_OPTION) {
-        if !UNESCAPED_QUOTE_HANDLING_VALUES
-            .iter()
-            .any(|x| x.eq_ignore_ascii_case(value))
+    }
+    // Spark measures the value with Java's `String.length`, which counts UTF-16 code units:
+    // an emoji is two units and is rejected, while `ñ` is one and is accepted.
+    for option in SINGLE_CHAR_OPTIONS {
+        if let Some(value) = find_option(map, option)
+            && value.encode_utf16().count() > 1
         {
-            // Spark upper-cases the value before the lookup, so it surfaces the failure of the
-            // underlying parser's `valueOf` with the upper-cased name.
-            let value = value.to_uppercase();
-            return exec_err!(
-                "No enum constant com.univocity.parsers.csv.UnescapedQuoteHandling.{value}"
-            );
+            return exec_err!("{option} cannot be more than one character.");
         }
-    } else if key.eq_ignore_ascii_case(LINE_SEP_OPTION) {
-        if function == CsvFunction::To && value.is_empty() {
+    }
+    // Spark reads `sep`, falling back to `delimiter`; only the value it would read is validated.
+    if let Some(value) = find_option(map, "sep").or_else(|| find_option(map, "delimiter"))
+        && value.is_empty()
+    {
+        return exec_err!("Delimiter cannot be empty");
+    }
+    for option in INT_OPTIONS {
+        if let Some(value) = find_option(map, option)
+            && value.parse::<i32>().is_err()
+        {
+            return exec_err!("{option} should be an integer. Found {value}.");
+        }
+    }
+    // `inputBufferSize` (`.toInt`) and `samplingRatio` (`.toDouble`) both report the raw value.
+    for option in TO_INT_OPTIONS {
+        if let Some(value) = find_option(map, option)
+            && value.parse::<i32>().is_err()
+        {
+            return exec_err!("For input string: \"{value}\"");
+        }
+    }
+    if let Some(value) = find_option(map, SAMPLING_RATIO_OPTION)
+        && value.parse::<f64>().is_err()
+    {
+        return exec_err!("For input string: \"{value}\"");
+    }
+    if let Some(value) = find_option(map, UNESCAPED_QUOTE_HANDLING_OPTION)
+        && !UNESCAPED_QUOTE_HANDLING_VALUES
+            .iter()
+            .any(|x| fold_eq(value, x))
+    {
+        // Spark upper-cases the value before the lookup, so it surfaces the failure of the
+        // underlying parser's `valueOf` with the upper-cased name.
+        let value = value.to_uppercase();
+        return exec_err!(
+            "No enum constant com.univocity.parsers.csv.UnescapedQuoteHandling.{value}"
+        );
+    }
+    // The writer requires at most one Unicode character, which Spark measures as at most two UTF-16
+    // code units — so `ab` (two units) is accepted but `abc` (three) is not. The reader ignores it.
+    if function == CsvFunction::To
+        && let Some(value) = find_option(map, LINE_SEP_OPTION)
+    {
+        if value.is_empty() {
             return exec_err!("requirement failed: '{LINE_SEP_OPTION}' cannot be an empty string.");
         }
-    } else if key.eq_ignore_ascii_case(MODE_OPTION) {
-        // An unrecognized mode is not an error: Spark warns and falls back to PERMISSIVE.
-        if function == CsvFunction::From && value.eq_ignore_ascii_case(DROP_MALFORMED_MODE) {
+        if value.encode_utf16().count() > 2 {
             return exec_err!(
-                "The function `from_csv` doesn't support the {DROP_MALFORMED_MODE} mode. Acceptable modes are PERMISSIVE and FAILFAST."
+                "requirement failed: '{LINE_SEP_OPTION}' can contain only 1 character."
             );
         }
+    }
+    // An unrecognized mode is not an error: Spark warns and falls back to PERMISSIVE. Only
+    // `from_csv` rejects `DROPMALFORMED`.
+    if function == CsvFunction::From
+        && let Some(value) = find_option(map, MODE_OPTION)
+        && fold_eq(value, DROP_MALFORMED_MODE)
+    {
+        return exec_err!(
+            "The function `from_csv` doesn't support the {DROP_MALFORMED_MODE} mode. Acceptable modes are PERMISSIVE and FAILFAST."
+        );
     }
     Ok(())
 }
 
-/// Parses a boolean CSV option the way Spark's `CSVOptions.getBool` does: case-insensitively,
-/// accepting only `true` and `false`, with no surrounding whitespace tolerated.
+/// Case-insensitive comparison matching Java's `String.equalsIgnoreCase`, which folds non-ASCII
+/// letters too — Spark accepts `multiLine='falſe'` because `ſ` (U+017F) upper-cases to `S`. The
+/// ASCII fast path keeps the common value allocation-free; only a non-ASCII value pays the fold.
+fn fold_eq(value: &str, target: &str) -> bool {
+    value.eq_ignore_ascii_case(target)
+        || (!value.is_ascii() && value.to_uppercase() == target.to_uppercase())
+}
+
+/// Parses a boolean CSV option the way Spark's `CSVOptions.getBool` does: it lower-cases with
+/// `Locale.ROOT` and compares to `true`/`false`. That is ASCII-only folding — `ſ` (U+017F) does
+/// NOT lower-case to `s`, so `header='falſe'` is rejected, unlike the `toBoolean` options, which
+/// upper-case-fold and accept it. `eq_ignore_ascii_case`, not [`fold_eq`], matches this.
 pub(super) fn parse_bool_option(
     value: Option<&str>,
     option_name: &str,
@@ -202,16 +266,5 @@ pub(super) fn parse_bool_option(
         Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
         Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
         Some(_) => exec_err!("{option_name} flag can be true or false."),
-    }
-}
-
-/// Validates `multiLine`, which Spark reads with Scala's `String.toBoolean`. The accepted values
-/// are the same as [`parse_bool_option`], but the error quotes the offending value instead of
-/// naming the option. No CSV expression function honors the flag, so only the value is checked.
-fn validate_multi_line_option(value: &str) -> Result<()> {
-    if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
-        Ok(())
-    } else {
-        exec_err!("For input string: \"{value}\"")
     }
 }

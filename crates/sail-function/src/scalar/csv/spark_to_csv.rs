@@ -10,7 +10,9 @@ use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Si
 use datafusion_expr_common::signature::Volatility;
 
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::csv::options::{CsvFunction, find_option, parse_bool_option, validate_options};
+use crate::scalar::csv::options::{
+    CsvFunction, find_option, parse_bool_option, reject_null_entries, validate_options,
+};
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 #[cfg(test)]
@@ -76,16 +78,8 @@ impl SparkToCsvOptions {
             .unwrap_or(Self::SEP_DEFAULT)
             .to_string();
 
-        let quote = parse_char_option(
-            find_option(map, Self::QUOTE_OPTION),
-            Self::QUOTE_OPTION,
-            Self::QUOTE_DEFAULT,
-        )?;
-        let escape = parse_char_option(
-            find_option(map, Self::ESCAPE_OPTION),
-            Self::ESCAPE_OPTION,
-            Self::ESCAPE_DEFAULT,
-        )?;
+        let quote = parse_char_option(find_option(map, Self::QUOTE_OPTION), Self::QUOTE_DEFAULT);
+        let escape = parse_char_option(find_option(map, Self::ESCAPE_OPTION), Self::ESCAPE_DEFAULT);
         let escape_quotes = parse_bool_option(
             find_option(map, Self::ESCAPE_QUOTES_OPTION),
             Self::ESCAPE_QUOTES_OPTION,
@@ -261,6 +255,11 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
             ))
         })?;
 
+    let num_rows = struct_array.len();
+
+    // Option VALUES are validated lazily (inside `from_map`), so a bad option is not seen when
+    // every input struct is NULL; a structurally invalid map (NULL key/value) is rejected eagerly.
+    // See F2 in the #2255 review.
     let options: SparkToCsvOptions = if let Some(opts) = args.get(1) {
         let map = opts.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Execution(format!(
@@ -268,12 +267,16 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                 SparkToCsv::TO_CSV_NAME
             ))
         })?;
-        SparkToCsvOptions::from_map(map)?
+        reject_null_entries(map, CsvFunction::To)?;
+        if struct_array.null_count() < num_rows {
+            SparkToCsvOptions::from_map(map)?
+        } else {
+            SparkToCsvOptions::default()
+        }
     } else {
         SparkToCsvOptions::default()
     };
 
-    let num_rows = struct_array.len();
     let fields = struct_array.fields();
     let columns = struct_array.columns();
 
@@ -734,17 +737,13 @@ fn format_float64(value: f64) -> String {
     }
 }
 
-fn parse_char_option(value: Option<&str>, option_name: &str, default: char) -> Result<char> {
+/// Reads a single-character CSV option. `validate_options` already rejects a value longer than one
+/// character (with Spark's message), so an empty value maps to `'\0'` and anything else to its
+/// first character; this never has to error.
+fn parse_char_option(value: Option<&str>, default: char) -> char {
     match value {
-        None => Ok(default),
-        Some(value) => {
-            let mut chars = value.chars();
-            match (chars.next(), chars.next()) {
-                (None, _) => Ok('\0'),
-                (Some(ch), None) => Ok(ch),
-                _ => exec_err!("CSV option `{option_name}` must be a single character"),
-            }
-        }
+        None => default,
+        Some(value) => value.chars().next().unwrap_or('\0'),
     }
 }
 

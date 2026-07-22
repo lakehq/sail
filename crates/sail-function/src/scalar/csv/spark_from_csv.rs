@@ -21,7 +21,9 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::csv::options::{CsvFunction, find_option, validate_options};
+use crate::scalar::csv::options::{
+    CsvFunction, find_option, reject_null_entries, validate_options,
+};
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -230,8 +232,18 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         schema_str.value(0)
     };
 
+    // Spark validates option VALUES lazily, inside the non-null evaluation path, so a bad option
+    // is not seen when every input row is NULL. A structurally invalid map (a NULL key or value)
+    // is still rejected eagerly, because Spark fails that during map conversion. See F2 in the
+    // #2255 review.
     let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
-        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))?
+        let map = downcast_arg!(options, MapArray);
+        reject_null_entries(map, CsvFunction::From)?;
+        if array.null_count() < array.len() {
+            SparkFromCSVOptions::from_map(map)?
+        } else {
+            SparkFromCSVOptions::default()
+        }
     } else {
         SparkFromCSVOptions::default()
     };

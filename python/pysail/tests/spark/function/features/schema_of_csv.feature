@@ -1,3 +1,4 @@
+@csv
 Feature: schema_of_csv infers a CSV schema from a literal row
 
   Scenario: schema_of_csv infers integer and string columns
