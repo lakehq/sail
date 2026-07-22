@@ -24,6 +24,22 @@ use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
 
 use crate::error::generic_exec_err;
 
+/// Validates, at planning time, that a predicate lambda returns `BOOLEAN`.
+///
+/// Spark declares `functionType = BooleanType` for `filter`/`exists`/`forall` and
+/// rejects a non-boolean body during analysis (regardless of whether execution
+/// would ever evaluate it). An untyped `NULL` body carries the `Null` type and is
+/// coerced to boolean, so it is allowed.
+pub(crate) fn require_boolean_predicate(name: &str, return_type: &DataType) -> Result<()> {
+    match return_type {
+        DataType::Boolean | DataType::Null => Ok(()),
+        other => plan_err!(
+            "cannot resolve `{name}`: The second parameter requires the \"BOOLEAN\" type, \
+             however the lambda body has the type \"{other}\""
+        ),
+    }
+}
+
 /// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
 pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
@@ -100,6 +116,20 @@ pub(crate) fn extract_list_values(
     }
 
     Ok(ListValuesResult::Values(values))
+}
+
+/// Reinterprets a `Null`-typed lambda result as a boolean that is NULL everywhere.
+///
+/// An untyped `NULL` body (`x -> NULL`, or a bare `NULL` in a lambda position)
+/// carries the `Null` type rather than the boolean the predicate functions
+/// require. Spark coerces it to the required type, so the predicate is simply
+/// NULL for every element; without this the downcast below rejects it.
+pub(crate) fn coerce_null_lambda_result(result: ArrayRef) -> ArrayRef {
+    if result.data_type() == &DataType::Null {
+        Arc::new(BooleanArray::new_null(result.len()))
+    } else {
+        result
+    }
 }
 
 /// Evaluates a boolean lambda element by element, stopping each row at the first

@@ -289,3 +289,108 @@ Feature: aggregate higher-order function
         SELECT reduce(array(1, 2, 3), 0, acc -> acc + 1) AS result
         """
       Then query error (?i)lambda function
+
+  Rule: Non-lambda expression in place of a lambda
+
+    Scenario: A constant merge lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | 9      |
+
+    Scenario: A constant finish lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, (acc, x) -> acc + x, 99) AS result
+        """
+      Then query result
+        | result |
+        | 99     |
+
+    Scenario: Both lambdas constant
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 9, 99) AS result
+        """
+      Then query result
+        | result |
+        | 99     |
+
+    Scenario: A merge lambda that only references an outer column
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | 7      |
+
+    Scenario: The zero wins over a constant merge lambda on an empty array
+      When query
+        """
+        SELECT aggregate(array(), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: A constant merge lambda over a NULL array
+      When query
+        """
+        SELECT aggregate(CAST(NULL AS ARRAY<INT>), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: A constant merge lambda over an array column resolves per row
+      When query
+        """
+        SELECT aggregate(c, 0, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | 9      |
+        | 0      |
+        | NULL   |
+
+    @sail-bug
+    Scenario: A merge lambda whose type does not match the accumulator is still an error
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 'x') AS result
+        """
+      Then query error The third parameter requires the
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL merge lambda body
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: An untyped NULL in place of the merge lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: The zero survives an untyped NULL merge lambda on an empty array
+      When query
+        """
+        SELECT aggregate(array(), 0, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | 0      |

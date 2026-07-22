@@ -1,4 +1,5 @@
 @lambda_hof
+@filter
 Feature: array filter with lambda
 
   Rule: Filter array elements using lambda predicates
@@ -803,3 +804,140 @@ Feature: array filter with lambda
         SELECT filter(map('a', 1), x -> x > 0) AS result
         """
       Then query error .*
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario: A constant true predicate keeps every element
+      When query
+        """
+        SELECT filter(array(1, 2), true) AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    Scenario: A constant false predicate drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), false) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: A constant NULL predicate drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: A predicate that only references an outer column
+      When query
+        """
+        SELECT filter(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+    Scenario: A constant predicate over an empty array
+      When query
+        """
+        SELECT filter(array(), true) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: A constant predicate over a NULL array
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), true) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: A constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT filter(c, true) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1, 2] |
+        | []     |
+        | NULL   |
+
+    Scenario: A non-boolean constant is still a type error
+      When query
+        """
+        SELECT filter(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: A subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT filter(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: An untyped NULL in place of the lambda drops every element
+      When query
+        """
+        SELECT filter(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT filter(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, filter(array(1), 1), array(0)) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    Scenario: filter with a seeded rand keeps elements per row in order
+      When query
+        """
+        SELECT filter(c, rand(42) > 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [1]    |
+        | [3]    |

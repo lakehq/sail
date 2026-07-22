@@ -315,16 +315,6 @@ Feature: forall higher-order function
         """
       Then query error .*
 
-    @sail-bug
-    Scenario: a constant boolean is accepted in place of a lambda
-      When query
-        """
-        SELECT forall(array(1, 2), true) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
   Rule: Array borne by a column rather than a literal
 
     Scenario: distinct arrays per row are not broadcast from the first row
@@ -481,7 +471,6 @@ Feature: forall higher-order function
 
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null array literal yields a non-nullable boolean
       When query
         """
@@ -504,3 +493,134 @@ Feature: forall higher-order function
         root
          |-- result: boolean (nullable = true)
         """
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario: a constant true predicate
+      When query
+        """
+        SELECT forall(array(1, 2), true) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: a constant false predicate
+      When query
+        """
+        SELECT forall(array(1, 2), false) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: a constant NULL predicate
+      When query
+        """
+        SELECT forall(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: a predicate that only references an outer column
+      When query
+        """
+        SELECT forall(array(1, 2), v > 0) AS result FROM (SELECT 5 AS v) t
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: the empty array wins over a constant false predicate
+      When query
+        """
+        SELECT forall(array(), false) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: a NULL array wins over a constant false predicate
+      When query
+        """
+        SELECT forall(CAST(NULL AS ARRAY<INT>), false) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: a constant predicate over an array column resolves per row
+      When query
+        """
+        SELECT forall(c, false) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+        | NULL   |
+
+    Scenario: a non-boolean constant is still a type error
+      When query
+        """
+        SELECT forall(array(1, 2), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: Untyped NULL body
+
+    Scenario: an untyped NULL lambda body
+      When query
+        """
+        SELECT forall(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: an untyped NULL in place of the lambda
+      When query
+        """
+        SELECT forall(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: A stateful predicate is evaluated per element in order
+
+    @sail-bug
+    Scenario: forall with a seeded rand short-circuits per row
+      When query
+        """
+        SELECT forall(c, rand(42) < 0.6) AS result FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | true   |
+
+  Rule: The predicate type is validated at analysis time
+
+    Scenario: a non-boolean constant over an empty array is still rejected
+      When query
+        """
+        SELECT forall(array(), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean constant over a NULL array is still rejected
+      When query
+        """
+        SELECT forall(CAST(NULL AS ARRAY<INT>), 1) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type
+
+    Scenario: a non-boolean predicate is rejected even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, forall(array(1), 1), false) AS result
+        """
+      Then query error The second parameter requires the "BOOLEAN" type

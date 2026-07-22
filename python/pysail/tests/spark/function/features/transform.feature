@@ -590,3 +590,152 @@ Feature: transform higher-order function
       Then query result
         | result          |
         | [3.0, 5.0, 7.0] |
+
+  Rule: Non-lambda expression in place of the lambda
+
+    Scenario: A constant integer body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), 9) AS result
+        """
+      Then query result
+        | result |
+        | [9, 9] |
+
+    Scenario: A constant string body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), 'x') AS result
+        """
+      Then query result
+        | result   |
+        | [x, x]   |
+
+    Scenario: A constant NULL body replaces every element
+      When query
+        """
+        SELECT transform(array(1, 2), CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: A constant boolean body is accepted because the body type is unconstrained
+      When query
+        """
+        SELECT transform(array(1, 2), true) AS result
+        """
+      Then query result
+        | result       |
+        | [true, true] |
+
+    Scenario: A body that only references an outer column
+      When query
+        """
+        SELECT transform(array(1, 2), v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | [7, 7] |
+
+    Scenario: A constant body over an empty array
+      When query
+        """
+        SELECT transform(array(), 9) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: A constant body over a NULL array
+      When query
+        """
+        SELECT transform(CAST(NULL AS ARRAY<INT>), 9) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: A constant body over an array column resolves per row
+      When query
+        """
+        SELECT transform(c, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [9, 9] |
+        | []     |
+        | NULL   |
+
+  Rule: Non-deterministic non-lambda body is evaluated per element
+    # The wrapped non-lambda body must run once per element, not be folded to a
+    # single value and broadcast. Asserted through deterministic properties
+    # because the values themselves are random.
+
+    Scenario: A rand() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), rand()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A uuid() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), uuid()))) = 5 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: A randn() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Every rand() element falls within the unit interval
+      When query
+        """
+        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body
+      When query
+        """
+        SELECT transform(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: An untyped NULL in place of the lambda
+      When query
+        """
+        SELECT transform(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+  Rule: Non-lambda wrapping must not capture outer lambda variables
+
+    Scenario: a generated lambda parameter does not shadow an outer variable of the same name
+      When query
+        """
+        SELECT transform(array(1), __sail_unused_lambda_param_0 -> transform(array(2), __sail_unused_lambda_param_0)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
