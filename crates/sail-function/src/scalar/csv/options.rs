@@ -112,7 +112,7 @@ pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
             Some(entry_key) if entry_key.eq_ignore_ascii_case(key) => Some(entry_value),
             _ => None,
         })
-        .last()
+        .next_back()
         .flatten()
 }
 
