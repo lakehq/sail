@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, try_cast};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
@@ -10,21 +10,41 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+pub(crate) fn cast_to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
     let data_type = arg
         .to_field(input.function_context.schema)?
         .1
         .data_type()
         .clone();
+    // Unwrap dictionary-encoded strings so they parse through `SparkDate` like plain strings.
+    let (arg, data_type) = match data_type {
+        DataType::Dictionary(_, value_type)
+            if matches!(
+                value_type.as_ref(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) =>
+        {
+            let value_type = value_type.as_ref().clone();
+            let arg = if is_try {
+                try_cast(arg, value_type.clone())
+            } else {
+                cast(arg, value_type.clone())
+            };
+            (arg, value_type)
+        }
+        _ => (arg, data_type),
+    };
     if matches!(
         data_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkDate::new(false))),
+            func: Arc::new(ScalarUDF::from(SparkDate::new(is_try))),
             args: vec![arg],
         }))
+    } else if is_try {
+        Ok(try_cast(arg, DataType::Date32))
     } else {
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
@@ -91,7 +111,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("binary", F::cast(DataType::Binary)),
         ("boolean", F::cast(DataType::Boolean)),
         ("cast", F::unknown("cast")),
-        ("date", F::custom(cast_to_date)),
+        ("date", F::custom(|input| cast_to_date(input, false))),
         ("decimal", F::cast(DataType::Decimal128(10, 0))),
         ("double", F::cast(DataType::Float64)),
         ("float", F::cast(DataType::Float32)),

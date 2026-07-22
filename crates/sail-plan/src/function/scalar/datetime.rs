@@ -13,6 +13,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
@@ -345,25 +346,49 @@ fn to_chrono_fmt(format: Expr) -> Expr {
     ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }
 
-fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
+        crate::function::scalar::conversion::cast_to_date(input, is_try)
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
         let expr_type = expr.get_type(input.function_context.schema);
         if let Ok(DataType::Timestamp(_, _)) = expr_type {
             let expr = expr_fn::to_local_time(vec![expr]);
-            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+            return Ok(if is_try {
+                try_cast(expr, DataType::Date32)
+            } else {
+                cast(expr, DataType::Date32)
+            }); // In case of data type timestamp, ignore format
         }
         let expr = match expr_type {
+            Ok(DataType::Dictionary(_, value_type))
+                if matches!(
+                    value_type.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) =>
+            {
+                if is_try {
+                    try_cast(expr, value_type.as_ref().clone())
+                } else {
+                    cast(expr, value_type.as_ref().clone())
+                }
+            }
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
         let format = to_chrono_fmt(format);
-        Ok(expr_fn::to_date(vec![expr, format]))
+        if is_try {
+            Ok(ScalarUDF::from(SparkDate::new(true)).call(vec![expr, format]))
+        } else {
+            Ok(expr_fn::to_date(vec![expr, format]))
+        }
     } else {
-        Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
+        Err(PlanError::invalid(if is_try {
+            "try_to_date requires 1 or 2 arguments"
+        } else {
+            "to_date requires 1 or 2 arguments"
+        }))
     }
 }
 
@@ -1141,7 +1166,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("timestamp_add", F::custom(timestampadd)),
         ("timestampdiff", F::custom(datediff)),
         ("timestamp_diff", F::custom(datediff)),
-        ("to_date", F::custom(to_date)),
+        ("to_date", F::custom(|input| to_date(input, false))),
+        ("try_to_date", F::custom(|input| to_date(input, true))),
         ("to_time", F::custom(to_time)),
         ("try_to_time", F::custom(try_to_time)),
         (
