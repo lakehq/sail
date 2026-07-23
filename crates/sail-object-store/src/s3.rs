@@ -161,7 +161,7 @@ pub fn parse_s3_url(
     );
 
     match scheme {
-        "s3" | "s3a" => {
+        "s3" | "s3a" | "oss" => {
             builder = builder.with_bucket_name(host);
             if let Some(bucket_prefix) = host.strip_suffix("--x-s3")
                 && let Some(_bucket_az) = bucket_prefix.rsplit_once("--")
@@ -219,6 +219,20 @@ pub fn parse_s3_url(
                         builder = builder.with_bucket_name(bucket);
                     }
                 }
+                [bucket, "s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder.with_region(region.trim_start_matches("oss-"));
+                    builder = builder.with_endpoint(format!("{scheme}://{host}"));
+                    builder = builder.with_virtual_hosted_style_request(true);
+                }
+                ["s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
+                    builder = builder.with_region(region.trim_start_matches("oss-"));
+                    builder = builder.with_endpoint(format!("{scheme}://{host}"));
+                    builder = builder.with_virtual_hosted_style_request(false);
+                    if let Some(bucket) = first_path_segment {
+                        builder = builder.with_bucket_name(bucket);
+                    }
+                }
                 [bucket, _s3express_zone_id, region, "amazonaws", "com"] => {
                     builder = builder.with_bucket_name(bucket);
                     builder = builder.with_region(region);
@@ -245,4 +259,53 @@ pub fn parse_s3_url(
     };
 
     Ok(builder)
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_oss_url_sets_bucket() {
+        let url = Url::parse("oss://bucket/path/to/data").unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_aliyun_oss_virtual_hosted_endpoint() {
+        let url = Url::parse("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com/path/to/data")
+            .unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some("cn-hangzhou".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_aliyun_oss_path_style_endpoint() {
+        let url = Url::parse("https://s3.oss-cn-hangzhou.aliyuncs.com/bucket/path/to/data")
+            .unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some("cn-hangzhou".to_string())
+        );
+    }
 }
