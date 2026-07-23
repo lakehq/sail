@@ -181,6 +181,8 @@ pub struct ClusterConfig {
     pub driver_external_host: String,
     pub driver_external_port: u16,
     #[serde(skip_serializing)]
+    pub driver_id: u64,
+    #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
     pub worker_listen_port: u16,
@@ -665,6 +667,7 @@ impl ClusterConfigEnv {
         ENABLE_TLS,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
+        DRIVER_ID,
         WORKER_ID,
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,

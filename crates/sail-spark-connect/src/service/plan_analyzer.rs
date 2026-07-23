@@ -114,10 +114,18 @@ pub(crate) async fn handle_analyze_is_streaming(
 }
 
 pub(crate) async fn handle_analyze_input_files(
-    _ctx: &SessionContext,
-    _request: InputFilesRequest,
+    ctx: &SessionContext,
+    request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    Err(SparkError::todo("handle analyze input files"))
+    let InputFilesRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let spark = ctx.extension::<SparkSession>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, .. } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
+    let files = sail_data_source::listing::input_files::input_files(ctx, plan).await?;
+    Ok(InputFilesResponse { files })
 }
 
 pub(crate) async fn handle_analyze_spark_version(

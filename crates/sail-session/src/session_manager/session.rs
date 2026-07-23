@@ -10,6 +10,7 @@ use futures::FutureExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObservable};
+use sail_execution::DriverId;
 use tokio::sync::oneshot;
 
 use crate::session_manager::event::SessionHistory;
@@ -19,6 +20,7 @@ pub struct ServerSession {
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub state: ServerSessionState,
+    pub driver_id: Option<DriverId>,
 }
 
 impl ServerSession {
