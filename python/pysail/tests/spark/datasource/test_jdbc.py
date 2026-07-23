@@ -15,8 +15,21 @@ from pysail.testing.spark.utils.common import pyspark_version
 
 pytestmark = pytest.mark.integration
 
-if pyspark_version() < (4, 1):
-    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
+try:
+    from pyspark.sql.datasource import DataSourceArrowWriter  # noqa: F401  (Spark 4.0+)
+except ImportError:
+    pytest.skip("JDBC data source requires the PySpark Python DataSource API (4.0+)", allow_module_level=True)
+
+# Sail's engine-level filter pushdown (crates/sail-data-source/.../filter.rs) unconditionally
+# constructs `pyspark.sql.datasource` filter class instances (EqualTo, IsNotNull, etc.) for any
+# `.filter()`/join predicate against a Python data source, regardless of what the data source's
+# own `pushFilters()` does with them. Those classes are 4.1-only, so any test that filters a JDBC
+# DataFrame fails on 4.0 with an AttributeError raised from Sail's Rust side — this is a Sail
+# engine limitation, not something `jdbc.py` can guard against.
+_requires_pushdown_classes = pytest.mark.skipif(
+    pyspark_version() < (4, 1),
+    reason="Sail's engine-level filter pushdown requires PySpark 4.1+ filter classes",
+)
 
 _PG_IMAGE = "postgres:16-alpine"
 _PG_USER = "testuser"
@@ -228,6 +241,7 @@ def test_error_nonexistent_table(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_null_values_handling(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     null_ages = df.filter("age IS NULL").collect()
@@ -244,6 +258,7 @@ def test_null_values_handling(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_empty_table(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "empty_table").options(**jdbc_opts).load()
     assert df.count() == 0
@@ -255,6 +270,7 @@ def test_empty_table(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_large_dataset(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
     assert df.count() == 10000  # noqa: PLR2004
@@ -266,6 +282,7 @@ def test_large_dataset(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_unicode_strings(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     assert len(df.filter("name = '张伟'").collect()) == 1
@@ -279,6 +296,7 @@ def test_unicode_strings(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_data_types(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "data_types_test").options(**jdbc_opts).load()
     row = df.filter("id = 1").collect()[0]
@@ -301,6 +319,7 @@ def test_data_types(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_join_operations(spark, jdbc_opts):
     users = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     orders = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load()
@@ -335,6 +354,7 @@ def test_join_operations(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_complex_filters(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
 
@@ -356,6 +376,7 @@ def test_complex_filters(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_partition_with_nulls(spark, jdbc_opts):
     df = (
         spark.read.format("jdbc")
@@ -376,6 +397,7 @@ def test_partition_with_nulls(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_sql_injection_filter_value(spark, jdbc_opts):
     from pyspark.sql.functions import col
 
@@ -522,104 +544,561 @@ def test_custom_schema_case_insensitive(spark, jdbc_opts):
     assert "string" in schema_map.get("name", "") or "utf8" in schema_map.get("name", "")
 
 
-# ---------------------------------------------------------------------------
-# Unit tests — no Spark or DB required
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Writer integration tests — require Spark + Postgres container
+# ===========================================================================
 
 
-def test_filter_to_sql_unit():
-    from pyspark.sql.datasource import (
-        EqualTo,
-        GreaterThan,
-        GreaterThanOrEqual,
-        LessThan,
-        LessThanOrEqual,
+@pytest.fixture(scope="module")
+def pg_dsn(pg_container):
+    """Return a raw psycopg DSN for the test container."""
+    host = pg_container.get_container_host_ip()
+    port = pg_container.get_exposed_port(5432)
+    return f"postgresql://{_PG_USER}:{_PG_PASSWORD}@{host}:{port}/{_PG_DB}"
+
+
+def _managed_table(pg_dsn, table, ddl):
+    """Create *table* via *ddl*, yield its name, and drop it afterwards.
+
+    Shared scaffold for the write-target fixtures; ``ddl`` is the only thing that varies.
+    """
+    import psycopg
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'DROP TABLE IF EXISTS "{table}"')
+        cur.execute(ddl)
+    try:
+        yield table
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{table}"')
+
+
+@pytest.fixture
+def write_table(pg_dsn, request):
+    """Empty write target (``id INTEGER, name TEXT, score DOUBLE PRECISION``).
+
+    Name via ``request.param``: ``@pytest.mark.parametrize("write_table", ["my_table"], indirect=True)``.
+    """
+    yield from _managed_table(
+        pg_dsn, request.param, f'CREATE TABLE "{request.param}" (id INTEGER, name TEXT, score DOUBLE PRECISION)'
     )
 
-    from pysail.spark.datasource.jdbc import _filter_to_sql
 
-    cases = [
-        (EqualTo(("age",), 28), '"age" = 28'),
-        (GreaterThan(("score",), 9.0), '"score" > 9.0'),
-        (GreaterThanOrEqual(("id",), 1), '"id" >= 1'),
-        (LessThan(("age",), 40), '"age" < 40'),
-        (LessThanOrEqual(("age",), 35), '"age" <= 35'),
-        (EqualTo(("name",), "Alice"), "\"name\" = 'Alice'"),
-        (EqualTo(("name",), "O'Reilly"), "\"name\" = 'O''Reilly'"),
-        (EqualTo(("active",), True), '"active" = TRUE'),
-        (EqualTo(("active",), False), '"active" = FALSE'),
-    ]
+@pytest.fixture
+def serial_write_table(pg_dsn, request):
+    """Write target with a SERIAL primary key.
 
-    for f, expected in cases:
-        result = _filter_to_sql(f)
-        assert result == expected, f"_filter_to_sql({f!r}) = {result!r}, expected {expected!r}"
-
-
-def test_jdbc_url_to_dsn_unit():
-    from pysail.spark.datasource.jdbc import _jdbc_url_to_dsn
-
-    assert _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", None, None) == "postgresql://localhost:5432/db"
-    assert (
-        _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", "alice", None) == "postgresql://alice@localhost:5432/db"
-    )
-    assert (
-        _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", "alice", "secret")
-        == "postgresql://alice:secret@localhost:5432/db"
+    Exercises the atomic swap's owned-sequence handling: LIKE INCLUDING ALL ties the
+    staging's default to the target's sequence, which must be detached before DROP and
+    re-synced onto the swapped-in table.
+    """
+    yield from _managed_table(
+        pg_dsn, request.param, f'CREATE TABLE "{request.param}" (id SERIAL PRIMARY KEY, name TEXT)'
     )
 
-    result = _jdbc_url_to_dsn("jdbc:postgresql://h:5432/db", "u", "p@ss/w0rd")
-    assert "p%40ss%2Fw0rd" in result
 
-    with pytest.raises(ValueError, match="Invalid JDBC URL"):
-        _jdbc_url_to_dsn("postgresql://localhost/db", None, None)
+def _read_pg_table(spark, jdbc_opts, table: str):
+    """Helper: read a table back via the JDBC data source."""
+    return spark.read.format("jdbc").option("dbtable", table).options(**jdbc_opts).load()
 
 
-def test_parse_custom_schema_unit():
+@pytest.mark.parametrize("write_table", ["wt_append_basic"], indirect=True)
+def test_write_append_basic(spark, jdbc_opts, write_table):
+    """Append-mode write round-trips rows correctly."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    data = [(1, "Alice", 9.5), (2, "Bob", 7.2), (3, "Charlie", 8.8)]
+    df = spark.createDataFrame(data, schema)
+
+    df.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 3  # noqa: PLR2004
+    names = {r.name for r in result.collect()}
+    assert names == {"Alice", "Bob", "Charlie"}
+
+
+def test_write_missing_target_raises(spark, jdbc_opts):
+    """Writing to a non-existent target fails fast with a clear message (no auto-create)."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    df = spark.createDataFrame([(1, "Alice")], schema)
+    with pytest.raises(Exception, match="does not exist"):
+        df.write.format("jdbc").option("dbtable", "no_such_table_xyz").options(**jdbc_opts).mode("append").save()
+
+
+@pytest.mark.parametrize("write_table", ["wt_overwrite"], indirect=True)
+def test_write_overwrite_replaces(spark, jdbc_opts, write_table):
+    """Overwrite-mode write replaces all existing rows."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    first = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], schema)
+    second = spark.createDataFrame([(3, "Charlie", 8.8)], schema)
+
+    first.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 2  # noqa: PLR2004
+
+    second.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("overwrite").save()
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 1
+    assert result.collect()[0].name == "Charlie"
+
+
+@pytest.mark.parametrize("write_table", ["wt_batched_overwrite"], indirect=True)
+def test_write_overwrite_small_batchsize_writes_all_rows(spark, jdbc_opts, write_table):
+    """A batchsize smaller than the partition chunks the ADBC ingest yet writes every row."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    df = spark.createDataFrame([(i, f"n{i}") for i in range(1, 6)], schema)
+
+    # batchsize 2 over 5 rows exercises the chunk loop incl. a partial final chunk.
+    df.write.format("jdbc").option("dbtable", write_table).option("batchsize", "2").options(**jdbc_opts).mode(
+        "overwrite"
+    ).save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 5  # noqa: PLR2004
+    assert {r.id for r in result.collect()} == {1, 2, 3, 4, 5}
+
+
+@pytest.mark.parametrize("write_table", ["wt_empty_df"], indirect=True)
+def test_write_empty_df(spark, jdbc_opts, write_table):
+    """Writing an empty DataFrame leaves the table empty."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    empty_df = spark.createDataFrame([], schema)
+    empty_df.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 0
+
+
+@pytest.mark.parametrize("write_table", ["wt_nulls"], indirect=True)
+def test_write_null_values(spark, jdbc_opts, write_table):
+    """Rows with NULL values survive the write round-trip."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    data = [(1, None, 9.5), (2, "Bob", None)]
+    df = spark.createDataFrame(data, schema)
+    df.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table).collect()
+    assert len(result) == 2  # noqa: PLR2004
+    assert any(r.name is None for r in result)
+    assert any(r.score is None for r in result)
+
+
+@pytest.mark.parametrize("write_table", ["wt_append_twice"], indirect=True)
+def test_write_append_twice(spark, jdbc_opts, write_table):
+    """Two consecutive appends accumulate rows."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    df = spark.createDataFrame([(1, "Alice", 9.5)], schema)
+    df.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+    df.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 2  # noqa: PLR2004
+
+
+# ===========================================================================
+# Overwrite-mode integration tests
+# ===========================================================================
+
+
+@pytest.mark.parametrize("write_table", ["wt_atomic_overwrite"], indirect=True)
+def test_write_overwrite_atomic_replaces(spark, jdbc_opts, write_table):
+    """atomic overwrite replaces all existing rows atomically."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    first = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], schema)
+    second = spark.createDataFrame([(3, "Charlie", 8.8)], schema)
+
+    first.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 2  # noqa: PLR2004
+
+    second.write.format("jdbc").option("dbtable", write_table).option("overwriteMode", "atomic").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 1
+    assert result.collect()[0].name == "Charlie"
+
+
+@pytest.mark.parametrize("serial_write_table", ["wt_atomic_serial"], indirect=True)
+def test_write_overwrite_atomic_serial_sequence(spark, jdbc_opts, pg_dsn, serial_write_table):
+    """atomic overwrite works on a serial/owned-sequence column and leaves the sequence
+    usable and past the loaded max. Regression: DROP was refused because the staging
+    default depended on the target's owned sequence.
+    """
+    import psycopg
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    first = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema)
+    second = spark.createDataFrame([(10, "Charlie"), (11, "Dave")], schema)
+
+    first.write.format("jdbc").option("dbtable", serial_write_table).options(**jdbc_opts).mode("append").save()
+    second.write.format("jdbc").option("dbtable", serial_write_table).option("overwriteMode", "atomic").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    result = _read_pg_table(spark, jdbc_opts, serial_write_table)
+    assert sorted(r.name for r in result.collect()) == ["Charlie", "Dave"]
+
+    # The serial default must still work and hand out an id past the loaded max (11).
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'INSERT INTO "{serial_write_table}" (name) VALUES (%s) RETURNING id', ("Eve",))  # noqa: S608
+        new_id = cur.fetchone()[0]
+    assert new_id > 11  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("write_table", ["wt_truncate_overwrite"], indirect=True)
+def test_write_overwrite_truncate_replaces(spark, jdbc_opts, write_table):
+    """truncate overwrite replaces all existing rows."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    first = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], schema)
+    second = spark.createDataFrame([(3, "Charlie", 8.8)], schema)
+
+    first.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 2  # noqa: PLR2004
+
+    second.write.format("jdbc").option("dbtable", write_table).option("overwriteMode", "truncate").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 1
+    assert result.collect()[0].name == "Charlie"
+
+
+@pytest.mark.parametrize("write_table", ["wt_atomic_empty"], indirect=True)
+def test_write_atomic_empty_df(spark, jdbc_opts, write_table):
+    """atomic overwrite with empty df leaves table empty."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    # Seed the table with one row first
+    seed = spark.createDataFrame([(1, "Seed", 1.0)], schema)
+    seed.write.format("jdbc").option("dbtable", write_table).options(**jdbc_opts).mode("append").save()
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 1
+
+    # Overwrite with empty
+    empty_df = spark.createDataFrame([], schema)
+    empty_df.write.format("jdbc").option("dbtable", write_table).option("overwriteMode", "atomic").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    assert _read_pg_table(spark, jdbc_opts, write_table).count() == 0
+
+
+@pytest.mark.parametrize("write_table", ["wt_atomic_nulls"], indirect=True)
+def test_write_atomic_null_values(spark, jdbc_opts, write_table):
+    """atomic overwrite with nulls survives round-trip."""
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+    data = [(1, None, 9.5), (2, "Bob", None)]
+    df = spark.createDataFrame(data, schema)
+    df.write.format("jdbc").option("dbtable", write_table).option("overwriteMode", "atomic").options(**jdbc_opts).mode(
+        "overwrite"
+    ).save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table).collect()
+    assert len(result) == 2  # noqa: PLR2004
+    assert any(r.name is None for r in result)
+    assert any(r.score is None for r in result)
+
+
+@pytest.mark.parametrize("write_table", ["wt_concurrent_atomic"], indirect=True)
+def test_concurrent_atomic_overwrites_no_corruption(pg_dsn, write_table):
+    """Two concurrent atomic overwrites to the same table do not mix data.
+
+    This test verifies the run_id fix: each PgWriteEngine generates its own
+    run_id so staging table names are distinct even when targeting the same table.
+    Both jobs write, commit sequentially; last commit wins. The winner's data
+    is intact — no mixing of rows from both jobs.
+    """
+    import threading
+
+    import psycopg
     import pyarrow as pa
 
-    from pysail.spark.datasource.jdbc import _parse_custom_schema
+    from pysail.spark.datasource.jdbc import PgWriteEngine, _staging_name_atomic
 
-    result = _parse_custom_schema("id BIGINT, name STRING, score DOUBLE, active BOOLEAN")
-    assert result["id"] == pa.int64()
-    assert result["name"] == pa.large_utf8()
-    assert result["score"] == pa.float64()
-    assert result["active"] == pa.bool_()
+    dsn = pg_dsn
 
-    result = _parse_custom_schema("price DECIMAL(10,2)")
-    assert result["price"] == pa.decimal128(10, 2)
+    # Two engines targeting the same table — must get distinct run_ids and staging names
+    engine_a = PgWriteEngine(dsn=dsn, dbtable=write_table, overwrite_mode="atomic")
+    engine_b = PgWriteEngine(dsn=dsn, dbtable=write_table, overwrite_mode="atomic")
 
-    result = _parse_custom_schema("MyCol INTEGER")
-    assert "mycol" in result
-    assert result["mycol"] == pa.int32()
+    # Distinct run_ids → distinct staging table names (the concurrency-collision fix)
+    assert engine_a.run_id != engine_b.run_id
+    staging_a = _staging_name_atomic(write_table, engine_a.run_id)
+    staging_b = _staging_name_atomic(write_table, engine_b.run_id)
+    assert staging_a != staging_b
 
-    assert _parse_custom_schema("") == {}
+    batch_a = pa.record_batch(
+        {"id": pa.array([10], type=pa.int32()), "name": pa.array(["JobA"]), "score": pa.array([1.0])},
+    )
+    batch_b = pa.record_batch(
+        {"id": pa.array([20], type=pa.int32()), "name": pa.array(["JobB"]), "score": pa.array([2.0])},
+    )
+
+    results_a: list = []
+    results_b: list = []
+    errors: list = []
+
+    def run_a():
+        try:
+            results_a.append(engine_a.write_partition(0, [batch_a]))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(("a-write", exc))
+
+    def run_b():
+        try:
+            results_b.append(engine_b.write_partition(0, [batch_b]))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(("b-write", exc))
+
+    # Both jobs write their partitions concurrently (each to its own staging table)
+    t_a = threading.Thread(target=run_a)
+    t_b = threading.Thread(target=run_b)
+    t_a.start()
+    t_b.start()
+    t_a.join(timeout=30)
+    t_b.join(timeout=30)
+
+    assert not errors, f"concurrent write phase errors: {errors}"
+    assert len(results_a) == 1
+    assert len(results_b) == 1
+
+    # Both staging tables exist and have the correct rows (no mixing yet)
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'SELECT name FROM "{staging_a}"')  # noqa: S608
+        rows_a = {r[0] for r in cur.fetchall()}
+        cur.execute(f'SELECT name FROM "{staging_b}"')  # noqa: S608
+        rows_b = {r[0] for r in cur.fetchall()}
+
+    assert rows_a == {"JobA"}, f"staging_a has wrong rows: {rows_a}"
+    assert rows_b == {"JobB"}, f"staging_b has wrong rows: {rows_b}"
+
+    # Commit job A first, then job B — last commit (B) wins
+    engine_a.commit(results_a)
+    engine_b.commit(results_b)
+
+    # After both commits: only JobB rows present (B's DROP+RENAME ran last)
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'SELECT name FROM "{write_table}"')  # noqa: S608
+        final_rows = {r[0] for r in cur.fetchall()}
+
+    # No mixing: only one job's data survives
+    assert final_rows <= {"JobA", "JobB"}, f"mixed data detected: {final_rows}"
+    assert len(final_rows) == 1, f"expected exactly one job's data, got: {final_rows}"
 
 
-def test_lit_unit():
-    import datetime as dt
+@pytest.mark.parametrize("write_table", ["wt_abort_atomic"], indirect=True)
+def test_write_atomic_abort_cleanup(spark, jdbc_opts, pg_dsn, write_table):  # noqa: ARG001
+    """abort() drops the atomic staging table."""
+    import psycopg
+    import pyarrow as pa
 
-    from pyspark.sql.datasource import EqualTo
+    from pysail.spark.datasource.jdbc import PartitionResult, PgWriteEngine, _staging_name_atomic  # noqa: F401
 
-    from pysail.spark.datasource.jdbc import _filter_to_sql
+    dsn = pg_dsn
+    engine = PgWriteEngine(dsn=dsn, dbtable=write_table, overwrite_mode="atomic")
 
-    def lit(v):
-        return _filter_to_sql(EqualTo(("x",), v)).split(" = ", 1)[1]
+    # Write one partition (creates staging table)
+    batch = pa.record_batch(
+        {"id": pa.array([1], type=pa.int32()), "name": pa.array(["X"]), "score": pa.array([1.0])},
+    )
+    result = engine.write_partition(0, [batch])
+    assert result.staging_table == _staging_name_atomic(write_table, engine.run_id)
 
-    assert lit(True) == "TRUE"
-    assert lit(False) == "FALSE"
-    assert lit(None) == "NULL"
-    assert lit(42) == "42"
-    assert lit(3.14) == "3.14"
-    assert lit("hello") == "'hello'"
-    assert lit("O'Reilly") == "'O''Reilly'"
-    assert lit(dt.date(2024, 1, 15)) == "'2024-01-15'"
-    assert lit(dt.datetime(2024, 1, 15, 10, 30)) == "'2024-01-15T10:30:00'"  # noqa: DTZ001
+    # Verify staging table exists
+    staging_name = _staging_name_atomic(write_table, engine.run_id)
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = %s",
+            (staging_name,),
+        )
+        assert cur.fetchone()[0] == 1  # type: ignore[index]
+
+    # Abort should drop it
+    engine.abort([result])
+
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = %s",
+            (staging_name,),
+        )
+        assert cur.fetchone()[0] == 0  # type: ignore[index]
 
 
-def test_quote_identifier_unit():
-    from pysail.spark.datasource.jdbc import _quote_identifier
+# ===========================================================================
+# Schema-qualified write targets (dbtable = "schema.table")
+# ===========================================================================
 
-    assert _quote_identifier("age") == '"age"'
-    assert _quote_identifier("my col") == '"my col"'
-    assert _quote_identifier('col"name') == '"col""name"'
-    assert _quote_identifier("") == '""'
+
+@pytest.fixture
+def qualified_write_table(pg_dsn):
+    """Create ``wsch.events`` in a non-default schema; drop the schema afterwards.
+
+    Columns: id INTEGER, name TEXT, score DOUBLE PRECISION.
+    """
+    import psycopg
+
+    schema, table = "wsch", "events"
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        cur.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}"')
+        cur.execute(f'CREATE TABLE "{schema}"."{table}" (id INTEGER, name TEXT, score DOUBLE PRECISION)')
+    yield f"{schema}.{table}", schema, table
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def _count_in_schema(pg_dsn, schema: str, table: str) -> int:
+    import psycopg
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'SELECT COUNT(*) FROM "{schema}"."{table}"')  # noqa: S608
+        return cur.fetchone()[0]  # type: ignore[index]
+
+
+def _public_table_exists(pg_dsn, table: str) -> bool:
+    import psycopg
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+            (table,),
+        )
+        return cur.fetchone()[0] > 0  # type: ignore[index]
+
+
+def _schema_df():
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
+
+    return StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+            StructField("score", DoubleType()),
+        ]
+    )
+
+
+def test_write_append_schema_qualified(spark, jdbc_opts, pg_dsn, qualified_write_table):
+    """Append to a schema-qualified dbtable lands rows in the right schema."""
+    dbtable, schema, table = qualified_write_table
+    df = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], _schema_df())
+
+    df.write.format("jdbc").option("dbtable", dbtable).options(**jdbc_opts).mode("append").save()
+
+    assert _count_in_schema(pg_dsn, schema, table) == 2  # noqa: PLR2004
+    assert not _public_table_exists(pg_dsn, table), "rows leaked into public schema"
+
+
+def test_write_overwrite_atomic_schema_qualified(spark, jdbc_opts, pg_dsn, qualified_write_table):
+    """Atomic overwrite of a schema-qualified table replaces rows in-place.
+
+    Guards that the staging table is created in the target's schema, so the
+    post-rename target stays there and the original table is not replaced by a
+    public-schema copy.
+    """
+    dbtable, schema, table = qualified_write_table
+    first = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], _schema_df())
+    second = spark.createDataFrame([(3, "Charlie", 8.8)], _schema_df())
+
+    first.write.format("jdbc").option("dbtable", dbtable).options(**jdbc_opts).mode("append").save()
+    assert _count_in_schema(pg_dsn, schema, table) == 2  # noqa: PLR2004
+
+    second.write.format("jdbc").option("dbtable", dbtable).option("overwriteMode", "atomic").options(**jdbc_opts).mode(
+        "overwrite"
+    ).save()
+
+    assert _count_in_schema(pg_dsn, schema, table) == 1
+    assert not _public_table_exists(pg_dsn, table), "atomic overwrite created a public-schema copy"
+    assert _read_pg_table(spark, jdbc_opts, dbtable).collect()[0].name == "Charlie"
+
+
+def test_write_overwrite_truncate_schema_qualified(spark, jdbc_opts, pg_dsn, qualified_write_table):
+    """Truncate overwrite of a schema-qualified table replaces rows in-place."""
+    dbtable, schema, table = qualified_write_table
+    first = spark.createDataFrame([(1, "Alice", 9.5), (2, "Bob", 7.2)], _schema_df())
+    second = spark.createDataFrame([(3, "Charlie", 8.8)], _schema_df())
+
+    first.write.format("jdbc").option("dbtable", dbtable).options(**jdbc_opts).mode("append").save()
+    assert _count_in_schema(pg_dsn, schema, table) == 2  # noqa: PLR2004
+
+    second.write.format("jdbc").option("dbtable", dbtable).option("overwriteMode", "truncate").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    assert _count_in_schema(pg_dsn, schema, table) == 1
+    assert _read_pg_table(spark, jdbc_opts, dbtable).collect()[0].name == "Charlie"

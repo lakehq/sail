@@ -159,3 +159,72 @@ df = (
 ```
 
 Columns not listed in `customSchema` retain their inferred types.
+
+## Writing
+
+Writes use the same `jdbc` format name and the same `pysail[jdbc]` extra.
+
+PostgreSQL uses Arrow-native ADBC bulk ingest. MySQL and SQL Server use a
+SQLAlchemy-core fallback (a parameterised `INSERT` built directly from Arrow
+values) and need their DBAPI driver installed separately: `pip install pymysql`
+(MySQL) or `pip install pymssql` (SQL Server). The Arrow-value path preserves
+exact integers (including bigints above 2^53) and keeps `NULL` distinct from a
+numeric zero.
+
+For SQL Server, extra JDBC URL parameters (`;encrypt=...;trustServerCertificate=...;applicationIntent=...`)
+are parsed and mapped onto the pymssql connection: `encrypt` sets pymssql's
+`encryption` mode, `applicationIntent=ReadOnly` sets a read-only connection, and
+`trustServerCertificate` is accepted but ignored (FreeTDS, pymssql's backend,
+governs certificate trust through its own configuration). Unknown parameters are
+ignored.
+
+```python
+(
+    df.write.format("jdbc")
+    .option("url", "jdbc:postgresql://localhost:5432/mydb")
+    .option("dbtable", "orders")
+    .option("user", "alice")
+    .option("password", "secret")
+    .mode("append")  # or "overwrite"
+    .save()
+)
+```
+
+### Save modes
+
+- **append** — direct ingest into the target. At-least-once: a retried/speculated
+  Spark task re-ingests its rows (matches Spark's built-in JDBC writer, which
+  makes no exactly-once guarantee), so the target may gain duplicates. This
+  applies to **both** the PostgreSQL and the MySQL/SQL Server backends. Use a
+  unique constraint (plus `ON CONFLICT` on PostgreSQL) if you need exactly-once.
+- **overwrite**:
+  - PostgreSQL — controlled by `overwriteMode`. `atomic` (default) loads all
+    partitions into one staging table, then swaps it over the target in a single
+    `DROP; RENAME` transaction (replaces the table object, so grants/ACLs/RLS are
+    **not** preserved); the target is never left partially written. It is, however,
+    **at-least-once** under Spark task retry / speculative execution — a re-run
+    partition re-ingests into the shared staging, so the swapped-in table can contain
+    duplicates (same as `append`); disable speculation for exactly-once overwrite. `truncate`
+    `TRUNCATE`s the target once then ingests directly, preserving the table object
+    but **non-atomically** — if a task fails mid-job the target is left partially
+    populated (Spark documents the same caveat and advises turning `truncate` off
+    on failure). Prefer `atomic` unless the table object must survive.
+  - MySQL / SQL Server — each partition loads into a staging table, then the
+    driver swaps them in via a single `DELETE` + `INSERT … SELECT` transaction.
+
+::: warning
+Concurrent overwrites to the same table are **not supported**. Two overwrite jobs
+running at once can interleave and leave a mixed result; Spark's own JDBC writer
+takes no lock and gives the same non-guarantee. Run overwrites one at a time.
+
+A failed cleanup can leave orphan `*__sail_stg_*` (and, for PostgreSQL truncate
+mode, `*__sail_trunc_*`) tables behind. They are safe to drop manually.
+:::
+
+| Write option    | Default  | Description                                        |
+| --------------- | -------- | -------------------------------------------------- |
+| `dbtable`       |          | Target table (required; `query` not allowed)       |
+| `overwriteMode` | `atomic` | `atomic` or `truncate` (PostgreSQL overwrite only) |
+| `batchsize`     | `65536`  | Rows per ingest call                               |
+
+The target table must already exist.
