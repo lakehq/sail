@@ -108,3 +108,4 @@ CLAUDE.md
 AGENTS.md
 # roborev snapshots
 /.roborev/
+/notebooks/*
