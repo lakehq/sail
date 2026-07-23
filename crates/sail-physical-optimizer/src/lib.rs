@@ -23,12 +23,14 @@ use datafusion::physical_optimizer::window_topn::WindowTopN;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
+use crate::eliminate_redundant_repartition::EliminateRedundantRepartition;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 
 mod barrier;
 mod collect_left;
+mod eliminate_redundant_repartition;
 mod explicit_repartition;
 mod join_reorder;
 
@@ -67,6 +69,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    rules.push(Arc::new(EliminateRedundantRepartition::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
