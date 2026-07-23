@@ -582,7 +582,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::BinarySource(r#gen::BinarySourceExecNode {
                 base_config,
-                path_glob_filter,
+                path_glob_filter: _,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = parse_table_schema_from_proto(&base_config)?;
@@ -590,7 +590,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
-                    Arc::new(BinarySource::new(table_schema, path_glob_filter)),
+                    Arc::new(BinarySource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -1610,7 +1610,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         whole_text: text_source.whole_text(),
                         line_sep: text_source.line_sep().map(|x| vec![x]),
                     })
-                } else if let Some(binary_source) = file_source.downcast_ref::<BinarySource>() {
+                } else if file_source.downcast_ref::<BinarySource>().is_some() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1618,7 +1618,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )?)?;
                     NodeKind::BinarySource(r#gen::BinarySourceExecNode {
                         base_config,
-                        path_glob_filter: binary_source.path_glob_filter().cloned(),
+                        path_glob_filter: None,
                     })
                 } else if let Some(csv_source) = file_source.downcast_ref::<CsvSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(

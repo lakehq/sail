@@ -30,7 +30,7 @@ use crate::listing::utils::{
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::resolve_listing_urls;
-use crate::url::resolve_listing_writer_url;
+use crate::url::{PathGlobFilter, resolve_listing_writer_url};
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -84,8 +84,8 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
-    /// File-name glob restricting which listed files compose the dataset (e.g. binary `pathGlobFilter`).
-    fn input_file_name_glob(&self) -> Option<&str> {
+    /// File-name glob restricting which listed files compose the dataset.
+    fn path_glob_filter(&self) -> Option<&str> {
         None
     }
 }
@@ -164,8 +164,12 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let read_format = T::read(ctx, options)?;
+        let path_glob_filter = read_format
+            .path_glob_filter()
+            .map(PathGlobFilter::parse)
+            .transpose()?;
         let urls = resolve_listing_urls(ctx, paths).await?;
-        let sampled_files = sample_listing_files(ctx, &urls).await?;
+        let sampled_files = sample_listing_files(ctx, &urls, path_glob_filter.as_ref()).await?;
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
         let (schema, partition_fields) = match schema {
@@ -242,6 +246,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             collect_stat: ctx.config().collect_statistics(),
             target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
+            path_glob_filter,
             compression,
         })?;
         Ok(Arc::new(source))

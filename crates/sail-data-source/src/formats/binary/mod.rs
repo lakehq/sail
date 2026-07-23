@@ -19,11 +19,6 @@ mod write;
 pub use read::BinaryReadFormat;
 pub use write::BinaryWriteFormat;
 
-#[derive(Default, Debug, Clone, PartialEq)]
-pub struct TableBinaryOptions {
-    pub path_glob_filter: Option<String>,
-}
-
 pub type BinaryTableFormat = ListingTableFormat<BinaryFormatFactory>;
 
 #[derive(Debug, Default)]
