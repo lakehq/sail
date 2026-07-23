@@ -13,6 +13,5 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#4@0 as result]
-      ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = year OR __common_expr_1@0 = yyyy OR __common_expr_1@0 = yy THEN date_trunc(year, #2@1) WHEN __common_expr_1@0 = quarter THEN date_trunc(quarter, #2@1) WHEN __common_expr_1@0 = month OR __common_expr_1@0 = mon OR __common_expr_1@0 = mm THEN date_trunc(month, #2@1) WHEN __common_expr_1@0 = week THEN date_trunc(week, #2@1) WHEN __common_expr_1@0 = day OR __common_expr_1@0 = dd THEN date_trunc(day, #2@1) WHEN __common_expr_1@0 = hour THEN date_trunc(hour, #2@1) WHEN __common_expr_1@0 = minute THEN date_trunc(minute, #2@1) WHEN __common_expr_1@0 = second THEN date_trunc(second, #2@1) WHEN __common_expr_1@0 = millisecond THEN date_trunc(millisecond, #2@1) WHEN __common_expr_1@0 = microsecond THEN date_trunc(microsecond, #2@1) END as #4]
-        ProjectionExec: expr=[lower(column2@1) as __common_expr_1, column1@0 as #2]
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CASE spark_trunc_level(column2@1) WHEN year THEN date_trunc(year, column1@0) WHEN quarter THEN date_trunc(quarter, column1@0) WHEN month THEN date_trunc(month, column1@0) WHEN week THEN date_trunc(week, column1@0) WHEN day THEN date_trunc(day, column1@0) WHEN hour THEN date_trunc(hour, column1@0) WHEN minute THEN date_trunc(minute, column1@0) WHEN second THEN date_trunc(second, column1@0) WHEN millisecond THEN date_trunc(millisecond, column1@0) WHEN microsecond THEN date_trunc(microsecond, column1@0) WHEN null THEN NULL ELSE CASE WHEN column1@0 IS NULL THEN NULL END END as #4]
+        DataSourceExec: partitions=1, partition_sizes=[1]

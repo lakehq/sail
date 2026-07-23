@@ -1,10 +1,10 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::array::{Array, ArrayRef, TimestampMicrosecondArray};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondArray};
+use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -148,12 +148,42 @@ impl SparkTimestamp {
         }
     }
 
+    /// A TIMESTAMP_NTZ value is already a wall clock, so it is localized rather than parsed.
+    /// Arrow's own cast cannot do this: it resolves the local time with `.single()`, which has no
+    /// answer inside a DST gap or inside the repeated hour of a fall-back, and so errors or
+    /// nullifies exactly where Spark moves the value forward, or takes the earlier offset.
+    fn localize_naive(
+        parser: &TimestampParser,
+        safe: bool,
+        array: &ArrayRef,
+    ) -> Result<TimestampMicrosecondArray> {
+        array
+            .as_primitive::<TimestampMicrosecondType>()
+            .iter()
+            .map(|value| match value {
+                Some(micros) => {
+                    let datetime = DateTime::from_timestamp_micros(micros)
+                        .ok_or_else(|| exec_datafusion_err!("timestamp out of range: {micros}"))?
+                        .naive_utc();
+                    parser.localize(datetime, "", safe)
+                }
+                None => Ok(None),
+            })
+            .collect::<Result<_>>()
+    }
+
     fn kernel(
         parser: &TimestampParser,
         safe: bool,
         args: &[ArrayRef],
     ) -> Result<TimestampMicrosecondArray> {
         let value_arr = &args[0];
+        if matches!(
+            value_arr.data_type(),
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        ) {
+            return Self::localize_naive(parser, safe, value_arr);
+        }
         match args.get(1) {
             Some(format_arr) => {
                 if value_arr.len() != format_arr.len() {
@@ -211,19 +241,26 @@ impl ScalarUDFImpl for SparkTimestamp {
             ));
         }
         match &arg_types[0] {
-            // String-only, matching the kernel (which parses strings) and the
-            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
-            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
+            // Strings, matching the kernel (which parses them) and the sibling parsers
+            // `SparkDate`/`SparkTime`. A zoned TIMESTAMP the planner casts directly and never
+            // sends here; a DATE it converts to a naive timestamp first, so that one arrives
+            // through the arm below.
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+            // A TIMESTAMP_NTZ has to be localized the way Spark localizes it, which the Arrow
+            // cast cannot do across a DST transition, so the planner routes it here instead.
+            DataType::Timestamp(_, None) => {}
             other => {
                 return Err(unsupported_data_type_exec_err(
                     self.name(),
-                    "STRING or NULL",
+                    "STRING, TIMESTAMP_NTZ or NULL",
                     other,
                 ));
             }
         }
         let mut coerced = arg_types.to_vec();
+        if matches!(arg_types[0], DataType::Timestamp(_, None)) {
+            coerced[0] = DataType::Timestamp(TimeUnit::Microsecond, None);
+        }
         if let Some(format) = arg_types.get(1) {
             match format {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
