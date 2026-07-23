@@ -1,7 +1,6 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
 // Adapted from DataFusion's set operation implementation with Spark-compatible empty array handling for array intersections.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -15,7 +14,7 @@ use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    DataFusionError, Result, assert_eq_or_internal_err, exec_err, internal_err,
+    DataFusionError, HashSet, Result, assert_eq_or_internal_err, exec_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

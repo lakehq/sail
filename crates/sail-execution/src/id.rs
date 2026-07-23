@@ -64,6 +64,7 @@ macro_rules! define_id_type {
 }
 
 define_id_type!(JobId, u64);
+define_id_type!(DriverId, u64);
 define_id_type!(WorkerId, u64);
 
 #[derive(Debug)]
@@ -83,10 +84,19 @@ where
         }
     }
 
-    pub fn next(&mut self) -> ExecutionResult<T> {
+    pub fn generate(&mut self) -> ExecutionResult<T> {
         let value = self.next_value;
         self.next_value = T::Value::next(value)?;
         Ok(value.into())
+    }
+}
+
+impl<T: IdType> Default for IdGenerator<T>
+where
+    T::Value: Copy,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 

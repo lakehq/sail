@@ -86,6 +86,11 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+
+    /// File-name glob restricting which listed files compose the dataset (e.g. binary `pathGlobFilter`).
+    fn input_file_name_glob(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug)]

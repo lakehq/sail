@@ -113,6 +113,7 @@ impl KubernetesWorkerManager {
     fn build_pod_env(&self, id: WorkerId, options: WorkerLaunchOptions) -> Vec<EnvVar> {
         let WorkerLaunchOptions {
             enable_tls,
+            driver_id,
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
@@ -167,6 +168,11 @@ impl KubernetesWorkerManager {
             EnvVar {
                 name: ClusterConfigEnv::DRIVER_EXTERNAL_PORT.to_string(),
                 value: Some(driver_external_port.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::DRIVER_ID.to_string(),
+                value: Some(u64::from(driver_id).to_string()),
                 value_from: None,
             },
             EnvVar {
