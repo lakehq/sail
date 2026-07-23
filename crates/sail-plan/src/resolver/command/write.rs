@@ -505,6 +505,7 @@ impl PlanResolver<'_> {
                     let command = CatalogCommand::CreateTable {
                         table: table.clone().into(),
                         options: create_options,
+                        statistics_warmup: None,
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }

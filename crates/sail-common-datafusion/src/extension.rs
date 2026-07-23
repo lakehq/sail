@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
+use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::prelude::SessionContext;
@@ -12,6 +13,7 @@ pub trait SessionExtension: Send + Sync + 'static {
 
 pub trait SessionExtensionAccessor {
     fn extension<T: SessionExtension>(&self) -> Result<Arc<T>>;
+    fn session_config(&self) -> SessionConfig;
     fn runtime_env(&self) -> Arc<RuntimeEnv>;
 }
 
@@ -22,6 +24,10 @@ impl SessionExtensionAccessor for SessionContext {
             .config()
             .get_extension::<T>()
             .ok_or_else(|| internal_datafusion_err!("session extension not found: {}", T::name()))
+    }
+
+    fn session_config(&self) -> SessionConfig {
+        self.state_ref().read().config().clone()
     }
 
     fn runtime_env(&self) -> Arc<RuntimeEnv> {
@@ -36,6 +42,10 @@ impl SessionExtensionAccessor for SessionState {
             .ok_or_else(|| internal_datafusion_err!("session extension not found: {}", T::name()))
     }
 
+    fn session_config(&self) -> SessionConfig {
+        self.config().clone()
+    }
+
     fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime_env().clone()
     }
@@ -48,6 +58,10 @@ impl SessionExtensionAccessor for &dyn Session {
             .ok_or_else(|| internal_datafusion_err!("session extension not found: {}", T::name()))
     }
 
+    fn session_config(&self) -> SessionConfig {
+        self.config().clone()
+    }
+
     fn runtime_env(&self) -> Arc<RuntimeEnv> {
         Session::runtime_env(*self).clone()
     }
@@ -58,6 +72,10 @@ impl SessionExtensionAccessor for TaskContext {
         self.session_config()
             .get_extension::<T>()
             .ok_or_else(|| internal_datafusion_err!("session extension not found: {}", T::name()))
+    }
+
+    fn session_config(&self) -> SessionConfig {
+        TaskContext::session_config(self).clone()
     }
 
     fn runtime_env(&self) -> Arc<RuntimeEnv> {
