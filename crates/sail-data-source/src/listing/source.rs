@@ -67,17 +67,15 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Infer file-level metadata needed for planning.
     /// The metadata includes statistics and ordering.
-    /// `statistics_columns` is `None` for all file columns and `Some` for a selected subset.
     async fn infer_file_meta(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         object: &ObjectMeta,
         file_schema: SchemaRef,
-        statistics_columns: Option<&[usize]>,
         compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, object, statistics_columns, compression);
+        let _ = (ctx, store, object, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,

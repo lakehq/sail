@@ -56,8 +56,14 @@ pub(crate) async fn prewarm_file_statistics(
     source: &ListingTableSource,
     ctx: &dyn Session,
 ) -> datafusion_common::Result<()> {
-    if source.config().collect_stat {
-        let _ = list_files_for_scan(source, ctx, &[], None, Some(&[])).await?;
+    if source.config().collect_stat
+        && ctx
+            .runtime_env()
+            .cache_manager
+            .get_file_statistic_cache_limit()
+            > 0
+    {
+        let _ = list_files_for_scan(source, ctx, &[], None).await?;
     }
     Ok(())
 }
@@ -114,17 +120,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             });
 
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
-        let file_column_count = source.config().schema.file_schema().fields().len();
-        let statistics_columns = projection.as_ref().map(|projection| {
-            let mut columns = projection
-                .iter()
-                .copied()
-                .filter(|index| *index < file_column_count)
-                .collect::<Vec<_>>();
-            columns.sort_unstable();
-            columns.dedup();
-            columns
-        });
 
         let ListFilesResult {
             mut file_groups,
@@ -135,7 +130,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             session_state,
             &partition_filters,
             statistic_file_limit,
-            statistics_columns.as_deref(),
         )
         .await?;
 
@@ -353,7 +347,6 @@ async fn list_files_for_scan<'a>(
     ctx: &'a dyn Session,
     filters: &'a [Expr],
     limit: Option<usize>,
-    statistics_columns: Option<&'a [usize]>,
 ) -> datafusion_common::Result<ListFilesResult> {
     let store = if let Some(url) = source.config().table_paths.first() {
         ctx.runtime_env().object_store(url)?
@@ -394,21 +387,12 @@ async fn list_files_for_scan<'a>(
 
     let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
     let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
-    let statistics_cache_table = source.statistics_cache_table(statistics_columns);
 
     let files = file_list
         .map(|part_file| async {
             let part_file = part_file?;
             let (statistics, ordering) = if source.config().collect_stat {
-                do_collect_statistics_and_ordering(
-                    source,
-                    ctx,
-                    &store,
-                    &part_file,
-                    statistics_columns,
-                    &statistics_cache_table,
-                )
-                .await?
+                do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
             } else {
                 (
                     Arc::new(Statistics::new_unknown(
@@ -466,14 +450,15 @@ async fn do_collect_statistics_and_ordering(
     ctx: &dyn Session,
     store: &Arc<dyn ObjectStore>,
     part_file: &datafusion_datasource::PartitionedFile,
-    statistics_columns: Option<&[usize]>,
-    statistics_cache_table: &datafusion_common::TableReference,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let meta = &part_file.object_meta;
     let file_schema = source.config().schema.file_schema();
     let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
     let cache_key = TableScopedPath {
-        table: Some(statistics_cache_table.clone()),
+        table: Some(statistics_cache_table_ref(
+            part_file.table_reference.as_ref(),
+            file_schema.as_ref(),
+        )),
         path: meta.location.clone(),
     };
 
@@ -497,7 +482,6 @@ async fn do_collect_statistics_and_ordering(
             store,
             meta,
             source.config().schema.file_schema().clone(),
-            statistics_columns,
             source.config().compression,
         )
         .await?;
@@ -515,6 +499,28 @@ async fn do_collect_statistics_and_ordering(
     });
 
     Ok((statistics, file_meta.ordering))
+}
+
+fn statistics_cache_table_ref(
+    table: Option<&datafusion_common::TableReference>,
+    schema: &arrow::datatypes::Schema,
+) -> datafusion_common::TableReference {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    for field in schema.fields() {
+        std::hash::Hash::hash(field.name(), &mut hasher);
+        std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);
+        std::hash::Hash::hash(&field.is_nullable(), &mut hasher);
+    }
+
+    let table = table
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "listing".to_string());
+
+    datafusion_common::TableReference::bare(format!(
+        "{table}_{:016x}",
+        std::hash::Hasher::finish(&hasher)
+    ))
 }
 
 async fn get_files_with_limit(
@@ -559,4 +565,121 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bytes::Bytes;
+    use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Constraints;
+    use datafusion_common::parsers::CompressionTypeVariant;
+    use datafusion_datasource::TableSchema;
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use url::Url;
+
+    use super::*;
+    use crate::listing::source::{
+        ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat,
+    };
+    use crate::listing::table::ListingTableSourceConfig;
+
+    #[derive(Debug)]
+    struct CountingReadFormat {
+        inference_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ReadFormat for CountingReadFormat {
+        async fn infer_compression(
+            &self,
+            _ctx: &dyn Session,
+            _files: &[ListingFileSample<'_>],
+        ) -> datafusion_common::Result<CompressionTypeVariant> {
+            unreachable!()
+        }
+
+        async fn infer_schema(
+            &self,
+            _ctx: &dyn Session,
+            _files: &[ListingFileSample<'_>],
+            _compression: CompressionTypeVariant,
+        ) -> datafusion_common::Result<SchemaRef> {
+            unreachable!()
+        }
+
+        async fn infer_file_meta(
+            &self,
+            _ctx: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _object: &object_store::ObjectMeta,
+            file_schema: SchemaRef,
+            _compression: CompressionTypeVariant,
+        ) -> datafusion_common::Result<ListingFileMeta> {
+            self.inference_count.fetch_add(1, Ordering::Relaxed);
+            let mut statistics = Statistics::new_unknown(&file_schema);
+            statistics.num_rows = Precision::Exact(1);
+            Ok(ListingFileMeta {
+                statistics,
+                ordering: None,
+            })
+        }
+
+        async fn scan(
+            &self,
+            _ctx: &dyn Session,
+            _input: ListingScanInput,
+        ) -> datafusion_common::Result<FileScanConfig> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn prewarmed_statistics_are_reused_by_scan() {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        object_store
+            .put(
+                &Path::from("table/data"),
+                Bytes::from_static(b"data").into(),
+            )
+            .await
+            .unwrap();
+
+        let context = SessionContext::new();
+        context.register_object_store(&Url::parse("memory://").unwrap(), Arc::clone(&object_store));
+
+        let inference_count = Arc::new(AtomicUsize::new(0));
+        let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            table_paths: vec![ListingTableUrl::parse("memory:///table/").unwrap()],
+            schema: TableSchema::from_file_schema(Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )]))),
+            constraints: Constraints::default(),
+            file_sort_order: vec![],
+            collect_stat: true,
+            target_partitions: 1,
+            read_format: Arc::new(CountingReadFormat {
+                inference_count: Arc::clone(&inference_count),
+            }),
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        })
+        .unwrap();
+        let state = context.state();
+
+        prewarm_file_statistics(&source, &state).await.unwrap();
+        assert_eq!(inference_count.load(Ordering::Relaxed), 1);
+
+        let result = list_files_for_scan(&source, &state, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(inference_count.load(Ordering::Relaxed), 1);
+        assert_eq!(result.statistics.num_rows, Precision::Exact(1));
+    }
 }

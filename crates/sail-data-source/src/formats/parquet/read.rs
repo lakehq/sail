@@ -9,7 +9,7 @@ use datafusion::datasource::physical_plan::parquet::metadata::{
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
@@ -115,7 +115,6 @@ impl ReadFormat for ParquetReadFormat {
         store: &Arc<dyn ObjectStore>,
         object: &ObjectMeta,
         file_schema: SchemaRef,
-        statistics_columns: Option<&[usize]>,
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
@@ -125,17 +124,8 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
-        let statistics = match statistics_columns {
-            None => DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?,
-            Some(columns) => {
-                let statistics_schema = Arc::new(file_schema.project(columns)?);
-                let projected_statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-                    &metadata,
-                    &statistics_schema,
-                )?;
-                expand_projected_statistics(&file_schema, columns, projected_statistics)
-            }
-        };
+        let statistics =
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
         let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
         Ok(ListingFileMeta {
             statistics,
@@ -178,24 +168,6 @@ impl ReadFormat for ParquetReadFormat {
     }
 }
 
-fn expand_projected_statistics(
-    file_schema: &Schema,
-    columns: &[usize],
-    projected_statistics: Statistics,
-) -> Statistics {
-    let mut statistics = Statistics::new_unknown(file_schema);
-    statistics.num_rows = projected_statistics.num_rows;
-    statistics.total_byte_size = projected_statistics.total_byte_size;
-    for (index, column_statistics) in columns
-        .iter()
-        .copied()
-        .zip(projected_statistics.column_statistics)
-    {
-        statistics.column_statistics[index] = column_statistics;
-    }
-    statistics
-}
-
 /// Clears all metadata (Schema level and field level) for a schema.
 fn clear_metadata(schema: Schema) -> Schema {
     let fields = schema
@@ -220,78 +192,5 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion_common::ScalarValue;
-    use datafusion_common::stats::Precision;
-
-    use super::*;
-
-    #[test]
-    fn projected_statistics_keep_full_schema_positions() {
-        let file_schema = Schema::new(vec![
-            Arc::new(datafusion::arrow::datatypes::Field::new(
-                "a",
-                datafusion::arrow::datatypes::DataType::Int32,
-                false,
-            )),
-            Arc::new(datafusion::arrow::datatypes::Field::new(
-                "b",
-                datafusion::arrow::datatypes::DataType::Int32,
-                false,
-            )),
-            Arc::new(datafusion::arrow::datatypes::Field::new(
-                "c",
-                datafusion::arrow::datatypes::DataType::Int32,
-                false,
-            )),
-        ]);
-        let mut selected_column = datafusion_common::ColumnStatistics::new_unknown();
-        selected_column.min_value = Precision::Exact(ScalarValue::Int32(Some(10)));
-        selected_column.max_value = Precision::Exact(ScalarValue::Int32(Some(20)));
-        let projected_statistics = Statistics {
-            num_rows: Precision::Exact(100),
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![selected_column.clone()],
-        };
-
-        let statistics = expand_projected_statistics(&file_schema, &[1], projected_statistics);
-
-        assert_eq!(statistics.num_rows, Precision::Exact(100));
-        assert_eq!(statistics.column_statistics.len(), 3);
-        assert_eq!(
-            statistics.column_statistics[0],
-            datafusion_common::ColumnStatistics::new_unknown()
-        );
-        assert_eq!(statistics.column_statistics[1], selected_column);
-        assert_eq!(
-            statistics.column_statistics[2],
-            datafusion_common::ColumnStatistics::new_unknown()
-        );
-    }
-
-    #[test]
-    fn row_count_statistics_do_not_require_columns() {
-        let file_schema = Schema::new(vec![Arc::new(datafusion::arrow::datatypes::Field::new(
-            "a",
-            datafusion::arrow::datatypes::DataType::Int32,
-            false,
-        ))]);
-        let projected_statistics = Statistics {
-            num_rows: Precision::Exact(100),
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![],
-        };
-
-        let statistics = expand_projected_statistics(&file_schema, &[], projected_statistics);
-
-        assert_eq!(statistics.num_rows, Precision::Exact(100));
-        assert_eq!(
-            statistics.column_statistics,
-            vec![datafusion_common::ColumnStatistics::new_unknown()]
-        );
     }
 }
