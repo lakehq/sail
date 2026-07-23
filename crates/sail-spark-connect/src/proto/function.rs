@@ -87,7 +87,7 @@ mod tests {
                 let result = handle.primary().block_on(async {
                     let spark = context.extension::<SparkSession>()?;
                     let service = context.extension::<JobService>()?;
-                    let plan =
+                    let (plan, _) =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = service.runner().execute(&context, plan).await?;
                     read_stream(stream).await
