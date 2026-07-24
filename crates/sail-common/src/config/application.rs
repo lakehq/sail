@@ -38,6 +38,16 @@ pub struct AppConfig {
     pub internal: (),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+}
+
 /// A configuration provider that injects placeholder internal configuration.
 struct InternalConfigPlaceholder;
 
@@ -292,6 +302,7 @@ pub struct ExecutionConfig {
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
+    pub checkpoint: CheckpointConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

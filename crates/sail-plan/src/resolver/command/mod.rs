@@ -13,6 +13,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 mod catalog;
+mod checkpoint;
 mod delete;
 mod delta;
 mod explain;
@@ -228,6 +229,10 @@ impl PlanResolver<'_> {
                 definition,
             } => {
                 self.resolve_catalog_create_temporary_view(view, is_global, definition, state)
+                    .await
+            }
+            CommandNode::RemoteCheckpoint { relation_id, input } => {
+                self.resolve_command_remote_checkpoint(relation_id, *input, state)
                     .await
             }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,

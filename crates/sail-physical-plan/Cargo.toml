@@ -8,13 +8,21 @@ workspace = true
 
 [dependencies]
 sail-catalog = { path = "../sail-catalog" }
+sail-cache = { path = "../sail-cache" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource-parquet = { workspace = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
+object_store = { workspace = true }
+parquet = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 lazy_static = { workspace = true }
+log = { workspace = true }
+uuid = { workspace = true }

@@ -17,6 +17,7 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-data-source = { path = "../sail-data-source" }
+sail-cache = { path = "../sail-cache" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

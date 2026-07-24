@@ -67,7 +67,27 @@ message ExtendedPhysicalPlanNode {
     NoopSinkExecNode noop_sink = 52;
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
   }
+}
+
+message RemoteCheckpointWriteExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string prefix = 3;
+  bytes storage_schema = 4;
+}
+
+message RemoteCheckpointCommitExecNode {
+  bytes input = 1;
+  string relation_id = 2;
+  string object_store_url = 3;
+  string prefix = 4;
+  bytes logical_schema = 5;
+  bytes storage_schema = 6;
+  bytes output_partitioning = 7;
+  LexOrdering output_ordering = 8;
 }
 
 message ExtendedPhysicalExprNode {
@@ -587,6 +607,7 @@ message MemoryExecNode {
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
   optional uint64 limit = 6;
+  bytes output_partitioning = 7;
 }
 
 message ValuesExecNode {
@@ -608,6 +629,7 @@ message ParquetExecNode {
   bytes base_config = 1;
   bytes options = 2;
   optional bytes predicate = 3;
+  bytes output_partitioning = 4;
 }
 
 message ArrowExecNode {
