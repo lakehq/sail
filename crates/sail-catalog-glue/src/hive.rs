@@ -67,6 +67,7 @@ pub(crate) async fn create_hive_table(
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .table_input(table_input)
         .send()

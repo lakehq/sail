@@ -60,12 +60,11 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
-        // We create the session manager inside an async context, even though the
-        // `SessionManager::try_new()` function itself is sync. This is because the actor system
-        // may need to spawn actors when the session runs in cluster mode.
+        // The driver gateway is initialized before the session manager in cluster mode, so the
+        // manager must be created inside an async context.
         let manager = handle
             .primary()
-            .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
+            .block_on(create_spark_session_manager(config, handle.clone()))?;
         let context = handle
             .primary()
             .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;

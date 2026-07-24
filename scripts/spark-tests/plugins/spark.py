@@ -423,6 +423,14 @@ SKIPPED_SPARK_TESTS = [
         reason="Spark 3.x doctest uses the JVM-dependent RDD API",
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["test_parity_readwriter.py", "test_create_without_provider"],
+        reason=(
+            "Spark 3 requires Hive when no provider is specified, while Spark 4 uses the default provider; "
+            "Sail follows Spark 4"
+        ),
+        spark_major_version_less_than=4,
+    ),
 ]
 
 

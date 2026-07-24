@@ -1,8 +1,12 @@
+mod job_runner;
 mod server;
 mod worker;
 
 use datafusion::common::Result;
 use datafusion::prelude::SessionContext;
+pub use job_runner::{
+    ServerSessionJobRunnerFactory, SessionJobRunner, SessionJobRunnerFactory, SessionJobRunnerInfo,
+};
 pub use server::{ServerSessionFactory, ServerSessionInfo, ServerSessionMutator};
 pub use worker::WorkerSessionFactory;
 

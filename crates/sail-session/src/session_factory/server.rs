@@ -1,9 +1,8 @@
-use std::ops::DerefMut;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use datafusion::common::parquet_config::DFParquetWriterVersion;
-use datafusion::common::{Result, internal_datafusion_err};
+use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
@@ -11,19 +10,14 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
-use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
-use sail_execution::driver::DriverOptions;
-use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
-use sail_execution::worker_manager::{
-    KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
-};
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
@@ -31,13 +25,14 @@ use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
-use crate::session_factory::{SessionFactory, WorkerSessionFactory};
+use crate::session_factory::SessionFactory;
 use crate::session_manager::SessionManagerActor;
 
 pub struct ServerSessionInfo {
     pub session_id: String,
     pub user_id: String,
     pub session_manager: ActorHandle<SessionManagerActor>,
+    pub job_runner: Option<Box<dyn JobRunner>>,
 }
 
 pub trait ServerSessionMutator: Send {
@@ -61,7 +56,6 @@ pub trait ServerSessionMutator: Send {
 pub struct ServerSessionFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-    system: Arc<Mutex<ActorSystem>>,
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
     catalog_cache_manager: Arc<CatalogCacheManager>,
@@ -71,14 +65,12 @@ impl ServerSessionFactory {
     pub fn new(
         config: Arc<AppConfig>,
         runtime: RuntimeHandle,
-        system: Arc<Mutex<ActorSystem>>,
         mutator: Box<dyn ServerSessionMutator>,
     ) -> Self {
         let runtime_env = RuntimeEnvFactory::new(config.clone(), runtime.clone());
         Self {
             config,
             runtime,
-            system,
             mutator,
             runtime_env,
             catalog_cache_manager: Arc::new(CatalogCacheManager::new()),
@@ -87,8 +79,8 @@ impl ServerSessionFactory {
 }
 
 impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
-    fn create(&mut self, info: ServerSessionInfo) -> Result<SessionContext> {
-        let state = self.create_session_state(&info)?;
+    fn create(&mut self, mut info: ServerSessionInfo) -> Result<SessionContext> {
+        let state = self.create_session_state(&mut info)?;
         let context = SessionContext::new_with_state(state);
 
         // Register the `first_value` UDAF since the `replace_distinct_aggregate` optimizer rule
@@ -108,8 +100,10 @@ impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
 }
 
 impl ServerSessionFactory {
-    fn create_session_config(&mut self, info: &ServerSessionInfo) -> Result<SessionConfig> {
-        let job_runner = self.create_job_runner()?;
+    fn create_session_config(&mut self, info: &mut ServerSessionInfo) -> Result<SessionConfig> {
+        let Some(job_runner) = info.job_runner.take() else {
+            return internal_err!("job runner is missing from server session information");
+        };
         let mut config = SessionConfig::new()
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
@@ -134,7 +128,7 @@ impl ServerSessionFactory {
         Ok(config)
     }
 
-    fn create_session_state(&mut self, info: &ServerSessionInfo) -> Result<SessionState> {
+    fn create_session_state(&mut self, info: &mut ServerSessionInfo) -> Result<SessionState> {
         let config = self.create_session_config(info)?;
         let runtime = self
             .runtime_env
@@ -153,50 +147,6 @@ impl ServerSessionFactory {
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;
         Ok(builder.build())
-    }
-
-    fn create_job_runner(&mut self) -> Result<Box<dyn JobRunner>> {
-        let job_runner: Box<dyn JobRunner> = match self.config.mode {
-            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
-            ExecutionMode::LocalCluster => {
-                let worker_manager = Arc::new(LocalWorkerManager::new(
-                    self.runtime.clone(),
-                    WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())
-                        .create(())?,
-                ));
-                let options =
-                    DriverOptions::new(&self.config, self.runtime.clone(), worker_manager);
-                let mut system = self
-                    .system
-                    .lock()
-                    .map_err(|e| internal_datafusion_err!("{e}"))?;
-                Box::new(ClusterJobRunner::new(system.deref_mut(), options))
-            }
-            ExecutionMode::KubernetesCluster => {
-                let options = KubernetesWorkerManagerOptions {
-                    image: self.config.kubernetes.image.clone(),
-                    image_pull_policy: self.config.kubernetes.image_pull_policy.clone(),
-                    namespace: self.config.kubernetes.namespace.clone(),
-                    driver_pod_name: self.config.kubernetes.driver_pod_name.clone(),
-                    worker_pod_name_prefix: self.config.kubernetes.worker_pod_name_prefix.clone(),
-                    worker_service_account_name: self
-                        .config
-                        .kubernetes
-                        .worker_service_account_name
-                        .clone(),
-                    worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
-                };
-                let worker_manager = Arc::new(KubernetesWorkerManager::new(options));
-                let options =
-                    DriverOptions::new(&self.config, self.runtime.clone(), worker_manager);
-                let mut system = self
-                    .system
-                    .lock()
-                    .map_err(|e| internal_datafusion_err!("{e}"))?;
-                Box::new(ClusterJobRunner::new(system.deref_mut(), options))
-            }
-        };
-        Ok(job_runner)
     }
 
     fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {

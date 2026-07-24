@@ -39,7 +39,9 @@ def moto_endpoint(moto_container: DockerContainer) -> str:
 @pytest.fixture(scope="module")
 def remote(moto_endpoint: str) -> Generator[str, None, None]:
     """Start Sail server with Glue catalog."""
-    catalog_config = f'[{{name="sail", type="glue", region="us-east-1", endpoint_url="{moto_endpoint}"}}]'
+    catalog_config = (
+        f'[{{name="sail", type="glue", catalog_id="123456789012", region="us-east-1", endpoint_url="{moto_endpoint}"}}]'
+    )
     with spark_connect_server(
         envs={
             "SAIL_CATALOG__LIST": catalog_config,

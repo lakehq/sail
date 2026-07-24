@@ -63,4 +63,8 @@ impl ReadFormat for BinaryReadFormat {
 
         Ok(config)
     }
+
+    fn input_file_name_glob(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
+    }
 }

@@ -26,7 +26,7 @@ use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use futures::{Stream, StreamExt, future, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
@@ -35,7 +35,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
-use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::utils::{can_be_evaluated_for_partition_pruning, has_hidden_path_component};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
@@ -350,16 +350,23 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(|table_path| {
-        pruned_partition_list(
-            ctx,
-            store.as_ref(),
-            table_path,
-            filters,
-            "",
-            &partition_cols,
-        )
-    }))
+    let store_ref = store.as_ref();
+    let partition_cols_ref = partition_cols.as_slice();
+    let file_list = future::try_join_all(source.config().table_paths.iter().map(
+        |table_path| async move {
+            let files =
+                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
+                    .await?;
+            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
+            let files = files.try_filter(move |file| {
+                futures::future::ready(!has_hidden_path_component(
+                    table_path,
+                    &file.object_meta.location,
+                ))
+            });
+            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+        },
+    ))
     .await?;
 
     let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
