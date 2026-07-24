@@ -11,6 +11,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -93,6 +94,8 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     function_context.plan_config.ansi_mode,
                     function_context.plan_config.literal_pick_minimum_precision,
                 );
+                let (left, right) =
+                    coerce_decimal_peer_operand(left, right, function_context.schema);
                 let operands = (
                     left.get_type(function_context.schema),
                     right.get_type(function_context.schema),
@@ -184,6 +187,8 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     function_context.plan_config.ansi_mode,
                     function_context.plan_config.literal_pick_minimum_precision,
                 );
+                let (left, right) =
+                    coerce_decimal_peer_operand(left, right, function_context.schema);
                 let operands = (
                     left.get_type(function_context.schema),
                     right.get_type(function_context.schema),
@@ -275,8 +280,7 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 ansi_mode,
                 function_context.plan_config.literal_pick_minimum_precision,
             );
-            let (left, right) =
-                coerce_integer_operand_to_decimal(left, right, function_context.schema);
+            let (left, right) = coerce_decimal_peer_operand(left, right, function_context.schema);
             // Spark caps a decimal product's precision at 38 by REDUCING the scale
             // (adjustPrecisionScale) and HALF_UP-rounding the value; DataFusion keeps
             // the full scale. Only intervene when the product would exceed precision 38
@@ -471,25 +475,34 @@ fn spark_integer_decimal_type(data_type: &DataType) -> Option<DataType> {
     Some(DataType::Decimal128(precision, 0))
 }
 
-/// Casts an integer operand paired with a decimal to its Spark type-based decimal
-/// (`Int -> Decimal(10,0)`, ...) so the decimal arithmetic rule applies to integer
-/// *columns* — bare integer literals are narrowed separately by
-/// [`coerce_spark_arithmetic_operands`]. Used by `/` and `*` (the operators whose
-/// decimal result type depends on the widened integer's precision).
-fn coerce_integer_operand_to_decimal(
-    left: Expr,
-    right: Expr,
-    schema: &DFSchemaRef,
-) -> (Expr, Expr) {
+/// Casts an integer or NULL operand paired with a decimal to the decimal Spark gives it,
+/// so the decimal arithmetic rule sees two decimals.
+///
+/// An integer *column* takes its type-based decimal (`Int -> Decimal(10,0)`, ...); bare
+/// integer literals are narrowed to their minimal decimal separately by
+/// [`coerce_spark_arithmetic_operands`]. A NULL takes the peer's decimal type, which is
+/// what Spark's implicit cast does — without it `decimal(38,18) * NULL` keeps
+/// DataFusion's `decimal(38,36)` instead of Spark's `decimal(38,6)`.
+///
+/// Used by `+ - * /`: every operator whose decimal result type depends on the widened
+/// operand's precision. `/` resolves its own (asymmetric) NULL rule first, so no NULL
+/// reaches here from that path.
+fn coerce_decimal_peer_operand(left: Expr, right: Expr, schema: &DFSchemaRef) -> (Expr, Expr) {
+    fn peer_decimal_type(data_type: &DataType, decimal_type: &DataType) -> Option<DataType> {
+        match data_type {
+            DataType::Null => Some(decimal_type.clone()),
+            _ => spark_integer_decimal_type(data_type),
+        }
+    }
     match (left.get_type(schema), right.get_type(schema)) {
         (Ok(left_type), Ok(right_type)) if is_decimal_type(&right_type) => {
-            match spark_integer_decimal_type(&left_type) {
+            match peer_decimal_type(&left_type, &right_type) {
                 Some(target) => (cast(left, target), right),
                 None => (left, right),
             }
         }
         (Ok(left_type), Ok(right_type)) if is_decimal_type(&left_type) => {
-            match spark_integer_decimal_type(&right_type) {
+            match peer_decimal_type(&right_type, &left_type) {
                 Some(target) => (left, cast(right, target)),
                 None => (left, right),
             }
@@ -586,7 +599,7 @@ fn spark_decimal_literal_datatype(
 /// `DataTypeUtils.fromLiteral` only narrows Short, Int and Long literals; a Byte
 /// literal falls through to `forType(ByteType)` = `Decimal(3, 0)`, so `Int8` is
 /// deliberately absent here (`decimal(10,2) * 3Y` is `decimal(14,2)` in Spark, not
-/// `decimal(12,2)`). Byte operands are widened by [`coerce_integer_operand_to_decimal`]
+/// `decimal(12,2)`). Byte operands are widened by [`coerce_decimal_peer_operand`]
 /// like any other integer column.
 /// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/types/DataTypeUtils.scala#L246-L251>
 fn scalar_integer_value(scalar: &ScalarValue) -> Option<i128> {
@@ -668,6 +681,14 @@ fn is_zero_literal(expr: &Expr) -> bool {
 ///
 /// This wraps the divisor itself (not the entire division expression) to avoid
 /// duplicating complex divisor expressions (e.g., window functions) in the plan.
+///
+/// The `nullif` zero takes the divisor's own type. A bare `lit(0)` there makes `nullif`
+/// widen the divisor to the common type of the pair, silently changing the operator's
+/// result type — `decimal(10,2) % 3` came out as `decimal(10,2)` under ANSI off but
+/// `decimal(3,2)` under ANSI on, and Spark's remainder rule does not depend on the ANSI
+/// flag. The ANSI branch keeps the untyped zero: there the literal only feeds a
+/// comparison (coerced anyway) and the `CASE` takes its type from the else branch, so
+/// typing it would only leave a cross-type comparison the optimizer can no longer fold.
 fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
@@ -691,7 +712,8 @@ fn make_safe_divisor(
             else_expr: Some(Box::new(divisor)),
         })
     } else {
-        expr_fn::nullif(divisor, lit(0))
+        let zero = ScalarValue::new_zero(divisor_type).map_or_else(|_| lit(0), lit);
+        expr_fn::nullif(divisor, zero)
     }
 }
 
@@ -759,7 +781,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
 
     let (dividend, divisor) =
-        coerce_integer_operand_to_decimal(dividend, divisor, function_context.schema);
+        coerce_decimal_peer_operand(dividend, divisor, function_context.schema);
 
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
@@ -946,6 +968,9 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
+        // Spark accepts any foldable scale, so fold one that is not already a literal
+        // (`ceil(x, 1 + 1)`); a column reference stays as-is and is rejected below.
+        let target_scale = folded_scale_argument(target_scale);
         let target_scale = match target_scale {
             Expr::Literal(_, _) => Ok(target_scale),
             Expr::Negative(negative) => {
@@ -1102,6 +1127,44 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// Spark takes the target scale of `round`/`ceil`/`floor` from any *foldable*
+/// expression, not just a literal — `round(x, 1 + 1)` is typed with scale 2. Sail's
+/// functions can only read a scale that reaches them as a literal, because DataFusion
+/// fills `ReturnFieldArgs::scalar_arguments` from literals alone. Fold it here, where the
+/// plan is still being built, into the literal Spark's analyzer would have produced.
+///
+/// A non-foldable scale is returned untouched: the evaluator runs against an empty
+/// schema, so anything referencing a column fails to evaluate and the caller keeps its
+/// existing behaviour (Spark rejects those with `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT`).
+fn folded_scale_argument(expr: Expr) -> Expr {
+    if matches!(expr, Expr::Literal(_, _)) || expr.is_volatile() {
+        return expr;
+    }
+    match LiteralEvaluator::new().evaluate(&expr) {
+        Ok(scalar) => Expr::Literal(scalar, None),
+        Err(_) => expr,
+    }
+}
+
+fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context: _,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            if index == 1 {
+                folded_scale_argument(argument)
+            } else {
+                argument
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(ScalarUDF::from(SparkRound::new()).call(arguments))
+}
+
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
@@ -1220,16 +1283,13 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         // DataFusion's `Negative` doesn't support Duration types, so route those
         // to the dedicated UDF.
         Ok(DataType::Duration(_)) => ScalarUDF::from(NegateDuration::new()).call(vec![arg]),
-        // Spark's unary minus coerces strings to DOUBLE before negating. The
-        // cast honors ANSI mode: an invalid string is NULL under ANSI off and
-        // errors under ANSI on. (Without this, the `SparkNegative` signature
-        // would coerce the string to an interval instead.)
+        // Spark's unary minus coerces strings to DOUBLE before negating, with the
+        // same parse the binary operators and `CAST` use: surrounding whitespace is
+        // trimmed, and an invalid string is NULL under ANSI off but raises under ANSI
+        // on. (Without the cast, the `SparkNegative` signature would coerce the string
+        // to an interval instead.)
         Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            let casted = if ansi_mode {
-                cast(arg, DataType::Float64)
-            } else {
-                try_cast(arg, DataType::Float64)
-            };
+            let casted = spark_string_to_numeric(arg, DataType::Float64, !ansi_mode);
             ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![casted])
         }
         // Floating-point negation never overflows and is identical in both ANSI
@@ -1316,7 +1376,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
-        ("round", F::udf(SparkRound::new())),
+        ("round", F::custom(spark_round)),
         ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),

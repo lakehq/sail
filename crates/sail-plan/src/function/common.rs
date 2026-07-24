@@ -10,6 +10,7 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
@@ -60,17 +61,104 @@ pub fn spark_string_to_numeric(
     // non-foldable node, and callers rely on `FLOAT('NaN')` and friends collapsing to a
     // literal at plan time (e.g. `VALUES` infers its column type from the folded rows).
     // It also keeps the common case free of a per-row trim.
-    let trimmed = match &expr {
-        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => expr::Expr::Literal(
-            ScalarValue::Utf8(Some(value.trim_matches(is_spark_trim_char).to_string())),
-            metadata.clone(),
-        ),
-        _ => datafusion::functions::expr_fn::btrim(vec![expr, lit(spark_trim_chars())]),
+    let trimmed = match expr {
+        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => {
+            let value_trimmed = value.trim_matches(is_spark_trim_char);
+            // A string of nothing but trim characters is malformed for Spark, but
+            // Arrow's decimal parser reads the empty string as zero — trimming
+            // `' '` into `''` would turn a rejected input into a silent `0.00`.
+            // Report the failure instead: NULL when failures are nulled, otherwise
+            // raise the way Spark's ANSI cast does. The value is known here, so the
+            // message can quote it exactly like Spark.
+            if value_trimmed.is_empty() {
+                return if null_on_failure {
+                    expr::Expr::Literal(
+                        ScalarValue::try_from(&target).unwrap_or(ScalarValue::Null),
+                        metadata,
+                    )
+                } else {
+                    spark_cast_invalid_input(&value, target)
+                };
+            }
+            let value = value_trimmed.to_string();
+            expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata)
+        }
+        // Same guard for the per-row path. Only a decimal target needs it: every other
+        // Arrow numeric parser already rejects the empty string, so the plain cast
+        // reports the failure on its own (NULL under `try_cast`, raise otherwise).
+        expr => {
+            let trimmed =
+                datafusion::functions::expr_fn::btrim(vec![expr, lit(spark_trim_chars())]);
+            if !matches!(
+                target,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            ) {
+                trimmed
+            } else if null_on_failure {
+                datafusion::functions::expr_fn::nullif(trimmed, lit(""))
+            } else {
+                // ANSI mode: Spark raises on a malformed value, so the empty case
+                // cannot fall through to a NULL. The message names Spark's error
+                // class but not the offending value, which is only known per row.
+                return spark_cast_raise_on_empty(trimmed, target);
+            }
+        }
     };
     if null_on_failure {
         datafusion_expr::try_cast(trimmed, target)
     } else {
         cast(trimmed, target)
+    }
+}
+
+/// Spark's `CAST_INVALID_INPUT`, raised at evaluation time. The `cast` around it only
+/// gives the expression the target type — `raise_error` never returns.
+///
+/// `value` is the string Spark quotes in the message. The per-row caller passes the
+/// trimmed (empty) value, since the original is not known while the plan is built.
+///
+/// The text is Spark's own, minus the trailing "Correct the value ..." guidance and the
+/// SQLSTATE it appends — the same shape `spark_bin` already uses for this error class.
+fn spark_cast_invalid_input(value: &str, target: DataType) -> expr::Expr {
+    let message = format!(
+        "[CAST_INVALID_INPUT] The value '{value}' of the type \"STRING\" cannot be cast to \"{}\" because it is malformed.",
+        spark_type_name(&target)
+    );
+    let raise = expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(RaiseError::new())),
+        args: vec![lit(message)],
+    });
+    cast(raise, target)
+}
+
+/// `CASE WHEN <trimmed> = '' THEN raise_error(..) ELSE CAST(<trimmed> AS target) END`.
+///
+/// Spark's ANSI cast raises `CAST_INVALID_INPUT` for a value that is nothing but trim
+/// characters; Arrow's decimal parser would read it as zero instead. The `when` branch
+/// only runs on the offending rows, and common subexpression elimination collapses the
+/// two `btrim` calls into one (the physical plan shows a single `__common_expr`).
+fn spark_cast_raise_on_empty(trimmed: expr::Expr, target: DataType) -> expr::Expr {
+    let raise = spark_cast_invalid_input("", target.clone());
+    expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(Box::new(trimmed.clone().eq(lit(""))), Box::new(raise))],
+        else_expr: Some(Box::new(cast(trimmed, target))),
+    })
+}
+
+/// The Spark name of a numeric type, for error messages that quote it.
+fn spark_type_name(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+            format!("DECIMAL({precision},{scale})")
+        }
+        DataType::Int8 => "TINYINT".to_string(),
+        DataType::Int16 => "SMALLINT".to_string(),
+        DataType::Int32 => "INT".to_string(),
+        DataType::Int64 => "BIGINT".to_string(),
+        DataType::Float32 => "FLOAT".to_string(),
+        DataType::Float64 => "DOUBLE".to_string(),
+        other => format!("{other:?}"),
     }
 }
 

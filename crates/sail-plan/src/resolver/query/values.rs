@@ -51,12 +51,12 @@ impl PlanResolver<'_> {
         let mut nan_positions = HashSet::new();
         for value in values.iter() {
             value.iter().enumerate().for_each(|(idx, expr)| {
-                if let Expr::Cast(cast) = expr
-                    && let Expr::Literal(sv, _) = cast.expr.as_ref()
+                if let Some((inner, data_type)) = cast_parts(expr)
+                    && let Expr::Literal(sv, _) = inner
                     && let Some(true) = sv
                         .try_as_str()
                         .flatten()
-                        .map(|s| s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric())
+                        .map(|s| s.to_uppercase() == "NAN" && data_type.is_numeric())
                 {
                     nan_positions.insert(idx);
                 }
@@ -147,6 +147,17 @@ impl PlanResolver<'_> {
         }
 
         Ok(map_positions)
+    }
+}
+
+/// Returns the operand and target type of a `CAST` or `TRY_CAST` expression.
+/// Under ANSI off, string-to-numeric coercion emits `TRY_CAST`, so both forms
+/// must be recognized when inferring the type of a `VALUES` column.
+fn cast_parts(expr: &Expr) -> Option<(&Expr, &DataType)> {
+    match expr {
+        Expr::Cast(cast) => Some((cast.expr.as_ref(), cast.field.data_type())),
+        Expr::TryCast(cast) => Some((cast.expr.as_ref(), cast.field.data_type())),
+        _ => None,
     }
 }
 

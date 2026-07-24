@@ -361,3 +361,107 @@ Feature: bround comprehensive tests
         SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
+
+  Rule: bround with a foldable scale expression
+
+    # Spark accepts any foldable scale and keeps the decimal type; Sail folds the scale
+    # too, but `SparkBRound` only implements `return_type`, which never sees the scale
+    # VALUE — hence every decimal input is typed DOUBLE. Closing it needs the migration
+    # to `return_field_from_args` (issue #1903), the same one `round` already went
+    # through, plus a vectorized decimal kernel: the Decimal128 path is `unsupported`
+    # today, which is why the value is computed in double as well.
+    @sail-bug
+    Scenario: bround keeps the decimal type with a foldable scale
+      When query
+        """
+        SELECT bround(CAST(3.14159 AS DECIMAL(10,5)), 1 + 1) AS result,
+               typeof(bround(CAST(3.14159 AS DECIMAL(10,5)), 1 + 1)) AS t
+        """
+      Then query result
+        | result | t            |
+        | 3.14   | decimal(8,2) |
+
+  Rule: bround over DECIMAL input (all @sail-bug — see issue #1903)
+    # Three separate defects, all measured against Spark JVM 4.1.1:
+    #
+    # 1. WRONG VALUE. The scalar decimal path converts to `f64` and rounds with Rust's
+    #    `.round()`, which is half-away-from-zero — so `bround` behaves like `round` for
+    #    decimal input, losing the half-to-EVEN semantics the function exists for.
+    #    The float paths use `spark_bround_f64` and are correct; only decimal is not.
+    # 2. WRONG TYPE. `return_type` only sees the argument TYPES, never the scale VALUE,
+    #    so it cannot apply Spark's `(p - s + 1) + min(s, scale)` and maps every decimal
+    #    to DOUBLE. Fixing it needs `return_field_from_args` (issue #1903).
+    # 3. HARD FAILURE on a decimal COLUMN: the vectorized Decimal128 path is
+    #    `unsupported`, so the query errors outright while Spark returns a value.
+    #
+    # Closing this needs a real decimal kernel (half-to-even over i128 with rescaling)
+    # plus the `return_field_from_args` migration. It is `round`'s decimal typing again.
+
+    @sail-bug
+    Scenario: bround of a decimal rounds half to even
+      # The defining behaviour of bround: 2.5 -> 2 and 3.5 -> 4, never 3.
+      When query
+        """
+        SELECT bround(CAST(2.5 AS DECIMAL(2,1)), 0) AS r,
+               typeof(bround(CAST(2.5 AS DECIMAL(2,1)), 0)) AS t
+        """
+      Then query result
+        | r | t            |
+        | 2 | decimal(2,0) |
+
+    @sail-bug
+    Scenario: bround of a decimal with no scale rounds half to even
+      When query
+        """
+        SELECT bround(CAST(2.5 AS DECIMAL(2,1))) AS r
+        """
+      Then query result
+        | r |
+        | 2 |
+
+    @sail-bug
+    Scenario: bround of a decimal column rounds half to even over rows
+      # A decimal column errors today ("vectorized Decimal128" is unsupported).
+      When query
+        """
+        SELECT bround(v, 0) AS r
+        FROM VALUES (CAST(2.5 AS DECIMAL(2,1))), (CAST(3.5 AS DECIMAL(2,1))) AS t(v)
+        """
+      Then query result
+        | r |
+        | 2 |
+        | 4 |
+
+    @sail-bug
+    Scenario: bround of a decimal column keeps the decimal type
+      When query
+        """
+        SELECT bround(v, 2) AS r, typeof(bround(v, 2)) AS t
+        FROM VALUES (CAST(3.14159 AS DECIMAL(10,5))) AS t(v)
+        """
+      Then query result
+        | r    | t            |
+        | 3.14 | decimal(8,2) |
+
+    @sail-bug
+    Scenario: bround of a decimal column with a negative scale
+      When query
+        """
+        SELECT bround(v, -1) AS r, typeof(bround(v, -1)) AS t
+        FROM VALUES (CAST(25 AS DECIMAL(10,0))) AS t(v)
+        """
+      Then query result
+        | r  | t             |
+        | 20 | decimal(11,0) |
+
+    @sail-bug
+    Scenario: bround of a wide decimal keeps every digit
+      # Going through f64 loses the last digits: 0.123456789012345678 comes back as
+      # 0.12345678901234568.
+      When query
+        """
+        SELECT bround(CAST('0.123456789012345678' AS DECIMAL(38,18)), 18) AS r
+        """
+      Then query result
+        | r                   |
+        | 0.123456789012345678 |
