@@ -20,7 +20,7 @@ use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
 use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
 use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
 use sail_common::runtime::RuntimeHandle;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
 pub fn create_catalog_manager(
     config: &AppConfig,
@@ -70,23 +70,11 @@ pub fn create_catalog_manager(
                             namespace_separator.to_string(),
                         );
                     }
-                    // A token file takes precedence over a static token: its
-                    // contents are re-read per request so a rotated projected
-                    // service account token is picked up without a restart.
-                    let credentials = if let Some(path) = bearer_access_token_file {
-                        Arc::new(FileCatalogCredentials::new(path.clone()))
-                            as Arc<dyn CatalogCredentials>
-                    } else {
-                        bearer_access_token
-                            .as_ref()
-                            .or(oauth_access_token.as_ref())
-                            .map(|token| {
-                                Arc::new(StaticCatalogCredentials::new(
-                                    token.expose_secret().to_string(),
-                                )) as Arc<dyn CatalogCredentials>
-                            })
-                            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
-                    };
+                    let credentials = iceberg_rest_credentials(
+                        bearer_access_token_file.as_ref(),
+                        bearer_access_token.as_ref(),
+                        oauth_access_token.as_ref(),
+                    );
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
@@ -326,6 +314,28 @@ fn wrap_catalog_provider(
     Ok(Arc::new(provider))
 }
 
+/// Credentials for an Iceberg REST catalog. A token file takes precedence over
+/// a static token: its contents are re-read per request, so a rotated projected
+/// service account token is picked up without a restart.
+fn iceberg_rest_credentials(
+    bearer_access_token_file: Option<&String>,
+    bearer_access_token: Option<&SecretString>,
+    oauth_access_token: Option<&SecretString>,
+) -> Arc<dyn CatalogCredentials> {
+    if let Some(path) = bearer_access_token_file {
+        Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>
+    } else {
+        bearer_access_token
+            .or(oauth_access_token)
+            .map(|token| {
+                Arc::new(StaticCatalogCredentials::new(
+                    token.expose_secret().to_string(),
+                )) as Arc<dyn CatalogCredentials>
+            })
+            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -420,5 +430,46 @@ mod tests {
             bundle.is_none(),
             "session cache should not be stored in global manager"
         );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_prefer_the_token_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "file-token\n").unwrap();
+        let path = path.to_string_lossy().to_string();
+        let static_token = SecretString::from("static-token".to_string());
+
+        let credentials = iceberg_rest_credentials(Some(&path), Some(&static_token), None);
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("file-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_use_the_static_bearer_token() {
+        let token = SecretString::from("static-token".to_string());
+        let credentials = iceberg_rest_credentials(None, Some(&token), None);
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("static-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_fall_back_to_the_oauth_token() {
+        let token = SecretString::from("oauth-token".to_string());
+        let credentials = iceberg_rest_credentials(None, None, Some(&token));
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("oauth-token".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_are_empty_without_any_token() {
+        let credentials = iceberg_rest_credentials(None, None, None);
+        assert_eq!(credentials.retrieve().await.unwrap(), None);
     }
 }

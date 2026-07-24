@@ -47,3 +47,6 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
