@@ -138,3 +138,63 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
       Then query result
         | result |
         | NaN    |
+
+  Rule: operand typing follows Spark's remainder rule, not DataFusion's coercion
+    # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands
+    # before the remainder rule can see them. The plan builder now applies Spark's own
+    # coercion first — the integer column takes its type-based decimal, and a string pair
+    # promotes BOTH operands to DOUBLE (leaving the peer alone let the UDF pick its own
+    # common type, which is what produced decimal(30,15) below).
+
+    Scenario: pmod of a decimal and an integer column keeps the remainder type
+      When query
+        """
+        SELECT typeof(pmod(a, b)) AS t, pmod(a, b) AS r
+        FROM VALUES (CAST(1.5 AS DECIMAL(3,2)), CAST(2 AS INT)) AS t(a, b)
+        """
+      Then query result
+        | t            | r    |
+        | decimal(3,2) | 1.50 |
+
+    Scenario: pmod of a string and a decimal promotes to double
+      When query
+        """
+        SELECT typeof(pmod('5.5', CAST(2.0 AS DECIMAL(10,2)))) AS t,
+               pmod('5.5', CAST(2.0 AS DECIMAL(10,2))) AS r
+        """
+      Then query result
+        | t      | r   |
+        | double | 1.5 |
+
+    Scenario: pmod of Infinity and a decimal is NaN
+      When query
+        """
+        SELECT pmod('Infinity', CAST(2.0 AS DECIMAL(10,2))) AS r
+        """
+      Then query result
+        | r   |
+        | NaN |
+
+    Scenario: pmod of NULL and a string is NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT pmod(NULL, '3') AS r
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+    Scenario: pmod of a decimal column and an integer column over rows
+      # The literal scenarios fold at plan time; this one drives the coercion through the
+      # runtime kernel.
+      When query
+        """
+        SELECT pmod(a, b) AS r
+        FROM VALUES (CAST(1.5 AS DECIMAL(3,2)), CAST(2 AS INT)),
+                    (CAST(-1.5 AS DECIMAL(3,2)), CAST(2 AS INT)) AS t(a, b)
+        """
+      Then query result
+        | r    |
+        | 1.50 |
+        | 0.50 |

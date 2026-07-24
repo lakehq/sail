@@ -1821,7 +1821,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             |
         | decimal(38,6) |
 
-    @sail-bug
     Scenario: round of a bigint keeps the integral type
       # Pre-existing: DataFusion's signature coerces integral inputs to Float64, losing
       # precision past 2^53. Spark preserves non-decimal input types (`case t => t`).
@@ -1852,7 +1851,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands to
     # one common type before the remainder rule can see the originals.
 
-    @sail-bug
     Scenario: pmod of a decimal and an integer column keeps the remainder type
       When query
         """
@@ -1863,7 +1861,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t            |
         | decimal(3,2) |
 
-    @sail-bug
     Scenario: pmod of a string and a decimal promotes to double
       When query
         """
@@ -1873,7 +1870,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t      |
         | double |
 
-    @sail-bug
     Scenario: pmod of Infinity and a decimal is NaN
       When query
         """
@@ -1883,7 +1879,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r   |
         | NaN |
 
-    @sail-bug
     Scenario: pmod of NULL and a string is NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query

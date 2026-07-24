@@ -391,8 +391,8 @@ fn coerce_spark_arithmetic_operands(
         if operand_ok(left_string, left_type) && operand_ok(right_string, right_type) {
             if !ansi_mode {
                 return (
-                    coerce_string_operand(left, left_string, &DataType::Float64, true),
-                    coerce_string_operand(right, right_string, &DataType::Float64, true),
+                    coerce_string_operand(left, left_type, &DataType::Float64, true),
+                    coerce_string_operand(right, right_type, &DataType::Float64, true),
                 );
             }
             // ANSI on. `string + string` has no numeric peer to promote to; leave it
@@ -407,11 +407,9 @@ fn coerce_spark_arithmetic_operands(
                 } else {
                     DataType::Int64
                 };
-                // Only the string is parsed; DataFusion widens the numeric peer to the
-                // same type, which is what makes the result BIGINT/DOUBLE like Spark.
                 return (
-                    coerce_string_operand(left, left_string, &target, false),
-                    coerce_string_operand(right, right_string, &target, false),
+                    coerce_string_operand(left, left_type, &target, false),
+                    coerce_string_operand(right, right_type, &target, false),
                 );
             }
         }
@@ -437,19 +435,26 @@ fn coerce_spark_arithmetic_operands(
     (left, right)
 }
 
-/// Applies Spark's string-to-number parse to a string operand, leaving a non-string
-/// operand alone. Shared with `CAST` and the type constructors so all three agree on
-/// trimming and on NULL-vs-raise.
+/// Brings one operand of a string-and-numeric pair to the type Spark promotes them to.
+///
+/// A string is parsed with the shared Spark rules (shared with `CAST` and the type
+/// constructors, so all three agree on trimming and on NULL-vs-raise). The peer is cast
+/// to the same target: a binary operator would not need it, since DataFusion widens the
+/// pair anyway, but a UDF picks its own common type from the operands it is handed —
+/// leaving the peer alone is what typed `pmod('5.5', decimal(10,2))` as `decimal(30,15)`
+/// instead of DOUBLE, and made `pmod(NULL, '3')` fail to plan.
 fn coerce_string_operand(
     expr: Expr,
-    is_string: bool,
+    expr_type: &DataType,
     target: &DataType,
     null_on_failure: bool,
 ) -> Expr {
-    if is_string {
+    if is_string_type(expr_type) {
         spark_string_to_numeric(expr, target.clone(), null_on_failure)
-    } else {
+    } else if expr_type == target {
         expr
+    } else {
+        cast(expr, target.clone())
     }
 }
 
@@ -1149,9 +1154,9 @@ fn folded_scale_argument(expr: Expr) -> Expr {
 fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
-        function_context: _,
+        function_context,
     } = input;
-    let arguments = arguments
+    let mut arguments = arguments
         .into_iter()
         .enumerate()
         .map(|(index, argument)| {
@@ -1162,7 +1167,40 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
         })
         .collect::<Vec<_>>();
+    // Spark keeps the input type for a non-decimal input (`Round.dataType` ends in
+    // `case t => t`), and rounding an integer at a non-negative scale cannot change it —
+    // so the call is the identity. Returning the argument keeps the exact value, which
+    // DataFusion's signature would otherwise destroy by coercing to Float64:
+    // `round(9007199254740993L, 0)` came back as 9007199254740992.0.
+    //
+    // A NEGATIVE scale over an integer does round (25L to -1 is 30L) and can overflow the
+    // input type, which Spark raises on under ANSI and wraps otherwise. That needs the
+    // ANSI flag inside the UDF plus an integral kernel, so it stays on the Float64 path
+    // for now and is pinned as a known gap.
+    if let [argument, scale] = arguments.as_slice()
+        && matches!(
+            argument.get_type(function_context.schema),
+            Ok(DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64)
+        )
+        && matches!(scalar_scale_value(scale), Some(scale) if scale >= 0)
+    {
+        return Ok(arguments.swap_remove(0));
+    }
     Ok(ScalarUDF::from(SparkRound::new()).call(arguments))
+}
+
+/// The value of a literal integer scale argument, once folded.
+fn scalar_scale_value(expr: &Expr) -> Option<i64> {
+    let Expr::Literal(scalar, _) = expr else {
+        return None;
+    };
+    match scalar {
+        ScalarValue::Int8(Some(v)) => Some(i64::from(*v)),
+        ScalarValue::Int16(Some(v)) => Some(i64::from(*v)),
+        ScalarValue::Int32(Some(v)) => Some(i64::from(*v)),
+        ScalarValue::Int64(Some(v)) => Some(*v),
+        _ => None,
+    }
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1216,6 +1254,10 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ansi_mode,
         function_context.plan_config.literal_pick_minimum_precision,
     );
+    // An integer *column* paired with a decimal takes its type-based decimal here too,
+    // the way `+ - * /` do it — without this the remainder rule below never sees two
+    // decimals and `pmod(decimal(3,2), INT column)` keeps DataFusion's `decimal(12,2)`.
+    let (left, right) = coerce_decimal_peer_operand(left, right, function_context.schema);
     // Spark types `pmod` by the remainder rule over the *original* operand types. The
     // UDF cannot: `Signature::numeric` unifies both operands to one common type before
     // `return_type` runs, so by then the narrow operand's precision is gone. Compute
