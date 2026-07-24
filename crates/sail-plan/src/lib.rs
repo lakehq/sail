@@ -36,14 +36,6 @@ pub async fn resolve_and_execute_plan(
     config: Arc<PlanConfig>,
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
-    resolve_plan_execution(ctx, config, plan).await
-}
-
-async fn resolve_plan_execution(
-    ctx: &SessionContext,
-    config: Arc<PlanConfig>,
-    plan: spec::Plan,
-) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
