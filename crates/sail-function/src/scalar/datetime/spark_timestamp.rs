@@ -3,9 +3,9 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDateTime;
+use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::array::{Array, ArrayRef, TimestampMicrosecondArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
