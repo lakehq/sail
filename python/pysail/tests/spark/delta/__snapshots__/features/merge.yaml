@@ -2215,6 +2215,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
   
