@@ -1,6 +1,6 @@
+use chumsky::Parser;
 use chumsky::input::Input;
 use chumsky::span::SimpleSpan;
-use chumsky::Parser;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
@@ -13,14 +13,14 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
-use sail_sql_parser::token::Token;
+use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
-    create_date_parser, create_time_parser, create_timestamp_parser, DateValue, TimeValue,
-    TimestampValue,
+    DateValue, TimeValue, TimestampValue, create_date_parser, create_time_parser,
+    create_timestamp_parser,
 };
-use crate::literal::interval::{parse_unqualified_interval_string, IntervalValue};
+use crate::literal::interval::{IntervalValue, parse_unqualified_interval_string};
 
 fn map_parser_input<'a, C>(
     (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),
@@ -50,6 +50,27 @@ macro_rules! parse_simple {
         let parser = $parser::<chumsky::extra::Err<chumsky::error::Rich<_, _>>>();
         parser.parse($input).into_result().map_err(SqlError::parser)
     }};
+}
+
+pub fn rewrite_positional_parameter_markers(s: &str) -> SqlResult<(String, usize)> {
+    let options = ParserOptions::default();
+    let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
+    let tokens = lexer.parse(s).into_result().map_err(SqlError::parser)?;
+
+    let mut output = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut count = 0;
+    for (token, span) in tokens {
+        if matches!(token, Token::Punctuation(Punctuation::QuestionMark)) {
+            count += 1;
+            output.push_str(&s[last..span.start]);
+            output.push('$');
+            output.push_str(&count.to_string());
+            last = span.end;
+        }
+    }
+    output.push_str(&s[last..]);
+    Ok((output, count))
 }
 
 pub fn parse_data_type(s: &str) -> SqlResult<DataType> {

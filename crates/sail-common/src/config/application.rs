@@ -5,7 +5,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+    ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
     serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
@@ -180,6 +180,8 @@ pub struct ClusterConfig {
     pub driver_listen_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
+    #[serde(skip_serializing)]
+    pub driver_id: u64,
     #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
@@ -368,8 +370,18 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetCdcConfig {
+    pub enabled: bool,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+    pub norm_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -499,6 +511,14 @@ pub struct OptimizerConfig {
     pub expand_views_at_output: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OneLakeApi {
+    Delta,
+    #[default]
+    Iceberg,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -552,6 +572,8 @@ pub enum CatalogType {
     OneLake {
         name: String,
         url: String,
+        #[serde(default)]
+        api: OneLakeApi,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -562,6 +584,8 @@ pub enum CatalogType {
     },
     Glue {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -645,6 +669,7 @@ impl ClusterConfigEnv {
         ENABLE_TLS,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
+        DRIVER_ID,
         WORKER_ID,
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,

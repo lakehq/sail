@@ -10,6 +10,7 @@ use futures::FutureExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObservable};
+use sail_execution::DriverId;
 use tokio::sync::oneshot;
 
 use crate::session_manager::event::SessionHistory;
@@ -19,6 +20,7 @@ pub struct ServerSession {
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub state: ServerSessionState,
+    pub driver_id: Option<DriverId>,
 }
 
 impl ServerSession {
@@ -33,20 +35,19 @@ impl ServerSession {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
         if let ServerSessionState::Running { context } = &self.state {
-            if let Ok(service) = context.extension::<JobService>() {
-                async move {
+            match context.extension::<JobService>() {
+                Ok(service) => async move {
                     service.runner().observe(observer).await;
                     rx.await
                         .map_err(|_| exec_datafusion_err!("failed to observe job runner"))?
                 }
-                .boxed()
-            } else {
-                async {
+                .boxed(),
+                _ => async {
                     Err(exec_datafusion_err!(
                         "job service not found in session context"
                     ))
                 }
-                .boxed()
+                .boxed(),
             }
         } else if let ServerSessionState::Deleted { history } = &self.state {
             let history = history.clone();

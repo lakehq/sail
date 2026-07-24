@@ -5,7 +5,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, plan_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -194,13 +194,15 @@ impl ScalarUDFImpl for SparkFromCSV {
             [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
             }
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
-                Ok(vec![
-                    arg_types[0].clone(),
-                    arg_types[1].clone(),
-                    arg_types[2].clone(),
-                ])
-            }
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![
+                arg_types[0].clone(),
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
             _ => plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
                 Self::FROM_CSV_NAME,
@@ -816,7 +818,7 @@ mod tests {
     }
 
     macro_rules! downcast_option {
-        ($opt:expr, $typ:ty, $err_msg:expr) => {{
+        ($opt:expr_2021, $typ:ty, $err_msg:expr_2021) => {{
             let some_value = $opt;
             let some_value = match some_value {
                 Some(value) => value,

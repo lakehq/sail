@@ -595,7 +595,7 @@ Feature: concat function
         | result |
         | abc    |
 
-    Scenario: nested concat with column does not flatten but returns correct result
+    Scenario: nested concat with column flattens and returns correct result
       When query
         """
         SELECT concat(concat(v, 'b'), 'c') AS result

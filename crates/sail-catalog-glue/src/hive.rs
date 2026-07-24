@@ -1,8 +1,8 @@
 /// Hive-style table creation logic for AWS Glue Data Catalog.
 use std::collections::{HashMap, HashSet};
 
-use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
+use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::{HiveCatalogFormat, HiveStorageFormat};
 use sail_catalog::provider::{
@@ -10,8 +10,8 @@ use sail_catalog::provider::{
 };
 use sail_common_datafusion::catalog::TableStatus;
 
-use crate::data_type::arrow_to_glue_type;
 use crate::GlueCatalogProvider;
+use crate::data_type::arrow_to_glue_type;
 
 pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
 
@@ -67,6 +67,7 @@ pub(crate) async fn create_hive_table(
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .table_input(table_input)
         .send()
@@ -98,7 +99,7 @@ pub(crate) async fn create_hive_table(
 pub(crate) fn validate_hive_create_table_options(
     options: &CreateTableOptions,
 ) -> CatalogResult<()> {
-    if options.replace {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
@@ -144,8 +145,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         partition_by,
         sort_by: _,
         bucket_by: _,
-        if_not_exists,
-        replace: _,
+        mode,
         properties,
         is_external: _,
         is_write_precondition: _,
@@ -160,7 +160,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         location,
         format,
         partition_by: partition_columns,
-        if_not_exists,
+        if_not_exists: mode.ignore_if_exists(),
         properties,
     })
 }

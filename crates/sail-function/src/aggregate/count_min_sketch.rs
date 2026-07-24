@@ -1,18 +1,16 @@
 use std::fmt::Debug;
 
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-    StringArray, StringViewArray,
-};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::array::{Array, ArrayRef, AsArray, BinaryArray};
+use arrow::datatypes::{DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::hash::utils::spark_compatible_murmur3_hash;
 use crate::scalar::math::java_random::JavaRandom;
 
@@ -62,12 +60,14 @@ impl AggregateUDFImpl for CountMinSketchFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "count_min_sketch"),
-            DataType::Binary,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "count_min_sketch"),
+                DataType::Binary,
+                true,
+            )
+            .into(),
+        ])
     }
 }
 
@@ -167,100 +167,58 @@ impl SparkCountMinSketch {
     }
 
     fn update_from_array(&mut self, values: &ArrayRef) -> Result<()> {
-        for row in 0..values.len() {
-            if values.is_null(row) {
-                continue;
+        // Downcast once outside the row loop: the data type and the concrete array
+        // are loop-invariant, so dispatching per row would re-pay the match + downcast
+        // on every element of the batch. `iter().flatten()` skips nulls without a
+        // per-row branch.
+        match values.data_type() {
+            DataType::Int8 => {
+                for v in values.as_primitive::<Int8Type>().iter().flatten() {
+                    self.add_long(v as i64);
+                }
             }
-            match values.data_type() {
-                DataType::Int8 => {
-                    let values = values.as_any().downcast_ref::<Int8Array>().ok_or_else(|| {
-                        DataFusionError::Internal("count_min_sketch expected Int8Array".to_string())
-                    })?;
-                    self.add_long(values.value(row) as i64);
+            DataType::Int16 => {
+                for v in values.as_primitive::<Int16Type>().iter().flatten() {
+                    self.add_long(v as i64);
                 }
-                DataType::Int16 => {
-                    let values = values
-                        .as_any()
-                        .downcast_ref::<Int16Array>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "count_min_sketch expected Int16Array".to_string(),
-                            )
-                        })?;
-                    self.add_long(values.value(row) as i64);
+            }
+            DataType::Int32 => {
+                for v in values.as_primitive::<Int32Type>().iter().flatten() {
+                    self.add_long(v as i64);
                 }
-                DataType::Int32 => {
-                    let values = values
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "count_min_sketch expected Int32Array".to_string(),
-                            )
-                        })?;
-                    self.add_long(values.value(row) as i64);
+            }
+            DataType::Int64 => {
+                for v in values.as_primitive::<Int64Type>().iter().flatten() {
+                    self.add_long(v);
                 }
-                DataType::Int64 => {
-                    let values = values
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "count_min_sketch expected Int64Array".to_string(),
-                            )
-                        })?;
-                    self.add_long(values.value(row));
+            }
+            DataType::Binary => {
+                for v in values.as_binary::<i32>().iter().flatten() {
+                    self.add_binary(v);
                 }
-                DataType::Binary => {
-                    let values =
-                        values
-                            .as_any()
-                            .downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| {
-                                DataFusionError::Internal(
-                                    "count_min_sketch expected BinaryArray".to_string(),
-                                )
-                            })?;
-                    self.add_binary(values.value(row));
+            }
+            DataType::Utf8 => {
+                for v in values.as_string::<i32>().iter().flatten() {
+                    self.add_binary(v.as_bytes());
                 }
-                DataType::Utf8 => {
-                    let values =
-                        values
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .ok_or_else(|| {
-                                DataFusionError::Internal(
-                                    "count_min_sketch expected StringArray".to_string(),
-                                )
-                            })?;
-                    self.add_binary(values.value(row).as_bytes());
+            }
+            DataType::LargeUtf8 => {
+                for v in values.as_string::<i64>().iter().flatten() {
+                    self.add_binary(v.as_bytes());
                 }
-                DataType::LargeUtf8 => {
-                    let values = values
-                        .as_any()
-                        .downcast_ref::<LargeStringArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "count_min_sketch expected LargeStringArray".to_string(),
-                            )
-                        })?;
-                    self.add_binary(values.value(row).as_bytes());
+            }
+            DataType::Utf8View => {
+                for v in values.as_string_view().iter().flatten() {
+                    self.add_binary(v.as_bytes());
                 }
-                DataType::Utf8View => {
-                    let values = values
-                        .as_any()
-                        .downcast_ref::<StringViewArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "count_min_sketch expected StringViewArray".to_string(),
-                            )
-                        })?;
-                    self.add_binary(values.value(row).as_bytes());
-                }
-                DataType::Null => {}
-                data_type => {
-                    return exec_err!("count_min_sketch does not support input type {data_type}");
-                }
+            }
+            DataType::Null => {}
+            data_type => {
+                return Err(unsupported_data_type_exec_err(
+                    "count_min_sketch",
+                    "TINYINT, SMALLINT, INT, BIGINT, STRING or BINARY",
+                    data_type,
+                ));
             }
         }
         Ok(())
@@ -275,8 +233,13 @@ impl SparkCountMinSketch {
     }
 
     fn add_binary(&mut self, item: &[u8]) {
-        let buckets = self.hash_binary(item);
-        for (row, bucket) in buckets.into_iter().enumerate() {
+        // Compute the two base hashes once, then derive each row's bucket inline
+        // (mirrors `add_long`) so a per-element bucket Vec is never allocated.
+        let hash1 = spark_compatible_murmur3_hash(item, 0) as i32;
+        let hash2 = spark_compatible_murmur3_hash(item, hash1 as u32) as i32;
+        for row in 0..self.depth {
+            let hash = hash1.wrapping_add((row as i32).wrapping_mul(hash2));
+            let bucket = (hash % self.width as i32).wrapping_abs() as usize;
             self.table[row * self.width + bucket] += 1;
         }
         self.total_count += 1;
@@ -357,17 +320,6 @@ impl SparkCountMinSketch {
         hash &= PRIME_MODULUS;
         (hash as i32 % self.width as i32) as usize
     }
-
-    fn hash_binary(&self, item: &[u8]) -> Vec<usize> {
-        let hash1 = spark_compatible_murmur3_hash(item, 0) as i32;
-        let hash2 = spark_compatible_murmur3_hash(item, hash1 as u32) as i32;
-        (0..self.depth)
-            .map(|row| {
-                let hash = hash1.wrapping_add((row as i32).wrapping_mul(hash2));
-                (hash % self.width as i32).wrapping_abs() as usize
-            })
-            .collect()
-    }
 }
 
 fn validate_parameters(eps: f64, confidence: f64) -> Result<()> {
@@ -384,10 +336,11 @@ fn validate_parameters(eps: f64, confidence: f64) -> Result<()> {
 
 fn validate_count_min_sketch_types(arg_types: &[DataType]) -> Result<()> {
     if arg_types.len() != 4 {
-        return exec_err!(
-            "count_min_sketch requires 4 arguments, got {}",
-            arg_types.len()
-        );
+        return Err(invalid_arg_count_exec_err(
+            "count_min_sketch",
+            (4, 4),
+            arg_types.len(),
+        ));
     }
     match &arg_types[0] {
         DataType::Int8
@@ -400,18 +353,22 @@ fn validate_count_min_sketch_types(arg_types: &[DataType]) -> Result<()> {
         | DataType::Utf8View
         | DataType::Null => {}
         data_type => {
-            return exec_err!("count_min_sketch does not support input type {data_type}");
+            return Err(unsupported_data_type_exec_err(
+                "count_min_sketch",
+                "TINYINT, SMALLINT, INT, BIGINT, STRING or BINARY",
+                data_type,
+            ));
         }
     }
-    if !matches!(arg_types[1], DataType::Float32 | DataType::Float64) {
+    if !matches!(arg_types[1], DataType::Float64) {
         return exec_err!(
-            "count_min_sketch requires a floating point eps argument, got {}",
+            "count_min_sketch requires a double eps argument, got {}",
             arg_types[1]
         );
     }
-    if !matches!(arg_types[2], DataType::Float32 | DataType::Float64) {
+    if !matches!(arg_types[2], DataType::Float64) {
         return exec_err!(
-            "count_min_sketch requires a floating point confidence argument, got {}",
+            "count_min_sketch requires a double confidence argument, got {}",
             arg_types[2]
         );
     }
@@ -430,14 +387,15 @@ fn resolve_float64_literal(args: &AccumulatorArgs, index: usize, name: &str) -> 
     })?;
     let value = get_scalar_value(value).map_err(|_| {
         DataFusionError::Plan(format!(
-            "count_min_sketch requires {name} to be a constant floating point value"
+            "count_min_sketch requires {name} to be a constant double value"
         ))
     })?;
+    // `validate_count_min_sketch_types` already rejects anything but Float64 for
+    // eps/confidence, so only the Float64 literal can reach here.
     match value {
-        ScalarValue::Float32(Some(value)) => Ok(value as f64),
         ScalarValue::Float64(Some(value)) => Ok(value),
         value => Err(DataFusionError::Plan(format!(
-            "count_min_sketch requires {name} to be a non-null floating point literal, got {}",
+            "count_min_sketch requires {name} to be a non-null double literal, got {}",
             value.data_type()
         ))),
     }

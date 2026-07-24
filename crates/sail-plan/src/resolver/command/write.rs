@@ -8,15 +8,16 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
 use datafusion_expr::{
-    col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Operator, Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition,
+    BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
+    Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::LakehouseCreateRequest;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
-    CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions, PartitionTransform,
+    CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
+    PartitionTransform,
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
@@ -27,8 +28,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
-    TableFormatRegistry,
+    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -42,8 +43,8 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// The write modes for all targets.
 ///
@@ -407,13 +408,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     let table_location = find_path_in_options(&sink_info.options);
-                    let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
-                        (true, false)
-                    } else if matches!(mode, WriteMode::Replace { .. }) {
-                        (false, true)
-                    } else {
+                    let create_mode = match &mode {
+                        WriteMode::Append { .. } => CreateTableMode::CreateIfNotExists,
+                        WriteMode::Replace {
+                            error_if_absent: true,
+                        } => CreateTableMode::Replace,
+                        WriteMode::Replace {
+                            error_if_absent: false,
+                        } => CreateTableMode::CreateOrReplace,
                         // ErrorIfExists or IgnoreIfExists
-                        (false, false)
+                        _ => CreateTableMode::Create,
                     };
                     let columns = input
                         .schema()
@@ -459,7 +463,7 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|part| part.as_ref().to_string())
                         .collect::<Vec<_>>();
-                    let create_options = CreateTableOptions {
+                    let mut create_options = CreateTableOptions {
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -468,8 +472,7 @@ impl PlanResolver<'_> {
                         partition_by,
                         sort_by,
                         bucket_by,
-                        if_not_exists,
-                        replace,
+                        mode: create_mode,
                         properties,
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
@@ -485,6 +488,14 @@ impl PlanResolver<'_> {
                             },
                         )
                         .await?;
+                    if let Some(location) = create_plan.table.status.location.clone()
+                        && create_options.location.as_deref() != Some(location.as_str())
+                    {
+                        create_options.location = Some(location.clone());
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), location)],
+                        });
+                    }
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table

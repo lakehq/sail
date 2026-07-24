@@ -8,7 +8,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_datafusion_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_datafusion_err};
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -156,11 +156,11 @@ impl ExecutionPlan for RelaxedTzCastExec {
 mod tests {
     use datafusion::arrow::array::{RecordBatch, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion::physical_plan::Partitioning;
-    use datafusion_common::stats::{ColumnStatistics, Precision};
+    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_common::ScalarValue;
-    use futures::{stream, StreamExt};
+    use datafusion_common::stats::{ColumnStatistics, Precision};
+    use futures::{StreamExt, stream};
 
     use super::*;
 

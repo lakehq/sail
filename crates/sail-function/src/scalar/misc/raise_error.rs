@@ -3,7 +3,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{internal_err, ScalarValue};
+use datafusion_common::{ScalarValue, internal_err};
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::utils::items::ItemTaker;
 

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::prelude::SessionContext;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use log::{info, warn};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
@@ -11,17 +11,29 @@ use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
 use sail_common_datafusion::system::predicate::PredicateExt;
+use sail_execution::DriverId;
+use sail_execution::driver::DriverHandle;
+use sail_execution::error::ExecutionResult;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SessionError, SessionResult};
-use crate::session_factory::ServerSessionInfo;
+use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
 
 impl SessionManagerActor {
+    pub(super) fn handle_get_driver(
+        &self,
+        driver_id: DriverId,
+        result: oneshot::Sender<ExecutionResult<DriverHandle>>,
+    ) -> ActorAction {
+        let _ = result.send(self.drivers.get(driver_id));
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_get_or_create_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -45,40 +57,91 @@ impl SessionManagerActor {
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            let info = ServerSessionInfo {
-                session_id: session_id.clone(),
-                user_id: user_id.clone(),
-                session_manager: ctx.handle().clone(),
+            let driver_id = match self.driver_id_generator.generate() {
+                Ok(driver_id) => driver_id,
+                Err(e) => {
+                    let output = Err(SessionError::internal(e.to_string()));
+                    let _ = result.send(output);
+                    return ActorAction::Continue;
+                }
             };
-            match self.factory.create(info) {
-                Ok(context) => {
-                    let session = ServerSession {
-                        user_id,
-                        created_at: Utc::now(),
-                        deleted_at: None,
-                        state: ServerSessionState::Running {
-                            context: context.clone(),
-                        },
+            let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
+                driver_id,
+                driver_server_port: self.gateway.as_ref().map(|x| x.port()),
+            });
+            match runner {
+                Ok(runner) => {
+                    let (runner, driver) = runner.into_parts();
+                    let registered_driver_id = driver.as_ref().map(|_| driver_id);
+                    if let Some(driver) = &driver
+                        && let Err(e) = self.drivers.insert(driver_id, driver.clone())
+                    {
+                        let driver = driver.clone();
+                        ctx.spawn(async move {
+                            if let Err(e) = driver.shutdown().await {
+                                warn!("failed to shut down driver {driver_id}: {e}");
+                            }
+                        });
+                        let output = Err(e.into());
+                        let _ = result.send(output);
+                        return ActorAction::Continue;
+                    }
+                    let info = ServerSessionInfo {
+                        session_id: session_id.clone(),
+                        user_id: user_id.clone(),
+                        session_manager: ctx.handle().clone(),
+                        job_runner: Some(runner),
                     };
-                    self.sessions.insert(session_id, session);
-                    Ok(context)
+                    match self.session_factory.create(info) {
+                        Ok(context) => {
+                            if let Some(driver) = driver {
+                                ctx.spawn(async move {
+                                    if let Err(e) = driver.activate().await {
+                                        warn!("failed to activate driver {driver_id}: {e}");
+                                    }
+                                });
+                            }
+                            let session = ServerSession {
+                                user_id,
+                                created_at: Utc::now(),
+                                deleted_at: None,
+                                state: ServerSessionState::Running {
+                                    context: context.clone(),
+                                },
+                                driver_id: registered_driver_id,
+                            };
+                            self.sessions.insert(session_id, session);
+                            Ok(context)
+                        }
+                        Err(e) => {
+                            if let Some(driver_id) = registered_driver_id
+                                && let Some(driver) = self.drivers.remove(driver_id)
+                            {
+                                ctx.spawn(async move {
+                                    if let Err(e) = driver.shutdown().await {
+                                        warn!("failed to shut down driver {driver_id}: {e}");
+                                    }
+                                });
+                            }
+                            Err(e.into())
+                        }
+                    }
                 }
                 Err(e) => Err(e.into()),
             }
         };
-        if let Ok(context) = &context {
-            if let Ok(active_at) = context
+        if let Ok(context) = &context
+            && let Ok(active_at) = context
                 .extension::<ActivityTracker>()
                 .and_then(|tracker| tracker.track_activity())
-            {
-                ctx.send_with_delay(
-                    SessionManagerEvent::ProbeIdleSession {
-                        session_id,
-                        instant: active_at,
-                    },
-                    self.options.session_timeout,
-                );
-            }
+        {
+            ctx.send_with_delay(
+                SessionManagerEvent::ProbeIdleSession {
+                    session_id,
+                    instant: active_at,
+                },
+                self.options.session_timeout,
+            );
         }
         let _ = result.send(context);
         ActorAction::Continue
@@ -91,17 +154,15 @@ impl SessionManagerActor {
         instant: Instant,
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
-        if let Some(session) = session {
-            if let ServerSessionState::Running { context } = &mut session.state {
-                if let Ok(tracker) = context.extension::<ActivityTracker>() {
-                    if tracker.active_at().is_ok_and(|x| x <= instant) {
-                        info!("removing idle session {session_id}");
-                        Self::delete_session(ctx, session_id, context);
-                        session.deleted_at = Some(Utc::now());
-                        session.state = ServerSessionState::Deleting;
-                    }
-                }
-            }
+        if let Some(session) = session
+            && let ServerSessionState::Running { context } = &mut session.state
+            && let Ok(tracker) = context.extension::<ActivityTracker>()
+            && tracker.active_at().is_ok_and(|x| x <= instant)
+        {
+            info!("removing idle session {session_id}");
+            Self::delete_session(ctx, session_id, context);
+            session.deleted_at = Some(Utc::now());
+            session.state = ServerSessionState::Deleting;
         }
         ActorAction::Continue
     }
@@ -144,6 +205,9 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
+        if let Some(driver_id) = session.driver_id.take() {
+            self.drivers.remove(driver_id);
+        }
         if matches!(session.state, ServerSessionState::Deleting) {
             session.state = ServerSessionState::Deleted {
                 history: Arc::new(history),
@@ -156,13 +220,22 @@ impl SessionManagerActor {
 
     pub(super) fn handle_set_session_failure(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         session_id: String,
     ) -> ActorAction {
         let Some(session) = self.sessions.get_mut(&session_id) else {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
+        if let Some(driver_id) = session.driver_id.take()
+            && let Some(driver) = self.drivers.remove(driver_id)
+        {
+            ctx.spawn(async move {
+                if let Err(e) = driver.shutdown().await {
+                    warn!("failed to shut down driver {driver_id}: {e}");
+                }
+            });
+        }
         session.state = ServerSessionState::Failed;
         ActorAction::Continue
     }

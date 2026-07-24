@@ -18,9 +18,9 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSch
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::variant::variant_storage_types_equivalent;
 
+use crate::spec::TableMetadata;
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
 use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
-use crate::spec::TableMetadata;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaMode {
@@ -223,10 +223,10 @@ impl SchemaEvolver {
             DataType::Timestamp(table_unit, table_tz),
             DataType::Timestamp(input_unit, input_tz),
         ) = (table_type, input_type)
+            && table_unit == input_unit
+            && Self::timestamp_timezone_compatible(table_tz, input_tz)
         {
-            if table_unit == input_unit && Self::timestamp_timezone_compatible(table_tz, input_tz) {
-                return true;
-            }
+            return true;
         }
         match (table_type, input_type) {
             (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
@@ -478,19 +478,22 @@ impl SchemaEvolver {
 
         // 1. Build fields in the order of Input Arrow Schema
         for input_field in input_fields {
-            if let Some(existing_field) = existing_pool.remove(input_field.name()) {
-                // Field exists: perform recursive merge_field, preserving original ID
-                let (merged_field, field_changed) =
-                    Self::merge_field(existing_field.as_ref(), input_field, next_field_id)?;
-                changed |= field_changed;
-                merged_children.push(Arc::new(merged_field));
-            } else {
-                // FIXME: - Missing Nested Column Rename detection.
-                // Same as top-level fields: renaming a nested field is currently treated as adding a new field.
-                // This breaks schema evolution for renamed nested fields.
-                let new_field = Self::build_field_from_arrow(input_field, next_field_id)?;
-                merged_children.push(Arc::new(new_field));
-                changed = true;
+            match existing_pool.remove(input_field.name()) {
+                Some(existing_field) => {
+                    // Field exists: perform recursive merge_field, preserving original ID
+                    let (merged_field, field_changed) =
+                        Self::merge_field(existing_field.as_ref(), input_field, next_field_id)?;
+                    changed |= field_changed;
+                    merged_children.push(Arc::new(merged_field));
+                }
+                _ => {
+                    // FIXME: - Missing Nested Column Rename detection.
+                    // Same as top-level fields: renaming a nested field is currently treated as adding a new field.
+                    // This breaks schema evolution for renamed nested fields.
+                    let new_field = Self::build_field_from_arrow(input_field, next_field_id)?;
+                    merged_children.push(Arc::new(new_field));
+                    changed = true;
+                }
             }
         }
 
@@ -529,7 +532,13 @@ impl SchemaEvolver {
     }
 
     pub fn assign_schema_field_ids(schema: &IcebergSchema) -> Result<IcebergSchema> {
-        let mut next_field_id = 1;
+        Self::assign_schema_field_ids_starting_at(schema, 1)
+    }
+
+    pub fn assign_schema_field_ids_starting_at(
+        schema: &IcebergSchema,
+        mut next_field_id: i32,
+    ) -> Result<IcebergSchema> {
         let mut new_fields = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             let mut cloned = field.as_ref().clone();
@@ -837,8 +846,8 @@ mod tests {
     use crate::spec::metadata::format::FormatVersion;
     use crate::spec::partition::PartitionSpec;
     use crate::spec::transform::Transform;
-    use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::PrimitiveType;
+    use crate::spec::types::values::{Literal, PrimitiveLiteral};
 
     #[test]
     fn assign_schema_field_ids_assigns_nested_children() {

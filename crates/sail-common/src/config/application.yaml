@@ -96,6 +96,12 @@
     If the value is `0`, the port is assumed to be the same as the port
     on which the driver listens.
 
+- key: cluster.driver_id
+  type: number
+  default: "0"
+  description:
+  hidden: true
+
 - key: cluster.worker_id
   type: number
   default: "0"
@@ -561,6 +567,39 @@
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
     This may improve performance when writing large Parquet files,
     at the expense of higher memory usage.
+  experimental: true
+
+- key: parquet.content_defined_chunking.enabled
+  type: boolean
+  default: "false"
+  description: |
+    (Writing) Whether to enable content-defined chunking (CDC) when writing Parquet files.
+    When enabled, data page boundaries are determined by a rolling hash of column values.
+  experimental: true
+
+- key: parquet.content_defined_chunking.min_chunk_size
+  type: number
+  default: "262144"
+  description: |
+    (Writing) The minimum chunk size in bytes for Parquet content-defined chunking.
+    The rolling hash will not trigger a split until this many bytes have been accumulated.
+  experimental: true
+
+- key: parquet.content_defined_chunking.max_chunk_size
+  type: number
+  default: "1048576"
+  description: |
+    (Writing) The maximum chunk size in bytes for Parquet content-defined chunking.
+    A split is forced when the accumulated size exceeds this value.
+  experimental: true
+
+- key: parquet.content_defined_chunking.norm_level
+  type: number
+  default: "0"
+  description: |
+    (Writing) The normalization level for Parquet content-defined chunking.
+    Increasing this improves deduplication ratio but increases fragmentation.
+    The recommended range is `-3` to `3`.
   experimental: true
 
 - key: parquet.file_statistics_cache.type

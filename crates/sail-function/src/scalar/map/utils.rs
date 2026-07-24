@@ -1,12 +1,11 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, MapArray, StructArray};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::filter;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{HashSet, Result, ScalarValue, exec_err, internal_err};
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 /// Helper function to get element [`DataType`]
@@ -48,14 +47,15 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
     match array.data_type() {
         DataType::List(_) => Ok(Cow::Borrowed(array.as_list::<i32>().offsets().as_ref())),
         DataType::LargeList(_) => Ok(Cow::Owned(
-            array.as_list::<i64>()
+            array
+                .as_list::<i64>()
                 .offsets()
                 .iter()
                 .map(|i| *i as i32)
                 .collect::<Vec<_>>(),
         )),
         DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
-             (0..=array.len() as i32).map(|i| size * i).collect()
+            (0..=array.len() as i32).map(|i| size * i).collect(),
         )),
         wrong_type => internal_err!(
             "map_from_arrays expects List/LargeList/FixedSizeList as first argument, got {wrong_type:?}"
@@ -181,7 +181,9 @@ fn map_deduplicate_keys(
 
         if key_is_valid && value_is_valid {
             if num_keys_entries != num_values_entries {
-                return exec_err!("map_deduplicate_keys: keys and values lists in the same row must have equal lengths");
+                return exec_err!(
+                    "map_deduplicate_keys: keys and values lists in the same row must have equal lengths"
+                );
             } else if num_keys_entries != 0 {
                 let mut seen_keys = HashSet::new();
 

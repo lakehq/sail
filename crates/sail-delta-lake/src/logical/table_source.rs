@@ -5,10 +5,10 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use sail_common_datafusion::datasource::MergeCapableSource;
 
-use crate::datasource::{df_logical_schema, get_pushdown_filters, DeltaScanConfig};
-use crate::storage::LogStoreRef;
-use crate::table::DeltaSnapshot;
 use crate::DeltaResult;
+use crate::datasource::{DeltaScanConfig, df_logical_schema, get_pushdown_filters};
+use crate::delta_log::LogStoreRef;
+use crate::table::DeltaSnapshot;
 
 /// Logical-only Delta table source used in DataFusion logical plans.
 ///

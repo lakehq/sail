@@ -4,13 +4,13 @@ use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    expr, Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
+    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
 };
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_set_operation(

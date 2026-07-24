@@ -268,7 +268,7 @@ impl Display for IntervalDayTimeFormatter {
 pub struct IntervalMonthDayNanoFormatter(pub IntervalMonthDayNano);
 
 macro_rules! write_interval_part {
-    ($f:expr, $sep:expr, $value:expr, $unit:expr) => {
+    ($f:expr_2021, $sep:expr_2021, $value:expr_2021, $unit:expr_2021) => {
         if $value != 0 {
             write!($f, "{}{} {}", $sep, $value, $unit)?;
             " "

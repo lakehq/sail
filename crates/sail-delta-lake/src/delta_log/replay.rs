@@ -4,26 +4,24 @@ use std::sync::Arc;
 use datafusion::common::runtime::SpawnedTask;
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use super::{
-    list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
-    read_last_checkpoint_version_from_store, LogSegmentResolver, ReplayedTableHeader,
-    ResolvedLogSegment,
+    LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_delta_log_entries_from,
+    parse_checkpoint_version_from_location, parse_commit_version_from_location,
+    parse_compacted_json_versions_from_location, read_last_checkpoint_version_from_store,
 };
-use crate::kernel::checkpoints::{
-    decode_checkpoint_rows, read_checkpoint_main_rows_from_checkpoint_file,
-    read_checkpoint_rows_from_checkpoint_file, replay_commit_actions_with_compactions,
-    replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
-    ReconciledHeaderState, ReplayedTableState,
+use crate::checkpoint::{
+    ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState, decode_checkpoint_rows,
+    read_checkpoint_main_rows_from_checkpoint_file, read_checkpoint_rows_from_checkpoint_file,
+    replay_commit_actions_with_compactions, replay_commit_header_actions_with_compactions,
 };
-use crate::kernel::CatalogManagedCommitSet;
+use crate::delta_log::LogStore;
+use crate::snapshot::CatalogManagedCommitSet;
 use crate::spec::{
-    is_json_checkpoint_filename, CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult,
+    CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult, is_json_checkpoint_filename,
 };
-use crate::storage::LogStore;
 
 async fn read_checkpoint_header_from_checkpoint_file(
     root_store: Arc<dyn ObjectStore>,

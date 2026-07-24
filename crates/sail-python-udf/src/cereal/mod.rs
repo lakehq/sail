@@ -1,7 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::{PyList, PyModule};
-use pyo3::{intern, PyResult, Python};
+use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
 use sail_pyarrow::ToPyArrow;
 

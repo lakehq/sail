@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
+use fastrace::Span;
 use fastrace::future::FutureExt;
 use fastrace::prelude::SpanContext;
-use fastrace::Span;
 use log::{error, warn};
 use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;

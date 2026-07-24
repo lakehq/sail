@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::extension::{
-    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType,
 };
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
@@ -11,12 +11,13 @@ use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 use serde_json::json;
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// Map SRID to CRS string for Arrow metadata.
 ///
@@ -282,10 +283,8 @@ impl PlanResolver<'_> {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("value", adt::DataType::Binary, false),
-                    adt::Field::new("metadata", adt::DataType::Binary, false).with_metadata(
-                        HashMap::from([("variant".to_string(), "true".to_string())]),
-                    ),
+                    adt::Field::new(VARIANT_VALUE_FIELD_NAME, adt::DataType::Binary, false),
+                    variant_metadata_field(adt::DataType::Binary, false),
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use datafusion_expr::{lit, Extension, Limit, LogicalPlan};
+use datafusion_expr::{Extension, Limit, LogicalPlan, lit};
 use sail_common::spec;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringNode, ShowStringStyle};
 
 use crate::error::PlanResult;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_show_string(

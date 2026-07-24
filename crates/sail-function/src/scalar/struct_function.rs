@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -104,13 +104,17 @@ impl ScalarUDFImpl for StructFunction {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
-            args, arg_fields, ..
+            args, return_field, ..
         } = args;
+        let arg_fields = match return_field.data_type() {
+            DataType::Struct(fields) => fields.iter().cloned().collect::<Vec<_>>(),
+            other => return exec_err!("struct: expected struct return field, got {}", other),
+        };
         let arrays = ColumnarValue::values_to_arrays(&args)?;
         Ok(ColumnarValue::Array(to_struct_array(
             arrays.as_slice(),
             self.field_names.as_slice(),
-            &arg_fields,
+            arg_fields.as_slice(),
         )?))
     }
 }

@@ -272,7 +272,7 @@ pub fn enrich_arrow_with_parquet_field_ids(
                             af.data_type().clone(),
                             af.is_nullable(),
                         )
-                        .with_metadata(meta)
+                        .with_metadata(meta);
                     }
                 };
                 let mut new_kv_children: Vec<datafusion::arrow::datatypes::Field> =

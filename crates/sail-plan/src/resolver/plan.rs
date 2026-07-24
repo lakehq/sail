@@ -2,8 +2,8 @@ use datafusion::logical_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::PlanResult;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 #[derive(Debug)]
 pub struct NamedPlan {
@@ -20,11 +20,13 @@ impl PlanResolver<'_> {
         match plan {
             spec::Plan::Query(query) => {
                 let plan = self.resolve_query_plan(query, &mut state).await?;
+                let plan = Self::preserve_order_sensitive_aggregate_sorts(plan)?;
                 let fields = Some(Self::get_field_names(plan.schema(), &state)?);
                 Ok(NamedPlan { plan, fields })
             }
             spec::Plan::Command(command) => {
                 let plan = self.resolve_command_plan(command, &mut state).await?;
+                let plan = Self::preserve_order_sensitive_aggregate_sorts(plan)?;
                 Ok(NamedPlan { plan, fields: None })
             }
         }

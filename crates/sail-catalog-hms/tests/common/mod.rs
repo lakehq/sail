@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used, clippy::panic)]
 
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, Namespace,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMode,
+    CreateTableOptions, Namespace,
 };
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_common::runtime::RuntimeHandle;
@@ -19,7 +19,7 @@ use testcontainers::runners::{AsyncBuilder, AsyncRunner};
 use testcontainers::{ContainerAsync, GenericBuildableImage, GenericImage, Image, ImageExt};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::Mutex;
 
 const KERBEROS_REALM: &str = "SAIL.TEST";
 const KDC_HOSTNAME: &str = "sail-kerberos-kdc";
@@ -30,6 +30,13 @@ const HIVE_SITE_XML_PATH: &str = "/opt/hive/conf/hive-site.xml";
 const CORE_SITE_XML_PATH: &str = "/opt/hadoop/etc/hadoop/core-site.xml";
 const HIVE_METASTORE_PORT: u16 = 9083;
 const KDC_PORT: u16 = 88;
+const KRB_SUBPROCESS_ENV: &str = "SAIL_HMS_KRB_SUBPROCESS";
+const KRB_TEST_NAME_ENV: &str = "SAIL_HMS_KRB_TEST_NAME";
+const KRB_CANONICAL_HOST_ENV: &str = "SAIL_HMS_KRB_CANONICAL_HOST";
+const KRB_HMS_PORT_ENV: &str = "SAIL_HMS_KRB_HMS_PORT";
+const KRB_SERVICE_PRINCIPAL_ENV: &str = "SAIL_HMS_KRB_SERVICE_PRINCIPAL";
+const KRB_CLIENT_PRINCIPAL_ENV: &str = "SAIL_HMS_KRB_CLIENT_PRINCIPAL";
+const KRB_CLIENT_KEYTAB_ENV: &str = "SAIL_HMS_KRB_CLIENT_KEYTAB";
 
 pub struct HmsTestContext {
     pub catalog: HmsCatalogProvider,
@@ -44,39 +51,6 @@ pub struct HmsDatabaseContext {
 
 pub struct KerberosHmsTestContext {
     pub catalog: HmsCatalogProvider,
-    _env_guard: ProcessEnvGuard,
-    _lock: OwnedMutexGuard<()>,
-}
-
-struct ProcessEnvGuard {
-    previous: Vec<(String, Option<OsString>)>,
-}
-
-impl ProcessEnvGuard {
-    fn new() -> Self {
-        Self {
-            previous: Vec::new(),
-        }
-    }
-
-    fn set(&mut self, name: &str, value: impl Into<OsString>) {
-        if !self.previous.iter().any(|(key, _)| key == name) {
-            self.previous
-                .push((name.to_string(), std::env::var_os(name)));
-        }
-        std::env::set_var(name, value.into());
-    }
-}
-
-impl Drop for ProcessEnvGuard {
-    fn drop(&mut self) {
-        for (name, value) in self.previous.drain(..).rev() {
-            match value {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
-            }
-        }
-    }
 }
 
 pub fn simple_database_options() -> CreateDatabaseOptions {
@@ -121,8 +95,7 @@ pub fn simple_table_options_with_format(
         partition_by: vec![],
         sort_by: vec![],
         bucket_by: None,
-        if_not_exists: false,
-        replace: false,
+        mode: CreateTableMode::Create,
         properties: vec![],
         is_external: true,
         is_write_precondition: false,
@@ -228,37 +201,68 @@ async fn shared_hms_container() -> &'static SharedHmsContainer {
     SHARED_HMS.get().unwrap()
 }
 
-pub async fn setup_kerberos_hms_catalog(test_name: &str) -> KerberosHmsTestContext {
-    setup_kerberos_hms_catalog_inner(test_name, true).await
+pub fn is_kerberos_hms_subprocess() -> bool {
+    std::env::var_os(KRB_SUBPROCESS_ENV).is_some()
 }
 
-pub async fn setup_kerberos_hms_catalog_without_kinit(test_name: &str) -> KerberosHmsTestContext {
-    setup_kerberos_hms_catalog_inner(test_name, false).await
+pub async fn run_kerberos_hms_catalog_test_in_subprocess(test_name: &str, helper_test: &str) {
+    let shared = shared_kerberos_infrastructure().await;
+    let ticket_cache_path = shared.temp_dir.path().join(format!("krb5cc-{test_name}"));
+    let ticket_cache = format!("FILE:{}", ticket_cache_path.display());
+    let current_exe =
+        std::env::current_exe().unwrap_or_else(|error| panic!("get current test binary: {error}"));
+
+    let output = Command::new(current_exe)
+        .arg("--ignored")
+        .arg("--exact")
+        .arg(helper_test)
+        .env(KRB_SUBPROCESS_ENV, "1")
+        .env(KRB_TEST_NAME_ENV, test_name)
+        .env("KRB5_CONFIG", &shared.host_krb5_conf_path)
+        .env("KRB5CCNAME", ticket_cache)
+        .env("SAIL_HMS_KRB_TRACE", "1")
+        .env(KRB_CANONICAL_HOST_ENV, &shared.canonical_host)
+        .env(KRB_HMS_PORT_ENV, shared.hms_port.to_string())
+        .env(KRB_SERVICE_PRINCIPAL_ENV, &shared.service_principal)
+        .env(KRB_CLIENT_PRINCIPAL_ENV, &shared.client_principal)
+        .env(KRB_CLIENT_KEYTAB_ENV, &shared.client_keytab_path)
+        .output()
+        .await
+        .unwrap_or_else(|error| panic!("run Kerberos HMS subprocess test {helper_test}: {error}"));
+
+    if !output.status.success() {
+        panic!(
+            "Kerberos HMS subprocess test {helper_test} failed: status={:?}, stdout={}, stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }
 
-async fn setup_kerberos_hms_catalog_inner(
-    test_name: &str,
+pub async fn setup_kerberos_hms_catalog_from_subprocess_env(
     perform_kinit: bool,
 ) -> KerberosHmsTestContext {
-    let lock = kerberos_test_lock().lock_owned().await;
-    let shared = shared_kerberos_infrastructure().await;
-
-    let mut env_guard = ProcessEnvGuard::new();
-    let ticket_cache_path = shared.temp_dir.path().join(format!("krb5cc-{test_name}"));
-    let ticket_cache_str = format!("FILE:{}", ticket_cache_path.display());
-    env_guard.set("KRB5CCNAME", ticket_cache_str);
+    let test_name = required_env(KRB_TEST_NAME_ENV);
+    let canonical_host = required_env(KRB_CANONICAL_HOST_ENV);
+    let hms_port = required_env(KRB_HMS_PORT_ENV)
+        .parse::<u16>()
+        .unwrap_or_else(|error| panic!("parse {KRB_HMS_PORT_ENV}: {error}"));
+    let service_principal = required_env(KRB_SERVICE_PRINCIPAL_ENV);
+    let client_principal = required_env(KRB_CLIENT_PRINCIPAL_ENV);
+    let client_keytab_path = PathBuf::from(required_env(KRB_CLIENT_KEYTAB_ENV));
 
     if perform_kinit {
-        run_kinit(&shared.client_keytab_path, &shared.client_principal).await;
+        run_kinit(&client_keytab_path, &client_principal).await;
     }
 
     let catalog = HmsCatalogProvider::new(
-        test_name.to_string(),
+        test_name,
         HmsCatalogConfig {
-            uris: vec![format!("{}:{}", shared.canonical_host, shared.hms_port)],
+            uris: vec![format!("{canonical_host}:{hms_port}")],
             thrift_transport: None,
             auth: Some("kerberos".to_string()),
-            kerberos_service_principal: Some(shared.service_principal.clone()),
+            kerberos_service_principal: Some(service_principal),
             min_sasl_qop: None,
             connect_timeout_secs: None,
         },
@@ -270,11 +274,11 @@ async fn setup_kerberos_hms_catalog_inner(
         wait_until_ready(&catalog, 240, "Kerberos Hive Metastore").await;
     }
 
-    KerberosHmsTestContext {
-        catalog,
-        _env_guard: env_guard,
-        _lock: lock,
-    }
+    KerberosHmsTestContext { catalog }
+}
+
+fn required_env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|error| panic!("read {name}: {error}"))
 }
 
 struct SharedKerberosInfrastructure {
@@ -424,12 +428,6 @@ async fn shared_kerberos_infrastructure() -> &'static SharedKerberosInfrastructu
         .unwrap_or_else(|error| panic!("get HMS host port: {error}"));
     wait_for_tcp_port(&canonical_host, hms_port, 240, "Kerberos Hive Metastore").await;
 
-    // Set Kerberos env vars permanently for the process (not per-test).
-    // KRB5_CONFIG must be set before any GSSAPI call so the library can
-    // locate the KDC. SAIL_HMS_KRB_TRACE enables readiness diagnostics.
-    std::env::set_var("KRB5_CONFIG", &host_krb5_conf_path);
-    std::env::set_var("SAIL_HMS_KRB_TRACE", "1");
-
     let _ = SHARED_KRB.set(SharedKerberosInfrastructure {
         canonical_host,
         hms_port,
@@ -449,12 +447,6 @@ fn runtime_handle() -> RuntimeHandle {
         tokio::runtime::Handle::current(),
         tokio::runtime::Handle::current(),
     )
-}
-
-fn kerberos_test_lock() -> Arc<tokio::sync::Mutex<()>> {
-    static LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
-    LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
 }
 
 async fn wait_until_ready(catalog: &HmsCatalogProvider, attempts: usize, service_name: &str) {

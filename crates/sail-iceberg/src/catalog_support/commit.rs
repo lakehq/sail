@@ -4,8 +4,8 @@ use sail_catalog::lakehouse::{LakehouseCommitOutcome, LakehouseCommitRequest};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
-    existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
-    PREVIOUS_METADATA_LOCATION_KEY,
+    METADATA_LOCATION_UNDERSCORE_KEY, PREVIOUS_METADATA_LOCATION_KEY,
+    existing_metadata_location_key,
 };
 use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableKind, TableStatus,
@@ -279,19 +279,18 @@ pub(crate) fn catalog_requirements(
     );
     requirements.extend_from_slice(commit_requirements);
     requirements.extend_from_slice(action_requirements);
-    if let Some(uuid) = table_meta.table_uuid {
-        if !requirements
+    if let Some(uuid) = table_meta.table_uuid
+        && !requirements
             .iter()
             .any(|requirement| matches!(requirement, TableRequirement::UuidMatch { uuid: u } if *u == uuid))
         {
             requirements.push(TableRequirement::UuidMatch { uuid });
         }
-    }
     requirements
 }
 
 pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if Url::parse(metadata_file).is_ok() {
+    if crate::utils::parse_absolute_url(metadata_file).is_some() {
         return Ok(metadata_file.to_string());
     }
     Ok(table_url

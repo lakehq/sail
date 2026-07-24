@@ -9,24 +9,24 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::SessionState;
+use datafusion::execution::cache::TableScopedPath;
+use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
-use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
+use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::ListingTableUrl;
-use futures::{future, stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
@@ -35,7 +35,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
-use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::utils::{can_be_evaluated_for_partition_pruning, has_hidden_path_component};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
@@ -350,16 +350,23 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(|table_path| {
-        pruned_partition_list(
-            ctx,
-            store.as_ref(),
-            table_path,
-            filters,
-            "",
-            &partition_cols,
-        )
-    }))
+    let store_ref = store.as_ref();
+    let partition_cols_ref = partition_cols.as_slice();
+    let file_list = future::try_join_all(source.config().table_paths.iter().map(
+        |table_path| async move {
+            let files =
+                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
+                    .await?;
+            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
+            let files = files.try_filter(move |file| {
+                futures::future::ready(!has_hidden_path_component(
+                    table_path,
+                    &file.object_meta.location,
+                ))
+            });
+            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+        },
+    ))
     .await?;
 
     let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
@@ -522,24 +529,21 @@ async fn get_files_with_limit(
 
         let file = file_result?;
 
-        if collect_stats {
-            if let Some(file_stats) = &file.statistics {
-                num_rows = if file_group.is_empty() {
-                    file_stats.num_rows
-                } else {
-                    num_rows.add(&file_stats.num_rows)
-                };
-            }
+        if collect_stats && let Some(file_stats) = &file.statistics {
+            num_rows = if file_group.is_empty() {
+                file_stats.num_rows
+            } else {
+                num_rows.add(&file_stats.num_rows)
+            };
         }
 
         file_group.push(file);
 
-        if let Some(limit) = limit {
-            if let Precision::Exact(row_count) = num_rows {
-                if row_count > limit {
-                    state = ProcessingState::ReachedLimit;
-                }
-            }
+        if let Some(limit) = limit
+            && let Precision::Exact(row_count) = num_rows
+            && row_count > limit
+        {
+            state = ProcessingState::ReachedLimit;
         }
     }
 

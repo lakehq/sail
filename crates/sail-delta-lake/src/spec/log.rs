@@ -16,7 +16,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use object_store::path::{Path, DELIMITER};
+use object_store::path::{DELIMITER, Path};
 use uuid::Uuid;
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
@@ -77,6 +77,19 @@ pub fn sidecar_file_path(sidecar_filename: &str) -> Path {
     } else {
         Path::from(format!("{DELTA_LOG_DIR}/{SIDECARS_DIR}/{path}"))
     }
+}
+
+pub fn sidecar_log_path(sidecar_filename: &str) -> String {
+    sidecar_file_path(sidecar_filename)
+        .as_ref()
+        .trim_start_matches(&format!("{DELTA_LOG_DIR}{DELIMITER}"))
+        .to_string()
+}
+
+pub fn sidecar_file_name(sidecar_filename: &str) -> String {
+    sidecar_log_path(sidecar_filename)
+        .trim_start_matches(&format!("{SIDECARS_DIR}{DELIMITER}"))
+        .to_string()
 }
 
 pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
@@ -277,6 +290,15 @@ mod tests {
         assert_eq!(
             sidecar_file_path("_sidecars/part.parquet").as_ref(),
             "_delta_log/_sidecars/part.parquet"
+        );
+        assert_eq!(sidecar_log_path("part.parquet"), "_sidecars/part.parquet");
+        assert_eq!(
+            sidecar_log_path("_delta_log/_sidecars/part.parquet"),
+            "_sidecars/part.parquet"
+        );
+        assert_eq!(
+            sidecar_file_name("_delta_log/_sidecars/part.parquet"),
+            "part.parquet"
         );
     }
 

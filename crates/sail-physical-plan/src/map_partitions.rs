@@ -7,7 +7,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;

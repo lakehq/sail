@@ -1,13 +1,13 @@
 use std::sync::{Arc, OnceLock};
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
-    StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
+    StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -24,7 +24,7 @@ use crate::scalar::datetime::format::DateTimeFormat;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
-    ($array:expr, $index:expr, $array_type:ty, $convert:expr) => {{
+    ($array:expr_2021, $index:expr_2021, $array_type:ty, $convert:expr_2021) => {{
         let arr = $array
             .as_any()
             .downcast_ref::<$array_type>()
@@ -138,26 +138,24 @@ impl ScalarUDFImpl for SparkToJson {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // If input is a Variant struct, use the shared variant-to-JSON conversion
         // (Spark's to_json supports Variant input and ignores options for it)
-        if let Some(field) = args.arg_fields.first() {
-            if matches!(field.data_type(), DataType::Struct(_))
-                && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
-            {
-                let result =
-                    crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
-                        &args.args[0],
-                    )?;
-                // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
-                return match result {
-                    ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
-                    }
-                    ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
-                        &arr,
-                        &DataType::Utf8,
-                    )?)),
-                    other => Ok(other),
-                };
-            }
+        if let Some(field) = args.arg_fields.first()
+            && matches!(field.data_type(), DataType::Struct(_))
+            && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
+        {
+            let result = crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
+                &args.args[0],
+            )?;
+            // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
+            return match result {
+                ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
+                }
+                ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
+                    &arr,
+                    &DataType::Utf8,
+                )?)),
+                other => Ok(other),
+            };
         }
         make_scalar_function(to_json_inner, vec![])(&args.args)
     }
@@ -198,7 +196,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<ArrayRef> {
-    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 64);
+    let mut builder = StringBuilder::with_capacity(array.len(), array.get_buffer_memory_size());
 
     for i in 0..array.len() {
         if array.is_null(i) {

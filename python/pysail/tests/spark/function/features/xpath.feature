@@ -68,3 +68,42 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         SELECT xpath('<a><b>1</b></a>', 'sum(a/b)') AS result
         """
       Then query error (?s).*NodeList.*
+
+  Rule: xpath — the argument must be foldable
+
+    @column_args
+    Scenario: xpath with the argument as a literal
+      When query
+        """
+        SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b') AS result
+        """
+      Then query result ordered
+        | result             |
+        | [NULL, NULL, NULL] |
+
+    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ["['b1', 'b2', 'b3']", '[None, None, None]'].
+    @column_args @sail-bug
+    Scenario: xpath takes argument 2 from a column holding two different values
+      When query
+        """
+        SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>', c) AS result FROM VALUES (1, 'a/b/text()'), (2, 'a/b') AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
+
+    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['[None, None, None]', 'NULL'].
+    @column_args @sail-bug
+    Scenario: xpath takes argument 2 from a column containing NULL
+      When query
+        """
+        SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>', c) AS result FROM VALUES (1, 'a/b'), (2, NULL) AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT
+
+    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['[None, None, None]', '[None, None, None]'].
+    @column_args @sail-bug
+    Scenario: xpath takes argument 2 from a column
+      When query
+        """
+        SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>', c) AS result FROM VALUES (1, 'a/b'), (2, 'a/b') AS t(i, c) ORDER BY i
+        """
+      Then query error NON_FOLDABLE_INPUT

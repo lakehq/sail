@@ -4,13 +4,15 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
+use datafusion_spark::function::string::length::SparkLengthFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -19,6 +21,7 @@ use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
@@ -162,12 +165,53 @@ fn contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     in_str_str_out_bool(expr_fn::contains)(input)
 }
 
+/// Spark measures the character length of string data and the byte length of binary data,
+/// so binary must reach the function as-is. Any other type is measured as its string form,
+/// via the Spark-compatible cast rather than the Arrow one, which renders a timestamp with
+/// a time zone suffix. Collections have no string form in Spark and are rejected.
+fn length_argument(input: ScalarFunctionInput, name: &str) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arg = arguments.one()?;
+    let data_type = arg.get_type(function_context.schema)?;
+    match data_type {
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView => Ok(arg),
+        DataType::FixedSizeBinary(_) => Ok(cast(arg, DataType::Binary)),
+        DataType::Null => Ok(cast(arg, DataType::Utf8)),
+        DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Struct(_)
+        | DataType::Map(_, _)
+        | DataType::Union(_, _) => Err(PlanError::invalid(format!(
+            "`{name}` does not support {data_type} input"
+        ))),
+        _ => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])),
+    }
+}
+
+fn length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = length_argument(input, "length")?;
+    Ok(ScalarUDF::from(SparkLengthFunc::new()).call(vec![arg]))
+}
+
 fn bit_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    in_str_out_i32(expr_fn::bit_length)(input)
+    let arg = length_argument(input, "bit_length")?;
+    Ok(ScalarUDF::from(SparkBitLength::new()).call(vec![arg]))
 }
 
 fn octet_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    in_str_out_i32(expr_fn::octet_length)(input)
+    let arg = length_argument(input, "octet_length")?;
+    Ok(ScalarUDF::from(SparkOctetLength::new()).call(vec![arg]))
 }
 
 fn ascii(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -298,8 +342,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("bit_length", F::custom(bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unary(expr_fn::chr)),
-        ("char_length", F::unary(expr_fn::char_length)),
-        ("character_length", F::unary(expr_fn::char_length)),
+        ("char_length", F::custom(length)),
+        ("character_length", F::custom(length)),
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
@@ -317,8 +361,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
         ("left", F::binary(expr_fn::left)),
-        ("len", F::unary(expr_fn::length)),
-        ("length", F::unary(expr_fn::length)),
+        ("len", F::custom(length)),
+        ("length", F::custom(length)),
         ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),

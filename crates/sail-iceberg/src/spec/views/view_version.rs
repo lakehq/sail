@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::spec::catalog::NamespaceIdent;
 use crate::spec::SchemaId;
+use crate::spec::catalog::NamespaceIdent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

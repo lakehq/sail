@@ -24,6 +24,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-iceberg = { path = "../sail-iceberg" }
 
+arrow = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
@@ -31,11 +32,15 @@ percent-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
+log = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 wiremock = { workspace = true }
 testcontainers = { workspace = true }
-arrow = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }

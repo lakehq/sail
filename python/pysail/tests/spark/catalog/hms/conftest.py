@@ -362,26 +362,120 @@ def _wait_for_hms_catalog(remote: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
+# Derive the Spark/Scala-specific runtime jar coordinates from the installed
+# pyspark version so this works across the Spark matrix (3.5.x uses Scala 2.12,
+# 4.x uses Scala 2.13) instead of hardcoding a single Spark minor.
+import pyspark as _pyspark  # noqa: E402
+
+_SPARK_VERSION = _pyspark.__version__
+_SPARK_MAJOR, _SPARK_MINOR_PART = _SPARK_VERSION.split(".")[:2]
+_SCALA_BINARY = "2.12" if _SPARK_MAJOR == "3" else "2.13"
+_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"
+# Delta Maven coordinates per Spark minor version. Delta renamed its artifact at
+# 4.1.0 to embed the Spark minor (``delta-spark_<spark-minor>_<scala>``); earlier
+# releases (3.3.x, 4.0.x) keep the legacy ``delta-spark_<scala>`` name. The previous
+# ``delta-spark_{minor}_{scala}`` rule for every Spark 4.x produced a 404 for 4.0
+# (``delta-spark_4.0_2.13`` does not exist at 4.0.1), so pin the full coordinate
+# explicitly per Spark version: a future Delta rename then cannot silently break
+# the JVM classpath. Each row was verified against Maven Central:
+#   Spark 3.5 -> io.delta:delta-spark_2.12:3.3.2
+#   Spark 4.0 -> io.delta:delta-spark_2.13:4.0.1   (legacy name; 4.0 minor not embedded)
+#   Spark 4.1 -> io.delta:delta-spark_4.1_2.13:4.1.0 (new name introduced at Delta 4.1.0)
+_DELTA_SPARK_COORDINATES: dict[str, tuple[str, str, str]] = {
+    "3.5": ("io.delta", "delta-spark_2.12", "3.3.2"),
+    "4.0": ("io.delta", "delta-spark_2.13", "4.0.1"),
+    "4.1": ("io.delta", "delta-spark_4.1_2.13", "4.1.0"),
+}
+if _SPARK_MINOR not in _DELTA_SPARK_COORDINATES:
+    raise RuntimeError(
+        f"No Delta Maven coordinate mapping for Spark {_SPARK_VERSION}; "
+        "add an entry to _DELTA_SPARK_COORDINATES in "
+        "python/pysail/tests/spark/catalog/hms/conftest.py."
+    )
+_DELTA_GROUP, _DELTA_ARTIFACT, _DELTA_VERSION = _DELTA_SPARK_COORDINATES[_SPARK_MINOR]
+_DELTA_SPARK_PACKAGE = f"{_DELTA_GROUP}:{_DELTA_ARTIFACT}:{_DELTA_VERSION}"
+# Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar must
+# be on the classpath for `USING AVRO`.
+_AVRO_SPARK_PACKAGE = f"org.apache.spark:spark-avro_{_SCALA_BINARY}:{_SPARK_VERSION}"
+# Iceberg runtime (latest stable 1.11.0); the artifact encodes the Spark minor and
+# Scala binary versions. Resolved cleanly from Maven Central for Spark 4.1.
+_ICEBERG_SPARK_PACKAGE = f"org.apache.iceberg:iceberg-spark-runtime-{_SPARK_MINOR}_{_SCALA_BINARY}:1.11.0"
+
+
+@pytest.fixture(scope="session")
 def jvm_spark(
-    spark: SparkSession,
     hms_s3_metastore_endpoint: str,
     hms_warehouse_dir: Path,
     hms_s3_endpoint: str,
 ) -> Generator[SparkSession, None, None]:
-    """Start classic reference Spark with Hive support and MinIO S3A wiring."""
-    del spark
+    """Single session-scoped JVM Spark with Hive + Delta + Iceberg loaded.
+
+    Consolidates the former ``jvm_spark`` and ``delta_jvm_spark`` module-scoped
+    fixtures into one session. ``SparkSession.getOrCreate()`` is a JVM singleton:
+    ``spark.sql.extensions`` is applied exactly once, at first context creation, and
+    a second fixture asking for a differently-extended session in the same process
+    silently receives the FIRST session with its own extensions dropped -- while some
+    runtime catalog config still leaks through, producing an inconsistent,
+    operation-dependent failure (e.g. ``DeltaCatalog`` set but no Delta SQL parser
+    extension, so ``MERGE``/``UPDATE``/generated columns break).
+
+    One session-scoped unified session makes the extension/catalog set deterministic
+    regardless of fixture or test ordering, which is the precondition for safely
+    layering format interop on top without spawning further fragile per-format
+    sessions.
+
+    Iceberg is always loaded (not opt-in): the runtime jar resolves cleanly from
+    Maven Central, the extension does not perturb non-Iceberg table resolution, and
+    the full HMS suite passes with it enabled. Keeping it always-on ensures the
+    Iceberg HMS interop path is exercised in CI rather than skipped by default.
+
+    Trade-off accepted: plain parquet round-trip tests now run under ``DeltaCatalog``
+    instead of the default Hive session catalog. ``DeltaCatalog`` delegates non-Delta
+    tables to the underlying Hive catalog, so parquet/csv/json/avro behaviour is
+    unchanged -- this is the same configuration the former ``delta_jvm_spark`` already
+    relied on.
+    """
     warehouse_uri = hms_warehouse_dir.as_uri()
+
+    extensions = [
+        "io.delta.sql.DeltaSparkSessionExtension",
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+    ]
+    spark_packages = [
+        _DELTA_SPARK_PACKAGE,
+        "org.apache.hadoop:hadoop-aws:3.4.2",
+        # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar
+        # must be on the classpath for `USING AVRO`.
+        _AVRO_SPARK_PACKAGE,
+        _ICEBERG_SPARK_PACKAGE,
+    ]
 
     with _classic_spark_mode():
         builder = (
             SparkSession.builder.master("local[1]")
-            .appName("hms-jvm-s3")
+            .appName("hms-jvm-unified")
             .config("spark.sql.catalogImplementation", "hive")
+            # Both extension sets coexist in one session; extensions load once at
+            # context creation, so this list is the single source of truth.
+            .config("spark.sql.extensions", ",".join(extensions))
+            # Delta keeps the default ``spark_catalog`` (proven by the former
+            # ``delta_jvm_spark``); ``DeltaCatalog`` delegates non-Delta tables to Hive.
+            .config(
+                "spark.sql.catalog.spark_catalog",
+                "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+            )
+            # Iceberg gets a NAMED catalog so it never fights Delta over ``spark_catalog``
+            # ownership. It points at the same HMS thrift endpoint; both engines share
+            # table registrations and the S3 (MinIO) metadata files.
+            .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
+            .config("spark.sql.catalog.iceberg.type", "hive")
+            .config("spark.sql.catalog.iceberg.uri", f"thrift://{hms_s3_metastore_endpoint}")
+            .config("spark.sql.catalog.iceberg.warehouse", warehouse_uri)
             .config(
                 "spark.hadoop.hive.metastore.uris",
                 f"thrift://{hms_s3_metastore_endpoint}",
             )
+            .config("spark.jars.packages", ",".join(spark_packages))
             .config("spark.sql.warehouse.dir", warehouse_uri)
             .config(
                 "spark.hadoop.javax.jdo.option.ConnectionURL",
@@ -389,6 +483,8 @@ def jvm_spark(
             )
         )
         for key, value in _spark_s3_options(hms_s3_endpoint).items():
+            if key == "spark.jars.packages":
+                continue
             builder = builder.config(key, value)
         spark = builder.enableHiveSupport().getOrCreate()
         spark.conf.set("spark.sql.session.timeZone", "UTC")

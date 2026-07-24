@@ -6,7 +6,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use futures::{StreamExt, TryStreamExt};
 
 #[derive(Debug)]
@@ -26,6 +26,10 @@ impl NoopSinkExec {
             Boundedness::Bounded,
         ));
         Self { input, properties }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
     }
 }
 

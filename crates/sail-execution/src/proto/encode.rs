@@ -1,42 +1,75 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{plan_err, Result};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::{Result, plan_err};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
+use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_physical_plan::data_source::RemoteDataSourceExec;
 
-use crate::plan::gen;
-use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
+use crate::plan::r#gen;
+use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
 use crate::proto::converter::RemotePhysicalProtoConverter;
 
-pub fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
+pub fn encode_remote_physical_plan(
+    codec: &dyn PhysicalExtensionCodec,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<u8>> {
+    let plan = plan
+        .transform(|node| {
+            if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
+                let node =
+                    Arc::new(RemoteDataSourceExec::new(data_source)) as Arc<dyn ExecutionPlan>;
+                Ok(Transformed::yes(node))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .data()?;
+    try_encode_physical_plan(codec, plan)
+}
+
+pub fn encode_remote_physical_expr(
+    codec: &dyn PhysicalExtensionCodec,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<Vec<u8>> {
+    try_encode_physical_expr(codec, expr)
+}
+
+pub(super) fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
 where
     M: Message,
 {
     Ok(message.encode_to_vec())
 }
 
-pub fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
+pub(super) fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
     try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
 }
 
-pub fn try_encode_field_ref(field: &FieldRef) -> Result<Vec<u8>> {
+pub(super) fn try_encode_field_ref(field: &FieldRef) -> Result<Vec<u8>> {
     try_encode_message::<gen_datafusion_common::Field>(field.as_ref().try_into()?)
 }
 
-pub fn try_encode_physical_plan(
+pub(super) fn try_encode_physical_plan(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>> {
     try_encode_message(physical_plan_to_proto(codec, plan)?)
 }
 
-pub fn physical_plan_to_proto(
+pub(super) fn physical_plan_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<PhysicalPlanNode> {
@@ -47,14 +80,14 @@ pub fn physical_plan_to_proto(
     )
 }
 
-pub fn try_encode_physical_expr(
+pub(super) fn try_encode_physical_expr(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<Vec<u8>> {
     try_encode_message(physical_expr_to_proto(codec, expr)?)
 }
 
-pub fn physical_expr_to_proto(
+pub(super) fn physical_expr_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
@@ -62,16 +95,34 @@ pub fn physical_expr_to_proto(
     converter.physical_expr_to_proto(expr, codec)
 }
 
-pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
+pub(super) fn try_encode_higher_order_udf(
+    hof: &HigherOrderFunctionExpr,
+) -> Result<r#gen::HigherOrderUdf> {
     let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
     let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
-        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
+        HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
+        })
+    } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
+        HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
+            index_first: transform.is_index_first(),
+        })
+    } else if let Some(aggregate) = udf_inner.downcast_ref::<SparkArrayAggregate>() {
+        HigherOrderUdfKind::Aggregate(r#gen::SparkArrayAggregateUdf {
+            element_first: aggregate.is_element_first(),
+        })
+    } else if udf_inner.is::<SparkArrayExists>() {
+        HigherOrderUdfKind::Exists(r#gen::SparkArrayExistsUdf {})
+    } else if udf_inner.is::<SparkArrayForall>() {
+        HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {})
+    } else if let Some(sort) = udf_inner.downcast_ref::<SparkArraySort>() {
+        HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
+            swapped: sort.is_swapped(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };
-    Ok(gen::HigherOrderUdf {
+    Ok(r#gen::HigherOrderUdf {
         higher_order_udf_kind: Some(udf_kind),
     })
 }

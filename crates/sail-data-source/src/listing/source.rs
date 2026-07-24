@@ -12,15 +12,15 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, not_impl_err, plan_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SinkMode,
-    SourceInfo, TableFormat,
+    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, find_path_in_options,
+    get_partition_columns_and_file_schema,
 };
 use url::Url;
 
@@ -83,6 +83,11 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+
+    /// File-name glob restricting which listed files compose the dataset (e.g. binary `pathGlobFilter`).
+    fn input_file_name_glob(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -171,14 +176,17 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 // the file stats and reader (which resolve columns by exact name) find the data.
                 let schema = if read_case_sensitive {
                     schema
-                } else if let Ok(physical) = read_format
-                    .infer_schema(ctx, &sampled_files, compression)
-                    .await
-                {
-                    reconcile_schema_names_case_insensitive(schema, &physical)?
                 } else {
-                    // Keeps the user schema if physical schema inference is unavailable.
-                    schema
+                    match read_format
+                        .infer_schema(ctx, &sampled_files, compression)
+                        .await
+                    {
+                        Ok(physical) => reconcile_schema_names_case_insensitive(schema, &physical)?,
+                        _ => {
+                            // Keeps the user schema if physical schema inference is unavailable.
+                            schema
+                        }
+                    }
                 };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
@@ -296,12 +304,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 }
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
-    if url.scheme() == "file" {
-        if let Ok(path) = url.to_file_path() {
-            if path.exists() {
-                return Ok(true);
-            }
-        }
+    if url.scheme() == "file"
+        && let Ok(path) = url.to_file_path()
+        && path.exists()
+    {
+        return Ok(true);
     }
     listing_target_nonempty(ctx, url).await
 }

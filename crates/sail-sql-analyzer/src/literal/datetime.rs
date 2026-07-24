@@ -1,9 +1,9 @@
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::{any, choice, end, just, one_of};
-use chumsky::Parser;
 
 use crate::error::{SqlError, SqlResult};
 

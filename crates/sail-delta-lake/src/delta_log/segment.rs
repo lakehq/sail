@@ -2,18 +2,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use log::debug;
-use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
-use crate::kernel::CatalogManagedCommitSet;
+use crate::delta_log::LogStore;
+use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_path};
 use crate::spec::{
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
-    Transaction, VersionChecksum,
+    parse_compacted_json_versions,
 };
-use crate::storage::LogStore;
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
 
@@ -114,11 +113,11 @@ impl<'a> LogSegmentResolver<'a> {
         let version = self.target_version;
 
         let store = self.log_store.object_store(None);
-        if !self.has_catalog_managed_commits_in_range(0, version) {
-            if let Some(header) = try_read_checksum_header(store.clone(), version).await {
-                debug!("crc-header: exact checksum hit target_version={version}");
-                return Ok(ResolvedLogSegment::ExactChecksum { header });
-            }
+        if !self.has_catalog_managed_commits_in_range(0, version)
+            && let Some(header) = try_read_checksum_header(store.clone(), version).await
+        {
+            debug!("crc-header: exact checksum hit target_version={version}");
+            return Ok(ResolvedLogSegment::ExactChecksum { header });
         }
 
         let lower_bound = {
@@ -418,22 +417,22 @@ pub(crate) async fn list_log_files(
             Some(f) => f,
             None => continue,
         };
-        if let Some(v) = parse_checkpoint_version(filename) {
-            if v <= max_version {
-                checkpoint_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checkpoint_version(filename)
+            && v <= max_version
+        {
+            checkpoint_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_commit_version(filename) {
-            if v <= max_version {
-                commit_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_commit_version(filename)
+            && v <= max_version
+        {
+            commit_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_checksum_version(filename) {
-            if v <= max_version {
-                checksum_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checksum_version(filename)
+            && v <= max_version
+        {
+            checksum_candidates.push((v, meta));
             continue;
         }
         if let Some(versions) = parse_compacted_json_versions(filename) {
@@ -512,21 +511,6 @@ fn filter_compactions_for_range(
         .collect()
 }
 
-fn catalog_managed_commit_path(file_name: &str) -> Path {
-    let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
-        Path::from(&file_name[index..])
-    } else if let Some(index) = file_name.find("_staged_commits/") {
-        Path::from(format!("_delta_log/{}", &file_name[index..]))
-    } else if file_name.starts_with("_delta_log/") {
-        Path::from(file_name)
-    } else if file_name.starts_with("_staged_commits/") {
-        Path::from(format!("_delta_log/{file_name}"))
-    } else {
-        Path::from(format!("_delta_log/_staged_commits/{file_name}"))
-    }
-}
-
 fn merge_catalog_managed_commits(
     commit_files: Vec<(i64, ObjectMeta)>,
     catalog_commit_files: Vec<(i64, ObjectMeta)>,
@@ -575,10 +559,10 @@ fn resolve_compactions(
 
     for ((start, end), meta) in compaction_files {
         // Skip if this compaction overlaps with an already-selected one.
-        if let Some(boundary) = covered_up_to {
-            if end >= boundary {
-                continue;
-            }
+        if let Some(boundary) = covered_up_to
+            && end >= boundary
+        {
+            continue;
         }
         selected_compactions.push(((start, end), meta));
         covered_up_to = Some(start);

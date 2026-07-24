@@ -21,9 +21,9 @@ jobs:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ inputs.spark_version }}-%p-%m.profraw
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -41,7 +41,7 @@ jobs:
         uses: taiki-e/install-action@grcov
 
       - name: Download Python Package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: python-package
           path: target/wheels
@@ -90,5 +90,5 @@ jobs:
           files: coverage-python-${{ inputs.spark_version }}.info
           flags: python-unit-tests
           name: python-unit-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS

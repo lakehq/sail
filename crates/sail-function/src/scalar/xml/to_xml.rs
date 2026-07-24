@@ -5,7 +5,7 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
@@ -44,9 +44,6 @@ impl SparkToXmlOptions {
     pub const VALUE_TAG_OPTION: &'static str = "valueTag";
     pub const VALUE_TAG_DEFAULT: &'static str = "_VALUE";
     pub const NULL_VALUE_OPTION: &'static str = "nullValue";
-    pub const DECLARATION_OPTION: &'static str = "declaration";
-    pub const DECLARATION_DEFAULT: &'static str =
-        r#"version="1.0" encoding="UTF-8" standalone="yes""#;
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
@@ -64,12 +61,6 @@ impl SparkToXmlOptions {
         }
         if row_tag.starts_with('<') || row_tag.ends_with('>') {
             return plan_err!("`rowTag` must not include angle brackets");
-        }
-
-        let declaration = find_key_value(map, Self::DECLARATION_OPTION)
-            .unwrap_or_else(|| Self::DECLARATION_DEFAULT.to_string());
-        if declaration.starts_with('<') || declaration.ends_with('>') {
-            return plan_err!("`declaration` must not include angle brackets");
         }
 
         let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
@@ -121,7 +112,7 @@ impl SparkToXmlOptions {
             attribute_prefix,
             value_tag,
             null_value,
-            declaration,
+            declaration: String::new(), // TODO: Add declaration option support
             timestamp_ltz_format,
             timestamp_ntz_format,
             date_format,
@@ -150,7 +141,7 @@ impl Default for SparkToXmlOptions {
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
             null_value: None,
-            declaration: Self::DECLARATION_DEFAULT.to_string(),
+            declaration: String::new(),
             timestamp_ltz_format: None,
             timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
                 .expect("default timestamp NTZ format should be valid"),
@@ -216,7 +207,7 @@ impl ScalarUDFImpl for SparkToXml {
                 match &arg_types[0] {
                     DataType::Struct(_) => {}
                     other => {
-                        return plan_err!("`to_xml` first argument must be a struct, got {other}")
+                        return plan_err!("`to_xml` first argument must be a struct, got {other}");
                     }
                 }
                 match &arg_types[1] {
@@ -224,7 +215,7 @@ impl ScalarUDFImpl for SparkToXml {
                     other => {
                         return plan_err!(
                             "`to_xml` second argument must be a map of options, got {other}"
-                        )
+                        );
                     }
                 }
                 Ok(arg_types.to_vec())
@@ -268,39 +259,50 @@ impl ScalarUDFImpl for SparkToXml {
 }
 
 fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Result<ArrayRef> {
-    let mut output: Vec<Option<String>> = Vec::with_capacity(array.len());
+    let mut builder = StringBuilder::with_capacity(array.len(), 0);
+    // One reused buffer across rows: `clear()` keeps its capacity, so the row
+    // strings are not re-allocated per row and are copied into the Arrow buffer
+    // exactly once.
+    let mut buf = String::with_capacity(256);
 
     for row in 0..array.len() {
         if array.is_null(row) {
-            output.push(None);
+            builder.append_null();
         } else {
-            output.push(Some(write_row(array, row, array.fields(), options)?));
+            buf.clear();
+            write_struct(
+                &mut buf,
+                array,
+                row,
+                array.fields(),
+                &options.row_tag,
+                0,
+                options,
+            )?;
+            // Every writer prefixes its own leading newline; the root element has none.
+            builder.append_value(buf.strip_prefix('\n').unwrap_or(&buf));
         }
     }
 
-    Ok(Arc::new(StringArray::from(output)))
+    Ok(Arc::new(builder.finish()))
 }
 
 const INDENT: &str = "    ";
 
-fn write_row(
-    array: &StructArray,
-    row: usize,
-    fields: &Fields,
-    options: &SparkToXmlOptions,
-) -> Result<String> {
-    let mut buf = String::with_capacity(256);
-    if !options.declaration.is_empty() {
-        buf.push_str("<?xml ");
-        buf.push_str(&options.declaration);
-        buf.push_str("?>\n");
+/// Appends `depth` levels of indentation without allocating (unlike
+/// `INDENT.repeat(depth)`, which builds a fresh `String` each call).
+#[inline]
+fn push_indent(buf: &mut String, depth: usize) {
+    for _ in 0..depth {
+        buf.push_str(INDENT);
     }
-    write_struct(&mut buf, array, row, fields, &options.row_tag, 0, options)?;
-    Ok(buf)
 }
 
-/// Matches Spark's two-pass logic: attributes are written to the open tag,
-/// then child elements follow.
+/// Serializes a struct as `<tag …attrs…>…children…</tag>`, matching Spark's
+/// `StaxXmlGenerator`. Uses a leading-newline convention: every element/array/map
+/// child prefixes its own `\n` plus indentation, so no trailing newline is ever
+/// appended. Attributes go on the open tag; the `valueTag` field becomes inline
+/// text right after `>`; remaining fields become child elements.
 fn write_struct(
     buf: &mut String,
     array: &StructArray,
@@ -310,19 +312,17 @@ fn write_struct(
     depth: usize,
     options: &SparkToXmlOptions,
 ) -> Result<()> {
-    let pad = INDENT.repeat(depth);
-
-    let (attr_cols, elem_cols): (Vec<_>, Vec<_>) = fields
-        .iter()
-        .enumerate()
-        .partition(|(_, f)| options.is_attribute(f.name()));
-
-    buf.push_str(&pad);
+    buf.push('\n');
+    push_indent(buf, depth);
     buf.push('<');
     buf.push_str(tag);
 
-    for (col_idx, field) in &attr_cols {
-        let col = array.column(*col_idx);
+    // First pass: attributes go on the open tag.
+    for (col_idx, field) in fields.iter().enumerate() {
+        if !options.is_attribute(field.name()) {
+            continue;
+        }
+        let col = array.column(col_idx);
         if col.is_null(row) {
             if let Some(ref nv) = options.null_value {
                 let attr_name = options.strip_prefix(field.name());
@@ -335,25 +335,49 @@ fn write_struct(
         }
     }
 
-    if elem_cols.is_empty() {
-        buf.push_str("/>\n");
-    } else {
-        let content_start = buf.len();
-        buf.push_str(">\n");
-        for (col_idx, field) in &elem_cols {
-            let col = array.column(*col_idx);
-            write_field(buf, col, row, field, depth + 1, options)?;
+    // Second pass: the valueTag field becomes inline text, the rest child elements.
+    let mut value_text: Option<String> = None;
+    let mut children = String::new();
+    for (col_idx, field) in fields.iter().enumerate() {
+        if options.is_attribute(field.name()) {
+            continue;
         }
-        let content_end = buf.len();
-        if content_end == content_start + 2 {
-            buf.truncate(content_start);
-            buf.push_str("/>\n");
+        let col = array.column(col_idx);
+        if field.name() == options.value_tag.as_str() {
+            if col.is_null(row) {
+                if let Some(ref nv) = options.null_value {
+                    value_text = Some(escape_text(nv));
+                }
+            } else {
+                value_text = Some(escape_text(&format_field_to_xml(
+                    col,
+                    row,
+                    field.data_type(),
+                    options,
+                )?));
+            }
         } else {
-            buf.push_str(&pad);
-            buf.push_str("</");
-            buf.push_str(tag);
-            buf.push_str(">\n");
+            write_field(&mut children, col, row, field, depth + 1, options)?;
         }
+    }
+
+    let has_text = value_text.is_some();
+    let has_children = !children.is_empty();
+    if !has_text && !has_children {
+        buf.push_str("/>");
+    } else {
+        buf.push('>');
+        if let Some(text) = value_text {
+            buf.push_str(&text);
+        }
+        buf.push_str(&children);
+        if has_children {
+            buf.push('\n');
+            push_indent(buf, depth);
+        }
+        buf.push_str("</");
+        buf.push_str(tag);
+        buf.push('>');
     }
 
     Ok(())
@@ -367,31 +391,13 @@ fn write_field(
     depth: usize,
     options: &SparkToXmlOptions,
 ) -> Result<()> {
-    let pad = INDENT.repeat(depth);
     let name = field.name().as_str();
-
-    // value_tag handles text content injected directly into the parent
-    if name == options.value_tag {
-        if col.is_null(row) {
-            if let Some(ref nv) = options.null_value {
-                buf.push_str(&escape_text(nv));
-            }
-        } else {
-            buf.push_str(&escape_text(&format_field_to_xml(
-                col,
-                row,
-                field.data_type(),
-                options,
-            )?));
-        }
-        return Ok(());
-    }
 
     if col.is_null(row) {
         if let Some(ref nv) = options.null_value {
-            buf.push_str(&pad);
-            push_element(buf, name, &escape_text(nv));
             buf.push('\n');
+            push_indent(buf, depth);
+            push_element(buf, name, &escape_text(nv));
         }
         return Ok(());
     }
@@ -413,15 +419,18 @@ fn write_field(
         }
         _ => {
             let text = format_field_to_xml(col, row, field.data_type(), options)?;
-            buf.push_str(&pad);
-            push_element(buf, name, &escape_text(&text));
             buf.push('\n');
+            push_indent(buf, depth);
+            push_element(buf, name, &escape_text(&text));
         }
     }
 
     Ok(())
 }
 
+/// Serializes an array field. Spark repeats the field tag once per element for
+/// primitives (`<f>1</f><f>2</f>`) and structs, with no `item` wrapper. Only a
+/// nested array wraps its inner elements, which then use `arrayElementName`.
 fn write_array(
     buf: &mut String,
     col: &ArrayRef,
@@ -431,8 +440,6 @@ fn write_array(
     depth: usize,
     options: &SparkToXmlOptions,
 ) -> Result<()> {
-    let pad = INDENT.repeat(depth);
-
     let (offsets_start, offsets_end, values): (usize, usize, ArrayRef) =
         if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
             (
@@ -472,45 +479,39 @@ fn write_array(
                 )?;
             }
             DataType::List(inner_field) | DataType::LargeList(inner_field) => {
+                buf.push('\n');
+                push_indent(buf, depth);
+                buf.push('<');
+                buf.push_str(field_name);
+                buf.push('>');
                 write_array(
                     buf,
                     &values,
                     item_idx,
                     options.array_element_name.as_str(),
                     inner_field,
-                    depth,
+                    depth + 1,
                     options,
                 )?;
+                buf.push('\n');
+                push_indent(buf, depth);
+                buf.push_str("</");
+                buf.push_str(field_name);
+                buf.push('>');
             }
             _ => {
                 if values.is_null(item_idx) {
                     if let Some(ref nv) = options.null_value {
-                        buf.push_str(&pad);
-                        buf.push('<');
-                        buf.push_str(field_name);
-                        buf.push_str(">\n");
-                        buf.push_str(&INDENT.repeat(depth + 1));
-                        push_element(buf, &options.array_element_name, &escape_text(nv));
                         buf.push('\n');
-                        buf.push_str(&pad);
-                        buf.push_str("</");
-                        buf.push_str(field_name);
-                        buf.push_str(">\n");
+                        push_indent(buf, depth);
+                        push_element(buf, field_name, &escape_text(nv));
                     }
                 } else {
                     let text =
                         format_field_to_xml(&values, item_idx, item_field.data_type(), options)?;
-                    buf.push_str(&pad);
-                    buf.push('<');
-                    buf.push_str(field_name);
-                    buf.push_str(">\n");
-                    buf.push_str(&INDENT.repeat(depth + 1));
-                    push_element(buf, &options.array_element_name, &escape_text(&text));
                     buf.push('\n');
-                    buf.push_str(&pad);
-                    buf.push_str("</");
-                    buf.push_str(field_name);
-                    buf.push_str(">\n");
+                    push_indent(buf, depth);
+                    push_element(buf, field_name, &escape_text(&text));
                 }
             }
         }
@@ -532,8 +533,6 @@ fn write_map(
             "to_xml: expected MapArray for field '{field_name}'"
         ))
     })?;
-
-    let pad = INDENT.repeat(depth);
 
     let entries = map_array.value(row);
     let num_entries = entries.len();
@@ -568,7 +567,7 @@ fn write_map(
             other => {
                 return exec_err!(
                     "to_xml: map keys must be strings to be valid XML tag names, got {other:?}"
-                )
+                );
             }
         };
         if key.is_empty() {
@@ -584,112 +583,113 @@ fn write_map(
                  which is not a valid XML name start character"
             );
         }
-        if values.is_null(i) {
-            if let Some(ref nv) = options.null_value {
-                inner.push_str(&INDENT.repeat(depth + 1));
-                push_element(&mut inner, &key, &escape_text(nv));
-                inner.push('\n');
-            }
-        } else {
-            let val_dt = values.data_type();
-            match val_dt {
-                DataType::Struct(child_fields) => {
-                    let child = values
+        write_map_entry(&mut inner, values, i, &key, depth + 1, options)?;
+    }
+
+    buf.push('\n');
+    push_indent(buf, depth);
+    buf.push('<');
+    buf.push_str(field_name);
+    if inner.is_empty() {
+        buf.push_str("/>");
+    } else {
+        buf.push('>');
+        buf.push_str(&inner);
+        buf.push('\n');
+        push_indent(buf, depth);
+        buf.push_str("</");
+        buf.push_str(field_name);
+        buf.push('>');
+    }
+
+    Ok(())
+}
+
+/// Renders a single map value under tag `key`, prefixing its own newline plus
+/// indentation. A list value repeats `key` once per element (like a top-level
+/// primitive array).
+fn write_map_entry(
+    buf: &mut String,
+    values: &ArrayRef,
+    i: usize,
+    key: &str,
+    depth: usize,
+    options: &SparkToXmlOptions,
+) -> Result<()> {
+    if values.is_null(i) {
+        if let Some(ref nv) = options.null_value {
+            buf.push('\n');
+            push_indent(buf, depth);
+            push_element(buf, key, &escape_text(nv));
+        }
+        return Ok(());
+    }
+
+    match values.data_type() {
+        DataType::Struct(child_fields) => {
+            let child = values
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "to_xml: expected StructArray for map value '{key}'"
+                    ))
+                })?;
+            write_struct(buf, child, i, child_fields, key, depth, options)?;
+        }
+        DataType::List(item_field) | DataType::LargeList(item_field) => {
+            let (offsets_start, offsets_end, array_values): (usize, usize, ArrayRef) =
+                if let Some(list) = values.as_any().downcast_ref::<ListArray>() {
+                    (
+                        list.offsets()[i] as usize,
+                        list.offsets()[i + 1] as usize,
+                        list.values().clone(),
+                    )
+                } else if let Some(list) = values.as_any().downcast_ref::<LargeListArray>() {
+                    (
+                        list.offsets()[i] as usize,
+                        list.offsets()[i + 1] as usize,
+                        list.values().clone(),
+                    )
+                } else {
+                    return exec_err!("to_xml: expected ListArray for map value '{key}'");
+                };
+            for elem_idx in offsets_start..offsets_end {
+                if array_values.is_null(elem_idx) {
+                    if let Some(ref nv) = options.null_value {
+                        buf.push('\n');
+                        push_indent(buf, depth);
+                        push_element(buf, key, &escape_text(nv));
+                    }
+                } else if let DataType::Struct(child_fields) = item_field.data_type() {
+                    let child = array_values
                         .as_any()
                         .downcast_ref::<StructArray>()
                         .ok_or_else(|| {
                             DataFusionError::Internal(format!(
-                                "to_xml: expected StructArray for map value in '{field_name}'"
+                                "to_xml: expected StructArray in map array value '{key}'"
                             ))
                         })?;
-                    write_struct(&mut inner, child, i, child_fields, &key, depth + 1, options)?;
-                }
-                DataType::List(item_field) | DataType::LargeList(item_field) => {
-                    let (offsets_start, offsets_end, array_values): (usize, usize, ArrayRef) =
-                        if let Some(list) = values.as_any().downcast_ref::<ListArray>() {
-                            (
-                                list.offsets()[i] as usize,
-                                list.offsets()[i + 1] as usize,
-                                list.values().clone(),
-                            )
-                        } else if let Some(list) = values.as_any().downcast_ref::<LargeListArray>()
-                        {
-                            (
-                                list.offsets()[i] as usize,
-                                list.offsets()[i + 1] as usize,
-                                list.values().clone(),
-                            )
-                        } else {
-                            return exec_err!(
-                                "to_xml: expected ListArray for map value in field '{field_name}'"
-                            );
-                        };
-                    for elem_idx in offsets_start..offsets_end {
-                        if array_values.is_null(elem_idx) {
-                            if let Some(ref nv) = options.null_value {
-                                inner.push_str(&INDENT.repeat(depth + 1));
-                                push_element(&mut inner, &key, &escape_text(nv));
-                                inner.push('\n');
-                            }
-                        } else {
-                            match item_field.data_type() {
-                                DataType::Struct(child_fields) => {
-                                    let child = array_values
-                                        .as_any()
-                                        .downcast_ref::<StructArray>()
-                                        .ok_or_else(|| DataFusionError::Internal(format!(
-                                            "to_xml: expected StructArray in map array value for '{field_name}'"
-                                        )))?;
-                                    write_struct(
-                                        &mut inner,
-                                        child,
-                                        elem_idx,
-                                        child_fields,
-                                        &key,
-                                        depth + 1,
-                                        options,
-                                    )?;
-                                }
-                                _ => {
-                                    let text = format_field_to_xml(
-                                        &array_values,
-                                        elem_idx,
-                                        item_field.data_type(),
-                                        options,
-                                    )?;
-                                    inner.push_str(&INDENT.repeat(depth + 1));
-                                    push_element(&mut inner, &key, &escape_text(&text));
-                                    inner.push('\n');
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    let text = format_field_to_xml(values, i, val_dt, options)?;
-                    inner.push_str(&INDENT.repeat(depth + 1));
-                    push_element(&mut inner, &key, &escape_text(&text));
-                    inner.push('\n');
+                    write_struct(buf, child, elem_idx, child_fields, key, depth, options)?;
+                } else {
+                    let text = format_field_to_xml(
+                        &array_values,
+                        elem_idx,
+                        item_field.data_type(),
+                        options,
+                    )?;
+                    buf.push('\n');
+                    push_indent(buf, depth);
+                    push_element(buf, key, &escape_text(&text));
                 }
             }
         }
-    }
-
-    if inner.is_empty() {
-        buf.push_str(&pad);
-        buf.push('<');
-        buf.push_str(field_name);
-        buf.push_str("/>\n");
-    } else {
-        buf.push_str(&pad);
-        buf.push('<');
-        buf.push_str(field_name);
-        buf.push_str(">\n");
-        buf.push_str(&inner);
-        buf.push_str(&pad);
-        buf.push_str("</");
-        buf.push_str(field_name);
-        buf.push_str(">\n");
+        val_dt => {
+            let text = format_field_to_xml(values, i, val_dt, options)?;
+            buf.push('\n');
+            push_indent(buf, depth);
+            push_element(buf, key, &escape_text(&text));
+        }
     }
 
     Ok(())
@@ -770,17 +770,73 @@ fn format_decimal128(raw: i128, scale: u32) -> String {
     )
 }
 
-fn format_float(v: f64) -> String {
+/// Formats a `f64` the way Java's `Double.toString` (and therefore Spark) does:
+/// plain decimal for `1e-3 <= |x| < 1e7`, scientific `d.dddEexp` otherwise,
+/// always with at least one fractional digit.
+fn format_double(v: f64) -> String {
     if v.is_nan() {
-        "NaN".to_string()
-    } else if v.is_infinite() {
-        if v > 0.0 {
-            "Infinity".to_string()
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if v == 0.0 {
+        return "0.0".to_string();
+    }
+    // Rust's `{:e}` yields the shortest round-tripping mantissa in normalized
+    // form `d[.ddd]e<exp>`, which carries exactly the significant digits and the
+    // base-10 exponent Java needs.
+    java_float_repr(v < 0.0, &format!("{:e}", v.abs()))
+}
+
+/// Same as [`format_double`] but for `f32` (Spark `FLOAT`). Formatting the `f32`
+/// directly (not via `f64`) keeps the shortest `f32` round-tripping digits.
+fn format_single(v: f32) -> String {
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if v == 0.0 {
+        return "0.0".to_string();
+    }
+    java_float_repr(v < 0.0, &format!("{:e}", v.abs()))
+}
+
+/// Reformats Rust's normalized `{:e}` output (e.g. `"1.2345678e7"`) into Java
+/// `Double.toString` style. `neg` carries the sign separately.
+fn java_float_repr(neg: bool, rust_sci: &str) -> String {
+    let Some((mantissa, exp_str)) = rust_sci.split_once('e') else {
+        return rust_sci.to_string();
+    };
+    let Ok(sci_exp) = exp_str.parse::<i32>() else {
+        return rust_sci.to_string();
+    };
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let sign = if neg { "-" } else { "" };
+
+    if (-3..7).contains(&sci_exp) {
+        // Plain decimal notation.
+        let body = if sci_exp >= 0 {
+            let int_len = sci_exp as usize + 1;
+            if int_len >= digits.len() {
+                format!("{}{}.0", digits, "0".repeat(int_len - digits.len()))
+            } else {
+                format!("{}.{}", &digits[..int_len], &digits[int_len..])
+            }
         } else {
-            "-Infinity".to_string()
-        }
+            format!("0.{}{}", "0".repeat((-sci_exp - 1) as usize), digits)
+        };
+        format!("{sign}{body}")
     } else {
-        format!("{v}")
+        // Scientific notation: one digit before the point, at least one after.
+        let mantissa = if digits.len() == 1 {
+            format!("{}.0", digits)
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        format!("{sign}{mantissa}E{sci_exp}")
     }
 }
 
@@ -795,14 +851,35 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> Result<String> {
         ScalarValue::UInt16(Some(v)) => Ok(v.to_string()),
         ScalarValue::UInt32(Some(v)) => Ok(v.to_string()),
         ScalarValue::UInt64(Some(v)) => Ok(v.to_string()),
-        ScalarValue::Float32(Some(v)) => Ok(format_float(*v as f64)),
-        ScalarValue::Float64(Some(v)) => Ok(format_float(*v)),
+        ScalarValue::Float32(Some(v)) => Ok(format_single(*v)),
+        ScalarValue::Float64(Some(v)) => Ok(format_double(*v)),
         ScalarValue::Utf8(Some(v))
         | ScalarValue::LargeUtf8(Some(v))
         | ScalarValue::Utf8View(Some(v)) => Ok(v.clone()),
+        ScalarValue::Binary(Some(v))
+        | ScalarValue::LargeBinary(Some(v))
+        | ScalarValue::BinaryView(Some(v))
+        | ScalarValue::FixedSizeBinary(_, Some(v)) => Ok(format_binary(v)),
         sv if sv.is_null() => exec_err!("to_xml: scalar_to_display_string called on null: {sv:?}"),
         _ => exec_err!("to_xml: unsupported scalar type for XML serialization: {scalar:?}"),
     }
+}
+
+/// Spark renders binary as space-separated uppercase hex bytes in brackets,
+/// e.g. `X'48656C6C6F'` becomes `[48 65 6C 6C 6F]` and empty binary becomes `[]`.
+fn format_binary(value: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::with_capacity(value.len() * 3 + 2);
+    output.push('[');
+    for (i, byte) in value.iter().enumerate() {
+        if i > 0 {
+            output.push(' ');
+        }
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output.push(']');
+    output
 }
 
 fn format_timestamp_field(
@@ -901,28 +978,29 @@ fn format_timestamp_field(
     }
 }
 
+/// Spark's `StaxXmlGenerator` escapes only `&` and `<` in element text; `>` is
+/// left literal.
 fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
             _ => out.push(c),
         }
     }
     out
 }
 
+/// In attribute values Spark escapes `&`, `<` and `"`; `>` and `'` are left
+/// literal.
 fn escape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
             _ => out.push(c),
         }
     }
@@ -999,14 +1077,26 @@ mod tests {
 
     #[test]
     fn test_escape_text() {
-        assert_eq!(escape_text("a & b < c > d"), "a &amp; b &lt; c &gt; d");
+        // Spark escapes only `&` and `<`; `>` stays literal.
+        assert_eq!(escape_text("a & b < c > d"), "a &amp; b &lt; c > d");
         assert_eq!(escape_text("clean"), "clean");
     }
 
     #[test]
     fn test_escape_attr() {
+        // Spark escapes `&`, `<` and `"` in attributes; `>` and `'` stay literal.
         assert_eq!(escape_attr(r#"say "hi""#), "say &quot;hi&quot;");
-        assert_eq!(escape_attr("it's"), "it&apos;s");
+        assert_eq!(escape_attr("it's > that"), "it's > that");
+    }
+
+    #[test]
+    fn test_format_binary() {
+        assert_eq!(
+            format_binary(&[0x48, 0x65, 0x6C, 0x6C, 0x6F]),
+            "[48 65 6C 6C 6F]"
+        );
+        assert_eq!(format_binary(&[]), "[]");
+        assert_eq!(format_binary(&[0x00, 0xFF]), "[00 FF]");
     }
 
     #[test]
@@ -1021,12 +1111,36 @@ mod tests {
     }
 
     #[test]
-    fn test_format_float() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(format_float(f64::NAN), "NaN");
-        assert_eq!(format_float(f64::INFINITY), "Infinity");
-        assert_eq!(format_float(f64::NEG_INFINITY), "-Infinity");
-        assert_eq!(format_float(3.44), "3.44");
-        assert_eq!(format_float(0.0), "0");
-        Ok(())
+    fn test_format_double() {
+        // Values pinned against Java `Double.toString` (Spark JVM ground truth).
+        assert_eq!(format_double(f64::NAN), "NaN");
+        assert_eq!(format_double(f64::INFINITY), "Infinity");
+        assert_eq!(format_double(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(format_double(0.0), "0.0");
+        assert_eq!(format_double(-0.0), "0.0");
+        assert_eq!(format_double(1.0), "1.0");
+        assert_eq!(format_double(100.0), "100.0");
+        assert_eq!(format_double(2.71), "2.71");
+        assert_eq!(format_double(-123.456), "-123.456");
+        assert_eq!(format_double(0.001), "0.001");
+        assert_eq!(format_double(0.0009), "9.0E-4");
+        assert_eq!(format_double(0.0001), "1.0E-4");
+        assert_eq!(format_double(9999999.0), "9999999.0");
+        assert_eq!(format_double(10000000.0), "1.0E7");
+        assert_eq!(format_double(12345678.0), "1.2345678E7");
+        assert_eq!(format_double(1e20), "1.0E20");
+        assert_eq!(format_double(1e-7), "1.0E-7");
+        assert_eq!(format_double(1e308), "1.0E308");
+        assert_eq!(format_double(123456789012345.0), "1.23456789012345E14");
+    }
+
+    #[test]
+    fn test_format_single() {
+        assert_eq!(format_single(f32::NAN), "NaN");
+        assert_eq!(format_single(f32::INFINITY), "Infinity");
+        assert_eq!(format_single(1.0), "1.0");
+        assert_eq!(format_single(0.1), "0.1");
+        assert_eq!(format_single(123.456), "123.456");
+        assert_eq!(format_single(10000000.0), "1.0E7");
     }
 }

@@ -459,8 +459,8 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use sail_common_datafusion::catalog::{
         CatalogProviderId, CatalogTableIdentity, CommitAuthority, DatabaseStatus,
@@ -843,8 +843,7 @@ mod tests {
             partition_by: vec![],
             sort_by: vec![],
             bucket_by: None,
-            if_not_exists: false,
-            replace: false,
+            mode: crate::provider::CreateTableMode::Create,
             properties: vec![],
             is_external: false,
             is_write_precondition: false,

@@ -1,16 +1,38 @@
+use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::{Lambda, LambdaVariable};
-use datafusion_expr::{expr, ExprSchemable, ValueOrLambda};
+use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::get_lambda_parameters;
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
+
+pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
+    match argument {
+        spec::Expr::LambdaFunction { .. } => true,
+        spec::Expr::Alias { expr, .. } => is_spec_lambda_argument(expr),
+        _ => false,
+    }
+}
+
+fn take_spec_lambda_argument(
+    argument: spec::Expr,
+) -> Option<(spec::Expr, Vec<spec::UnresolvedNamedLambdaVariable>)> {
+    // TODO: Do we need to preserve any information from the original argument?
+    match argument {
+        spec::Expr::LambdaFunction {
+            function,
+            arguments,
+        } => Some((*function, arguments)),
+        spec::Expr::Alias { expr, .. } => take_spec_lambda_argument(*expr),
+        _ => None,
+    }
+}
 
 impl PlanResolver<'_> {
     /// Resolves the arguments of a built-in higher-order function.
@@ -34,14 +56,18 @@ impl PlanResolver<'_> {
 
         let mut slots: Vec<Slot> = Vec::with_capacity(arguments.len());
         for argument in arguments {
-            match argument {
-                spec::Expr::LambdaFunction {
-                    function,
-                    arguments,
-                } => slots.push(Slot::Lambda(*function, arguments)),
-                other => slots.push(Slot::Resolved(
-                    self.resolve_named_expression(other, schema, state).await?,
-                )),
+            if is_spec_lambda_argument(&argument) {
+                let Some((function, arguments)) = take_spec_lambda_argument(argument) else {
+                    return Err(PlanError::internal(
+                        "lambda argument predicate and extraction disagreed",
+                    ));
+                };
+                slots.push(Slot::Lambda(function, arguments));
+            } else {
+                slots.push(Slot::Resolved(
+                    self.resolve_named_expression(argument, schema, state)
+                        .await?,
+                ));
             }
         }
 

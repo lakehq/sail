@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
@@ -70,6 +70,7 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
                 Some(input.function_context.plan_config.session_timezone.clone()),
+                input.function_context.plan_config.ansi_mode,
                 false,
             )?)),
             args: vec![arg],

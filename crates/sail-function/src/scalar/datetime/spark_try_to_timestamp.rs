@@ -60,7 +60,8 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Delegate to SparkTimestamp with is_try=true
         // This will return NULL on parse failure instead of raising an error
-        let spark_timestamp = SparkTimestamp::try_new(self.timezone.clone(), true)?;
+        // ansi_mode is set to true for try_to_timestamp (safe parsing)
+        let spark_timestamp = SparkTimestamp::try_new(self.timezone.clone(), true, true)?;
         spark_timestamp.invoke_with_args(args)
     }
 }

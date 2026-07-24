@@ -5,10 +5,10 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
-    CreateDatabaseOptions, CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
-    TableFormatCreateMetadataMode,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace, PartitionTransform, TableFormatCreateMetadataMode,
+    plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -25,10 +25,9 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    alter_spark_column_default, build_database, build_generic_table, build_view,
-    database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
+    GenericTableFormat, alter_spark_column_default, build_database, build_generic_table,
+    build_view, database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
     reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
-    GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
 use crate::managed_table;
@@ -420,7 +419,7 @@ impl HmsCatalogProvider {
             (_, other) => {
                 return Err(CatalogError::InvalidArgument(format!(
                     "Unsupported thrift_transport '{other}', expected 'buffered' or 'framed'"
-                )))
+                )));
             }
         };
         Ok(client)
@@ -461,10 +460,10 @@ impl HmsCatalogProvider {
     ) -> CatalogResult<(usize, ThriftHiveMetastoreClient)> {
         {
             let state = self.state.lock().await;
-            if state.active_index != failed_index {
-                if let Some(client) = &state.client {
-                    return Ok((state.active_index, client.clone()));
-                }
+            if state.active_index != failed_index
+                && let Some(client) = &state.client
+            {
+                return Ok((state.active_index, client.clone()));
             }
         }
 
@@ -828,7 +827,7 @@ impl HmsCatalogProvider {
 }
 
 fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
-    if options.replace {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog does not support REPLACE".to_string(),
         ));
@@ -1031,6 +1030,7 @@ impl CatalogProvider for HmsCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
+        let if_not_exists = options.mode.ignore_if_exists();
 
         validate_create_table_options(&options)?;
         let db_name = validate_namespace(database)?;
@@ -1062,7 +1062,7 @@ impl CatalogProvider for HmsCatalogProvider {
             &format_for_metadata,
         )?;
 
-        self.create_hms_table(database, table, hms_table, options.if_not_exists)
+        self.create_hms_table(database, table, hms_table, if_not_exists)
             .await
     }
 
@@ -1314,11 +1314,13 @@ mod tests {
 
         assert!(matches!(error, CatalogError::InvalidArgument(_)));
         assert!(table.parameters.as_ref().unwrap().contains_key("owner"));
-        assert!(!table
-            .parameters
-            .as_ref()
-            .unwrap()
-            .contains_key("spark.sql.sources.provider"));
+        assert!(
+            !table
+                .parameters
+                .as_ref()
+                .unwrap()
+                .contains_key("spark.sql.sources.provider")
+        );
     }
 
     #[test]
@@ -1346,11 +1348,13 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, CatalogError::InvalidArgument(_)));
-        assert!(table
-            .parameters
-            .as_ref()
-            .unwrap()
-            .contains_key("spark.sql.sources.provider"));
+        assert!(
+            table
+                .parameters
+                .as_ref()
+                .unwrap()
+                .contains_key("spark.sql.sources.provider")
+        );
     }
 
     #[test]
@@ -1604,9 +1608,11 @@ mod tests {
         let error = super::split_hms_uri_list(&[]).unwrap_err();
 
         assert!(matches!(error, CatalogError::InvalidArgument(_)));
-        assert!(error
-            .to_string()
-            .contains("must contain at least one endpoint"));
+        assert!(
+            error
+                .to_string()
+                .contains("must contain at least one endpoint")
+        );
     }
 
     #[test]

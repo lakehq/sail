@@ -29,8 +29,8 @@ use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
-    FileScanConfigBuilder, ParquetSource,
+    FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource, wrap_partition_type_in_dict,
+    wrap_partition_value_in_dict,
 };
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
@@ -38,10 +38,10 @@ use object_store::path::Path;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::conversion::ScalarConverter;
-use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
+use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{Add, MaxStat, MinStat};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
@@ -330,10 +330,10 @@ pub fn build_file_scan_config(
     let mut parquet_source =
         ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
-    if let Some(predicate) = params.pushdown_filter {
-        if config.enable_parquet_pushdown {
-            parquet_source = parquet_source.with_predicate(predicate);
-        }
+    if let Some(predicate) = params.pushdown_filter
+        && config.enable_parquet_pushdown
+    {
+        parquet_source = parquet_source.with_predicate(predicate);
     }
 
     let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
@@ -433,21 +433,20 @@ fn sanitize_column_statistics_for_field(
         .max_value
         .get_value()
         .map(ScalarValue::data_type);
-    if let (Some(min_type), Some(max_type)) = (min_type, max_type) {
-        if min_type != max_type {
-            column_stats.min_value = Precision::Absent;
-            column_stats.max_value = Precision::Absent;
-            return;
-        }
+    if let (Some(min_type), Some(max_type)) = (min_type, max_type)
+        && min_type != max_type
+    {
+        column_stats.min_value = Precision::Absent;
+        column_stats.max_value = Precision::Absent;
+        return;
     }
     if let (Some(min), Some(max)) = (
         column_stats.min_value.get_value(),
         column_stats.max_value.get_value(),
-    ) {
-        if matches!(min.partial_cmp(max), Some(Ordering::Greater)) {
-            column_stats.min_value = Precision::Absent;
-            column_stats.max_value = Precision::Absent;
-        }
+    ) && matches!(min.partial_cmp(max), Some(Ordering::Greater))
+    {
+        column_stats.min_value = Precision::Absent;
+        column_stats.max_value = Precision::Absent;
     }
 }
 
@@ -609,14 +608,13 @@ fn stats_for_add(
                     ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
                         .ok()
                         .flatten()
-                }) {
-                    if !value.is_null() {
-                        min_value = match min_stat {
-                            MinStat::Exact(_) => Precision::Exact(value),
-                            MinStat::LowerBound(_) => Precision::Inexact(value),
-                            MinStat::Absent => Precision::Absent,
-                        };
-                    }
+                }) && !value.is_null()
+                {
+                    min_value = match min_stat {
+                        MinStat::Exact(_) => Precision::Exact(value),
+                        MinStat::LowerBound(_) => Precision::Inexact(value),
+                        MinStat::Absent => Precision::Absent,
+                    };
                 }
             }
             if max_value == Precision::Absent {
@@ -625,24 +623,23 @@ fn stats_for_add(
                     ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
                         .ok()
                         .flatten()
-                }) {
-                    if !value.is_null() {
-                        max_value = match max_stat {
-                            MaxStat::Exact(_) => Precision::Exact(value),
-                            MaxStat::UpperBound(_) => Precision::Inexact(value),
-                            MaxStat::Absent => Precision::Absent,
-                        };
-                    }
-                }
-            }
-            if null_count == Precision::Absent {
-                if let Some(value) = stats.null_count_value(name) {
-                    null_count = if stats.tight_bounds {
-                        Precision::Exact(value.max(0) as usize)
-                    } else {
-                        Precision::Inexact(value.max(0) as usize)
+                }) && !value.is_null()
+                {
+                    max_value = match max_stat {
+                        MaxStat::Exact(_) => Precision::Exact(value),
+                        MaxStat::UpperBound(_) => Precision::Inexact(value),
+                        MaxStat::Absent => Precision::Absent,
                     };
                 }
+            }
+            if null_count == Precision::Absent
+                && let Some(value) = stats.null_count_value(name)
+            {
+                null_count = if stats.tight_bounds {
+                    Precision::Exact(value.max(0) as usize)
+                } else {
+                    Precision::Inexact(value.max(0) as usize)
+                };
             }
         }
 
@@ -675,8 +672,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion::common::ScalarValue;
+    use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use object_store::path::Path;
 
     use super::{

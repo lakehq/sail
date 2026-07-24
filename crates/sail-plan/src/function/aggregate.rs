@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
@@ -10,7 +11,9 @@ use datafusion::functions_aggregate::{
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
+use datafusion_expr::{
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when,
+};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
@@ -39,9 +42,9 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
-    hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg, AggFunction, AggFunctionInput,
+    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
+    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -71,6 +74,100 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     }))
+}
+
+fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+        function_context,
+    } = input;
+    let supports_linear_rewrite =
+        !distinct && ignore_nulls.is_none() && filter.is_none() && order_by.is_empty();
+    let arguments = if supports_linear_rewrite {
+        arguments
+            .into_iter()
+            .map(|argument| {
+                widen_safe_linear_sum_argument(argument, function_context.schema.as_ref())
+            })
+            .collect()
+    } else {
+        arguments
+    };
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: sum::sum_udaf(),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct,
+            filter,
+            order_by,
+            null_treatment: get_null_treatment(ignore_nulls),
+        },
+    }))
+}
+
+fn widen_safe_linear_sum_argument(
+    argument: expr::Expr,
+    schema: &datafusion_common::DFSchema,
+) -> expr::Expr {
+    if argument.get_type(schema).ok() != Some(DataType::Int32) {
+        return argument;
+    }
+    let expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) = &argument else {
+        return argument;
+    };
+    if *op != Operator::Plus {
+        return argument;
+    }
+
+    let left_literal = widen_int32_literal(left);
+    let right_literal = widen_int32_literal(right);
+    let (value, widened_literal, value_expression, literal_is_left) =
+        match (left_literal, right_literal) {
+            (Some((value, literal)), None) => (value, literal, right.as_ref(), true),
+            (None, Some((value, literal))) => (value, literal, left.as_ref(), false),
+            _ => return argument,
+        };
+    let Ok(value_type) = value_expression.get_type(schema) else {
+        return argument;
+    };
+    let Some((minimum, maximum)) = signed_integer_bounds(&value_type) else {
+        return argument;
+    };
+    if minimum + value < i64::from(i32::MIN) || maximum + value > i64::from(i32::MAX) {
+        return argument;
+    }
+
+    let widened_value = cast(value_expression.clone(), DataType::Int64);
+    if literal_is_left {
+        widened_literal + widened_value
+    } else {
+        widened_value + widened_literal
+    }
+}
+
+fn widen_int32_literal(argument: &expr::Expr) -> Option<(i64, expr::Expr)> {
+    let expr::Expr::Literal(ScalarValue::Int32(Some(value)), metadata) = argument else {
+        return None;
+    };
+    let value = i64::from(*value);
+    Some((
+        value,
+        expr::Expr::Literal(ScalarValue::Int64(Some(value)), metadata.clone()),
+    ))
+}
+
+fn signed_integer_bounds(data_type: &DataType) -> Option<(i64, i64)> {
+    match data_type {
+        DataType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        DataType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        DataType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        _ => None,
+    }
 }
 
 fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -104,7 +201,8 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::first_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `First` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
@@ -119,7 +217,8 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::last_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `Last` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
@@ -249,9 +348,10 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let column = sort.expr;
     let percentile = input.arguments.one()?;
     let args = vec![column, percentile];
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: percentile_disc_udaf(),
+        func: percentile_disc_udaf(ansi_mode),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -387,71 +487,79 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     // Spark's collect_set ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
+    let arg = input.arguments.one()?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
-    let (args, filter, null_treatment) = if ignore_nulls == Some(true) {
-        let arg = input.arguments.one()?;
+    let (filter, null_treatment) = if ignore_nulls == Some(true) {
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
-            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
-            None => Some(Box::new(null_filter)),
+            Some(existing) => existing.as_ref().clone().and(null_filter),
+            None => null_filter,
         };
-        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
+        // Don't use null_treatment when we have explicit filter
+        (Some(Box::new(combined_filter)), None)
     } else {
-        (
-            input.arguments,
-            input.filter,
-            get_null_treatment(ignore_nulls),
-        )
+        (input.filter, get_null_treatment(ignore_nulls))
     };
 
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args,
+            args: vec![arg],
             distinct: true,
             order_by: input.order_by,
             filter,
             null_treatment,
         },
-    }))
+    });
+    Ok(coalesce_to_empty_array(agg, &element_type))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     // Spark's collect_list ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
+    let arg = input.arguments.one()?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
-    let (args, filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
-        let arg = input.arguments.one()?;
+    let (filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
-            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
-            None => Some(Box::new(null_filter)),
+            Some(existing) => existing.as_ref().clone().and(null_filter),
+            None => null_filter,
         };
-        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
+        // Don't use null_treatment when we have explicit filter
+        (Some(Box::new(combined_filter)), None)
     } else {
-        (
-            input.arguments,
-            input.filter,
-            get_null_treatment(ignore_nulls),
-        )
+        (input.filter, get_null_treatment(ignore_nulls))
     };
 
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args,
+            args: vec![arg],
             distinct: input.distinct,
             order_by: input.order_by,
             filter,
             null_treatment,
         },
-    }))
+    });
+    Ok(coalesce_to_empty_array(agg, &element_type))
+}
+
+/// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
+/// values to collect, but DataFusion's `array_agg` returns NULL over zero rows. Coalesce the
+/// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
+fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
+    coalesce(vec![agg, lit(empty)])
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -750,7 +858,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::default(sum::sum_udaf)),
+        ("sum", F::custom(spark_sum)),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
@@ -764,4 +872,8 @@ pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunct
         .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown aggregate function: {name}")))?
         .clone())
+}
+
+pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &'static str> {
+    BUILT_IN_AGGREGATE_FUNCTIONS.keys().copied()
 }

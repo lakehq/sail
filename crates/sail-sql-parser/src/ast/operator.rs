@@ -1,8 +1,8 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
-use chumsky::Parser;
 
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;

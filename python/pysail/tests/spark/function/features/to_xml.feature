@@ -1,3 +1,4 @@
+@to_xml
 Feature: to_xml converts a struct value to an XML string
 
   Rule: Basic serialization
@@ -39,15 +40,6 @@ Feature: to_xml converts a struct value to an XML string
         | 1 | 1 |
         | 2 | 2 |
         | 3 | 3 |
-
-    Scenario: XML declaration is present by default
-      When query
-        """
-        SELECT to_xml(named_struct('a', 1)) LIKE '<?xml%' AS result
-        """
-      Then query result
-        | result |
-        | true   |
 
     Scenario: Root tag defaults to ROW
       When query
@@ -148,15 +140,6 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: Arrays
 
-    Scenario: Primitive array becomes repeated elements
-      When query
-        """
-        SELECT xpath(to_xml(named_struct('numbers', array(1, 2, 3))), '/ROW/numbers/item/text()') AS result
-        """
-      Then query result
-        | result      |
-        | [1, 2, 3]   |
-
     Scenario: Empty array produces self-closing ROW element
       When query
         """
@@ -166,15 +149,6 @@ Feature: to_xml converts a struct value to an XML string
         | result |
         | true   |
 
-    Scenario: Array with single element
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('items', array(1))), '/ROW/items/item') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
     Scenario: Array of structs repeats elements
       When query
         """
@@ -183,24 +157,6 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | result |
         | [1, 2] |
-
-    Scenario: Array containing NULL elements skips nulls
-      When query
-        """
-        SELECT xpath(to_xml(named_struct('items', array(1, CAST(NULL AS INT), 3))), '/ROW/items/item/text()') AS result
-        """
-      Then query result
-        | result |
-        | [1, 3] |
-
-    Scenario: Array with boolean values preserves false
-      When query
-        """
-        SELECT xpath(to_xml(named_struct('flags', array(true, false, true))), '/ROW/flags/item/text()') AS result
-        """
-      Then query result
-        | result            |
-        | [true, false, true] |
 
   Rule: Nested structures
 
@@ -449,17 +405,6 @@ Feature: to_xml converts a struct value to an XML string
         | result |
         | false  |
 
-    Scenario: Struct with array and nested struct
-      When query
-        """
-        SELECT
-          xpath(to_xml(named_struct('items', array(1, 2), 'nested', named_struct('value', 42))), '/ROW/items/item/text()') AS items,
-          xpath_string(to_xml(named_struct('items', array(1, 2), 'nested', named_struct('value', 42))), '/ROW/nested/value') AS nested
-        """
-      Then query result
-        | items  | nested |
-        | [1, 2] | 42     |
-
   Rule: Options
 
     Scenario: Custom rowTag changes root element name
@@ -495,15 +440,6 @@ Feature: to_xml converts a struct value to an XML string
       When query
         """
         SELECT to_xml(named_struct('a', 1), map('ROWTAG', 'Item')) LIKE '%<Item>%' AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: Custom arrayElementName changes inner element tag
-      When query
-        """
-        SELECT to_xml(named_struct('nums', array(10, 20)), map('arrayElementName', 'val')) LIKE '%<val>10</val>%' AS result
         """
       Then query result
         | result |
@@ -613,3 +549,338 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | result |
         | [1, 2] |
+
+  # ============================================================
+  # Bug-hunt (2026-07-10): JVM-validated exact-output scenarios.
+  # Flatten with replace(..., '\n', '~'); '~' marks a newline so the
+  # exact bytes (declaration, indentation, tag structure) are asserted.
+  # ============================================================
+
+  Rule: Serialization envelope
+
+    Scenario: No XML declaration, no trailing newline, four-space indent
+      When query
+        """
+        SELECT replace(to_xml(named_struct('a', 1, 'b', 2)), '\n', '~') AS r
+        """
+      Then query result
+        | r                                    |
+        | <ROW>~    <a>1</a>~    <b>2</b>~</ROW> |
+
+    Scenario: Struct whose only field is NULL is self-closing
+      When query
+        """
+        SELECT replace(to_xml(named_struct('a', CAST(NULL AS INT))), '\n', '~') AS r
+        """
+      Then query result
+        | r       |
+        | <ROW/>  |
+
+    Scenario: declaration option is ignored for string output
+      When query
+        """
+        SELECT replace(to_xml(named_struct('a', 1), map('declaration', 'version="1.0"')), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <a>1</a>~</ROW> |
+
+  Rule: Primitive arrays are repeated flat tags
+
+    Scenario: Primitive array repeats the field tag without an item wrapper
+      When query
+        """
+        SELECT replace(to_xml(named_struct('numbers', array(1, 2, 3))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                                        |
+        | <ROW>~    <numbers>1</numbers>~    <numbers>2</numbers>~    <numbers>3</numbers>~</ROW> |
+
+    Scenario: Single-element primitive array
+      When query
+        """
+        SELECT replace(to_xml(named_struct('items', array(1))), '\n', '~') AS r
+        """
+      Then query result
+        | r                              |
+        | <ROW>~    <items>1</items>~</ROW> |
+
+    Scenario: NULL elements are dropped from a primitive array
+      When query
+        """
+        SELECT replace(to_xml(named_struct('items', array(1, CAST(NULL AS INT), 3))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                    |
+        | <ROW>~    <items>1</items>~    <items>3</items>~</ROW> |
+
+    Scenario: Nested arrays wrap inner elements in item, outer keeps field tag
+      When query
+        """
+        SELECT replace(to_xml(named_struct('m', array(array(1, 2), array(3)))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                                                                       |
+        | <ROW>~    <m>~        <item>1</item>~        <item>2</item>~    </m>~    <m>~        <item>3</item>~    </m>~</ROW> |
+
+    Scenario: Array of structs repeats the field tag around struct fields
+      When query
+        """
+        SELECT replace(to_xml(named_struct('items', array(named_struct('x', 1), named_struct('x', 2)))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                                                       |
+        | <ROW>~    <items>~        <x>1</x>~    </items>~    <items>~        <x>2</x>~    </items>~</ROW> |
+
+  Rule: Binary fields
+
+    Scenario: Binary renders as bracketed uppercase hex
+      When query
+        """
+        SELECT replace(to_xml(named_struct('b', X'48656C6C6F')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                     |
+        | <ROW>~    <b>[48 65 6C 6C 6F]</b>~</ROW> |
+
+    Scenario: Empty binary renders as empty brackets
+      When query
+        """
+        SELECT replace(to_xml(named_struct('b', X'')), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <b>[]</b>~</ROW> |
+
+  Rule: XML escaping
+
+    Scenario: Text escapes ampersand and less-than but leaves greater-than literal
+      When query
+        """
+        SELECT replace(to_xml(named_struct('msg', 'a < b > c & d')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                            |
+        | <ROW>~    <msg>a &lt; b > c &amp; d</msg>~</ROW> |
+
+    Scenario: Attribute escapes ampersand, less-than and double-quote but not greater-than
+      When query
+        """
+        SELECT replace(to_xml(named_struct('_a', 'x<y>z&"q')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                   |
+        | <ROW a="x&lt;y>z&amp;&quot;q"/> |
+
+  Rule: valueTag is inline text content
+
+    Scenario: valueTag-only struct glues text with no surrounding whitespace
+      When query
+        """
+        SELECT replace(to_xml(named_struct('_VALUE', 'hello')), '\n', '~') AS r
+        """
+      Then query result
+        | r                  |
+        | <ROW>hello</ROW>   |
+
+    Scenario: valueTag with an attribute sibling
+      When query
+        """
+        SELECT replace(to_xml(named_struct('_id', 1, '_VALUE', 'hello')), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW id="1">hello</ROW>  |
+
+    Scenario: valueTag text precedes element siblings inline
+      When query
+        """
+        SELECT replace(to_xml(named_struct('_VALUE', 'hi', 'child', 5)), '\n', '~') AS r
+        """
+      Then query result
+        | r                                     |
+        | <ROW>hi~    <child>5</child>~</ROW>    |
+
+  Rule: Maps
+
+    Scenario: Map keys become child tags
+      When query
+        """
+        SELECT replace(to_xml(named_struct('m', map('k1', 1, 'k2', 2))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                              |
+        | <ROW>~    <m>~        <k1>1</k1>~        <k2>2</k2>~    </m>~</ROW> |
+
+    Scenario: Map with array value repeats the key tag
+      When query
+        """
+        SELECT replace(to_xml(named_struct('m', map('nums', array(1, 2, 3)))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                                                    |
+        | <ROW>~    <m>~        <nums>1</nums>~        <nums>2</nums>~        <nums>3</nums>~    </m>~</ROW> |
+
+  Rule: NULL handling and options
+
+    Scenario: NULL struct input returns NULL exact
+      When query
+        """
+        SELECT to_xml(CAST(NULL AS STRUCT<a:INT, b:INT>)) AS r
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+    Scenario: NULL field is omitted by default
+      When query
+        """
+        SELECT replace(to_xml(named_struct('a', 1, 'b', CAST(NULL AS INT))), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <a>1</a>~</ROW> |
+
+    Scenario: Empty string field is an open-close pair, not self-closing
+      When query
+        """
+        SELECT replace(to_xml(named_struct('text', '')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                |
+        | <ROW>~    <text></text>~</ROW>   |
+
+    Scenario: nullValue option renders NULL fields with the configured string
+      When query
+        """
+        SELECT replace(to_xml(named_struct('a', CAST(NULL AS INT)), map('nullValue', 'NA')), '\n', '~') AS r
+        """
+      Then query result
+        | r                          |
+        | <ROW>~    <a>NA</a>~</ROW>  |
+
+  Rule: Temporal and decimal formatting
+
+    Scenario: Date uses default yyyy-MM-dd format
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', DATE '2026-06-06')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                |
+        | <ROW>~    <d>2026-06-06</d>~</ROW> |
+
+    Scenario: Decimal keeps trailing zeros to scale
+      When query
+        """
+        SELECT replace(to_xml(named_struct('price', CAST(2.99 AS DECIMAL(5,2)))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                  |
+        | <ROW>~    <price>2.99</price>~</ROW> |
+
+    Scenario: TIMESTAMP_NTZ uses ISO 8601 with millisecond precision and no offset
+      When query
+        """
+        SELECT replace(to_xml(named_struct('ts', CAST('2026-06-06 12:00:00' AS TIMESTAMP_NTZ))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                  |
+        | <ROW>~    <ts>2026-06-06T12:00:00.000</ts>~</ROW>   |
+
+  Rule: Special float values
+
+    Scenario: NaN renders literally
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST('NaN' AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <d>NaN</d>~</ROW> |
+
+    Scenario: Positive infinity renders as Infinity
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST('Infinity' AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                             |
+        | <ROW>~    <d>Infinity</d>~</ROW> |
+
+  Rule: Double and float use Java toString formatting
+
+    Scenario: Whole double keeps a decimal point
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST(1.0 AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <d>1.0</d>~</ROW> |
+
+    Scenario: Large double uses scientific notation
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST(1e20 AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                            |
+        | <ROW>~    <d>1.0E20</d>~</ROW> |
+
+    Scenario: Small double uses scientific notation
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST(1e-7 AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                             |
+        | <ROW>~    <d>1.0E-7</d>~</ROW>  |
+
+    Scenario: Medium whole double keeps a decimal point
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST(123456.0 AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                             |
+        | <ROW>~    <d>123456.0</d>~</ROW> |
+
+    Scenario: Negative zero double normalizes to positive zero
+      When query
+        """
+        SELECT replace(to_xml(named_struct('d', CAST(-0.0 AS DOUBLE))), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <d>0.0</d>~</ROW> |
+
+    Scenario: Whole float keeps a decimal point
+      When query
+        """
+        SELECT replace(to_xml(named_struct('f', CAST(1.0 AS FLOAT))), '\n', '~') AS r
+        """
+      Then query result
+        | r                        |
+        | <ROW>~    <f>1.0</f>~</ROW> |
+
+    Scenario: Double array repeats the field tag with formatted values
+      When query
+        """
+        SELECT replace(to_xml(named_struct('v', array(CAST(1.0 AS DOUBLE), CAST(2.5 AS DOUBLE)))), '\n', '~') AS r
+        """
+      Then query result
+        | r                                    |
+        | <ROW>~    <v>1.0</v>~    <v>2.5</v>~</ROW> |
+
+  Rule: Array element naming option
+
+    Scenario: Custom arrayElementName names the inner elements of nested arrays
+      When query
+        """
+        SELECT replace(to_xml(named_struct('m', array(array(10, 20))), map('arrayElementName', 'val')), '\n', '~') AS r
+        """
+      Then query result
+        | r                                                                    |
+        | <ROW>~    <m>~        <val>10</val>~        <val>20</val>~    </m>~</ROW> |
+

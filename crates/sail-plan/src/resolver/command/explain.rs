@@ -1,12 +1,12 @@
 use async_recursion::async_recursion;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
 use sail_common::spec;
 
 use crate::error::PlanResult;
-use crate::explain::{explain_string_from_logical_plan, ExplainOptions};
-use crate::resolver::state::PlanResolverState;
+use crate::explain::{ExplainOptions, explain_string_from_logical_plan};
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     #[async_recursion]

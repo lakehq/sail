@@ -1,26 +1,26 @@
+use std::sync::Arc;
+
 use log::debug;
-use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use crate::driver::actor::DriverActor;
-use crate::driver::gen::driver_service_server::DriverService;
-use crate::driver::gen::{
+use crate::driver::r#gen::driver_service_server::DriverService;
+use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
     ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{gen, DriverEvent};
+use crate::driver::{DriverEvent, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
-use crate::id::{TaskKey, WorkerId};
+use crate::id::{DriverId, TaskKey, WorkerId};
 
 pub struct DriverServer {
-    handle: ActorHandle<DriverActor>,
+    registry: Arc<dyn DriverRegistryAccessor>,
 }
 
 impl DriverServer {
-    pub fn new(handle: ActorHandle<DriverActor>) -> Self {
-        Self { handle }
+    pub fn new(registry: Arc<dyn DriverRegistryAccessor>) -> Self {
+        Self { registry }
     }
 }
 
@@ -33,6 +33,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let RegisterWorkerRequest {
+            driver_id,
             worker_id,
             host,
             port,
@@ -47,7 +48,9 @@ impl DriverService for DriverServer {
             port,
             result: tx,
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -63,11 +66,16 @@ impl DriverService for DriverServer {
     ) -> Result<Response<ReportWorkerHeartbeatResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let ReportWorkerHeartbeatRequest { worker_id } = request;
+        let ReportWorkerHeartbeatRequest {
+            driver_id,
+            worker_id,
+        } = request;
         let event = DriverEvent::WorkerHeartbeat {
             worker_id: worker_id.into(),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -83,6 +91,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportWorkerKnownPeersRequest {
+            driver_id,
             worker_id,
             peer_worker_ids,
         } = request;
@@ -90,7 +99,9 @@ impl DriverService for DriverServer {
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
@@ -106,6 +117,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportTaskStatusRequest {
+            driver_id,
             job_id,
             stage,
             partition,
@@ -115,7 +127,7 @@ impl DriverService for DriverServer {
             cause,
             sequence,
         } = request;
-        let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
+        let status = r#gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
         let cause = cause
             .map(|x| serde_json::from_str(&x))
             .transpose()
@@ -132,7 +144,9 @@ impl DriverService for DriverServer {
             cause,
             sequence: Some(sequence),
         };
-        self.handle
+        self.registry
+            .get(DriverId::from(driver_id))
+            .await?
             .send(event)
             .await
             .map_err(ExecutionError::from)?;

@@ -20,13 +20,13 @@ jobs:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/adjust-swap-space
 
       - uses: ./.github/actions/mount-target-directory
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -64,7 +64,7 @@ jobs:
           files: coverage-rust-unit.info
           flags: rust-unit-tests
           name: rust-unit-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS
 
       - name: Install Kerberos client tools
@@ -99,5 +99,5 @@ jobs:
           files: coverage-rust-slow.info
           flags: rust-slow-tests
           name: rust-slow-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS

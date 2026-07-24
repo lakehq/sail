@@ -1286,7 +1286,7 @@ Feature: Data source temporary views
       | 2   |
     Given statement template
       """
-      CREATE OR REPLACE TEMPORARY VIEW v_glob USING parquet OPTIONS (path '{{ view_parquet_data.string }}/*.parquet')
+      CREATE OR REPLACE TEMPORARY VIEW v_glob USING parquet OPTIONS (path '{{ view_parquet_data.file_uri }}/*.parquet')
       """
     When query
       """

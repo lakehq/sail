@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, GenericStringBuilder};
+use datafusion::arrow::array::{ArrayRef, AsArray, GenericStringBuilder, new_null_array};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
@@ -87,7 +87,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: second arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: second arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -112,7 +114,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: third arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: third arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -137,7 +141,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: fourth arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: fourth arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -162,7 +168,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: fifth arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: fifth arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)

@@ -18,7 +18,7 @@
 
 // [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
@@ -27,45 +27,48 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
+use futures::TryStreamExt;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStatus};
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
 use crate::catalog_managed::{
-    catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
-    CatalogManagedDeltaTable,
+    CatalogManagedDeltaTable, catalog_managed_delta_table, metadata_with_catalog_managed,
+    protocol_with_catalog_managed,
 };
-use crate::datasource::{df_logical_schema, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, df_logical_schema};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::resolve_version_timestamp;
-pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::transaction::CommitBuilder;
-use crate::kernel::{
-    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaOperation, DeltaSnapshotConfig,
-    SaveMode,
-};
+use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::gen::DeltaReadOptions;
+use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
-use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
-    DeltaError as DeltaTableError, DeltaResult, Protocol, StructType, TableFeature,
+pub use crate::snapshot::DeltaSnapshot;
+use crate::snapshot::{
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+    catalog_managed_commit_file_name,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::spec::{
+    CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol,
+    SaveMode, StructType, TableFeature, contains_timestampntz_arrow, contains_variant_arrow,
+};
+use crate::transaction::CommitBuilder;
 
 /// In memory representation of a Delta Table
 ///
@@ -103,10 +106,10 @@ impl DeltaTable {
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }
@@ -357,24 +360,25 @@ fn effective_catalog_commit_end_version(
     )
 }
 
+#[cfg(test)]
 fn next_catalog_commit_start_version(
-    start_version: i64,
+    current_start_version: i64,
     effective_end_version: i64,
-    commit_versions: impl IntoIterator<Item = i64>,
-) -> Result<Option<i64>> {
-    let Some(max_version) = commit_versions.into_iter().max() else {
+    versions: impl IntoIterator<Item = i64>,
+) -> DeltaResult<Option<i64>> {
+    let Some(page_max_version) = versions.into_iter().max() else {
         return Ok(None);
     };
-
-    if max_version < start_version {
-        return Err(DataFusionError::External(Box::new(
-            DeltaTableError::generic(format!(
-                "Unity Catalog Delta commit discovery returned only commit versions before requested start version {start_version}"
-            )),
+    if page_max_version < current_start_version {
+        return Err(DeltaTableError::generic(format!(
+            "Catalog-managed Delta commit page ended at version {page_max_version}, before requested start version {current_start_version}"
         )));
     }
-
-    Ok((max_version < effective_end_version).then_some(max_version + 1))
+    if page_max_version >= effective_end_version {
+        Ok(None)
+    } else {
+        Ok(Some(page_max_version + 1))
+    }
 }
 
 fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
@@ -383,6 +387,12 @@ fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
         DeltaTableError::InvalidTableLocation(message)
             if message.contains("No commit files found in _delta_log")
     )
+}
+
+pub(crate) fn catalog_managed_commit_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Option<&LakehouseExecutionContext> {
+    lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
 }
 
 async fn load_catalog_managed_delta_bootstrap_info<C>(
@@ -519,6 +529,7 @@ async fn load_catalog_managed_commits<C>(
     ctx: &C,
     lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
+    log_store: LogStoreRef,
     version_as_of: Option<i64>,
 ) -> Result<CatalogManagedCommitSet>
 where
@@ -533,62 +544,117 @@ where
 
     let catalog_table = lakehouse_table.catalog_table();
     let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
-    let mut start_version = 1;
-    let mut commits = Vec::new();
+    let response = coordinator
+        .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
+        .await?;
 
-    let latest_table_version = loop {
+    let latest_table_version = response.latest_table_version;
+    if let Some(version) = version_as_of
+        && latest_table_version >= 0
+        && version > latest_table_version
+    {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
+            )),
+        )));
+    }
+
+    let Some(effective_end_version) =
+        effective_catalog_commit_end_version(latest_table_version, version_as_of)
+    else {
+        return Ok(CatalogManagedCommitSet {
+            latest_table_version,
+            commits: Vec::new(),
+        });
+    };
+
+    let mut by_version = response
+        .commits
+        .into_iter()
+        .filter(|commit| commit.version >= 1 && commit.version <= effective_end_version)
+        .map(|commit| {
+            (
+                commit.version,
+                CatalogManagedCommitFile {
+                    version: commit.version,
+                    file_name: commit.file_name,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for version in 1..=effective_end_version {
+        if by_version.contains_key(&version) {
+            continue;
+        }
         let response = coordinator
             .get_ratified_commits(
                 lakehouse_table,
                 table_url.to_string(),
-                start_version,
-                version_as_of,
+                version,
+                Some(version),
             )
             .await?;
-
-        let latest_table_version = response.latest_table_version;
-        if let Some(version) = version_as_of {
-            if latest_table_version >= 0 && version > latest_table_version {
-                return Err(DataFusionError::External(Box::new(DeltaTableError::generic(
-                    format!(
-                        "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
-                    ),
-                ))));
-            }
+        if let Some(commit) = response
+            .commits
+            .into_iter()
+            .find(|commit| commit.version == version)
+        {
+            by_version.insert(
+                version,
+                CatalogManagedCommitFile {
+                    version: commit.version,
+                    file_name: commit.file_name,
+                },
+            );
+            continue;
         }
-
-        let effective_end_version =
-            effective_catalog_commit_end_version(latest_table_version, version_as_of);
-        let response_commits = response.commits;
-        let next_start_version = match effective_end_version {
-            Some(end_version) => next_catalog_commit_start_version(
-                start_version,
-                end_version,
-                response_commits.iter().map(|commit| commit.version),
-            )?,
-            None => None,
-        };
-
-        commits.extend(response_commits.into_iter().filter_map(|commit| {
-            if effective_end_version.is_some_and(|end_version| commit.version > end_version) {
-                return None;
-            }
-            Some(CatalogManagedCommitFile {
-                version: commit.version,
-                file_name: commit.file_name,
-            })
-        }));
-
-        match next_start_version {
-            Some(next_start_version) => start_version = next_start_version,
-            None => break latest_table_version,
+        if let Some(file_name) = staged_catalog_managed_commit_file(&log_store, version).await? {
+            by_version.insert(version, CatalogManagedCommitFile { version, file_name });
+        } else {
+            return Err(DataFusionError::External(Box::new(
+                DeltaTableError::generic(format!(
+                    "Catalog-managed Delta commit version {version} was not returned by the catalog"
+                )),
+            )));
         }
-    };
+    }
 
     Ok(CatalogManagedCommitSet {
         latest_table_version,
-        commits,
+        commits: by_version.into_values().collect(),
     })
+}
+
+async fn staged_catalog_managed_commit_file(
+    log_store: &LogStoreRef,
+    version: i64,
+) -> Result<Option<String>> {
+    let prefix = Path::from("_delta_log/_staged_commits");
+    let store = log_store.object_store(None);
+    let staged = store
+        .list(Some(&prefix))
+        .try_filter_map(|meta| async move {
+            let path = meta.location.as_ref();
+            let file_name = path.rsplit('/').next().unwrap_or(path);
+            Ok(
+                (file_name.starts_with(&format!("{version:020}")) && file_name.ends_with(".json"))
+                    .then(|| catalog_managed_commit_file_name(path)),
+            )
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    match staged.as_slice() {
+        [] => Ok(None),
+        [file_name] => Ok(Some(file_name.clone())),
+        _ => Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Multiple staged Delta commits found for catalog-managed version {version}"
+            )),
+        ))),
+    }
 }
 
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
@@ -609,13 +675,25 @@ where
         match log_store.get_latest_version(-1).await {
             Ok(_) => {}
             Err(DeltaError::MissingVersion) => {
-                bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
-                    .await?;
+                bootstrap_catalog_managed_delta_table(
+                    ctx,
+                    catalog_table,
+                    table_url,
+                    log_store.clone(),
+                )
+                .await?;
             }
             Err(err) => return Err(DataFusionError::from(err)),
         }
         return Ok(Some(
-            load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of).await?,
+            load_catalog_managed_commits(
+                ctx,
+                lakehouse_table,
+                table_url,
+                log_store.clone(),
+                version_as_of,
+            )
+            .await?,
         ));
     }
 
@@ -630,20 +708,37 @@ where
         Ok(()) => {
             if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
-                        .await?,
+                    load_catalog_managed_commits(
+                        ctx,
+                        lakehouse_table,
+                        table_url,
+                        log_store.clone(),
+                        version_as_of,
+                    )
+                    .await?,
                 ))
             } else {
                 Ok(None)
             }
         }
         Err(err) if is_missing_delta_log_error(&err) => {
-            if bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
-                .await?
+            if bootstrap_catalog_managed_delta_table(
+                ctx,
+                catalog_table,
+                table_url,
+                log_store.clone(),
+            )
+            .await?
             {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
-                        .await?,
+                    load_catalog_managed_commits(
+                        ctx,
+                        lakehouse_table,
+                        table_url,
+                        log_store.clone(),
+                        version_as_of,
+                    )
+                    .await?,
                 ))
             } else {
                 Err(DataFusionError::from(err))
@@ -667,7 +762,7 @@ async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match lakehouse_table.as_ref() {
+    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
         Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,
