@@ -46,6 +46,10 @@ use uuid::Uuid;
 
 pub const METADATA_COLUMN: &str = "metadata";
 
+/// Exposes the partitioning recorded by a checkpoint instead of the layout-derived partitioning
+/// reported by its underlying file or memory source.
+///
+/// Source rewrites remain wrapped so optimizer pushdowns cannot discard this property.
 #[derive(Debug)]
 pub struct CheckpointDataSource {
     source: Arc<dyn DataSource>,
