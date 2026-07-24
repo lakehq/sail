@@ -23,3 +23,6 @@ log = { workspace = true }
 
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-common = { path = "../sail-common" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

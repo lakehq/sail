@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
 use sail_catalog::credentials::{
-    CatalogCredentials, EmptyCatalogCredentials, StaticCatalogCredentials,
+    CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, StaticCatalogCredentials,
 };
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
@@ -53,6 +53,7 @@ pub fn create_catalog_manager(
                     namespace_separator,
                     oauth_access_token,
                     bearer_access_token,
+                    bearer_access_token_file,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -69,15 +70,23 @@ pub fn create_catalog_manager(
                             namespace_separator.to_string(),
                         );
                     }
-                    let credentials = bearer_access_token
-                        .as_ref()
-                        .or(oauth_access_token.as_ref())
-                        .map(|token| {
-                            Arc::new(StaticCatalogCredentials::new(
-                                token.expose_secret().to_string(),
-                            )) as Arc<dyn CatalogCredentials>
-                        })
-                        .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials));
+                    // A token file takes precedence over a static token: its
+                    // contents are re-read per request so a rotated projected
+                    // service account token is picked up without a restart.
+                    let credentials = if let Some(path) = bearer_access_token_file {
+                        Arc::new(FileCatalogCredentials::new(path.clone()))
+                            as Arc<dyn CatalogCredentials>
+                    } else {
+                        bearer_access_token
+                            .as_ref()
+                            .or(oauth_access_token.as_ref())
+                            .map(|token| {
+                                Arc::new(StaticCatalogCredentials::new(
+                                    token.expose_secret().to_string(),
+                                )) as Arc<dyn CatalogCredentials>
+                            })
+                            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
+                    };
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
