@@ -21,7 +21,9 @@ def checkpoint_root(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def remote(checkpoint_root):
-    with spark_connect_server(envs={"SAIL_CHECKPOINT__ROOT": checkpoint_root.as_uri()}) as server:
+    with spark_connect_server(
+        envs={"SAIL_EXECUTION__CHECKPOINT__PATH": checkpoint_root.as_uri()}
+    ) as server:
         yield server.remote
 
 

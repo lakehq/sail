@@ -94,7 +94,6 @@ impl Stream for ExecutePlanResponseStream {
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(*schema);
                     }
-                    ExecutorBatch::Heartbeat => {}
                     ExecutorBatch::Complete => {
                         response.response_type =
                             Some(ResponseType::ResultComplete(ResultComplete::default()));
@@ -541,31 +540,22 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let (plan, _, logical_schema) =
         resolve_and_execute_query(ctx, spark.plan_config()?, query).await?;
     let checkpoint = ctx.extension::<RemoteCheckpointService>()?;
-    let operation_ctx = ctx.clone();
-    let operation = stream::once(async move {
-        let descriptor = checkpoint
-            .materialize(&operation_ctx, plan, logical_schema)
-            .await?;
-        Ok(ExecutorBatch::CheckpointCommandResult(Box::new(
-            CheckpointCommandResult {
-                relation: Some(CachedRemoteRelation {
-                    relation_id: descriptor.relation_id.clone(),
-                }),
-            },
-        )))
-    });
-    let operation_id = metadata.operation_id.clone();
-    let executor = Executor::new_operation(
-        metadata,
-        Box::pin(operation),
-        spark.options().execution_heartbeat_interval,
-    );
-    let rx = executor.start()?;
-    spark.add_executor(executor)?;
+    let descriptor = checkpoint.materialize(ctx, plan, logical_schema).await?;
+    let result = ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(Box::new(
+        CheckpointCommandResult {
+            relation: Some(CachedRemoteRelation {
+                relation_id: descriptor.relation_id.clone(),
+            }),
+        },
+    )));
+    let mut output = vec![result];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
-        operation_id,
-        Box::pin(rx),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
     ))
 }
 

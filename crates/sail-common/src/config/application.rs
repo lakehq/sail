@@ -22,7 +22,6 @@ pub struct AppConfig {
     pub runtime: RuntimeConfig,
     pub cluster: ClusterConfig,
     pub execution: ExecutionConfig,
-    pub checkpoint: CheckpointConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
     pub catalog: CatalogConfig,
@@ -46,7 +45,7 @@ pub struct CheckpointConfig {
         serialize_with = "serialize_non_empty_string",
         deserialize_with = "deserialize_non_empty_string"
     )]
-    pub root: Option<String>,
+    pub path: Option<String>,
 }
 
 /// A configuration provider that injects placeholder internal configuration.
@@ -303,6 +302,7 @@ pub struct ExecutionConfig {
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
+    pub checkpoint: CheckpointConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,7 +12,6 @@ use sail_cache::remote_checkpoint::{
     RemoteCheckpointDescriptor, RemoteCheckpointFile, RemoteCheckpointPartition,
     RemoteCheckpointRegistry,
 };
-use sail_common::config::ExecutionMode;
 use sail_common_datafusion::extension::{SessionExtension, SessionExtensionAccessor};
 use sail_common_datafusion::session::job::JobService;
 use sail_object_store::{
@@ -27,9 +26,8 @@ use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct RemoteCheckpointService {
-    root: Option<String>,
+    path: Option<String>,
     session_namespace: String,
-    mode: ExecutionMode,
     lifecycle: RwLock<RemoteCheckpointLifecycle>,
 }
 
@@ -39,11 +37,10 @@ struct RemoteCheckpointLifecycle {
 }
 
 impl RemoteCheckpointService {
-    pub fn new(root: Option<String>, mode: ExecutionMode) -> Self {
+    pub fn new(path: Option<String>) -> Self {
         Self {
-            root,
+            path,
             session_namespace: Uuid::new_v4().to_string(),
-            mode,
             lifecycle: RwLock::new(RemoteCheckpointLifecycle::default()),
         }
     }
@@ -62,8 +59,7 @@ impl RemoteCheckpointService {
             ));
         }
         let root = self.resolve_root(ctx.runtime_env().as_ref())?;
-        let registry = ctx.extension::<RemoteCheckpointRegistry>()?;
-        let relation_id = self.new_relation_id(registry.as_ref())?;
+        let relation_id = self.new_relation_id();
         let relation_prefix = self
             .session_prefix(root.prefix())
             .join(relation_id.as_str());
@@ -101,18 +97,15 @@ impl RemoteCheckpointService {
     ) -> Result<()> {
         let mut lifecycle = self.lifecycle.write().await;
         lifecycle.closed = true;
-        let storage_cleanup = if let Some(root) = &self.root {
-            match resolve_object_store_path(runtime_env, root) {
-                Ok(root) => match self.validate_store(&root) {
-                    Ok(()) => {
-                        delete_object_store_prefix_objects(
-                            root.store().as_ref(),
-                            &self.session_prefix(root.prefix()),
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                },
+        let storage_cleanup = if let Some(path) = &self.path {
+            match resolve_object_store_path(runtime_env, path) {
+                Ok(root) => {
+                    delete_object_store_prefix_objects(
+                        root.store().as_ref(),
+                        &self.session_prefix(root.prefix()),
+                    )
+                    .await
+                }
                 Err(error) => Err(error),
             }
         } else {
@@ -172,49 +165,21 @@ impl RemoteCheckpointService {
     }
 
     fn resolve_root(&self, runtime_env: &RuntimeEnv) -> Result<ResolvedObjectStorePath> {
-        let root = self.root.as_deref().ok_or_else(|| {
+        let path = self.path.as_deref().ok_or_else(|| {
             DataFusionError::Plan(
-                "checkpoint object-store root is not configured; set checkpoint.root".to_string(),
+                "checkpoint object-store path is not configured; set execution.checkpoint.path"
+                    .to_string(),
             )
         })?;
-        let root = resolve_object_store_path(runtime_env, root)?;
-        self.validate_store(&root)?;
-        Ok(root)
-    }
-
-    fn validate_store(&self, root: &ResolvedObjectStorePath) -> Result<()> {
-        let object_store_url = root.object_store_url().as_str();
-        if matches!(
-            self.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) && (object_store_url.starts_with("file:") || object_store_url.starts_with("memory:"))
-        {
-            return Err(DataFusionError::Plan(format!(
-                "checkpoint.root must use shared object storage in cluster mode, not {object_store_url}"
-            )));
-        }
-        Ok(())
+        resolve_object_store_path(runtime_env, path)
     }
 
     fn session_prefix(&self, root: &Path) -> Path {
-        // `v1` versions the object layout only; checkpoint discovery remains session-local.
-        root.clone()
-            .join("_sail")
-            .join("checkpoints")
-            .join("v1")
-            .join(self.session_namespace.as_str())
+        root.clone().join(self.session_namespace.as_str())
     }
 
-    fn new_relation_id(&self, registry: &RemoteCheckpointRegistry) -> Result<String> {
-        for _ in 0..8 {
-            let relation_id = Uuid::new_v4().to_string();
-            if registry.get(&relation_id)?.is_none() {
-                return Ok(relation_id);
-            }
-        }
-        Err(internal_datafusion_err!(
-            "failed to allocate a unique checkpoint relation ID"
-        ))
+    fn new_relation_id(&self) -> String {
+        Uuid::new_v4().to_string()
     }
 }
 
@@ -423,10 +388,9 @@ mod tests {
         let runtime_env = Arc::new(RuntimeEnv::default());
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
         runtime_env.register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
-        let checkpoint = Arc::new(RemoteCheckpointService::new(
-            Some("memory:///checkpoint-test".to_string()),
-            ExecutionMode::Local,
-        ));
+        let checkpoint = Arc::new(RemoteCheckpointService::new(Some(
+            "memory:///checkpoint-test".to_string(),
+        )));
         let registry = Arc::new(RemoteCheckpointRegistry::default());
         let config = SessionConfig::new()
             .with_extension(Arc::new(JobService::new(Box::new(LocalJobRunner::new()))))
