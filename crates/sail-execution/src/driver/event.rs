@@ -78,6 +78,7 @@ pub enum DriverEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     FetchDriverStream {
@@ -94,6 +95,7 @@ pub enum DriverEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     ObserveState {
@@ -302,6 +304,7 @@ impl SpanAssociation for DriverEvent {
                         channel,
                     },
                 schema: _,
+                context: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
@@ -359,6 +362,7 @@ impl SpanAssociation for DriverEvent {
                         channel,
                     },
                 schema: _,
+                context: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));

@@ -6,6 +6,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
 use crate::id::DriverId;
+use crate::shuffle::ShuffleServiceKind;
 use crate::worker_manager::WorkerManager;
 
 #[readonly::make]
@@ -26,6 +27,7 @@ pub struct DriverOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
+    pub shuffle: ShuffleServiceKind,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
@@ -63,6 +65,7 @@ impl DriverOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             task_max_attempts: config.cluster.task_max_attempts,
+            shuffle: (&config.cluster.shuffle_service).into(),
             runtime,
             worker_manager,
         }

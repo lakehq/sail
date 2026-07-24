@@ -18,6 +18,7 @@ use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
+use crate::shuffle::{ShuffleCompression, ShuffleServiceKind};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,7 @@ impl KubernetesWorkerManager {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
+            shuffle,
         } = options;
         let w3c_traceparent =
             SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
@@ -216,7 +218,49 @@ impl KubernetesWorkerManager {
                 value: Some(rpc_retry_strategy),
                 value_from: None,
             },
+            EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_SERVICE__TYPE.to_string(),
+                value: Some(
+                    match &shuffle {
+                        ShuffleServiceKind::None => "none",
+                        ShuffleServiceKind::Storage { .. } => "storage",
+                    }
+                    .to_string(),
+                ),
+                value_from: None,
+            },
         ];
+        if let ShuffleServiceKind::Storage {
+            path,
+            max_file_size,
+            compression,
+        } = shuffle
+        {
+            env.extend([
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__PATH.to_string(),
+                    value: Some(path),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__MAX_FILE_SIZE.to_string(),
+                    value: Some(max_file_size.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__COMPRESSION.to_string(),
+                    value: Some(
+                        match compression {
+                            ShuffleCompression::None => "none",
+                            ShuffleCompression::Lz4 => "lz4",
+                            ShuffleCompression::Zstd => "zstd",
+                        }
+                        .to_string(),
+                    ),
+                    value_from: None,
+                },
+            ]);
+        }
         if let Some(traceparent) = w3c_traceparent {
             env.push(EnvVar {
                 name: ContextPropagationEnv::TRACEPARENT.to_string(),

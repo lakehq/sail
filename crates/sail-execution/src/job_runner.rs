@@ -14,7 +14,8 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
-use crate::job_graph::JobGraph;
+use crate::job_graph::{JobGraph, JobGraphOptions};
+use crate::shuffle::ShuffleServiceKind;
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -78,12 +79,14 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: DriverHandle,
+    shuffle: ShuffleServiceKind,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+        let shuffle = options.shuffle.clone();
         let driver = DriverHandle::new(system.spawn::<DriverActor>(options));
-        Self { driver }
+        Self { driver, shuffle }
     }
 
     pub fn driver(&self) -> DriverHandle {
@@ -109,9 +112,14 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        JobGraph::try_new(plan)
-            .map(|graph| Some(graph.to_string()))
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+        JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                shuffle: self.shuffle.clone(),
+            },
+        )
+        .map(|graph| Some(graph.to_string()))
+        .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.

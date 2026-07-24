@@ -49,11 +49,16 @@ impl JobScheduler {
             "job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let graph = JobGraph::try_new(plan)?;
+        let graph = JobGraph::try_new(
+            plan,
+            crate::job_graph::JobGraphOptions {
+                shuffle: self.options.shuffle.clone(),
+            },
+        )?;
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
-        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output, context })?;
+        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
         Ok((job_id, stream))
@@ -261,6 +266,7 @@ impl JobScheduler {
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
+                    context: job.context.clone(),
                 });
             }
         }
@@ -489,6 +495,7 @@ impl JobScheduler {
         actions.push(JobAction::CleanUpJob {
             job_id,
             stage: None,
+            context: job.context.clone(),
         });
         if matches!(job.state, JobState::Draining) {
             job.state = JobState::Succeeded;
@@ -511,12 +518,6 @@ impl JobScheduler {
                 key.job_id
             )));
         };
-        let JobState::Running { context, .. } = &job.state else {
-            return Err(ExecutionError::InvalidArgument(format!(
-                "job {} is not running",
-                key.job_id
-            )));
-        };
         let Some(stage) = job.graph.stages().get(key.stage) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "stage {} not found in job {}",
@@ -536,7 +537,7 @@ impl JobScheduler {
             inputs,
             output,
         };
-        Ok((definition, context.clone()))
+        Ok((definition, job.context.clone()))
     }
 
     pub fn stop(&mut self) {
@@ -653,7 +654,7 @@ impl JobScheduler {
                 }
             },
             OutputMode::Blocking => {
-                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                let uri = Self::shuffle_storage_path(&self.options)?;
                 TaskInputLocator::Remote {
                     uri,
                     stage: input.stage,
@@ -697,7 +698,7 @@ impl JobScheduler {
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
             OutputMode::Blocking => {
-                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                let uri = Self::shuffle_storage_path(&self.options)?;
                 TaskOutputLocator::Remote { uri }
             }
         };
@@ -705,6 +706,15 @@ impl JobScheduler {
             distribution,
             locator,
         })
+    }
+
+    fn shuffle_storage_path(options: &JobSchedulerOptions) -> ExecutionResult<String> {
+        let crate::shuffle::ShuffleServiceKind::Storage { path, .. } = &options.shuffle else {
+            return Err(ExecutionError::InternalError(
+                "blocking shuffle stage requested without a storage shuffle service".to_string(),
+            ));
+        };
+        Ok(path.clone())
     }
 
     fn get_latest_task_attempt(

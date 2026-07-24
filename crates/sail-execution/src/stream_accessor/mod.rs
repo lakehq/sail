@@ -1,8 +1,10 @@
 mod core;
 
 use std::fmt;
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
@@ -15,6 +17,16 @@ use crate::worker::{WorkerEvent, WorkerStreamOwner};
 
 pub struct StreamAccessor<T: Actor> {
     handle: ActorHandle<T>,
+    context: Arc<TaskContext>,
+}
+
+impl<T: Actor> Clone for StreamAccessor<T> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            context: Arc::clone(&self.context),
+        }
+    }
 }
 
 impl<T: Actor> fmt::Debug for StreamAccessor<T> {
@@ -35,6 +47,7 @@ pub trait StreamAccessorMessage {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self;
 
@@ -55,6 +68,7 @@ pub trait StreamAccessorMessage {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self;
 }
@@ -78,12 +92,14 @@ impl StreamAccessorMessage for DriverEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
         DriverEvent::CreateRemoteStream {
             uri,
             key,
             schema,
+            context,
             result,
         }
     }
@@ -114,12 +130,14 @@ impl StreamAccessorMessage for DriverEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
         DriverEvent::FetchRemoteStream {
             uri,
             key,
             schema,
+            context,
             result,
         }
     }
@@ -144,12 +162,14 @@ impl StreamAccessorMessage for WorkerEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
         WorkerEvent::CreateRemoteStream {
             uri,
             key,
             schema,
+            context,
             result,
         }
     }
@@ -183,12 +203,14 @@ impl StreamAccessorMessage for WorkerEvent {
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
         WorkerEvent::FetchRemoteStream {
             uri,
             key,
             schema,
+            context,
             result,
         }
     }

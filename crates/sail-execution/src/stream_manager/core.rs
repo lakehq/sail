@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use log::warn;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -17,12 +19,26 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::stream_manager::local::{LocalStream, MemoryStream};
 use crate::stream_manager::options::StreamManagerOptions;
+use crate::stream_manager::remote::RemoteStreamManager;
 use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessage};
 
 impl StreamManager {
     pub fn new(options: StreamManagerOptions) -> Self {
+        let remote_streams = match &options.shuffle {
+            crate::shuffle::ShuffleServiceKind::None => None,
+            crate::shuffle::ShuffleServiceKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(Arc::new(RemoteStreamManager::new(
+                path.clone(),
+                *max_file_size,
+                *compression,
+            ))),
+        };
         Self {
             options,
+            remote_streams,
             local_streams: HashMap::new(),
         }
     }
@@ -87,13 +103,17 @@ impl StreamManager {
 
     pub fn create_remote_stream(
         &mut self,
-        _uri: String,
-        _key: TaskStreamKey,
-        _schema: SchemaRef,
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
-        Err(ExecutionError::InternalError(
-            "not implemented: remote stream".to_string(),
-        ))
+        let Some(remote_streams) = &self.remote_streams else {
+            return Err(ExecutionError::InternalError(
+                "remote stream requested without a storage shuffle service".to_string(),
+            ));
+        };
+        remote_streams.create_stream(uri, key, schema, context)
     }
 
     pub fn fetch_local_stream<T>(
@@ -135,17 +155,21 @@ impl StreamManager {
     pub fn fetch_remote_stream<T>(
         &mut self,
         _ctx: &mut ActorContext<T>,
-        _uri: String,
-        _key: &TaskStreamKey,
-        _schema: SchemaRef,
+        uri: String,
+        key: &TaskStreamKey,
+        schema: SchemaRef,
+        context: &TaskContext,
     ) -> ExecutionResult<TaskStreamSource>
     where
         T: Actor,
         T::Message: StreamManagerMessage,
     {
-        Err(ExecutionError::InternalError(
-            "not implemented: fetch remote stream".to_string(),
-        ))
+        let Some(remote_streams) = &self.remote_streams else {
+            return Err(ExecutionError::InternalError(
+                "remote stream requested without a storage shuffle service".to_string(),
+            ));
+        };
+        remote_streams.fetch_stream(uri, key.clone(), schema, context)
     }
 
     pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {
@@ -159,13 +183,21 @@ impl StreamManager {
 
     pub fn remove_remote_streams<T>(
         &mut self,
-        _ctx: &mut ActorContext<T>,
-        _job_id: JobId,
-        _stage: Option<usize>,
+        ctx: &mut ActorContext<T>,
+        job_id: JobId,
+        stage: Option<usize>,
+        context: Arc<TaskContext>,
     ) where
         T: Actor,
     {
-        warn!("removing remote streams is not implemented");
+        let Some(remote_streams) = self.remote_streams.clone() else {
+            return;
+        };
+        ctx.spawn(async move {
+            if let Err(e) = remote_streams.remove_streams(job_id, stage, &context).await {
+                warn!("failed to remove remote shuffle data for job {job_id}: {e}");
+            }
+        });
     }
 
     pub fn fail_local_stream_if_pending(&mut self, key: &TaskStreamKey) {

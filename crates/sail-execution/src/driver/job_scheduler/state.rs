@@ -14,6 +14,7 @@ use crate::job_graph::JobGraph;
 
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
+    pub context: Arc<TaskContext>,
     pub graph: JobGraph,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
@@ -24,10 +25,7 @@ pub struct JobDescriptor {
 }
 
 pub enum JobState {
-    Running {
-        output: JobOutputManager,
-        context: Arc<TaskContext>,
-    },
+    Running { output: JobOutputManager },
     Draining,
     Succeeded,
     Failed,
@@ -47,7 +45,11 @@ impl JobState {
 }
 
 impl JobDescriptor {
-    pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
+    pub fn try_new(
+        graph: JobGraph,
+        state: JobState,
+        context: Arc<TaskContext>,
+    ) -> ExecutionResult<Self> {
         let mut stages = vec![];
         for stage in graph.stages().iter() {
             let mut descriptor = StageDescriptor {
@@ -68,6 +70,7 @@ impl JobDescriptor {
             })
             .collect();
         Ok(Self {
+            context,
             graph,
             topology,
             stages,

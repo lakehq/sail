@@ -7703,6 +7703,7 @@ dependencies = [
  "sail-function",
  "sail-iceberg",
  "sail-logical-plan",
+ "sail-object-store",
  "sail-physical-plan",
  "sail-python-udf",
  "sail-server",

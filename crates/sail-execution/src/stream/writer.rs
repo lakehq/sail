@@ -78,7 +78,6 @@ pub enum TaskStreamSinkState {
     /// The sink is ready to accept more writes.
     Ok,
     /// The sink has encountered an error and no further writes should be attempted.
-    #[expect(unused)]
     Error(DataFusionError),
     /// The sink has been closed and no further writes should be attempted.
     Closed,

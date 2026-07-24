@@ -8,6 +8,13 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::shuffle::ShuffleServiceKind;
+
+#[derive(Debug, Clone)]
+pub struct JobGraphOptions {
+    pub shuffle: ShuffleServiceKind,
+}
+
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
 /// *partitions*. There are *tasks* which each corresponds to the execution of a single partition
@@ -21,6 +28,7 @@ pub struct JobGraph {
     stages: Vec<Stage>,
     /// The output schema of the job.
     schema: SchemaRef,
+    options: JobGraphOptions,
 }
 
 impl JobGraph {
@@ -165,7 +173,6 @@ impl fmt::Display for InputMode {
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
-    #[expect(unused)]
     Blocking,
 }
 

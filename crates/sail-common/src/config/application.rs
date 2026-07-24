@@ -200,6 +200,7 @@ pub struct ClusterConfig {
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_service: ShuffleService,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +279,78 @@ mod retry_strategy {
                         delay_secs: 0,
                     },
                     exponential_backoff: e,
+                },
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "shuffle_service::ShuffleService",
+    from = "shuffle_service::ShuffleService"
+)]
+pub enum ShuffleService {
+    None,
+    Storage(StorageShuffleService),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageShuffleService {
+    pub path: String,
+    pub max_file_size: usize,
+    pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+mod shuffle_service {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        None,
+        Storage,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ShuffleService {
+        pub r#type: Type,
+        pub storage: super::StorageShuffleService,
+    }
+
+    impl From<ShuffleService> for super::ShuffleService {
+        fn from(value: ShuffleService) -> Self {
+            match value.r#type {
+                Type::None => super::ShuffleService::None,
+                Type::Storage => super::ShuffleService::Storage(value.storage),
+            }
+        }
+    }
+
+    impl From<super::ShuffleService> for ShuffleService {
+        fn from(value: super::ShuffleService) -> Self {
+            match value {
+                super::ShuffleService::None => ShuffleService {
+                    r#type: Type::None,
+                    storage: super::StorageShuffleService {
+                        path: String::new(),
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                },
+                super::ShuffleService::Storage(storage) => ShuffleService {
+                    r#type: Type::Storage,
+                    storage,
                 },
             }
         }
@@ -677,5 +750,9 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        SHUFFLE_SERVICE__TYPE,
+        SHUFFLE_SERVICE__STORAGE__PATH,
+        SHUFFLE_SERVICE__STORAGE__MAX_FILE_SIZE,
+        SHUFFLE_SERVICE__STORAGE__COMPRESSION,
     }
 }
