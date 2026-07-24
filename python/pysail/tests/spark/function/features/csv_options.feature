@@ -846,6 +846,43 @@ Feature: CSV expression functions handle Spark's CSV options
         | result |
         | 3      |
 
+  Rule: Numeric options follow Java's parsing (F5, deferred)
+
+    # Java's `Integer.parseInt` goes through `Character.digit`, which accepts any Unicode Nd digit
+    # (`٥` is Arabic-Indic five, `١٢` is twelve). Rust's `parse::<i32>()` is ASCII-only, so Sail
+    # rejects a value Spark reads fine. `maxCharsPerColumn` behaves identically.
+
+    @sail-only
+    Scenario: from_csv accepts a negative maxColumns
+      # Deliberate divergence, NOT a @sail-bug — do not "fix" this by matching Spark.
+      #
+      #   Spark: throws a raw `java.lang.NegativeArraySizeException: -5` from univocity, which
+      #          allocates the column array with that size. That is a crash, not a validation:
+      #          there is no error class and no message designed for a user.
+      #   Sail:  accepts it and ignores the option (Sail does not implement `maxColumns`), so the
+      #          row parses as if the option were absent.
+      #
+      # Matching Spark here would mean replicating a crash, so the scenario is `@sail-only`
+      # (skipped on the JVM) rather than `@sail-bug` (which would mean "fix this").
+      # For contrast, `maxCharsPerColumn=-1` IS valid in Spark, where a negative means "no limit".
+      When query
+        """
+        SELECT from_csv('1', 'a INT', map('maxColumns', '-5')) AS result
+        """
+      Then query result
+        | result |
+        | {1}    |
+
+    @sail-bug
+    Scenario: from_csv accepts a Unicode decimal digit in an integer option
+      When query
+        """
+        SELECT from_csv('1', 'a INT', map('maxColumns', '٥')) AS result
+        """
+      Then query result
+        | result |
+        | {1}    |
+
   Rule: samplingRatio uses Java's float grammar (F5, deferred)
 
     # Spark parses it with Double.parseDouble, which accepts `1d` and rejects `inf`. Sail uses
