@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -9,9 +9,8 @@ use datafusion::arrow::array::{Array, ArrayRef, TimestampMicrosecondArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
@@ -142,29 +141,6 @@ impl TimestampParser {
         };
         self.localize(datetime, timezone, safe)
     }
-
-    fn string_to_microseconds_with_format(
-        &self,
-        value: &str,
-        format: &str,
-        safe: bool,
-    ) -> Result<Option<i64>> {
-        // `format` is already a chrono format (the planner runs `to_chrono_fmt`).
-        let datetime = match NaiveDateTime::parse_from_str(value, format) {
-            Ok(v) => v,
-            // A date-only format (e.g. `yyyy-MM-dd`) can't parse as a datetime;
-            // fall back to a date and default the time to midnight, matching Spark.
-            Err(_) => match NaiveDate::parse_from_str(value, format) {
-                Ok(d) => match d.and_hms_opt(0, 0, 0) {
-                    Some(v) => v,
-                    None => return exec_err!("invalid midnight for {value}"),
-                },
-                Err(_e) if safe => return Ok(None),
-                Err(e) => return Err(exec_datafusion_err!("{e}")),
-            },
-        };
-        self.localize(datetime, "", safe)
-    }
 }
 
 fn is_invalid_leap_second(error: &datafusion_common::DataFusionError) -> bool {
@@ -221,53 +197,6 @@ impl SparkTimestamp {
 
     pub fn is_try(&self) -> bool {
         self.is_try
-    }
-
-    /// Whether a parse/cast failure yields NULL: `try_*` always, or the strict
-    /// variant when ANSI is disabled.
-    fn safe(&self) -> bool {
-        self.is_try || !self.ansi_mode
-    }
-
-    fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
-        match array.data_type() {
-            DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
-            DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
-            DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
-            other => exec_err!("expected string array, got {other}"),
-        }
-    }
-
-    fn kernel(
-        parser: &TimestampParser,
-        safe: bool,
-        args: &[ArrayRef],
-    ) -> Result<TimestampMicrosecondArray> {
-        let value_arr = &args[0];
-        match args.get(1) {
-            Some(format_arr) => {
-                if value_arr.len() != format_arr.len() {
-                    return exec_err!("value/format array length mismatch");
-                }
-                let values = Self::string_array_iter(value_arr)?;
-                let formats = Self::string_array_iter(format_arr)?;
-                values
-                    .zip(formats)
-                    .map(|(v, f)| match (v, f) {
-                        (Some(s), Some(fmt)) => {
-                            parser.string_to_microseconds_with_format(s, fmt, safe)
-                        }
-                        _ => Ok(None),
-                    })
-                    .collect::<Result<_>>()
-            }
-            None => Self::string_array_iter(value_arr)?
-                .map(|v| match v {
-                    Some(s) => parser.string_to_microseconds(s, safe),
-                    None => Ok(None),
-                })
-                .collect::<Result<_>>(),
-        }
     }
 }
 
