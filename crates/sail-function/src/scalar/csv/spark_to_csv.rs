@@ -8,10 +8,37 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
+use lazy_static::lazy_static;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::{
+    DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+};
+
+fn default_timestamp_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
+        .expect("default timestamp format should be valid")
+}
+
+fn default_date_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
+        .expect("default date format should be valid")
+}
+
+fn default_ltz_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+        .expect("default timestamp LTZ format should be valid")
+}
+
+lazy_static! {
+    static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat = default_timestamp_format();
+    static ref DEFAULT_DATE_FORMAT: DateTimeFormat = default_date_format();
+    static ref DEFAULT_LTZ_FORMAT: DateTimeFormat = default_ltz_format();
+}
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -41,8 +68,8 @@ struct SparkToCsvOptions {
     empty_value: String,
     ignore_leading_whitespace: bool,
     ignore_trailing_whitespace: bool,
-    timestamp_format: String,
-    date_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
 }
 
 impl SparkToCsvOptions {
@@ -64,8 +91,8 @@ impl SparkToCsvOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
     // Default formats matching Spark's defaults
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build `SparkToCsvOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
@@ -111,15 +138,15 @@ impl SparkToCsvOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.clone());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| DEFAULT_DATE_FORMAT.clone());
 
         Ok(Self {
             sep,
@@ -151,8 +178,8 @@ impl Default for SparkToCsvOptions {
             empty_value: Self::EMPTY_VALUE_DEFAULT.to_string(),
             ignore_leading_whitespace: true,
             ignore_trailing_whitespace: true,
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.clone(),
+            date_format: DEFAULT_DATE_FORMAT.clone(),
         }
     }
 }
@@ -372,7 +399,6 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let is_default_format = options.timestamp_format == SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT;
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
@@ -385,15 +411,20 @@ fn format_timestamp_field(
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
         let local_dt = utc_dt.with_timezone(&tz);
-        if is_default_format {
-            // Spark default: ISO 8601 with offset — Z for UTC, +HH:MM otherwise
-            Ok(local_dt
-                .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
-                .to_string()
-                .replace("+00:00", "Z"))
+        let input = DateTimeFormatInput {
+            datetime: local_dt.naive_local(),
+            timezone: Some(TimeZoneDisplay {
+                offset: local_dt.offset().fix(),
+                name: Some(session_timezone),
+            }),
+            zone_id: Some(session_timezone),
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+        if options.timestamp_format == SparkToCsvOptions::default().timestamp_format {
+            DEFAULT_LTZ_FORMAT.format(input)
         } else {
-            // Custom timestampFormat — apply format, no offset appended
-            Ok(local_dt.format(&options.timestamp_format).to_string())
+            options.timestamp_format.format(input)
         }
     } else {
         // TIMESTAMP_NTZ — no timezone, no offset suffix
@@ -402,7 +433,13 @@ fn format_timestamp_field(
             .ok_or_else(|| {
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
-        Ok(naive.format(&options.timestamp_format).to_string())
+        options.timestamp_format.format(DateTimeFormatInput {
+            datetime: naive,
+            timezone: None,
+            zone_id: None,
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        })
     }
 }
 
@@ -438,7 +475,15 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date32 value out of range: {days}"))
                 })?;
-            Ok(date.format(&options.date_format).to_string())
+            options.date_format.format(DateTimeFormatInput {
+                datetime: date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Date32 value out of range: {days}"))
+                })?,
+                timezone: None,
+                zone_id: None,
+                timestamp_kind: TimestampKind::Normal,
+                precision: TimePrecision::Second,
+            })
         }
 
         DataType::Date64 => {
@@ -453,7 +498,15 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
                 })?;
-            Ok(date.format(&options.date_format).to_string())
+            options.date_format.format(DateTimeFormatInput {
+                datetime: date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
+                })?,
+                timezone: None,
+                zone_id: None,
+                timestamp_kind: TimestampKind::Normal,
+                precision: TimePrecision::Second,
+            })
         }
 
         DataType::List(field) => {
@@ -1433,7 +1486,7 @@ mod tests {
 
         // Manually construct options with custom format
         let options = SparkToCsvOptions {
-            timestamp_format: "%d/%m/%Y".to_string(), // dd/MM/yyyy format
+            timestamp_format: DateTimeFormat::parse("dd/MM/yyyy")?,
             ..SparkToCsvOptions::default()
         };
 
