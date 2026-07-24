@@ -48,6 +48,7 @@ pub async fn setup_glue_catalog(
     let endpoint = format!("http://{host}:{port}");
 
     let config = GlueCatalogConfig {
+        catalog_id: Some("123456789012".to_string()),
         region: Some("us-east-1".to_string()),
         endpoint_url: Some(endpoint),
     };
