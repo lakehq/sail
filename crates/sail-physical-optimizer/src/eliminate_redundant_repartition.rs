@@ -41,7 +41,10 @@ impl PhysicalOptimizerRule for EliminateRedundantRepartition {
                 return Ok(Transformed::no(node));
             };
 
-            let child = node.children()[0];
+            let [child] = node.children()[..] else {
+                return Ok(Transformed::no(node));
+            };
+
             if child.downcast_ref::<ExplicitRepartitionExec>().is_some() {
                 Ok(Transformed::yes(child.clone()))
             } else {
