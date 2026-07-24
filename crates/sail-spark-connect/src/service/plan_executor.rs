@@ -11,8 +11,7 @@ use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::{resolve_and_execute_plan, resolve_and_execute_query};
-use sail_session::checkpoint::RemoteCheckpointService;
+use sail_plan::resolve_and_execute_plan;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -537,15 +536,20 @@ pub(crate) async fn handle_execute_checkpoint_command(
     }
     let relation = relation.required("checkpoint relation")?;
     let query: spec::QueryPlan = relation.try_into()?;
-    let (plan, _, logical_schema) =
-        resolve_and_execute_query(ctx, spark.plan_config()?, query).await?;
-    let checkpoint = ctx.extension::<RemoteCheckpointService>()?;
-    let descriptor = checkpoint.materialize(ctx, plan, logical_schema).await?;
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    let plan = spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::RemoteCheckpoint {
+            relation_id: relation_id.clone(),
+            input: Box::new(query),
+        },
+    ));
+    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let service = ctx.extension::<JobService>()?;
+    let stream = service.runner().execute(ctx, plan).await?;
+    let _ = read_stream(stream).await?;
     let result = ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(Box::new(
         CheckpointCommandResult {
-            relation: Some(CachedRemoteRelation {
-                relation_id: descriptor.relation_id.clone(),
-            }),
+            relation: Some(CachedRemoteRelation { relation_id }),
         },
     )));
     let mut output = vec![result];

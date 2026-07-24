@@ -21,7 +21,6 @@ use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers}
 use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
-use crate::checkpoint::RemoteCheckpointService;
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -118,8 +117,7 @@ impl ServerSessionFactory {
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
-            .with_extension(Arc::new(RemoteCheckpointRegistry::default()))
-            .with_extension(Arc::new(RemoteCheckpointService::new(
+            .with_extension(Arc::new(RemoteCheckpointRegistry::new(
                 self.config.execution.checkpoint.path.clone(),
             )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(

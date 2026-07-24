@@ -7355,7 +7355,9 @@ dependencies = [
  "object_store",
  "sail-common",
  "sail-common-datafusion",
+ "sail-object-store",
  "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]
@@ -7928,6 +7930,7 @@ dependencies = [
  "log",
  "object_store",
  "parquet",
+ "sail-cache",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",

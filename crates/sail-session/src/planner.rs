@@ -10,9 +10,10 @@ use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -43,7 +44,9 @@ use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
-use sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode;
+use sail_logical_plan::remote_checkpoint::{
+    RemoteCheckpointCommandNode, RemoteCheckpointRelationNode,
+};
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -59,7 +62,10 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::remote_checkpoint::RemoteCheckpointScanExec;
+use sail_physical_plan::remote_checkpoint::{
+    RemoteCheckpointCommitExec, RemoteCheckpointScanExec, RemoteCheckpointWriteExec,
+    checkpoint_storage_schema,
+};
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -117,8 +123,45 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RemoteCheckpointRelationNode>()
+            node.as_any().downcast_ref::<RemoteCheckpointCommandNode>()
         {
+            let [_logical_input] = logical_inputs else {
+                return internal_err!("RemoteCheckpointCommand requires exactly one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!(
+                    "RemoteCheckpointCommand requires exactly one physical input"
+                );
+            };
+            let registry = session_state.extension::<RemoteCheckpointRegistry>()?;
+            let (object_store_url, prefix) = registry
+                .resolve_relation(session_state.runtime_env().as_ref(), node.relation_id())?;
+            let storage_schema = checkpoint_storage_schema(node.logical_schema());
+            let output_partitioning =
+                checkpoint_schema_partitioning(input.output_partitioning(), &storage_schema)?;
+            let output_ordering = input
+                .output_ordering()
+                .map(|ordering| checkpoint_schema_ordering(ordering, &storage_schema))
+                .transpose()?;
+            let writer: Arc<dyn ExecutionPlan> = Arc::new(RemoteCheckpointWriteExec::try_new(
+                Arc::clone(input),
+                object_store_url.clone(),
+                prefix.clone(),
+                Arc::clone(&storage_schema),
+            )?);
+            let commit_input: Arc<dyn ExecutionPlan> =
+                Arc::new(CoalescePartitionsExec::new(writer));
+            Arc::new(RemoteCheckpointCommitExec::new(
+                commit_input,
+                node.relation_id().to_string(),
+                object_store_url,
+                prefix,
+                Arc::clone(node.logical_schema()),
+                storage_schema,
+                output_partitioning,
+                output_ordering,
+            ))
+        } else if let Some(node) = node.as_any().downcast_ref::<RemoteCheckpointRelationNode>() {
             let registry = session_state.extension::<RemoteCheckpointRegistry>()?;
             let descriptor = registry.get(node.relation_id())?.ok_or_else(|| {
                 datafusion_common::DataFusionError::Plan(format!(
@@ -531,13 +574,19 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::execution::runtime_env::RuntimeEnv;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::ToDFSchema;
     use datafusion_expr::col;
+    use object_store::memory::InMemory;
+    use sail_common::spec;
+    use sail_plan::config::PlanConfig;
 
     use super::*;
 
@@ -569,6 +618,52 @@ mod tests {
         let ordering_column = ordering.first().expr.downcast_ref::<Column>().unwrap();
         assert_eq!(ordering_column.name(), "__sail_checkpoint_col_00000");
         assert_eq!(ordering_column.index(), 0);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_command_plans_writer_coalesce_and_commit() -> datafusion_common::Result<()>
+    {
+        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
+            "memory:///checkpoint".to_string(),
+        )));
+        let config = SessionConfig::new().with_extension(registry);
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        let object_store_url =
+            datafusion::execution::object_store::ObjectStoreUrl::parse("memory://")?;
+        runtime_env.register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let command = spec::Plan::Command(spec::CommandPlan::new(
+            spec::CommandNode::RemoteCheckpoint {
+                relation_id: "relation".to_string(),
+                input: Box::new(spec::QueryPlan::new(spec::QueryNode::Range(spec::Range {
+                    start: Some(0),
+                    end: 10,
+                    step: 1,
+                    num_partitions: Some(2),
+                }))),
+            },
+        ));
+
+        let (physical, _) =
+            sail_plan::resolve_and_execute_plan(&context, Arc::new(PlanConfig::default()), command)
+                .await
+                .map_err(|error| internal_datafusion_err!("{error}"))?;
+
+        let commit = physical
+            .downcast_ref::<RemoteCheckpointCommitExec>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint command did not plan a commit"))?;
+        let coalesce = commit
+            .input()
+            .downcast_ref::<CoalescePartitionsExec>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint commit input is not coalesced"))?;
+        assert!(coalesce.input().is::<RemoteCheckpointWriteExec>());
+        Ok(())
     }
 
     fn plan_partitioning(

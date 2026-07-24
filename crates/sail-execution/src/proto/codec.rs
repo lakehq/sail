@@ -257,7 +257,9 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::remote_checkpoint::{RemoteCheckpointScanExec, RemoteCheckpointWriteExec};
+use sail_physical_plan::remote_checkpoint::{
+    RemoteCheckpointCommitExec, RemoteCheckpointScanExec, RemoteCheckpointWriteExec,
+};
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -490,6 +492,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .transpose()?;
                 Ok(Arc::new(RemoteCheckpointScanExec::new(
                     input,
+                    output_partitioning,
+                    output_ordering,
+                )))
+            }
+            NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
+                input,
+                relation_id,
+                object_store_url,
+                prefix,
+                logical_schema,
+                storage_schema,
+                output_partitioning,
+                output_ordering,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let prefix = object_store::path::Path::parse(prefix)
+                    .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
+                let logical_schema = Arc::new(try_decode_schema(&logical_schema)?);
+                let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let output_partitioning =
+                    self.try_decode_partitioning(&output_partitioning, &storage_schema, ctx)?;
+                let output_ordering = output_ordering
+                    .map(|ordering| self.try_decode_lex_ordering(&ordering, &storage_schema, ctx))
+                    .transpose()?;
+                Ok(Arc::new(RemoteCheckpointCommitExec::new(
+                    input,
+                    relation_id,
+                    object_store_url,
+                    prefix,
+                    logical_schema,
+                    storage_schema,
                     output_partitioning,
                     output_ordering,
                 )))
@@ -1565,6 +1600,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_ordering: checkpoint
                     .properties()
                     .output_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering))
+                    .transpose()?,
+            })
+        } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
+            NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
+                input: try_encode_physical_plan(self, checkpoint.input().clone())?,
+                relation_id: checkpoint.relation_id().to_string(),
+                object_store_url: checkpoint.object_store_url().as_str().to_string(),
+                prefix: checkpoint.prefix().to_string(),
+                logical_schema: try_encode_schema(checkpoint.logical_schema().as_ref())?,
+                storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                output_partitioning: self
+                    .try_encode_partitioning(checkpoint.checkpoint_partitioning())?,
+                output_ordering: checkpoint
+                    .checkpoint_ordering()
                     .map(|ordering| self.try_encode_lex_ordering(ordering))
                     .transpose()?,
             })
@@ -4873,6 +4923,63 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_remote_checkpoint_commit_plan() -> Result<()> {
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let metadata_schema = Arc::new(Schema::new(vec![
+            Field::new("partition", DataType::UInt64, false),
+            Field::new("location", DataType::Utf8, true),
+            Field::new("size", DataType::UInt64, false),
+            Field::new("row_count", DataType::UInt64, false),
+        ]));
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "logical_name",
+            DataType::Int64,
+            true,
+        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new(
+            "__sail_checkpoint_col_00000",
+            DataType::Int64,
+            true,
+        )]));
+        let key = Arc::new(Column::new("__sail_checkpoint_col_00000", 0)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&key))])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty checkpoint ordering"))?;
+        let checkpoint = RemoteCheckpointCommitExec::new(
+            Arc::new(EmptyExec::new(metadata_schema)),
+            "relation".to_string(),
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
+            object_store::path::Path::from("checkpoints/session/relation"),
+            Arc::clone(&logical_schema),
+            Arc::clone(&storage_schema),
+            Partitioning::Hash(vec![key], 4),
+            Some(ordering),
+        );
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RemoteCheckpointCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a checkpoint commit"))?;
+
+        assert_eq!(decoded.relation_id(), "relation");
+        assert_eq!(decoded.logical_schema(), &logical_schema);
+        assert_eq!(decoded.storage_schema(), &storage_schema);
+        let Partitioning::Hash(expressions, 4) = decoded.checkpoint_partitioning() else {
+            return plan_err!("expected checkpoint hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("checkpoint hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "__sail_checkpoint_col_00000");
+        assert_eq!(partition_column.index(), 0);
+        assert!(decoded.checkpoint_ordering().is_some());
         Ok(())
     }
 

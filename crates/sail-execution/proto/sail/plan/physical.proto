@@ -69,6 +69,7 @@ message ExtendedPhysicalPlanNode {
     ParquetExecNode parquet = 54;
     RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
     RemoteCheckpointScanExecNode remote_checkpoint_scan = 56;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 57;
   }
 }
 
@@ -83,6 +84,17 @@ message RemoteCheckpointScanExecNode {
   bytes input = 1;
   bytes output_partitioning = 2;
   LexOrdering output_ordering = 3;
+}
+
+message RemoteCheckpointCommitExecNode {
+  bytes input = 1;
+  string relation_id = 2;
+  string object_store_url = 3;
+  string prefix = 4;
+  bytes logical_schema = 5;
+  bytes storage_schema = 6;
+  bytes output_partitioning = 7;
+  LexOrdering output_ordering = 8;
 }
 
 message ExtendedPhysicalExprNode {

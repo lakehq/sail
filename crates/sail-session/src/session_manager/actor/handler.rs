@@ -19,7 +19,6 @@ use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use crate::checkpoint::RemoteCheckpointService;
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::actor::SessionManagerActor;
@@ -401,7 +400,6 @@ impl SessionManagerActor {
             warn!("job service not found for session {session_id}");
             return;
         };
-        let checkpoint = context.extension::<RemoteCheckpointService>().ok();
         let checkpoint_registry = context.extension::<RemoteCheckpointRegistry>().ok();
         let runtime_env = context.runtime_env();
         let handle = ctx.handle().clone();
@@ -410,9 +408,9 @@ impl SessionManagerActor {
             // Stop tasks before deleting the namespace so late attempts cannot recreate objects.
             service.runner().stop(tx).await;
             let history = rx.await;
-            if let (Some(checkpoint), Some(checkpoint_registry)) = (checkpoint, checkpoint_registry)
-                && let Err(error) = checkpoint
-                    .cleanup_session(runtime_env.as_ref(), checkpoint_registry.as_ref())
+            if let Some(checkpoint_registry) = checkpoint_registry
+                && let Err(error) = checkpoint_registry
+                    .cleanup_session(runtime_env.as_ref())
                     .await
             {
                 warn!("failed to clean checkpoints for session {session_id}: {error}");
