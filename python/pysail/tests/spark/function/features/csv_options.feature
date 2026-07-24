@@ -943,6 +943,15 @@ Feature: CSV expression functions handle Spark's CSV options
       Then query error INVALID_PARAMETER_VALUE.CHARSET
 
     @sail-bug
+    Scenario: from_csv rejects an unknown charset
+      # `charset` is Spark's alias for `encoding` and validates identically.
+      When query
+        """
+        SELECT from_csv('1', 'a INT', map('charset', 'utf-99')) AS result
+        """
+      Then query error INVALID_PARAMETER_VALUE.CHARSET
+
+    @sail-bug
     Scenario: from_csv rejects an unknown timeZone
       When query
         """
