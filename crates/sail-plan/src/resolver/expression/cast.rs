@@ -22,6 +22,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::spark_string_to_numeric;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -187,6 +188,11 @@ impl PlanResolver<'_> {
                     return Err(PlanError::invalid(format!("cannot cast date to {to}")));
                 }
                 lit(ScalarValue::try_from(&to)?)
+            }
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, ref to, is_try)
+                if to.is_numeric() =>
+            {
+                spark_string_to_numeric(expr, to.clone(), is_try || !self.config.ansi_mode)
             }
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
                 // Pre-rename the source struct fields positionally so the cast

@@ -1,3 +1,4 @@
+@pmod
 Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
 
   # Spark `pmod(a, b)` returns the positive remainder of `a / b` (always in
@@ -117,12 +118,9 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
   Rule: FLOAT/DOUBLE mixed with DECIMAL coerces the result to DOUBLE
 
     # Spark widens `float`/`double` + `decimal` to DOUBLE, so the result is a
-    # double (e.g. `1.5`), not a decimal. Sail instead widens to DECIMAL, which
-    # changes the result type and — when the double operand is Infinity/NaN —
-    # raises a spurious "cannot cast to Decimal128 ... overflow" error instead
-    # of returning the float result.
+    # double (e.g. `1.5`), not a decimal. `pmod` now takes the same operand coercion
+    # as the `%` operator, which promotes the pair to DOUBLE before the UDF sees it.
 
-    @sail-bug
     Scenario: double pmod decimal returns a double
       When query
         """
@@ -132,7 +130,6 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         | result |
         | 1.5    |
 
-    @sail-bug
     Scenario: infinity double pmod decimal returns NaN not an error
       When query
         """

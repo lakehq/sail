@@ -29,8 +29,7 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | result |
         | NaN    |
 
-    @sail-bug
-    # Sail does not trim spaces before parsing NaN
+    # Spark trims surrounding whitespace before parsing; Arrow does not.
     Scenario: FLOAT NaN with spaces
       When query
         """
@@ -114,8 +113,7 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | result    |
         | -Infinity |
 
-    @sail-bug
-    # Sail does not trim spaces before parsing Infinity
+    # Spark trims surrounding whitespace before parsing; Arrow does not.
     Scenario: DOUBLE Infinity with spaces
       When query
         """
