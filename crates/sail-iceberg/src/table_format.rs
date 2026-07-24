@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -756,7 +755,7 @@ impl IcebergTableFormat {
         let path = &paths[0];
         let mut table_url = match crate::utils::parse_absolute_url(path) {
             Some(url) => url,
-            _ => file_url_from_absolute_path(path).ok_or_else(|| {
+            _ => crate::utils::file_url_from_absolute_path(path).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Iceberg table location must be an absolute path or URL: {path}"
                 ))
@@ -895,27 +894,6 @@ fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
         .max()
         .unwrap_or(0)
         + 1
-}
-
-fn file_url_from_absolute_path(path: &str) -> Option<Url> {
-    if Path::new(path).is_absolute() {
-        return Url::from_file_path(path).ok();
-    }
-    windows_drive_path_to_file_url(path)
-}
-
-fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
-    let bytes = path.as_bytes();
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || !matches!(bytes[2], b'/' | b'\\')
-    {
-        return None;
-    }
-
-    let path = path.replace('\\', "/");
-    Url::parse(&format!("file:///{path}")).ok()
 }
 
 pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {

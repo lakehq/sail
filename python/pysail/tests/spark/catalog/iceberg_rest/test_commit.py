@@ -7,7 +7,9 @@ import urllib.request
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
+import boto3
 import pytest
+from botocore.config import Config
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -34,6 +36,22 @@ def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
     url = f"{iceberg_rest_endpoint}/v1/namespaces/{namespace}/tables/{table}"
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)
+
+
+def _s3_object_keys(endpoint: str, location: str) -> set[str]:
+    parsed = urllib.parse.urlparse(location)
+    assert parsed.scheme == "s3"
+    prefix = parsed.path.lstrip("/").rstrip("/") + "/"
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id="admin",
+        aws_secret_access_key="password",  # noqa: S106
+        region_name="us-east-1",
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
+    pages = client.get_paginator("list_objects_v2").paginate(Bucket=parsed.netloc, Prefix=prefix)
+    return {item["Key"] for page in pages for item in page.get("Contents", [])}
 
 
 def _assert_uuid_metadata_location(metadata_location: str, expected_version: int | None = None) -> None:
@@ -119,6 +137,47 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     rows = spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
+
+
+def test_rest_catalog_write_honors_absolute_data_path(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+) -> None:
+    table_name = "absolute_data_path_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    data_location = f"s3://icebergdata/managed-data/{NAMESPACE}/{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        TBLPROPERTIES ('write.data.path' = '{data_location}')
+        """
+    )
+
+    created = _load_table(iceberg_rest_endpoint, table_name)
+    assert created["metadata"]["properties"]["write.data.path"] == data_location
+
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'one')")  # noqa: S608
+
+    committed = _load_table(iceberg_rest_endpoint, table_name)
+    assert committed["metadata-location"] != created["metadata-location"]
+    assert committed["metadata"]["current-snapshot-id"] not in (None, -1)
+    table_location = committed["metadata"]["location"]
+    assert table_location != data_location
+    assert committed["metadata"]["properties"]["write.data.path"] == data_location
+
+    data_keys = _s3_object_keys(seaweedfs_host_endpoint, data_location)
+    assert any(key.endswith(".parquet") for key in data_keys)
+    table_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
+    assert not any(key.endswith(".parquet") for key in table_keys)
+
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()  # noqa: S608
+    assert [(row.id, row.name) for row in rows] == [(1, "one")]
 
 
 def test_merge_schema_append_advances_rest_catalog_metadata_location(
