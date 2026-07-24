@@ -10,6 +10,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
+use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::expressions::{self, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
@@ -157,13 +158,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             DataType::Struct(fields) => fields,
             _ => return Ok(None),
         };
-        if physical_struct_fields
-            .iter()
-            .any(|f| f.name() == field_name)
-        {
-            return Ok(None);
-        }
-
         let logical_field = match self.logical_file_schema.field_with_name(column.name()) {
             Ok(field) => field,
             Err(_) => return Ok(None),
@@ -179,6 +173,10 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             Some(field) => field,
             None => return Ok(None),
         };
+        if find_matching_struct_field(physical_struct_fields, logical_struct_field).is_some() {
+            return Ok(None);
+        }
+
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
         Ok(Some(Arc::new(Literal::new(null_value))))
     }
@@ -338,15 +336,57 @@ fn can_cast_field_with_schema_evolution(source: &Field, target: &Field) -> Resul
     }
 }
 
+const DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY: &str = "delta.columnMapping.physicalName";
+const STRUCT_FIELD_ID_METADATA_KEYS: [&str; 3] = [
+    "delta.columnMapping.id",
+    PARQUET_FIELD_ID_META_KEY,
+    "parquet.field.id",
+];
+
+fn struct_field_id(field: &Field) -> Option<&str> {
+    STRUCT_FIELD_ID_METADATA_KEYS
+        .iter()
+        .find_map(|key| field.metadata().get(*key).map(String::as_str))
+}
+
+fn find_matching_struct_field<'a>(
+    source_fields: &'a [Arc<Field>],
+    target_field: &Field,
+) -> Option<(usize, &'a Arc<Field>)> {
+    if let Some(physical_name) = target_field
+        .metadata()
+        .get(DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY)
+        && let Some(matched) = source_fields
+            .iter()
+            .enumerate()
+            .find(|(_, source)| source.name() == physical_name)
+    {
+        return Some(matched);
+    }
+
+    if let Some(target_id) = struct_field_id(target_field)
+        && let Some(matched) = source_fields
+            .iter()
+            .enumerate()
+            .find(|(_, source)| struct_field_id(source) == Some(target_id))
+    {
+        return Some(matched);
+    }
+
+    source_fields
+        .iter()
+        .enumerate()
+        .find(|(_, source)| source.name() == target_field.name())
+}
+
 fn validate_struct_compatibility_with_variant(
     source_fields: &[Arc<Field>],
     target_fields: &[Arc<Field>],
 ) -> Result<()> {
-    if !target_fields.iter().any(|target| {
-        source_fields
-            .iter()
-            .any(|source| source.name() == target.name())
-    }) {
+    if !target_fields
+        .iter()
+        .any(|target| find_matching_struct_field(source_fields, target).is_some())
+    {
         return exec_err!(
             "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
             source_fields.len(),
@@ -355,11 +395,8 @@ fn validate_struct_compatibility_with_variant(
     }
 
     for target_field in target_fields {
-        match source_fields
-            .iter()
-            .find(|source| source.name() == target_field.name())
-        {
-            Some(source_field) => {
+        match find_matching_struct_field(source_fields, target_field) {
+            Some((_, source_field)) => {
                 if !can_cast_field_with_schema_evolution(source_field, target_field)? {
                     return exec_err!(
                         "Cannot cast struct field '{}' from type {} to type {}",
@@ -691,10 +728,10 @@ fn cast_struct_array_to_fields(
 
     for target_child in target_fields {
         fields.push(Arc::clone(target_child));
-        match source_struct.column_by_name(target_child.name()) {
-            Some(source_child) => {
+        match find_matching_struct_field(source_struct.fields(), target_child) {
+            Some((source_index, _)) => {
                 arrays.push(cast_array_with_schema_evolution(
-                    source_child,
+                    source_struct.column(source_index),
                     target_child.as_ref(),
                     cast_options,
                 )?);
@@ -713,6 +750,8 @@ fn cast_struct_array_to_fields(
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::collections::HashMap;
+
     use datafusion::arrow::array::{BinaryViewArray, Int64Array, StringArray};
     use datafusion::arrow::buffer::OffsetBuffer;
     use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
@@ -732,6 +771,110 @@ mod tests {
             true,
         )
         .with_extension_type(VariantType)
+    }
+
+    fn field_with_id(name: &str, metadata_key: &str, id: i64) -> Arc<Field> {
+        Arc::new(
+            Field::new(name, DataType::Int64, true)
+                .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
+        )
+    }
+
+    #[test]
+    fn cast_struct_fields_by_column_id() -> Result<()> {
+        let source_fields = vec![
+            field_with_id("col-a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("col-b", PARQUET_FIELD_ID_META_KEY, 2),
+        ];
+        let source = Arc::new(StructArray::new(
+            source_fields.into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(10)])),
+                Arc::new(Int64Array::from(vec![Some(20)])),
+            ],
+            None,
+        )) as ArrayRef;
+        let target_fields = vec![
+            field_with_id("logical_b", "delta.columnMapping.id", 2),
+            field_with_id("logical_a", "delta.columnMapping.id", 1),
+        ];
+        let target_field = Field::new("root", DataType::Struct(target_fields.clone().into()), true);
+
+        assert!(can_cast_field_with_schema_evolution(
+            &Field::new("root", source.data_type().clone(), true),
+            &target_field,
+        )?);
+        let casted =
+            cast_array_with_schema_evolution(&source, &target_field, &DEFAULT_CAST_OPTIONS)?;
+        let casted = casted
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+
+        assert!(casted.fields().iter().eq(target_fields.iter()));
+        assert_eq!(
+            casted
+                .column_by_name("logical_b")
+                .expect("logical_b")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .value(0),
+            20,
+        );
+        assert_eq!(
+            casted
+                .column_by_name("logical_a")
+                .expect("logical_a")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .value(0),
+            10,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cast_struct_field_by_physical_name_before_logical_name() -> Result<()> {
+        let source = Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("rate", DataType::Int64, true)),
+                Arc::new(Field::new("col-rate", DataType::Int64, true)),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(10)])),
+                Arc::new(Int64Array::from(vec![Some(20)])),
+            ],
+            None,
+        )) as ArrayRef;
+        let target_child = Arc::new(Field::new("rate", DataType::Int64, true).with_metadata(
+            HashMap::from([(
+                DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY.to_string(),
+                "col-rate".to_string(),
+            )]),
+        ));
+        let target_field = Field::new("root", DataType::Struct(vec![target_child].into()), true);
+
+        let casted =
+            cast_array_with_schema_evolution(&source, &target_field, &DEFAULT_CAST_OPTIONS)?;
+        let casted = casted
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+
+        assert_eq!(
+            casted
+                .column_by_name("rate")
+                .expect("rate")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .value(0),
+            20,
+        );
+        Ok(())
     }
 
     #[test]

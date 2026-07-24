@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef,
 };
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
@@ -231,7 +232,7 @@ pub fn enrich_arrow_with_parquet_field_ids(
         let mut new_name = af.name().clone();
         if let Some((maybe_id, logical_name)) = map.get(path) {
             if let Some(fid) = maybe_id {
-                meta.insert("PARQUET:field_id".to_string(), fid.to_string());
+                meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), fid.to_string());
             }
             if rename_current {
                 new_name = logical_name.clone();
@@ -335,4 +336,50 @@ pub fn enrich_arrow_with_parquet_field_ids(
         .collect();
 
     ArrowSchema::new(new_fields)
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> StructField {
+        StructField::new(name, data_type, true).with_metadata([
+            ("delta.columnMapping.id", MetadataValue::Number(id)),
+            (
+                "delta.columnMapping.physicalName",
+                MetadataValue::String(physical_name.to_string()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn physical_name_schema_enriches_nested_field_ids() {
+        let nested = StructType::try_new(vec![mapped_field("rate", "col-rate", 2, DataType::LONG)])
+            .expect("nested schema");
+        let logical = StructType::try_new(vec![mapped_field(
+            "details",
+            "col-details",
+            1,
+            DataType::Struct(Box::new(nested)),
+        )])
+        .expect("logical schema");
+
+        let physical = get_physical_arrow_schema(&logical, ColumnMappingMode::Name);
+        let details = physical
+            .field_with_name("col-details")
+            .expect("physical details field");
+        let ArrowDataType::Struct(children) = details.data_type() else {
+            panic!("details must be a struct");
+        };
+        let rate = children.first().expect("nested rate field");
+
+        assert_eq!(rate.name(), "rate");
+        assert_eq!(
+            rate.metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .map(String::as_str),
+            Some("2")
+        );
+    }
 }
