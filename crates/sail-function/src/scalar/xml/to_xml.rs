@@ -27,7 +27,6 @@ struct SparkToXmlOptions {
     value_tag: String,
     /// If Some(s), nulls are emitted as <field>s</field>. If None, they are omitted.
     null_value: Option<String>,
-    declaration: String,
     timestamp_ltz_format: Option<DateTimeFormat>,
     timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,

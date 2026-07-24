@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::timezone::Tz;
@@ -7,7 +7,7 @@ use datafusion::arrow::array::{Array, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::datetime::to_timestamp::ToTimestampSecondsFunc;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
@@ -101,38 +101,39 @@ impl SparkUnixTimestamp {
         match (first, format) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(format_scalar)) => {
                 let format = parse_format_scalar(format_scalar)?;
-                let array: PrimitiveArray<datafusion::arrow::datatypes::Int64Type> =
-                    match array.data_type() {
-                        DataType::Utf8 => as_string_array(array)?
-                            .iter()
-                            .map(|x| {
-                                x.map(|value| self.formatted_string_to_seconds(value, &format))
-                                    .transpose()
-                                    .map(|opt| opt.flatten())
-                            })
-                            .collect::<Result<_>>()?,
-                        DataType::LargeUtf8 => as_large_string_array(array)?
-                            .iter()
-                            .map(|x| {
-                                x.map(|value| self.formatted_string_to_seconds(value, &format))
-                                    .transpose()
-                                    .map(|opt| opt.flatten())
-                            })
-                            .collect::<Result<_>>()?,
-                        DataType::Utf8View => as_string_view_array(array)?
-                            .iter()
-                            .map(|x| {
-                                x.map(|value| self.formatted_string_to_seconds(value, &format))
-                                    .transpose()
-                                    .map(|opt| opt.flatten())
-                            })
-                            .collect::<Result<_>>()?,
-                        other => {
-                            return exec_err!(
-                                "spark_unix_timestamp function unsupported formatted input data type: {other}"
-                            )
-                        }
-                    };
+                let array: PrimitiveArray<datafusion::arrow::datatypes::Int64Type> = match array
+                    .data_type()
+                {
+                    DataType::Utf8 => as_string_array(array)?
+                        .iter()
+                        .map(|x| {
+                            x.map(|value| self.formatted_string_to_seconds(value, &format))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
+                        .collect::<Result<_>>()?,
+                    DataType::LargeUtf8 => as_large_string_array(array)?
+                        .iter()
+                        .map(|x| {
+                            x.map(|value| self.formatted_string_to_seconds(value, &format))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
+                        .collect::<Result<_>>()?,
+                    DataType::Utf8View => as_string_view_array(array)?
+                        .iter()
+                        .map(|x| {
+                            x.map(|value| self.formatted_string_to_seconds(value, &format))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
+                        .collect::<Result<_>>()?,
+                    other => {
+                        return exec_err!(
+                            "spark_unix_timestamp function unsupported formatted input data type: {other}"
+                        );
+                    }
+                };
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Array(array), ColumnarValue::Array(format_array)) => {

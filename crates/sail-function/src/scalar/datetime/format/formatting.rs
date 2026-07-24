@@ -1,7 +1,7 @@
 use chrono::{Datelike, Duration, FixedOffset, NaiveDateTime, Timelike};
 use datafusion_common::Result;
 
-use super::locale::{LocaleData, EN_US};
+use super::locale::{EN_US, LocaleData};
 use super::pattern::{
     DateTimeField, DateTimeFieldSpec, DateTimeFormat, DateTimeItem, FieldStyle, FractionField,
     FractionSpec, PredefinedFormatter, ZoneField, ZoneSpec,

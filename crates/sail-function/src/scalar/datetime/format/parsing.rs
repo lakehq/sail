@@ -1,6 +1,6 @@
 use chrono::format::Parsed;
 use chrono::{Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Weekday};
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{Result, exec_datafusion_err};
 
 use super::locale::LocaleData;
 use super::pattern::{
@@ -240,11 +240,7 @@ fn parse_signed_number(
 }
 
 fn expand_year(year: i32, count: usize) -> i32 {
-    if count == 2 {
-        2000 + year
-    } else {
-        year
-    }
+    if count == 2 { 2000 + year } else { year }
 }
 
 fn parse_fraction(

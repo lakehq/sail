@@ -39,7 +39,6 @@ use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-
 fn to_chrono_fmt(format: Expr) -> Expr {
     ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }

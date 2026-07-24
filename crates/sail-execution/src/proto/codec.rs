@@ -2586,9 +2586,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
-            "date_part" | "datepart" | "extract" => {
-                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
-            }
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
@@ -5267,7 +5264,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_timestamp_preserves_options() -> Result<()> {
-        let udf = SparkTimestamp::try_new(Some(Arc::from("America/Los_Angeles")), true)?;
+        let udf = SparkTimestamp::try_new(Some(Arc::from("America/Los_Angeles")), true, true)?;
         let decoded = round_trip_udf(ScalarUDF::from(udf))?;
 
         let decoded = downcast_udf::<SparkTimestamp>(&decoded, "SparkTimestamp")?;

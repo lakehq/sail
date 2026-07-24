@@ -1,4 +1,4 @@
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 
 use super::pattern::{
     DateTimeField, DateTimeFieldSpec, DateTimeFormat, DateTimeItem, FieldStyle, FractionField,
