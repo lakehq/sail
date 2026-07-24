@@ -551,6 +551,14 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        /// Path to a file holding the bearer token. When set, the token is
+        /// re-read from this file per request (with a short refresh interval)
+        /// so a rotated token (for example a kubelet-projected service account
+        /// token) is picked up without restarting the server. Takes precedence
+        /// over `bearer_access_token`. The path is not a secret, so it is kept
+        /// as a plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_access_token_file: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
