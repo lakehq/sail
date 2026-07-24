@@ -580,10 +580,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
-            NodeKind::BinarySource(r#gen::BinarySourceExecNode {
-                base_config,
-                path_glob_filter: _,
-            }) => {
+            NodeKind::BinarySource(r#gen::BinarySourceExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
@@ -1610,16 +1607,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         whole_text: text_source.whole_text(),
                         line_sep: text_source.line_sep().map(|x| vec![x]),
                     })
-                } else if file_source.downcast_ref::<BinarySource>().is_some() {
+                } else if file_source.is::<BinarySource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
                         &RemotePhysicalProtoConverter {},
                     )?)?;
-                    NodeKind::BinarySource(r#gen::BinarySourceExecNode {
-                        base_config,
-                        path_glob_filter: None,
-                    })
+                    NodeKind::BinarySource(r#gen::BinarySourceExecNode { base_config })
                 } else if let Some(csv_source) = file_source.downcast_ref::<CsvSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
