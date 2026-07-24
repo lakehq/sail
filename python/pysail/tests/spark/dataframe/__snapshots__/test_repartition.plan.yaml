@@ -1,23 +1,23 @@
 # serializer version: 1
 ---
-name: "test_explicit_repartition_pushes_column_projection_down_plan"
+name: "test_eliminate_redundant_repartition_above_explicit_repartition_plan"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#6@0 as id1, #7@1 as id2]
-      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=4
-        ProjectionExec: expr=[#1@0 as #6, #3@1 as #7]
-          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #5@0)], projection=[#1@0, #3@1]
-            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #3@0)]
-              RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #1]
-                  RangeExec
-              RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=1
-                ProjectionExec: expr=[id@0 as #3]
-                  RangeExec
-            RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=1
-              ProjectionExec: expr=[id@0 as #5]
-                RangeExec
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=3
+        FilterExec: #0@0 % 2 = 0
+          ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+            RangeExec
+---
+name: "test_explicit_repartition_does_not_push_filter_down_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+          RangeExec
 ---
 name: "test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown_plan"
 data:
@@ -38,12 +38,21 @@ data:
               ProjectionExec: expr=[id@0 as #5]
                 RangeExec
 ---
-name: "test_explicit_repartition_does_not_push_filter_down_plan"
+name: "test_explicit_repartition_pushes_column_projection_down_plan"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#0@0 as id]
-      FilterExec: #0@0 % 2 = 0
-        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-          ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
-            RangeExec
+    ProjectionExec: expr=[#6@0 as id1, #7@1 as id2]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=4
+        ProjectionExec: expr=[#1@0 as #6, #3@1 as #7]
+          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #5@0)], projection=[#1@0, #3@1]
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #3@0)]
+              RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #1]
+                  RangeExec
+              RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #3]
+                  RangeExec
+            RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=1
+              ProjectionExec: expr=[id@0 as #5]
+                RangeExec

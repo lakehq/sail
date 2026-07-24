@@ -154,6 +154,22 @@ def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
     assert plan == snapshot
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_eliminate_redundant_repartition_above_explicit_repartition_plan(spark, snapshot):
+    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0).repartition(10)
+    plan = normalized_plan(df)
+
+    assert plan == snapshot
+
+
+def test_eliminate_redundant_repartition_above_explicit_repartition_result(spark):
+    df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0).orderBy("id")
+    result = df.collect()
+
+    assert [row["id"] for row in result] == [0, 2, 4]
+
+
 def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004
