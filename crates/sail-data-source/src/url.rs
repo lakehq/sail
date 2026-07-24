@@ -769,6 +769,11 @@ mod tests {
             &[("https://example.com/path/?foo#bar", Some("**/*.txt"))],
         );
         test("s3://bucket/path", &[("s3://bucket/path", None)]);
+        test("oss://bucket/path", &[("oss://bucket/path", None)]);
+        test(
+            "oss://bucket/path/*.txt",
+            &[("oss://bucket/path/", Some("*.txt"))],
+        );
         test(
             "s3://bucket/path/*.txt",
             &[("s3://bucket/path/", Some("*.txt"))],

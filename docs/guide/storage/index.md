@@ -45,6 +45,7 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | [Memory](./memory)                        | :white_check_mark: | :white_check_mark: |
 | [AWS S3](./s3)                            | :white_check_mark: | :white_check_mark: |
 | [Cloudflare R2](./s3)                     | :white_check_mark: | :white_check_mark: |
+| [Aliyun OSS](./s3)                        | :white_check_mark: | :white_check_mark: |
 | [Azure Data Lake Storage (ADLS)](./azure) | :white_check_mark: | :white_check_mark: |
 | [Azure Blob Storage](./azure)             | :white_check_mark: | :white_check_mark: |
 | [Google Cloud Storage](./gcs)             | :white_check_mark: | :white_check_mark: |
@@ -57,7 +58,7 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 
 Some HTTPS URLs are automatically recognized as cloud storage:
 
-- **S3**: URLs containing `amazonaws.com` or `r2.cloudflarestorage.com`.
+- **S3**: URLs containing `amazonaws.com`, `r2.cloudflarestorage.com`, or Aliyun OSS S3-compatible endpoints under `aliyuncs.com`.
 - **Azure**: URLs containing `dfs.core.windows.net`, `blob.core.windows.net`, `dfs.fabric.microsoft.com`, or `blob.fabric.microsoft.com`.
 
 These URLs will use the appropriate cloud storage backend instead of the generic HTTP store.
