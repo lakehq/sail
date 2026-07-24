@@ -1,18 +1,19 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::{ConfigOptions, TableParquetOptions};
+use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::datasource::sink::DataSink;
 use datafusion::datasource::source::{DataSource, OpenArgs};
-use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
@@ -26,14 +27,10 @@ use datafusion::physical_plan::{
     SortOrderPushdownResult,
 };
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
+use datafusion_datasource_parquet::ParquetSink;
 use futures::{StreamExt, stream};
-use log::warn;
-use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
-use parquet::arrow::AsyncArrowWriter;
-use parquet::arrow::arrow_writer::ArrowWriterOptions;
-use parquet::file::properties::WriterPropertiesBuilder;
 use sail_cache::remote_checkpoint::{
     RemoteCheckpointDescriptor, RemoteCheckpointFile, RemoteCheckpointPartition,
     RemoteCheckpointRegistry,
@@ -41,7 +38,6 @@ use sail_cache::remote_checkpoint::{
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWrite;
 use uuid::Uuid;
 
 pub const METADATA_COLUMN: &str = "metadata";
@@ -507,6 +503,7 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
             partition,
             input,
             context,
+            self.object_store_url.clone(),
             store,
             location,
             storage_schema,
@@ -519,222 +516,72 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
     }
 }
 
-struct CheckpointUpload {
-    writer: Option<AsyncArrowWriter<CheckpointObjectWriter>>,
-    reservation: MemoryReservation,
-    object_store_buffer_size: usize,
-    store: Arc<dyn ObjectStore>,
-    location: Path,
-    completed: bool,
-}
-
-struct CheckpointObjectWriter {
-    writer: BufWriter,
-    shutdown_started: bool,
-}
-
-impl AsyncWrite for CheckpointObjectWriter {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.writer).poll_write(context, buffer)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.writer).poll_flush(context)
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        self.shutdown_started = true;
-        Pin::new(&mut self.writer).poll_shutdown(context)
-    }
-}
-
-impl CheckpointUpload {
-    fn try_new(
-        context: &TaskContext,
-        store: Arc<dyn ObjectStore>,
-        location: Path,
-        schema: SchemaRef,
-    ) -> Result<Self> {
-        let object_store_buffer_size = context
-            .session_config()
-            .options()
-            .execution
-            .objectstore_writer_buffer_size;
-        // Parquet trades encode/decode CPU for typically smaller object-store I/O and
-        // row-group/page pruning metadata; Arrow IPC favors low-overhead interchange.
-        let mut parquet_options = TableParquetOptions {
-            global: context.session_config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
-        if !parquet_options.global.skip_arrow_metadata {
-            parquet_options.arrow_schema(&schema);
-        }
-        let properties = WriterPropertiesBuilder::try_from(&parquet_options)?.build();
-        let options = ArrowWriterOptions::new()
-            .with_properties(properties)
-            .with_skip_arrow_metadata(parquet_options.global.skip_arrow_metadata);
-        let buffer = CheckpointObjectWriter {
-            writer: BufWriter::with_capacity(
-                Arc::clone(&store),
-                location.clone(),
-                object_store_buffer_size,
-            ),
-            shutdown_started: false,
-        };
-        let writer = AsyncArrowWriter::try_new_with_options(buffer, schema, options)?;
-        // Charge both object-store buffering and Parquet's live encoding state to the task pool.
-        let reservation = MemoryConsumer::new(format!("RemoteCheckpoint[{location}]"))
-            .register(context.memory_pool());
-        reservation.try_resize(object_store_buffer_size)?;
-        Ok(Self {
-            writer: Some(writer),
-            reservation,
-            object_store_buffer_size,
-            store,
-            location,
-            completed: false,
-        })
-    }
-
-    async fn write(&mut self, batch: &RecordBatch, schema: &SchemaRef) -> Result<()> {
-        let batch = record_batch_with_schema(batch.clone(), schema)?;
-        let writer = self
-            .writer
-            .as_mut()
-            .ok_or_else(|| internal_datafusion_err!("checkpoint writer is not available"))?;
-        writer.write(&batch).await?;
-        self.reservation
-            .try_resize(self.object_store_buffer_size + writer.memory_size())?;
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<u64> {
-        let writer = self
-            .writer
-            .as_mut()
-            .ok_or_else(|| internal_datafusion_err!("checkpoint writer is not available"))?;
-        writer.finish().await?;
-        let size = u64::try_from(writer.bytes_written())
-            .map_err(|_| internal_datafusion_err!("checkpoint object size is too large"))?;
-        self.completed = true;
-        self.writer.take();
-        Ok(size)
-    }
-
-    async fn abort(&mut self) {
-        let Some(writer) = self.writer.take() else {
-            self.completed = true;
-            return;
-        };
-        let mut output = writer.into_inner();
-        if output.shutdown_started {
-            if let Err(error) = self.store.delete(&self.location).await
-                && !matches!(error, object_store::Error::NotFound { .. })
-            {
-                warn!("failed to delete incomplete checkpoint object: {error}");
-            }
-        } else {
-            if let Err(error) = output.writer.abort().await {
-                warn!("failed to abort checkpoint multipart upload: {error}");
-            }
-        }
-        self.completed = true;
-    }
-}
-
-impl Drop for CheckpointUpload {
-    fn drop(&mut self) {
-        if self.completed {
-            return;
-        }
-        let Some(writer) = self.writer.take() else {
-            return;
-        };
-        let store = Arc::clone(&self.store);
-        let location = self.location.clone();
-        let mut output = writer.into_inner();
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
-            if output.shutdown_started {
-                let _ = store.delete(&location).await;
-            } else {
-                let _ = output.writer.abort().await;
-            }
-        });
-    }
-}
-
 async fn write_checkpoint_partition(
     partition: usize,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
+    object_store_url: ObjectStoreUrl,
     store: Arc<dyn ObjectStore>,
     location: Path,
     storage_schema: SchemaRef,
     output_schema: SchemaRef,
 ) -> Result<RecordBatch> {
-    let mut upload: Option<CheckpointUpload> = None;
     let mut row_count = 0_u64;
-    while let Some(batch) = input.next().await {
-        let batch = match batch {
-            Ok(batch) => batch,
-            Err(error) => {
-                if let Some(upload) = &mut upload {
-                    upload.abort().await;
-                }
-                return Err(error);
-            }
+    let first_batch = loop {
+        let Some(batch) = input.next().await else {
+            break None;
         };
+        let batch = batch?;
         row_count = row_count
             .checked_add(u64::try_from(batch.num_rows()).map_err(|_| {
                 internal_datafusion_err!("checkpoint partition row count is too large")
             })?)
             .ok_or_else(|| internal_datafusion_err!("checkpoint partition row count overflow"))?;
-        if batch.num_rows() == 0 || storage_schema.fields().is_empty() {
+        if storage_schema.fields().is_empty() || batch.num_rows() == 0 {
             continue;
         }
-        if upload.is_none() {
-            upload = Some(CheckpointUpload::try_new(
-                context.as_ref(),
-                Arc::clone(&store),
-                location.clone(),
-                Arc::clone(&storage_schema),
-            )?);
-        }
-        let Some(current_upload) = upload.as_mut() else {
-            return Err(internal_datafusion_err!(
-                "checkpoint upload was not initialized"
-            ));
-        };
-        if let Err(error) = current_upload.write(&batch, &storage_schema).await {
-            current_upload.abort().await;
-            return Err(error);
-        }
-    }
+        break Some(batch);
+    };
 
     // An empty partition stays in the descriptor but does not allocate an object.
-    let (location, size) = if let Some(upload) = &mut upload {
-        match upload.finish().await {
-            Ok(size) => (Some(location.to_string()), size),
-            Err(error) => {
-                upload.abort().await;
-                return Err(error);
-            }
-        }
+    let (location, size, row_count) = if let Some(first_batch) = first_batch {
+        let stream_schema = Arc::clone(&storage_schema);
+        let batch_schema = Arc::clone(&storage_schema);
+        let batches = stream::once(async move { Ok(first_batch) })
+            .chain(input)
+            .map(move |batch| {
+                batch.and_then(|batch| record_batch_with_schema(batch, &batch_schema))
+            });
+        let batches: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(stream_schema, batches));
+        let location_url = format!("{object_store_url}{location}");
+        let sink = ParquetSink::new(
+            FileSinkConfig {
+                original_url: location_url.clone(),
+                object_store_url,
+                file_group: Default::default(),
+                table_paths: vec![ListingTableUrl::parse(location_url)?],
+                output_schema: storage_schema,
+                table_partition_cols: vec![],
+                insert_op: InsertOp::Append,
+                keep_partition_by_columns: false,
+                file_extension: "parquet".to_string(),
+                file_output_mode: FileOutputMode::SingleFile,
+            },
+            TableParquetOptions {
+                global: context.session_config().options().execution.parquet.clone(),
+                ..Default::default()
+            },
+        );
+        let row_count = sink.write_all(batches, &context).await?;
+        let size = store
+            .head(&location)
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?
+            .size;
+        (Some(location.to_string()), size, row_count)
     } else {
-        (None, 0)
+        (None, 0, row_count)
     };
     let partition = u64::try_from(partition)
         .map_err(|_| internal_datafusion_err!("checkpoint partition index is too large"))?;
@@ -941,14 +788,11 @@ fn validate_partition_location(
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
-    use std::fs;
-
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::record_batch::RecordBatchOptions;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use object_store::local::LocalFileSystem;
     use object_store::memory::InMemory;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -1201,43 +1045,6 @@ mod tests {
                 .resolve_relation(context.runtime_env().as_ref(), "another")
                 .is_err()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn finalize_error_does_not_abort_a_shutdown_writer() -> Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("sail-checkpoint-finalize-error-{}", Uuid::new_v4()));
-        fs::create_dir(&root).map_err(|error| DataFusionError::External(Box::new(error)))?;
-        fs::write(root.join("not-a-directory"), b"blocker")
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let store: Arc<dyn ObjectStore> = Arc::new(
-            LocalFileSystem::new_with_prefix(&root)
-                .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?,
-        );
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int32,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1]))],
-        )?;
-        let context = SessionContext::new();
-        let mut upload = CheckpointUpload::try_new(
-            context.task_ctx().as_ref(),
-            store,
-            Path::from("not-a-directory/checkpoint.parquet"),
-            Arc::clone(&schema),
-        )?;
-        upload.write(&batch, &schema).await?;
-        assert!(upload.finish().await.is_err());
-
-        upload.abort().await;
-        fs::remove_file(root.join("not-a-directory"))
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        fs::remove_dir(root).map_err(|error| DataFusionError::External(Box::new(error)))?;
         Ok(())
     }
 }

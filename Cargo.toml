@@ -168,6 +168,7 @@ datafusion-common = { version = "54.0.0", features = ["object_store"] }
 datafusion-datasource = { version = "54.0.0" }
 datafusion-datasource-avro = { version = "54.0.0" }
 datafusion-datasource-json = { version = "54.0.0" }
+datafusion-datasource-parquet = { version = "54.0.0" }
 datafusion-expr = { version = "54.0.0", default-features = false }
 datafusion-expr-common = { version = "54.0.0" }
 datafusion-proto = { version = "54.0.0" }
