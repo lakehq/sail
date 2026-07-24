@@ -10,6 +10,7 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -97,6 +98,11 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let expr = arguments.one()?;
     let data_type = expr.get_type(function_context.schema)?;
+    // A variant is stored as a struct, but Spark's `typeof` reports it as `variant`,
+    // not the underlying `struct<value,metadata>`.
+    if is_marked_variant_storage_type(&data_type) {
+        return Ok(lit("variant"));
+    }
     let service = function_context
         .session_context
         .extension::<PlanService>()?;
