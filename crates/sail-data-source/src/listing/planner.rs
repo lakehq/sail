@@ -52,6 +52,40 @@ struct ListFilesResult {
 #[derive(Debug, Default)]
 pub struct ListingPhysicalPlanner;
 
+pub(crate) async fn prewarm_file_statistics(
+    source: &ListingTableSource,
+    ctx: &dyn Session,
+) -> datafusion_common::Result<()> {
+    if !source.config().collect_stat
+        || ctx
+            .runtime_env()
+            .cache_manager
+            .get_file_statistic_cache_limit()
+            == 0
+    {
+        return Ok(());
+    }
+
+    let Some(url) = source.config().table_paths.first() else {
+        return Ok(());
+    };
+    let store = ctx.runtime_env().object_store(url)?;
+    let partition_cols = listing_partition_columns(source);
+    let file_list =
+        list_partitioned_files(source, ctx, store.as_ref(), &[], &partition_cols).await?;
+    let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+
+    file_list
+        .map(|part_file| async {
+            let part_file = part_file?;
+            do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?;
+            Ok(())
+        })
+        .buffer_unordered(meta_fetch_concurrency)
+        .try_for_each(|()| future::ready(Ok(())))
+        .await
+}
+
 #[async_trait]
 impl ExtensionPlanner for ListingPhysicalPlanner {
     async fn plan_extension(
@@ -342,35 +376,10 @@ async fn list_files_for_scan<'a>(
         });
     };
 
-    let partition_cols: Vec<(String, DataType)> = source
-        .config()
-        .schema
-        .table_partition_cols()
-        .iter()
-        .map(|field| (field.name().clone(), field.data_type().clone()))
-        .collect();
-
-    let store_ref = store.as_ref();
-    let partition_cols_ref = partition_cols.as_slice();
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(
-        |table_path| async move {
-            let files =
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                    .await?;
-            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
-            let files = files.try_filter(move |file| {
-                futures::future::ready(!has_hidden_path_component(
-                    table_path,
-                    &file.object_meta.location,
-                ))
-            });
-            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
-        },
-    ))
-    .await?;
-
+    let partition_cols = listing_partition_columns(source);
+    let file_list =
+        list_partitioned_files(source, ctx, store.as_ref(), filters, &partition_cols).await?;
     let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
-    let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
 
     let files = file_list
         .map(|part_file| async {
@@ -427,6 +436,50 @@ async fn list_files_for_scan<'a>(
         statistics: stats,
         grouped_by_partition,
     })
+}
+
+fn listing_partition_columns(source: &ListingTableSource) -> Vec<(String, DataType)> {
+    source
+        .config()
+        .schema
+        .table_partition_cols()
+        .iter()
+        .map(|field| (field.name().clone(), field.data_type().clone()))
+        .collect()
+}
+
+async fn list_partitioned_files<'a>(
+    source: &'a ListingTableSource,
+    ctx: &'a dyn Session,
+    store: &'a dyn ObjectStore,
+    filters: &'a [Expr],
+    partition_cols: &'a [(String, DataType)],
+) -> datafusion_common::Result<
+    futures::stream::BoxStream<
+        'a,
+        datafusion_common::Result<datafusion_datasource::PartitionedFile>,
+    >,
+> {
+    let file_list = future::try_join_all(source.config().table_paths.iter().map(
+        |table_path| async move {
+            let files =
+                pruned_partition_list(ctx, store, table_path, filters, "", partition_cols).await?;
+            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
+            let files = files.try_filter(move |file| {
+                futures::future::ready(!has_hidden_path_component(
+                    table_path,
+                    &file.object_meta.location,
+                ))
+            });
+            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+        },
+    ))
+    .await?;
+
+    let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+    Ok(stream::iter(file_list)
+        .flatten_unordered(meta_fetch_concurrency)
+        .boxed())
 }
 
 async fn do_collect_statistics_and_ordering(
@@ -549,4 +602,124 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bytes::Bytes;
+    use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Constraints;
+    use datafusion_common::parsers::CompressionTypeVariant;
+    use datafusion_datasource::TableSchema;
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use url::Url;
+
+    use super::*;
+    use crate::listing::source::{
+        ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat,
+    };
+    use crate::listing::table::ListingTableSourceConfig;
+
+    #[derive(Debug)]
+    struct CountingReadFormat {
+        inference_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ReadFormat for CountingReadFormat {
+        async fn infer_compression(
+            &self,
+            _ctx: &dyn Session,
+            _files: &[ListingFileSample<'_>],
+        ) -> datafusion_common::Result<CompressionTypeVariant> {
+            unreachable!()
+        }
+
+        async fn infer_schema(
+            &self,
+            _ctx: &dyn Session,
+            _files: &[ListingFileSample<'_>],
+            _compression: CompressionTypeVariant,
+        ) -> datafusion_common::Result<SchemaRef> {
+            unreachable!()
+        }
+
+        async fn infer_file_meta(
+            &self,
+            _ctx: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _object: &object_store::ObjectMeta,
+            file_schema: SchemaRef,
+            _compression: CompressionTypeVariant,
+        ) -> datafusion_common::Result<ListingFileMeta> {
+            self.inference_count.fetch_add(1, Ordering::Relaxed);
+            let mut statistics = Statistics::new_unknown(&file_schema);
+            statistics.num_rows = Precision::Exact(1);
+            Ok(ListingFileMeta {
+                statistics,
+                ordering: None,
+            })
+        }
+
+        async fn scan(
+            &self,
+            _ctx: &dyn Session,
+            _input: ListingScanInput,
+        ) -> datafusion_common::Result<FileScanConfig> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn prewarmed_statistics_are_reused_after_source_recreation() {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        object_store
+            .put(
+                &Path::from("table/data"),
+                Bytes::from_static(b"data").into(),
+            )
+            .await
+            .unwrap();
+
+        let context = SessionContext::new();
+        context.register_object_store(&Url::parse("memory://").unwrap(), Arc::clone(&object_store));
+
+        let inference_count = Arc::new(AtomicUsize::new(0));
+        let config = ListingTableSourceConfig {
+            table_paths: vec![ListingTableUrl::parse("memory:///table/").unwrap()],
+            schema: TableSchema::from_file_schema(Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )]))),
+            constraints: Constraints::default(),
+            file_sort_order: vec![],
+            collect_stat: true,
+            target_partitions: 1,
+            read_format: Arc::new(CountingReadFormat {
+                inference_count: Arc::clone(&inference_count),
+            }),
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        };
+        let warmup_source = ListingTableSource::try_new(config.clone()).unwrap();
+        let scan_source = ListingTableSource::try_new(config).unwrap();
+        let state = context.state();
+
+        prewarm_file_statistics(&warmup_source, &state)
+            .await
+            .unwrap();
+        assert_eq!(inference_count.load(Ordering::Relaxed), 1);
+
+        let result = list_files_for_scan(&scan_source, &state, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(inference_count.load(Ordering::Relaxed), 1);
+        assert_eq!(result.statistics.num_rows, Precision::Exact(1));
+    }
 }

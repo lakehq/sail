@@ -1,5 +1,5 @@
 use datafusion_expr::LogicalPlan;
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, CreateTableStatisticsWarmup};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
@@ -90,6 +90,9 @@ impl PlanResolver<'_> {
                 is_external,
                 is_write_precondition: false,
             },
+            statistics_warmup: Some(CreateTableStatisticsWarmup {
+                read_case_sensitive: self.config.case_sensitive,
+            }),
         };
         self.resolve_catalog_command(command)
     }

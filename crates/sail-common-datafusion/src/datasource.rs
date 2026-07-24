@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
@@ -486,6 +487,19 @@ pub trait TableFormat: Send + Sync {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
+
+    /// Prewarms reusable physical statistics after a catalog table is registered.
+    ///
+    /// Formats without file-level statistics can keep the default no-op.
+    async fn prewarm_statistics(
+        &self,
+        session_config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+        info: SourceInfo,
+    ) -> Result<()> {
+        let _ = (session_config, runtime_env, info);
+        Ok(())
+    }
 
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
