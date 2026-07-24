@@ -373,18 +373,49 @@ Feature: Delta Lake Merge
         | 1  | keep     | target |
         | 3  | stay     | target |
         | 4  | inserted | insert |
-
-    Scenario: Matched updates are rejected for Merge-on-Read MERGE
-      When query
+  
+  Scenario: Matched updates use deletion vectors while unmatched rows are inserted
+      Given statement
+        """
+        INSERT INTO delta_merge_dv 
+        SELECT * FROM VALUES
+          (2, 'test', 'test')
+        """
+      Given statement
         """
         MERGE INTO delta_merge_dv AS t
         USING src_merge_dv AS s
         ON t.id = s.id
         WHEN MATCHED THEN
-          UPDATE SET value = s.value
+          UPDATE SET *
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
         """
-      Then query error Merge-on-Read strategy for MERGE UPDATE clauses
-
+      Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   |
+        | 1  | keep     | target |
+        | 2  | remove   | delete |
+        | 3  | stay     | target |
+        | 4  | inserted | insert |
 
   Rule: Updates for rows not matched by source and explicit insert columns
     Background:
