@@ -111,7 +111,6 @@ impl SparkToXmlOptions {
             attribute_prefix,
             value_tag,
             null_value,
-            declaration: String::new(), // TODO: Add declaration option support
             timestamp_ltz_format,
             timestamp_ntz_format,
             date_format,
@@ -140,7 +139,6 @@ impl Default for SparkToXmlOptions {
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
             null_value: None,
-            declaration: String::new(),
             timestamp_ltz_format: None,
             timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
                 .expect("default timestamp NTZ format should be valid"),
