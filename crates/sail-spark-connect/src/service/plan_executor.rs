@@ -569,6 +569,7 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
+    // TODO: Remove checkpoint data on a best-effort basis when the client releases the relation.
     // Checkpoints have session lifetime so plans can safely share their immutable relation ID.
     // The registry and object-store namespace are cleared together after the job runner stops.
     let output = metadata
