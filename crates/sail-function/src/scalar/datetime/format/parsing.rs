@@ -609,15 +609,15 @@ impl ParseState {
         }
         // Convert quarter to month if quarter is set and month is not
         // Chrono's to_naive_date() doesn't handle quarter resolution, so we must convert it manually
-        if let Some(quarter) = self.parsed.quarter() {
-            if self.parsed.month.is_none() {
-                // Quarter 1 -> January (month 1)
-                // Quarter 2 -> April (month 4)
-                // Quarter 3 -> July (month 7)
-                // Quarter 4 -> October (month 10)
-                let month = (quarter - 1) * 3 + 1;
-                self.set_month(month as i32)?;
-            }
+        if let Some(quarter) = self.parsed.quarter()
+            && self.parsed.month.is_none()
+        {
+            // Quarter 1 -> January (month 1)
+            // Quarter 2 -> April (month 4)
+            // Quarter 3 -> July (month 7)
+            // Quarter 4 -> October (month 10)
+            let month = (quarter - 1) * 3 + 1;
+            self.set_month(month as i32)?;
         }
         if self.parsed.month.is_none()
             && self.parsed.ordinal.is_none()

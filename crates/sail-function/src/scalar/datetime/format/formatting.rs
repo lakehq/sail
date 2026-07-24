@@ -53,10 +53,10 @@ fn format_predefined(predefined: PredefinedFormatter, input: DateTimeFormatInput
         PredefinedFormatter::BasicIsoDate => {
             let mut output = input.datetime.format("%Y%m%d").to_string();
             // Only include offset if timezone is present and not UTC
-            if let Some(tz) = input.timezone {
-                if tz.offset.local_minus_utc() != 0 {
-                    push_basic_offset(offset_seconds(input), &mut output);
-                }
+            if let Some(tz) = input.timezone
+                && tz.offset.local_minus_utc() != 0
+            {
+                push_basic_offset(offset_seconds(input), &mut output);
             }
             output
         }
