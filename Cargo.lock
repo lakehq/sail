@@ -8079,6 +8079,7 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-telemetry",
  "secrecy",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tonic",

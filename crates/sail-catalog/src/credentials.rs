@@ -101,6 +101,12 @@ impl CatalogCredentials for FileCatalogCredentials {
             })?
             .trim()
             .to_string();
+        if credential.is_empty() {
+            return Err(CatalogError::External(format!(
+                "token file {} is empty",
+                self.path.display()
+            )));
+        }
         let mut cached = self
             .cached
             .lock()
@@ -200,6 +206,28 @@ mod tests {
         assert!(
             matches!(error, CatalogError::External(_)),
             "unexpected error variant: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn retrieve_reports_error_for_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("token");
+        write_token(&path, "\n  \n");
+
+        let credentials = FileCatalogCredentials::new(&path);
+        let error = credentials.retrieve().await.unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::External(message) if message.contains("empty")),
+            "unexpected error: {error:?}"
+        );
+
+        // An empty read must not be cached: once the file holds a token again,
+        // the next retrieve returns it.
+        write_token(&path, "recovered-token");
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("recovered-token".to_string())
         );
     }
 }
