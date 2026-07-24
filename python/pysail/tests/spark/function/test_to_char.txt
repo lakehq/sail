@@ -1,10 +1,10 @@
 Tests for `to_char`.
 
 All expected values below were captured from JVM Spark. Numeric cases are
-verified identical on 3.5.7 and 4.1.1. Datetime and binary inputs are only
-supported by JVM Spark 4.x (3.5 requires a DECIMAL input), so those examples
+verified identical across Spark 3.x and 4.x. Datetime and binary inputs are only
+supported by JVM Spark 4.x (Spark 3.x requires a DECIMAL input), so those examples
 are marked SAIL_ONLY; their expected values were captured from JVM Spark
-4.1.1.
+4.x.
 
 >>> from pyspark.sql.functions import lit, to_char
 
@@ -348,7 +348,7 @@ error
 
 Datetime inputs use the Spark datetime pattern syntax. JVM Spark only
 supports this for 4.x, so these examples are skipped on JVM Spark; the
-expected values match JVM Spark 4.1.1.
+expected values match JVM Spark 4.x.
 
 >>> c("to_char(date'2016-04-08', 'y')")  # doctest: +SAIL_ONLY
 '2016'
@@ -368,7 +368,7 @@ True
 Binary inputs support the 'base64', 'hex', and 'utf-8' formats
 (case-insensitive, surrounding whitespace ignored). JVM Spark only
 supports this for 4.x, so these examples are skipped on JVM Spark; the
-expected values match JVM Spark 4.1.1.
+expected values match JVM Spark 4.x.
 
 >>> c("to_char(encode('Spark SQL', 'utf-8'), 'base64')")  # doctest: +SAIL_ONLY
 'U3BhcmsgU1FM'

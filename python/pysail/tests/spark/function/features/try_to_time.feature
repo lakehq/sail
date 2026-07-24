@@ -3,7 +3,7 @@ Feature: try_to_time
   Safe variant of to_time that returns NULL on parse failure
   instead of throwing an exception.
 
-  NOTE: TIME type is a preview feature in Spark 4.1.1; the JVM raises
+  NOTE: TIME type is a preview feature in Spark 4.x; the JVM raises
   `[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported` for
   any TIME usage. The scenarios below reflect Sail's implementation.
   Once Spark stabilises TIME support, remove @sail-only and update

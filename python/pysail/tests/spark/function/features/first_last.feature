@@ -4,7 +4,7 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
   # The row STORAGE order in every VALUES list below is deliberately scrambled so
   # that it does NOT match k-ascending nor k-descending order. Therefore a passing
   # result can ONLY come from the inner ORDER BY driving the aggregate, never from
-  # coincidental scan order. All expected values are verified against Spark JVM 4.1.1
+  # coincidental scan order. All expected values are verified against Spark JVM 4.x
   # (rule: first = value of the min-key row, last = value of the max-key row).
   #
   #   storage: v = 10, 20, 30, 40   with   k = 'b', 'a', 'd', 'c'

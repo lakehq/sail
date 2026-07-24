@@ -1,7 +1,7 @@
 Feature: try_variant_get with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
-  # through a column. All expected values were captured on Spark JVM 4.1.1.
+  # through a column. All expected values were captured on Spark JVM 4.x.
 
   Rule: try_variant_get — the argument may come from a column
 
