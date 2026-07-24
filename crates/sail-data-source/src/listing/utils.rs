@@ -18,6 +18,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::ListingFileSample;
+use crate::url::PathGlobFilter;
 
 pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
     // TODO: Spark doesn't support Utf8View
@@ -89,11 +90,12 @@ pub fn infer_listing_compression(
 pub async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
+    path_glob_filter: Option<&'a PathGlobFilter>,
 ) -> Result<Vec<ListingFileSample<'a>>> {
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref())
+        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))
@@ -198,6 +200,7 @@ pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
+    path_glob_filter: Option<&'a PathGlobFilter>,
 ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
@@ -226,12 +229,24 @@ pub async fn list_all_files<'a>(
     Ok(list
         .try_filter(move |meta| {
             let path = &meta.location;
-            let included =
-                url.contains(path, ignore_subdirectory) && !has_hidden_path_component(url, path);
+            let included = url.contains(path, ignore_subdirectory)
+                && !has_hidden_path_component(url, path)
+                && matches_path_glob_filter(path_glob_filter, path);
             futures::future::ready(included)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
+}
+
+pub fn matches_path_glob_filter(
+    path_glob_filter: Option<&PathGlobFilter>,
+    location: &Path,
+) -> bool {
+    path_glob_filter.is_none_or(|filter| {
+        location
+            .filename()
+            .is_some_and(|filename| filter.matches(filename))
+    })
 }
 
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.

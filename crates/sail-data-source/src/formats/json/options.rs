@@ -16,6 +16,7 @@ impl BuildPartialOptions<JsonReadPartialOptions> for JsonOptions {
         Ok(JsonReadPartialOptions {
             schema_infer_max_records: self.schema_infer_max_rec,
             compression: Some(self.compression.to_string()),
+            path_glob_filter: None,
         })
     }
 }
@@ -33,6 +34,7 @@ impl JsonReadOptions {
         let JsonReadOptions {
             schema_infer_max_records,
             compression,
+            path_glob_filter: _,
         } = self;
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {

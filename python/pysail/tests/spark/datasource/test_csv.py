@@ -42,6 +42,17 @@ def test_csv_read_write_basic(spark, sample_df, tmp_path, infer_schema):
     assert sorted(read_df.collect(), key=safe_sort_key) == sorted(expected, key=safe_sort_key)
 
 
+def test_csv_path_glob_filter(spark, tmp_path):
+    path = tmp_path / "csv_path_glob_filter"
+    path.mkdir()
+    (path / "keep.csv").write_text("value\n1\n")
+    (path / "drop.csv").write_text("value\n2\n")
+
+    df = spark.read.option("header", True).option("inferSchema", True).option("pathGlobFilter", "keep.*").csv(str(path))
+
+    assert df.collect() == [Row(value=1)]
+
+
 @pytest.mark.parametrize("infer_schema", [True, False])
 def test_csv_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path, infer_schema):
     # Round-tripped values are typed under `inferSchema=True` and STRING-only

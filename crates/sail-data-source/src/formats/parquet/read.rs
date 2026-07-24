@@ -166,6 +166,10 @@ impl ReadFormat for ParquetReadFormat {
 
         Ok(config)
     }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
+    }
 }
 
 /// Clears all metadata (Schema level and field level) for a schema.

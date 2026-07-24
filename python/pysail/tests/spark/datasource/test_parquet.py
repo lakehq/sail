@@ -24,6 +24,22 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_parquet_path_glob_filter(spark, tmp_path):
+    keep_source = tmp_path / "parquet_keep_source"
+    drop_source = tmp_path / "parquet_drop_source"
+    spark.createDataFrame([(1,)], "id INT").coalesce(1).write.parquet(str(keep_source))
+    spark.createDataFrame([(2,)], "id INT").coalesce(1).write.parquet(str(drop_source))
+
+    path = tmp_path / "parquet_path_glob_filter"
+    path.mkdir()
+    next(keep_source.glob("*.parquet")).rename(path / "keep.parquet")
+    next(drop_source.glob("*.parquet")).rename(path / "drop.parquet")
+
+    df = spark.read.option("pathGlobFilter", "keep.*").parquet(str(path))
+
+    assert df.collect() == [Row(id=1)]
+
+
 def test_parquet_write_modes(spark, tmp_path):
     path = str(tmp_path / "parquet_write_modes")
 
