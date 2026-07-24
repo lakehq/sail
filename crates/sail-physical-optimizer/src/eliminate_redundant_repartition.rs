@@ -8,6 +8,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use datafusion_physical_expr::Partitioning;
 
 /// EliminateRedundantRepartition optimizer rule removes a RepartitionExec
 /// that is directly on top of an ExplicitRepartitionExec, since the input has
@@ -37,8 +38,13 @@ impl PhysicalOptimizerRule for EliminateRedundantRepartition {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|node: Arc<dyn ExecutionPlan>| {
-            if node.downcast_ref::<RepartitionExec>().is_none() {
-                return Ok(Transformed::no(node));
+            let Some(repartition) = node.downcast_ref::<RepartitionExec>() else {
+                return Ok(Transformed::no(node))
+            };
+
+            // Do not eliminate hash partitioning, as it may voilate the parent node's distribution requirements.
+            if matches!(repartition.partitioning(), Partitioning::Hash(_, _)) {
+                return Ok(Transformed::no(node))
             };
 
             let [child] = node.children()[..] else {
