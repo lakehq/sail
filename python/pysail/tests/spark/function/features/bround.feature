@@ -3,7 +3,7 @@ Feature: bround comprehensive tests
   # bround = banker's rounding (round-half-to-even). The scenarios below use
   # explicit CAST to DOUBLE/FLOAT/INT/BIGINT so they exercise the vectorized
   # PrimitiveArray paths (Float64/Float32/Int32/Int64) rather than the scalar
-  # Decimal128 fast path. All values validated against Spark JVM 4.1.1.
+  # Decimal128 fast path. All values validated against Spark JVM 4.x.
 
   Rule: Double tie-to-even (round-half-to-even) at scale 0
 

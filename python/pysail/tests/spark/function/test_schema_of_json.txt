@@ -54,7 +54,7 @@ that the test passes against both engines.
 error
 
 All expected values below were captured from JVM Spark (verified identical on
-3.5.7 and 4.1.1).
+Spark 3.x and 4.x).
 
 >>> def check(json_str, opts=None):
 ...     col = schema_of_json(json_str) if opts is None else schema_of_json(json_str, opts)
