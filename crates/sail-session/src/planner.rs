@@ -63,7 +63,8 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
-    RemoteCheckpointCommitExec, RemoteCheckpointWriteExec, checkpoint_storage_schema,
+    CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
+    checkpoint_storage_schema,
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -217,9 +218,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     None,
                 )?
                 .try_with_sort_information(storage_output_ordering.clone().into_iter().collect())?;
-                Arc::new(
-                    DataSourceExec::new(Arc::new(source)).with_partitioning(output_partitioning),
-                )
+                Arc::new(DataSourceExec::new(Arc::new(CheckpointDataSource::new(
+                    Arc::new(source),
+                    output_partitioning,
+                ))))
             } else {
                 let parquet_options = TableParquetOptions {
                     global: session_state.config().options().execution.parquet.clone(),
@@ -303,7 +305,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                             "checkpoint Parquet source rejected its column projection"
                         )
                     })?;
-                Arc::new(DataSourceExec::new(source).with_partitioning(output_partitioning))
+                Arc::new(DataSourceExec::new(Arc::new(CheckpointDataSource::new(
+                    source,
+                    output_partitioning,
+                ))))
             };
             scan
         } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
@@ -618,7 +623,7 @@ mod tests {
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::ToDFSchema;
-    use datafusion_expr::col;
+    use datafusion_expr::{LogicalPlanBuilder, col};
     use object_store::memory::InMemory;
     use sail_common::spec;
     use sail_plan::config::PlanConfig;
@@ -825,6 +830,22 @@ mod tests {
             .ok_or_else(|| internal_datafusion_err!("checkpoint ordering key is not a column"))?;
         assert_eq!(ordering_column.name(), "id");
         assert_eq!(ordering_column.index(), 0);
+
+        let projected_logical = LogicalPlanBuilder::from(logical)
+            .project(vec![col("id").alias("key")])?
+            .build()?;
+        let projected = state
+            .query_planner()
+            .create_physical_plan(&projected_logical, &state)
+            .await?;
+        let Partitioning::Hash(expressions, 2) = projected.output_partitioning() else {
+            return internal_err!("checkpoint projection lost its hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| internal_datafusion_err!("projected hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "key");
+        assert_eq!(partition_column.index(), 0);
         Ok(())
     }
 

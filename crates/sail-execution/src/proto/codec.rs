@@ -258,7 +258,7 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
-    RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
+    CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -438,6 +438,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 show_sizes,
                 sort_information,
                 limit,
+                output_partitioning,
             }) => {
                 let schema = try_decode_schema(&schema)?;
                 let partitions = partitions
@@ -453,7 +454,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .with_show_sizes(show_sizes)
                         .try_with_sort_information(sort_information)?
                         .with_limit(limit.map(|x| x as usize));
-                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+                let scan = DataSourceExec::new(Arc::new(source));
+                let scan = if output_partitioning.is_empty() {
+                    scan
+                } else {
+                    let output_partitioning =
+                        self.try_decode_partitioning(&output_partitioning, &scan.schema(), ctx)?;
+                    scan.with_partitioning(output_partitioning)
+                };
+                Ok(Arc::new(scan))
             }
             NodeKind::RemoteCheckpointWrite(r#gen::RemoteCheckpointWriteExecNode {
                 input,
@@ -557,6 +566,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 options,
                 predicate,
+                output_partitioning,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
@@ -591,7 +601,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
                 )?;
-                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+                let scan = DataSourceExec::new(Arc::new(source));
+                let scan = if output_partitioning.is_empty() {
+                    scan
+                } else {
+                    let output_partitioning =
+                        self.try_decode_partitioning(&output_partitioning, &scan.schema(), ctx)?;
+                    scan.with_partitioning(output_partitioning)
+                };
+                Ok(Arc::new(scan))
             }
             NodeKind::Arrow(r#gen::ArrowExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
@@ -1670,7 +1688,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 common_prefix_length,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
-            let source = data_source.data_source();
+            let data_source = data_source.data_source();
+            let (source, output_partitioning) =
+                if let Some(checkpoint) = data_source.downcast_ref::<CheckpointDataSource>() {
+                    (
+                        checkpoint.source(),
+                        self.try_encode_partitioning(checkpoint.checkpoint_partitioning())?,
+                    )
+                } else {
+                    (data_source, Vec::new())
+                };
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if let Some(text_source) = file_source.downcast_ref::<TextSource>() {
@@ -1740,6 +1767,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         options,
                         predicate,
+                        output_partitioning,
                     })
                 } else if file_source.is::<JsonSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -1794,6 +1822,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     show_sizes: memory.show_sizes(),
                     sort_information,
                     limit: memory.fetch().map(|x| x as u64),
+                    output_partitioning,
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
@@ -4938,6 +4967,35 @@ mod tests {
         assert_eq!(partition_column.name(), "_c0");
         assert_eq!(partition_column.index(), 0);
         assert!(decoded.checkpoint_ordering().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_checkpoint_data_source_partitioning() -> Result<()> {
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let source = MemorySourceConfig::try_new(&[vec![], vec![]], Arc::clone(&schema), None)?;
+        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
+        let source = Arc::new(CheckpointDataSource::new(
+            Arc::new(source),
+            Partitioning::Hash(vec![key], 2),
+        ));
+        let scan = DataSourceExec::new(source);
+        let remote_scan = RemoteDataSourceExec::new(&scan);
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+
+        assert!(decoded.is::<DataSourceExec>());
+        assert!(matches!(
+            decoded.output_partitioning(),
+            Partitioning::Hash(_, 2)
+        ));
         Ok(())
     }
 

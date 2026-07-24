@@ -1,3 +1,5 @@
+use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -6,17 +8,24 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::config::TableParquetOptions;
+use datafusion::common::config::{ConfigOptions, TableParquetOptions};
+use datafusion::datasource::source::{DataSource, OpenArgs};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, LexOrdering, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
+};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
+use datafusion::physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    SortOrderPushdownResult,
 };
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use futures::{StreamExt, stream};
 use log::warn;
 use object_store::buffered::BufWriter;
@@ -36,6 +45,126 @@ use tokio::io::AsyncWrite;
 use uuid::Uuid;
 
 pub const METADATA_COLUMN: &str = "metadata";
+
+#[derive(Debug)]
+pub struct CheckpointDataSource {
+    source: Arc<dyn DataSource>,
+    output_partitioning: Partitioning,
+}
+
+impl CheckpointDataSource {
+    pub fn new(source: Arc<dyn DataSource>, output_partitioning: Partitioning) -> Self {
+        Self {
+            source,
+            output_partitioning,
+        }
+    }
+
+    pub fn source(&self) -> &Arc<dyn DataSource> {
+        &self.source
+    }
+
+    pub fn checkpoint_partitioning(&self) -> &Partitioning {
+        &self.output_partitioning
+    }
+
+    fn map_source(&self, source: Arc<dyn DataSource>) -> Arc<dyn DataSource> {
+        Arc::new(Self::new(source, self.output_partitioning.clone()))
+    }
+}
+
+impl DataSource for CheckpointDataSource {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.source.open(partition, context)
+    }
+
+    fn fmt_as(&self, display_type: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.source.fmt_as(display_type, f)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.output_partitioning.clone()
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        self.source.eq_properties()
+    }
+
+    fn scheduling_type(&self) -> SchedulingType {
+        self.source.scheduling_type()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.source.partition_statistics(partition)
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        self.source
+            .with_fetch(limit)
+            .map(|source| self.map_source(source))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.source.fetch()
+    }
+
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        self.source.metrics()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let result = self.source.try_pushdown_filters(filters, config)?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node: result.updated_node.map(|source| self.map_source(source)),
+        })
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(self
+            .source
+            .try_pushdown_sort(order)?
+            .map(|source| self.map_source(source)))
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        self.source
+            .with_preserve_order(preserve_order)
+            .map(|source| self.map_source(source))
+    }
+
+    fn with_new_state(&self, state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn DataSource>> {
+        self.source
+            .with_new_state(state)
+            .map(|source| self.map_source(source))
+    }
+
+    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.source.create_sibling_state()
+    }
+
+    fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
+        self.source.open_with_args(args)
+    }
+}
 
 pub fn checkpoint_storage_schema(logical_schema: &SchemaRef) -> SchemaRef {
     let fields = logical_schema
@@ -223,7 +352,6 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
         let storage_schema = Arc::clone(&self.storage_schema);
         let output_partitioning = self.output_partitioning.clone();
         let output_ordering = self.output_ordering.clone();
-        let partition_count = output_partitioning.partition_count();
         let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
         let output = stream::once(async move {
@@ -237,7 +365,6 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
                 storage_schema,
                 output_partitioning,
                 output_ordering,
-                partition_count,
                 output_schema,
             )
             .await
@@ -629,13 +756,13 @@ async fn commit_checkpoint(
     storage_schema: SchemaRef,
     output_partitioning: Partitioning,
     output_ordering: Option<LexOrdering>,
-    partition_count: usize,
     output_schema: SchemaRef,
 ) -> Result<RecordBatch> {
     let registry = context.extension::<RemoteCheckpointRegistry>()?;
     let commit = async {
-        let partitions =
-            collect_checkpoint_partitions(input, partition_count, &prefix, &storage_schema).await?;
+        let partitions = collect_checkpoint_partitions(input, &prefix, &storage_schema).await?;
+        let output_partitioning =
+            checkpoint_partitioning_with_count(output_partitioning, partitions.len());
         registry.insert(RemoteCheckpointDescriptor {
             relation_id,
             object_store_url: object_store_url.clone(),
@@ -667,11 +794,10 @@ async fn commit_checkpoint(
 
 async fn collect_checkpoint_partitions(
     mut stream: SendableRecordBatchStream,
-    partition_count: usize,
     relation_prefix: &Path,
     storage_schema: &Schema,
 ) -> Result<Vec<RemoteCheckpointPartition>> {
-    let mut partitions = vec![None; partition_count];
+    let mut partitions = BTreeMap::new();
     while let Some(batch) = stream.next().await {
         let batch = batch?;
         if batch.num_columns() != 1 {
@@ -732,17 +858,15 @@ async fn collect_checkpoint_partitions(
                 }
                 None
             };
-            let Some(slot) = partitions.get_mut(partition) else {
-                return Err(internal_datafusion_err!(
-                    "checkpoint returned invalid partition {partition}"
-                ));
-            };
-            if slot
-                .replace(RemoteCheckpointPartition {
+            if partitions
+                .insert(
                     partition,
-                    row_count,
-                    file,
-                })
+                    RemoteCheckpointPartition {
+                        partition,
+                        row_count,
+                        file,
+                    },
+                )
                 .is_some()
             {
                 return Err(internal_datafusion_err!(
@@ -751,15 +875,37 @@ async fn collect_checkpoint_partitions(
             }
         }
     }
+    if partitions.is_empty() {
+        return Err(internal_datafusion_err!(
+            "checkpoint did not return partition 0"
+        ));
+    }
     partitions
         .into_iter()
         .enumerate()
-        .map(|(partition, value)| {
-            value.ok_or_else(|| {
-                internal_datafusion_err!("checkpoint did not return partition {partition}")
-            })
+        .map(|(expected, (partition, value))| {
+            if partition != expected {
+                return Err(internal_datafusion_err!(
+                    "checkpoint did not return partition {expected}"
+                ));
+            }
+            Ok(value)
         })
         .collect()
+}
+
+fn checkpoint_partitioning_with_count(
+    partitioning: Partitioning,
+    partition_count: usize,
+) -> Partitioning {
+    match partitioning {
+        Partitioning::RoundRobinBatch(_) => Partitioning::RoundRobinBatch(partition_count),
+        Partitioning::Hash(expressions, expected) if expected == partition_count => {
+            Partitioning::Hash(expressions, partition_count)
+        }
+        Partitioning::Hash(_, _) => Partitioning::UnknownPartitioning(partition_count),
+        Partitioning::UnknownPartitioning(_) => Partitioning::UnknownPartitioning(partition_count),
+    }
 }
 
 fn validate_partition_location(
@@ -1020,7 +1166,7 @@ mod tests {
             prefix.clone(),
             Arc::clone(&logical_schema),
             storage_schema,
-            Partitioning::UnknownPartitioning(2),
+            Partitioning::UnknownPartitioning(1),
             None,
         );
 
@@ -1029,6 +1175,10 @@ mod tests {
         let descriptor = registry
             .get("relation")?
             .expect("checkpoint descriptor must be published");
+        assert!(matches!(
+            descriptor.output_partitioning,
+            Partitioning::UnknownPartitioning(2)
+        ));
         assert_eq!(descriptor.partitions.len(), 2);
         assert_eq!(descriptor.partitions[0].row_count, 3);
         assert_eq!(descriptor.partitions[1].row_count, 0);

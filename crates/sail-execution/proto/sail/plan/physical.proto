@@ -607,6 +607,7 @@ message MemoryExecNode {
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
   optional uint64 limit = 6;
+  bytes output_partitioning = 7;
 }
 
 message ValuesExecNode {
@@ -628,6 +629,7 @@ message ParquetExecNode {
   bytes base_config = 1;
   bytes options = 2;
   optional bytes predicate = 3;
+  bytes output_partitioning = 4;
 }
 
 message ArrowExecNode {
