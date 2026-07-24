@@ -18,6 +18,8 @@ datafusion-expr = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 parquet = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 lazy_static = { workspace = true }

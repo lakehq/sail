@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::config::TableParquetOptions;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
@@ -11,7 +13,6 @@ use datafusion::physical_expr::{
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -169,92 +170,108 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.relation_id()
                 ))
             })?;
-            let parquet_options = TableParquetOptions {
-                global: session_state.config().options().execution.parquet.clone(),
-                ..Default::default()
-            };
-            let storage_output_ordering = descriptor
-                .output_ordering
-                .as_ref()
-                .map(|ordering| {
-                    checkpoint_schema_ordering(ordering, descriptor.storage_schema.as_ref())
-                })
-                .transpose()?;
-            let source = ParquetSource::new(TableSchema::new(
-                Arc::clone(&descriptor.storage_schema),
-                vec![],
-            ))
-            .with_table_parquet_options(parquet_options);
-            // One file group per source partition, including empty partitions, keeps the saved
-            // physical properties sound.
-            let file_groups = descriptor
-                .partitions
-                .iter()
-                .map(|partition| {
-                    let files = partition
-                        .file
-                        .as_ref()
-                        .map(|file| {
-                            let mut statistics =
-                                Statistics::new_unknown(descriptor.storage_schema.as_ref());
-                            statistics.num_rows = Precision::Exact(
-                                usize::try_from(file.row_count).map_err(|_| {
-                                    datafusion_common::DataFusionError::Plan(
-                                        "checkpoint row count is too large".to_string(),
-                                    )
-                                })?,
-                            );
-                            Ok(PartitionedFile::new(file.location.to_string(), file.size)
-                                .with_statistics(Arc::new(statistics)))
-                        })
-                        .into_iter()
-                        .collect::<datafusion_common::Result<Vec<_>>>()?;
-                    Ok(FileGroup::new(files))
-                })
-                .collect::<datafusion_common::Result<Vec<_>>>()?;
-            let total_rows = descriptor
-                .partitions
-                .iter()
-                .try_fold(0_u64, |total, partition| {
-                    total
-                        .checked_add(
-                            partition
-                                .file
-                                .as_ref()
-                                .map(|file| file.row_count)
-                                .unwrap_or(0),
-                        )
-                        .ok_or_else(|| {
+            let scan: Arc<dyn ExecutionPlan> = if descriptor.storage_schema.fields().is_empty() {
+                let partitions = descriptor
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        let row_count = usize::try_from(partition.row_count).map_err(|_| {
                             datafusion_common::DataFusionError::Plan(
-                                "checkpoint row count overflow".to_string(),
+                                "checkpoint row count is too large".to_string(),
                             )
-                        })
-                })?;
-            let mut statistics = Statistics::new_unknown(descriptor.storage_schema.as_ref());
-            statistics.num_rows = Precision::Exact(usize::try_from(total_rows).map_err(|_| {
-                datafusion_common::DataFusionError::Plan(
-                    "checkpoint row count is too large".to_string(),
+                        })?;
+                        let batch = RecordBatch::try_new_with_options(
+                            Arc::clone(&descriptor.storage_schema),
+                            vec![],
+                            &RecordBatchOptions::new().with_row_count(Some(row_count)),
+                        )?;
+                        Ok(vec![batch])
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                MemorySourceConfig::try_new_exec(
+                    &partitions,
+                    Arc::clone(&descriptor.storage_schema),
+                    None,
+                )?
+            } else {
+                let parquet_options = TableParquetOptions {
+                    global: session_state.config().options().execution.parquet.clone(),
+                    ..Default::default()
+                };
+                let storage_output_ordering = descriptor
+                    .output_ordering
+                    .as_ref()
+                    .map(|ordering| {
+                        checkpoint_schema_ordering(ordering, descriptor.storage_schema.as_ref())
+                    })
+                    .transpose()?;
+                let source = ParquetSource::new(TableSchema::new(
+                    Arc::clone(&descriptor.storage_schema),
+                    vec![],
+                ))
+                .with_table_parquet_options(parquet_options);
+                let file_groups = descriptor
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        let files = partition
+                            .file
+                            .as_ref()
+                            .map(|file| {
+                                let mut statistics =
+                                    Statistics::new_unknown(descriptor.storage_schema.as_ref());
+                                statistics.num_rows = Precision::Exact(
+                                    usize::try_from(partition.row_count).map_err(|_| {
+                                        datafusion_common::DataFusionError::Plan(
+                                            "checkpoint row count is too large".to_string(),
+                                        )
+                                    })?,
+                                );
+                                Ok(PartitionedFile::new(file.location.to_string(), file.size)
+                                    .with_statistics(Arc::new(statistics)))
+                            })
+                            .into_iter()
+                            .collect::<datafusion_common::Result<Vec<_>>>()?;
+                        Ok(FileGroup::new(files))
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                let total_rows =
+                    descriptor
+                        .partitions
+                        .iter()
+                        .try_fold(0_u64, |total, partition| {
+                            total.checked_add(partition.row_count).ok_or_else(|| {
+                                datafusion_common::DataFusionError::Plan(
+                                    "checkpoint row count overflow".to_string(),
+                                )
+                            })
+                        })?;
+                let mut statistics = Statistics::new_unknown(descriptor.storage_schema.as_ref());
+                statistics.num_rows =
+                    Precision::Exact(usize::try_from(total_rows).map_err(|_| {
+                        datafusion_common::DataFusionError::Plan(
+                            "checkpoint row count is too large".to_string(),
+                        )
+                    })?);
+                let scan = FileScanConfigBuilder::new(
+                    descriptor.object_store_url.clone(),
+                    Arc::new(source),
                 )
-            })?);
-            let scan =
-                FileScanConfigBuilder::new(descriptor.object_store_url.clone(), Arc::new(source))
-                    .with_file_groups(file_groups)
-                    .with_statistics(statistics)
-                    .with_output_ordering(storage_output_ordering.into_iter().collect())
-                    .with_preserve_order(true)
-                    .with_partitioned_by_file_group(true)
-                    .build();
-            let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan);
+                .with_file_groups(file_groups)
+                .with_statistics(statistics)
+                .with_output_ordering(storage_output_ordering.into_iter().collect())
+                .with_preserve_order(true)
+                .with_partitioned_by_file_group(true)
+                .build();
+                DataSourceExec::from_data_source(scan)
+            };
             let names = UserDefinedLogicalNode::schema(node)
                 .fields()
                 .iter()
                 .map(|field| field.name().to_string())
                 .collect::<Vec<_>>();
             let scan = if names.is_empty() {
-                Arc::new(ProjectionExec::try_new(
-                    Vec::<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)>::new(),
-                    scan,
-                )?) as Arc<dyn ExecutionPlan>
+                scan
             } else {
                 rename_physical_plan(scan, &names)?
             };
@@ -579,6 +596,7 @@ mod tests {
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::collect;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::prelude::{SessionConfig, SessionContext};
@@ -597,8 +615,8 @@ mod tests {
     #[test]
     fn checkpoint_properties_map_columns_to_target_schema_by_position() {
         let target_schema = Schema::new(vec![
-            Field::new("__sail_checkpoint_col_00000", DataType::Int64, false),
-            Field::new("__sail_checkpoint_col_00001", DataType::Int64, false),
+            Field::new("_c0", DataType::Int64, false),
+            Field::new("_c1", DataType::Int64, false),
         ]);
         let first = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
         let second = Arc::new(Column::new("value", 1)) as Arc<dyn PhysicalExpr>;
@@ -613,10 +631,10 @@ mod tests {
             panic!("expected hash partitioning");
         };
         let partition_column = expressions[0].downcast_ref::<Column>().unwrap();
-        assert_eq!(partition_column.name(), "__sail_checkpoint_col_00001");
+        assert_eq!(partition_column.name(), "_c1");
         assert_eq!(partition_column.index(), 1);
         let ordering_column = ordering.first().expr.downcast_ref::<Column>().unwrap();
-        assert_eq!(ordering_column.name(), "__sail_checkpoint_col_00000");
+        assert_eq!(ordering_column.name(), "_c0");
         assert_eq!(ordering_column.index(), 0);
     }
 
@@ -663,6 +681,61 @@ mod tests {
             .downcast_ref::<CoalescePartitionsExec>()
             .ok_or_else(|| internal_datafusion_err!("checkpoint commit input is not coalesced"))?;
         assert!(coalesce.input().is::<RemoteCheckpointWriteExec>());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_column_checkpoint_scan_preserves_partition_rows() -> datafusion_common::Result<()>
+    {
+        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
+            "memory:///checkpoint".to_string(),
+        )));
+        registry.insert(sail_cache::remote_checkpoint::RemoteCheckpointDescriptor {
+            relation_id: "zero-columns".to_string(),
+            object_store_url: datafusion::execution::object_store::ObjectStoreUrl::parse(
+                "memory://",
+            )?,
+            prefix: object_store::path::Path::from("checkpoint/session/zero-columns"),
+            logical_schema: Arc::new(Schema::empty()),
+            storage_schema: Arc::new(Schema::empty()),
+            output_partitioning: Partitioning::UnknownPartitioning(2),
+            output_ordering: None,
+            partitions: vec![
+                sail_cache::remote_checkpoint::RemoteCheckpointPartition {
+                    partition: 0,
+                    row_count: 2,
+                    file: None,
+                },
+                sail_cache::remote_checkpoint::RemoteCheckpointPartition {
+                    partition: 1,
+                    row_count: 3,
+                    file: None,
+                },
+            ],
+        })?;
+        let config = SessionConfig::new().with_extension(registry);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RemoteCheckpointRelationNode::try_new(
+                "zero-columns".to_string(),
+                Arc::new(Schema::empty()),
+            )?),
+        });
+        let state = context.state();
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&logical, &state)
+            .await?;
+
+        assert_eq!(physical.output_partitioning().partition_count(), 2);
+        let batches = collect(physical, context.task_ctx()).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
         Ok(())
     }
 

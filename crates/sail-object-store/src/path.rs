@@ -5,8 +5,8 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion_common::{DataFusionError, Result};
 use futures::StreamExt;
+use object_store::ObjectStore;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, PutPayload, PutResult};
 
 #[derive(Clone)]
 pub struct ResolvedObjectStorePath {
@@ -26,13 +26,6 @@ impl ResolvedObjectStorePath {
 
     pub fn store(&self) -> &Arc<dyn ObjectStore> {
         &self.store
-    }
-
-    pub async fn put_bytes(&self, location: &Path, bytes: Vec<u8>) -> Result<PutResult> {
-        self.store
-            .put(location, PutPayload::from(bytes))
-            .await
-            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))
     }
 }
 
@@ -86,6 +79,7 @@ pub fn resolve_object_store_path(
 mod tests {
     use datafusion::execution::runtime_env::RuntimeEnv;
     use object_store::memory::InMemory;
+    use object_store::{ObjectStoreExt, PutPayload};
     use url::Url;
 
     use super::*;
@@ -107,9 +101,17 @@ mod tests {
             .join("part-00001.parquet");
         let outside = Path::from("outside.parquet");
 
-        resolved.put_bytes(&first, b"first".to_vec()).await?;
-        resolved.put_bytes(&nested, b"nested".to_vec()).await?;
-        resolved.put_bytes(&outside, b"outside".to_vec()).await?;
+        for (location, bytes) in [
+            (&first, b"first".as_slice()),
+            (&nested, b"nested".as_slice()),
+            (&outside, b"outside".as_slice()),
+        ] {
+            resolved
+                .store()
+                .put(location, PutPayload::from(bytes.to_vec()))
+                .await
+                .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
+        }
         delete_object_store_prefix_objects(resolved.store().as_ref(), resolved.prefix()).await?;
 
         assert!(matches!(

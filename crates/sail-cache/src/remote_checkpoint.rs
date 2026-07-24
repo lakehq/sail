@@ -19,12 +19,12 @@ use uuid::Uuid;
 pub struct RemoteCheckpointFile {
     pub location: Path,
     pub size: u64,
-    pub row_count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCheckpointPartition {
     pub partition: usize,
+    pub row_count: u64,
     pub file: Option<RemoteCheckpointFile>,
 }
 

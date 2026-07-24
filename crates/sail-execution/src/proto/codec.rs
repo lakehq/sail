@@ -4894,11 +4894,7 @@ mod tests {
             DataType::Int64,
             true,
         )]));
-        let storage_schema = Arc::new(Schema::new(vec![Field::new(
-            "__sail_checkpoint_col_00000",
-            DataType::Int64,
-            true,
-        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
         let checkpoint = RemoteCheckpointWriteExec::try_new(
             Arc::new(EmptyExec::new(input_schema)),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
@@ -4931,23 +4927,18 @@ mod tests {
         use datafusion::physical_expr::expressions::Column;
         use datafusion::physical_plan::empty::EmptyExec;
 
-        let metadata_schema = Arc::new(Schema::new(vec![
-            Field::new("partition", DataType::UInt64, false),
-            Field::new("location", DataType::Utf8, true),
-            Field::new("size", DataType::UInt64, false),
-            Field::new("row_count", DataType::UInt64, false),
-        ]));
+        let metadata_schema = Arc::new(Schema::new(vec![Field::new(
+            "metadata",
+            DataType::Utf8,
+            false,
+        )]));
         let logical_schema = Arc::new(Schema::new(vec![Field::new(
             "logical_name",
             DataType::Int64,
             true,
         )]));
-        let storage_schema = Arc::new(Schema::new(vec![Field::new(
-            "__sail_checkpoint_col_00000",
-            DataType::Int64,
-            true,
-        )]));
-        let key = Arc::new(Column::new("__sail_checkpoint_col_00000", 0)) as Arc<dyn PhysicalExpr>;
+        let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let key = Arc::new(Column::new("_c0", 0)) as Arc<dyn PhysicalExpr>;
         let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&key))])
             .ok_or_else(|| plan_datafusion_err!("expected non-empty checkpoint ordering"))?;
         let checkpoint = RemoteCheckpointCommitExec::new(
@@ -4977,7 +4968,7 @@ mod tests {
         let partition_column = expressions[0]
             .downcast_ref::<Column>()
             .ok_or_else(|| plan_datafusion_err!("checkpoint hash key is not a column"))?;
-        assert_eq!(partition_column.name(), "__sail_checkpoint_col_00000");
+        assert_eq!(partition_column.name(), "_c0");
         assert_eq!(partition_column.index(), 0);
         assert!(decoded.checkpoint_ordering().is_some());
         Ok(())

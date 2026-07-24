@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::{Array, ArrayRef, StringArray, UInt8Array, UInt64Array};
+use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::TableParquetOptions;
@@ -31,34 +31,18 @@ use sail_cache::remote_checkpoint::{
 };
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWrite;
 use uuid::Uuid;
 
-pub const PARTITION_COLUMN: &str = "partition";
-pub const LOCATION_COLUMN: &str = "location";
-pub const SIZE_COLUMN: &str = "size";
-pub const ROW_COUNT_COLUMN: &str = "row_count";
-pub const ROW_MARKER_COLUMN: &str = "__sail_checkpoint_row_marker";
+pub const METADATA_COLUMN: &str = "metadata";
 
 pub fn checkpoint_storage_schema(logical_schema: &SchemaRef) -> SchemaRef {
-    if logical_schema.fields().is_empty() {
-        return Arc::new(Schema::new_with_metadata(
-            vec![Field::new(ROW_MARKER_COLUMN, DataType::UInt8, false)],
-            logical_schema.metadata().clone(),
-        ));
-    }
     let fields = logical_schema
         .fields()
         .iter()
         .enumerate()
-        .map(|(index, field)| {
-            Arc::new(
-                field
-                    .as_ref()
-                    .clone()
-                    .with_name(format!("__sail_checkpoint_col_{index:05}")),
-            )
-        })
+        .map(|(index, field)| Arc::new(field.as_ref().clone().with_name(format!("_c{index}"))))
         .collect::<Vec<_>>();
     Arc::new(Schema::new_with_metadata(
         fields,
@@ -177,13 +161,21 @@ impl ExecutionPlan for RemoteCheckpointScanExec {
     }
 }
 
-fn checkpoint_commit_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new(PARTITION_COLUMN, DataType::UInt64, false),
-        Field::new(LOCATION_COLUMN, DataType::Utf8, true),
-        Field::new(SIZE_COLUMN, DataType::UInt64, false),
-        Field::new(ROW_COUNT_COLUMN, DataType::UInt64, false),
-    ]))
+fn checkpoint_metadata_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new(
+        METADATA_COLUMN,
+        DataType::Utf8,
+        false,
+    )]))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointPartitionMetadata {
+    partition: u64,
+    location: Option<String>,
+    size: u64,
+    row_count: u64,
 }
 
 fn checkpoint_command_schema() -> SchemaRef {
@@ -390,23 +382,19 @@ impl RemoteCheckpointWriteExec {
             ));
         }
         let input_schema = input.schema();
-        let schema_matches = if input_schema.fields().is_empty() {
-            is_row_marker_schema(storage_schema.as_ref())
-        } else {
-            input_schema.fields().len() == storage_schema.fields().len()
-                && input_schema
-                    .fields()
-                    .iter()
-                    .zip(storage_schema.fields())
-                    .all(|(input, storage)| input.data_type() == storage.data_type())
-        };
+        let schema_matches = input_schema.fields().len() == storage_schema.fields().len()
+            && input_schema
+                .fields()
+                .iter()
+                .zip(storage_schema.fields())
+                .all(|(input, storage)| input.data_type() == storage.data_type());
         if !schema_matches {
             return Err(DataFusionError::Plan(
                 "checkpoint storage schema does not match the input schema by position".to_string(),
             ));
         }
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(checkpoint_commit_schema()),
+            EquivalenceProperties::new(checkpoint_metadata_schema()),
             Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             EmissionType::Final,
             Boundedness::Bounded,
@@ -488,13 +476,10 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let store = context.runtime_env().object_store(&self.object_store_url)?;
-        // Attempt-unique immutable objects make retries safe without rename or copy.
         let location = self
             .prefix
             .clone()
-            .join("attempts")
-            .join(format!("partition-{partition:020}"))
-            .join(format!("{}.parquet", Uuid::new_v4()));
+            .join(format!("part-{partition:05}-{}.parquet", Uuid::new_v4()));
         let storage_schema = Arc::clone(&self.storage_schema);
         let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
@@ -602,7 +587,7 @@ impl CheckpointUpload {
     }
 
     async fn write(&mut self, batch: &RecordBatch, schema: &SchemaRef) -> Result<()> {
-        let batch = checkpoint_record_batch(batch, schema)?;
+        let batch = record_batch_with_schema(batch.clone(), schema)?;
         let writer = self
             .writer
             .as_mut()
@@ -671,23 +656,6 @@ impl Drop for CheckpointUpload {
     }
 }
 
-fn is_row_marker_schema(schema: &Schema) -> bool {
-    schema.fields().len() == 1
-        && schema.field(0).name() == ROW_MARKER_COLUMN
-        && schema.field(0).data_type() == &DataType::UInt8
-        && !schema.field(0).is_nullable()
-}
-
-fn checkpoint_record_batch(batch: &RecordBatch, storage_schema: &SchemaRef) -> Result<RecordBatch> {
-    if batch.num_columns() == 0 && is_row_marker_schema(storage_schema.as_ref()) {
-        return Ok(RecordBatch::try_new(
-            Arc::clone(storage_schema),
-            vec![Arc::new(UInt8Array::from(vec![0; batch.num_rows()]))],
-        )?);
-    }
-    record_batch_with_schema(batch.clone(), storage_schema)
-}
-
 async fn write_checkpoint_partition(
     partition: usize,
     mut input: SendableRecordBatchStream,
@@ -714,7 +682,7 @@ async fn write_checkpoint_partition(
                 internal_datafusion_err!("checkpoint partition row count is too large")
             })?)
             .ok_or_else(|| internal_datafusion_err!("checkpoint partition row count overflow"))?;
-        if batch.num_rows() == 0 {
+        if batch.num_rows() == 0 || storage_schema.fields().is_empty() {
             continue;
         }
         if upload.is_none() {
@@ -750,12 +718,14 @@ async fn write_checkpoint_partition(
     };
     let partition = u64::try_from(partition)
         .map_err(|_| internal_datafusion_err!("checkpoint partition index is too large"))?;
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(UInt64Array::from(vec![partition])),
-        Arc::new(StringArray::from(vec![location])),
-        Arc::new(UInt64Array::from(vec![size])),
-        Arc::new(UInt64Array::from(vec![row_count])),
-    ];
+    let metadata = serde_json::to_string(&CheckpointPartitionMetadata {
+        partition,
+        location,
+        size,
+        row_count,
+    })
+    .map_err(|error| internal_datafusion_err!("failed to encode checkpoint metadata: {error}"))?;
+    let columns: Vec<ArrayRef> = vec![Arc::new(StringArray::from(vec![metadata]))];
     Ok(RecordBatch::try_new(output_schema, columns)?)
 }
 
@@ -775,7 +745,8 @@ async fn commit_checkpoint(
 ) -> Result<RecordBatch> {
     let registry = context.extension::<RemoteCheckpointRegistry>()?;
     let commit = async {
-        let partitions = collect_checkpoint_partitions(input, partition_count, &prefix).await?;
+        let partitions =
+            collect_checkpoint_partitions(input, partition_count, &prefix, &storage_schema).await?;
         registry.insert(RemoteCheckpointDescriptor {
             relation_id,
             object_store_url: object_store_url.clone(),
@@ -809,58 +780,68 @@ async fn collect_checkpoint_partitions(
     mut stream: SendableRecordBatchStream,
     partition_count: usize,
     relation_prefix: &Path,
+    storage_schema: &Schema,
 ) -> Result<Vec<RemoteCheckpointPartition>> {
     let mut partitions = vec![None; partition_count];
     while let Some(batch) = stream.next().await {
         let batch = batch?;
-        if batch.num_columns() != 4 {
+        if batch.num_columns() != 1 {
             return Err(internal_datafusion_err!(
-                "checkpoint returned {} metadata columns instead of 4",
+                "checkpoint returned {} metadata columns instead of 1",
                 batch.num_columns()
             ));
         }
-        let partition_values = checkpoint_u64_column(&batch, 0, PARTITION_COLUMN)?;
-        let locations = batch
-            .column(1)
+        let metadata_values = batch
+            .column(0)
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| {
-                internal_datafusion_err!("invalid checkpoint {LOCATION_COLUMN} column")
+                internal_datafusion_err!("invalid checkpoint {METADATA_COLUMN} column")
             })?;
-        let sizes = checkpoint_u64_column(&batch, 2, SIZE_COLUMN)?;
-        let row_counts = checkpoint_u64_column(&batch, 3, ROW_COUNT_COLUMN)?;
         for row in 0..batch.num_rows() {
-            if partition_values.is_null(row) || sizes.is_null(row) || row_counts.is_null(row) {
+            if metadata_values.is_null(row) {
                 return Err(internal_datafusion_err!(
-                    "checkpoint returned null required metadata"
+                    "checkpoint returned null metadata"
                 ));
             }
-            let partition = usize::try_from(partition_values.value(row))
+            let CheckpointPartitionMetadata {
+                partition,
+                location,
+                size,
+                row_count,
+            } = serde_json::from_str(metadata_values.value(row)).map_err(|error| {
+                internal_datafusion_err!("invalid checkpoint metadata JSON: {error}")
+            })?;
+            let partition = usize::try_from(partition)
                 .map_err(|_| internal_datafusion_err!("checkpoint partition index is too large"))?;
-            let size = sizes.value(row);
-            let row_count = row_counts.value(row);
-            let file = if locations.is_null(row) {
-                if size != 0 || row_count != 0 {
+            let file = if let Some(location) = location {
+                if storage_schema.fields().is_empty() {
                     return Err(internal_datafusion_err!(
-                        "empty checkpoint partition {partition} has nonzero metadata"
+                        "zero-column checkpoint partition {partition} returned a file"
                     ));
                 }
-                None
-            } else {
                 if size == 0 || row_count == 0 {
                     return Err(internal_datafusion_err!(
                         "checkpoint partition {partition} has an empty file"
                     ));
                 }
-                let location = Path::parse(locations.value(row)).map_err(|error| {
+                let location = Path::parse(location).map_err(|error| {
                     internal_datafusion_err!("invalid checkpoint object location: {error}")
                 })?;
-                validate_attempt_location(relation_prefix, partition, &location)?;
-                Some(RemoteCheckpointFile {
-                    location,
-                    size,
-                    row_count,
-                })
+                validate_partition_location(relation_prefix, partition, &location)?;
+                Some(RemoteCheckpointFile { location, size })
+            } else {
+                if size != 0 {
+                    return Err(internal_datafusion_err!(
+                        "checkpoint partition {partition} has a size without a file"
+                    ));
+                }
+                if row_count != 0 && !storage_schema.fields().is_empty() {
+                    return Err(internal_datafusion_err!(
+                        "non-empty checkpoint partition {partition} is missing a file"
+                    ));
+                }
+                None
             };
             let Some(slot) = partitions.get_mut(partition) else {
                 return Err(internal_datafusion_err!(
@@ -868,7 +849,11 @@ async fn collect_checkpoint_partitions(
                 ));
             };
             if slot
-                .replace(RemoteCheckpointPartition { partition, file })
+                .replace(RemoteCheckpointPartition {
+                    partition,
+                    row_count,
+                    file,
+                })
                 .is_some()
             {
                 return Err(internal_datafusion_err!(
@@ -888,32 +873,24 @@ async fn collect_checkpoint_partitions(
         .collect()
 }
 
-fn checkpoint_u64_column<'a>(
-    batch: &'a RecordBatch,
-    index: usize,
-    name: &str,
-) -> Result<&'a UInt64Array> {
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| internal_datafusion_err!("invalid checkpoint {name} column"))
-}
-
-fn validate_attempt_location(
+fn validate_partition_location(
     relation_prefix: &Path,
     partition: usize,
     location: &Path,
 ) -> Result<()> {
-    let partition_prefix = relation_prefix
-        .clone()
-        .join("attempts")
-        .join(format!("partition-{partition:020}"));
-    if !location.prefix_matches(&partition_prefix)
-        || location.parts_count() != partition_prefix.parts_count() + 1
-        || location
-            .filename()
-            .is_none_or(|filename| !filename.ends_with(".parquet"))
+    let Some(filename) = location.filename() else {
+        return Err(internal_datafusion_err!(
+            "checkpoint returned an invalid object for partition {partition}: {location}"
+        ));
+    };
+    let prefix = format!("part-{partition:05}-");
+    let file_id = filename
+        .strip_prefix(&prefix)
+        .and_then(|value| value.strip_suffix(".parquet"));
+    let valid_file_id = file_id.is_some_and(|value| Uuid::parse_str(value).is_ok());
+    if !location.prefix_matches(relation_prefix)
+        || location.parts_count() != relation_prefix.parts_count() + 1
+        || !valid_file_id
     {
         return Err(internal_datafusion_err!(
             "checkpoint returned unexpected object {location} for partition {partition}"
@@ -927,7 +904,8 @@ fn validate_attempt_location(
 mod tests {
     use std::fs;
 
-    use datafusion::arrow::array::{Array, Int32Array};
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::record_batch::RecordBatchOptions;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -939,6 +917,15 @@ mod tests {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::*;
+
+    fn partition_metadata(batch: &RecordBatch) -> CheckpointPartitionMetadata {
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("metadata column");
+        serde_json::from_str(values.value(0)).expect("valid checkpoint metadata")
+    }
 
     #[test]
     fn storage_schema_uses_positional_names_and_preserves_metadata() {
@@ -958,15 +945,13 @@ mod tests {
 
         let storage = checkpoint_storage_schema(&logical);
 
-        assert_eq!(storage.field(0).name(), "__sail_checkpoint_col_00000");
-        assert_eq!(storage.field(1).name(), "__sail_checkpoint_col_00001");
+        assert_eq!(storage.field(0).name(), "_c0");
+        assert_eq!(storage.field(1).name(), "_c1");
         assert_eq!(storage.field(0).metadata(), logical.field(0).metadata());
         assert_eq!(storage.metadata(), logical.metadata());
 
         let empty = checkpoint_storage_schema(&Arc::new(Schema::empty()));
-        assert_eq!(empty.fields().len(), 1);
-        assert_eq!(empty.field(0).name(), ROW_MARKER_COLUMN);
-        assert_eq!(empty.field(0).data_type(), &DataType::UInt8);
+        assert!(empty.fields().is_empty());
     }
 
     #[test]
@@ -1027,11 +1012,7 @@ mod tests {
             DataType::Int32,
             false,
         )]));
-        let storage_schema = Arc::new(Schema::new(vec![Field::new(
-            "__sail_checkpoint_col_0",
-            DataType::Int32,
-            false,
-        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(
             Arc::clone(&logical_schema),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
@@ -1052,23 +1033,15 @@ mod tests {
 
         let mut output = checkpoint.execute(0, context.task_ctx())?;
         let commit = output.next().await.expect("commit batch")?;
-        let locations = commit
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("location column");
-        assert!(!locations.is_null(0));
-        assert_eq!(
-            commit
-                .column(3)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .expect("row count column")
-                .value(0),
-            3
-        );
-        let path = Path::parse(locations.value(0))
+        let metadata = partition_metadata(&commit);
+        assert_eq!(metadata.partition, 0);
+        assert_eq!(metadata.row_count, 3);
+        let path = Path::parse(metadata.location.expect("checkpoint file"))
             .map_err(|error| internal_datafusion_err!("invalid path: {error}"))?;
+        assert!(
+            path.filename()
+                .is_some_and(|name| name.starts_with("part-00000-"))
+        );
         let store = context.runtime_env().object_store(&object_store_url)?;
         let bytes = store
             .get(&path)
@@ -1107,12 +1080,10 @@ mod tests {
 
         let mut output = checkpoint.execute(0, context.task_ctx())?;
         let commit = output.next().await.expect("commit batch")?;
-        let locations = commit
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("location column");
-        assert!(locations.is_null(0));
+        let metadata = partition_metadata(&commit);
+        assert!(metadata.location.is_none());
+        assert_eq!(metadata.row_count, 0);
+        assert_eq!(metadata.size, 0);
         let store = context.runtime_env().object_store(&object_store_url)?;
         assert!(
             store
@@ -1121,6 +1092,55 @@ mod tests {
                 .await
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_column_partition_records_rows_without_an_object() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
+            "memory:///checkpoint".to_string(),
+        )));
+        let config = SessionConfig::new().with_extension(Arc::clone(&registry));
+        let context = SessionContext::new_with_config(config);
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
+        let (object_store_url, prefix) =
+            registry.resolve_relation(context.runtime_env().as_ref(), "zero-columns")?;
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(RemoteCheckpointWriteExec::try_new(
+            input,
+            object_store_url.clone(),
+            prefix.clone(),
+            Arc::clone(&schema),
+        )?);
+        let checkpoint = RemoteCheckpointCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(writer)),
+            "zero-columns".to_string(),
+            object_store_url.clone(),
+            prefix.clone(),
+            Arc::clone(&schema),
+            schema,
+            Partitioning::UnknownPartitioning(1),
+            None,
+        );
+
+        let mut output = checkpoint.execute(0, context.task_ctx())?;
+        output.next().await.expect("checkpoint commit batch")?;
+        let descriptor = registry
+            .get("zero-columns")?
+            .expect("checkpoint descriptor must be published");
+        assert_eq!(descriptor.partitions[0].row_count, 3);
+        assert!(descriptor.partitions[0].file.is_none());
+        let store = context.runtime_env().object_store(&object_store_url)?;
+        assert!(store.list(Some(&prefix)).next().await.is_none());
         Ok(())
     }
 
@@ -1175,6 +1195,8 @@ mod tests {
             .get("relation")?
             .expect("checkpoint descriptor must be published");
         assert_eq!(descriptor.partitions.len(), 2);
+        assert_eq!(descriptor.partitions[0].row_count, 3);
+        assert_eq!(descriptor.partitions[1].row_count, 0);
         assert!(descriptor.partitions[0].file.is_some());
         assert!(descriptor.partitions[1].file.is_none());
         let store = context.runtime_env().object_store(&object_store_url)?;
