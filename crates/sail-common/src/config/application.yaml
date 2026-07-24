@@ -275,6 +275,17 @@
     Has no effect after the table is created.
   experimental: true
 
+- key: execution.prewarm_file_statistics_on_source_creation
+  type: boolean
+  default: "false"
+  description: |
+    Whether to eagerly populate the file statistics cache when resolving a listing data source.
+    This applies to direct reads such as `spark.read.parquet()` as well as catalog table reads.
+    It can make data source resolution more expensive but avoids collecting file statistics
+    during the first query. This setting requires `execution.collect_statistics` and an enabled
+    file statistics cache.
+  experimental: true
+
 - key: execution.use_row_number_estimates_to_optimize_partitioning
   type: boolean
   default: "false"

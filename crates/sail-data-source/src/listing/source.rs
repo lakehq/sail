@@ -139,12 +139,20 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ListingTableFormat<T: FormatFactory> {
+    prewarm_file_statistics_on_source_creation: bool,
     phantom: PhantomData<T>,
 }
 
 impl<T: FormatFactory> ListingTableFormat<T> {
+    pub fn new(prewarm_file_statistics_on_source_creation: bool) -> Self {
+        Self {
+            prewarm_file_statistics_on_source_creation,
+            phantom: PhantomData,
+        }
+    }
+
     async fn create_listing_source(
         &self,
         ctx: &dyn Session,
@@ -244,6 +252,25 @@ impl<T: FormatFactory> ListingTableFormat<T> {
             compression,
         })
     }
+
+    async fn prewarm_listing_source(
+        &self,
+        source: &ListingTableSource,
+        ctx: &dyn Session,
+    ) -> Result<()> {
+        prewarm_file_statistics(source, ctx).await?;
+        log::debug!(
+            "prewarmed listing file statistics cache for {} path(s)",
+            source.config().table_paths.len()
+        );
+        Ok(())
+    }
+}
+
+impl<T: FormatFactory> Default for ListingTableFormat<T> {
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 #[async_trait]
@@ -257,7 +284,19 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
-        Ok(Arc::new(self.create_listing_source(ctx, info).await?))
+        let source = self.create_listing_source(ctx, info).await?;
+        if self.prewarm_file_statistics_on_source_creation
+            && ctx.config().collect_statistics()
+            && ctx
+                .runtime_env()
+                .cache_manager
+                .get_file_statistic_cache_limit()
+                > 0
+            && let Err(error) = self.prewarm_listing_source(&source, ctx).await
+        {
+            log::warn!("failed to prewarm listing file statistics: {error}");
+        }
+        Ok(Arc::new(source))
     }
 
     async fn prewarm_statistics(
@@ -277,12 +316,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             .with_runtime_env(runtime_env)
             .build();
         let source = self.create_listing_source(&session_state, info).await?;
-        prewarm_file_statistics(&source, &session_state).await?;
-        log::debug!(
-            "prewarmed listing file statistics cache for {} path(s)",
-            source.config().table_paths.len()
-        );
-        Ok(())
+        self.prewarm_listing_source(&source, &session_state).await
     }
 
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
@@ -488,7 +522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_source_does_not_prewarm_file_statistics() {
+    async fn create_source_prewarms_file_statistics_when_enabled() {
         FILE_META_INFERENCE_COUNT.store(0, Ordering::Relaxed);
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         object_store
@@ -501,7 +535,6 @@ mod tests {
         let context = SessionContext::new();
         context.register_object_store(&Url::parse("memory://").unwrap(), object_store);
         let state = context.state();
-        let format = ListingTableFormat::<TestFormatFactory>::default();
         let info = SourceInfo {
             paths: vec!["memory:///table/".to_string()],
             lakehouse_table: None,
@@ -518,13 +551,21 @@ mod tests {
             read_case_sensitive: true,
         };
 
-        format.create_source(&state, info.clone()).await.unwrap();
-        assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 0);
-
-        format
-            .prewarm_statistics(state.config().clone(), state.runtime_env().clone(), info)
+        let disabled_format = ListingTableFormat::<TestFormatFactory>::new(false);
+        disabled_format
+            .create_source(&state, info.clone())
             .await
             .unwrap();
+        assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 0);
+
+        let enabled_format = ListingTableFormat::<TestFormatFactory>::new(true);
+        enabled_format
+            .create_source(&state, info.clone())
+            .await
+            .unwrap();
+        assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 1);
+
+        enabled_format.create_source(&state, info).await.unwrap();
         assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 1);
     }
 }

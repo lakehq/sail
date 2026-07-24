@@ -108,7 +108,11 @@ impl ServerSessionFactory {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(create_table_format_registry(
+                self.config
+                    .execution
+                    .prewarm_file_statistics_on_source_creation,
+            )?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
