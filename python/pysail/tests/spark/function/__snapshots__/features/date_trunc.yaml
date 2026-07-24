@@ -1,0 +1,17 @@
+# serializer version: 1
+---
+name: "test_the_plan_for_a_literal_unit"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[date_trunc(year, column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_the_plan_for_a_unit_coming_from_a_column"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as result]
+      ProjectionExec: expr=[CASE spark_trunc_level(column2@1) WHEN year THEN date_trunc(year, column1@0) WHEN quarter THEN date_trunc(quarter, column1@0) WHEN month THEN date_trunc(month, column1@0) WHEN week THEN date_trunc(week, column1@0) WHEN day THEN date_trunc(day, column1@0) WHEN hour THEN date_trunc(hour, column1@0) WHEN minute THEN date_trunc(minute, column1@0) WHEN second THEN date_trunc(second, column1@0) WHEN millisecond THEN date_trunc(millisecond, column1@0) WHEN microsecond THEN date_trunc(microsecond, column1@0) WHEN null THEN NULL ELSE CASE WHEN column1@0 IS NULL THEN NULL END END as #4]
+        DataSourceExec: partitions=1, partition_sizes=[1]

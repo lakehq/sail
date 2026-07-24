@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
+use datafusion_common::types::NativeType;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit, try_cast, when};
@@ -13,6 +14,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
@@ -25,6 +27,7 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_trunc_level::{SparkTruncLevel, TRUNC_LEVEL_NULL};
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -48,46 +51,404 @@ fn years(arg: Expr) -> Expr {
     integer_part(arg, "YEAR")
 }
 
-fn trunc_part_conversion(part: Expr) -> Expr {
+/// The granularities `date_trunc` truncates to. The ALIASES each one accepts live in
+/// `SparkTruncLevel`, which is the single place a unit is matched -- whether it arrives as a
+/// literal or in a column -- so the two paths cannot drift apart.
+const DATE_TRUNC_LEVELS: &[&str] = &[
+    "year",
+    "quarter",
+    "month",
+    "week",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "millisecond",
+    "microsecond",
+];
+
+/// `trunc` is a different Spark expression (`TruncDate`) and truncates only to a date-level unit.
+/// A finer unit is not an error: it names a granularity this list omits, so it falls through to
+/// NULL exactly like a unit that matches nothing.
+const TRUNC_LEVELS: &[&str] = &["year", "quarter", "month", "week"];
+
+/// Spark resolves the truncation unit **per row** and yields NULL for a unit it does not
+/// recognize, whereas DataFusion's `date_trunc` demands a literal unit and errors otherwise.
+///
+/// So enumerate the units in the plan rather than inspecting the argument: every branch calls the
+/// kernel with a literal unit, which makes a unit arriving in a column behave exactly like a
+/// literal one, and lets an unrecognized, NULL, or non-string unit fall through to NULL. Matching
+/// the unit lives here and nowhere else, so the two comparisons cannot drift apart.
+///
+/// A literal STRING unit is resolved here and emits the single call it names, so the common case
+/// costs nothing: no branch, and nothing per-unit shipped to the workers. A literal of any other
+/// type is measured as its string form, which this stage cannot compute, so it takes the dispatch
+/// below like a column would.
+///
+/// A unit that only exists as a column is dispatched by a `CASE` over the resolved level. That
+/// `CASE` repeats the VALUE subtree once per branch -- ten for `date_trunc`, four for `trunc`,
+/// plus the unmatched one -- and the whole thing travels to every worker in the physical plan.
+/// Runtime cost is bounded (`CaseExpr` evaluates each branch on a disjoint slice of rows, so the
+/// value is still computed at most once per row), but plan SIZE is not. Collapsing it would mean
+/// passing the level as a column to a single call, which would also make the value an ordinary
+/// argument -- always evaluated -- and that is exactly what Spark's short circuit forbids.
+///
+/// Whether a unit that matches nothing converts the value is not the same in the two cases, and
+/// Spark's codegen is where the difference lives (`TruncInstant.codeGenHelper`):
+///
+/// * a **literal** unit that names no granularity short-circuits to NULL and never evaluates the
+///   value, so `null` is a bare NULL literal;
+/// * a unit **in a column** is evaluated together with the value before the level is checked, so
+///   `unmatched` has to convert the value and only then yield NULL -- a bare literal there would
+///   swallow the error Spark raises under ANSI for a value it cannot convert.
+fn truncate_by_unit(
+    unit: Expr,
+    levels: &[&str],
+    truncate: impl Fn(&str) -> Expr,
+    null: Expr,
+    unmatched: Expr,
+    null_unit_converts_value: bool,
+) -> Expr {
+    // A NULL unit matches nothing whatever its type, and Spark folds the cast that types it --
+    // `date_trunc(CAST(NULL AS STRING), ...)` short-circuits just like a bare NULL.
+    if is_folded_null(&unit) {
+        return null;
+    }
+    // Spark's short circuit keys off `foldable`, not off being a literal: it resolves anything
+    // without an input at compile time, so `concat('BOG','US')` skips the value too. Sail cannot
+    // name the granularity for those at plan-build time -- the optimizer that would evaluate them
+    // runs later -- but it can still decline to convert the value, which is the part that shows.
+    //
+    // KNOWN GAP -- a scalar subquery is treated as foldable here, and that is not always right.
+    // `ScalarSubquery.foldable` is false in Spark; what makes the short circuit happen is Spark's
+    // own optimizer folding the subquery into a literal before codegen. Whether it does depends
+    // on the subquery, and this check cannot tell: it sees the UNOPTIMIZED plan.
+    //
+    // Measured on JVM 4.1.1. `(SELECT 'BOGUS')` and a one-row temporary view are both folded, and
+    // Spark returns NULL for them -- Sail agrees. A subquery over a relation (`... FROM range(1)`,
+    // a table) is NOT folded, and Spark raises `CAST_INVALID_INPUT` where Sail still returns NULL.
+    // That case is reproducible and covered by a `@sail-bug` scenario in `date_trunc.feature`.
+    //
+    // The boundary IS detectable from here: Spark folds exactly when every leaf of the subquery
+    // is a one-row relation. `(SELECT 'BOGUS')`, a view over a constant and `FROM (SELECT 1)` all
+    // fold; `FROM (VALUES ('x'))`, `FROM range(1)` and a table do not. Left alone anyway, because
+    // that boundary is a quirk of which optimizer rule fires rather than a rule of the language --
+    // nothing explains why `VALUES` of one row is not folded while `SELECT 1` is -- so encoding it
+    // buys one exotic case and pins Sail to an internal detail of a specific Spark version.
+    let foldable = unit.column_refs().is_empty() && !unit.is_volatile() && !unit.contains_outer();
+    let unmatched = if foldable { null.clone() } else { unmatched };
+    // A NULL unit and a unit that matches nothing are NOT the same case, and which one skips the
+    // value follows the ARGUMENT ORDER of the Spark expression. `nullSafeCodeGen` evaluates the
+    // left child, and only evaluates the right one inside the null check: `TruncTimestamp` is
+    // `(format, timestamp)`, so a NULL format never reaches the timestamp; `TruncDate` is
+    // `(date, format)`, so the date is always evaluated. Verified on JVM 4.1.1.
+    let null_unit = if null_unit_converts_value {
+        unmatched.clone()
+    } else {
+        null.clone()
+    };
+    // The plan builder runs before types are resolved, so only a literal can be folded here.
+    // Only a STRING literal resolves here. Any other literal is measured as its string form, and
+    // that form is not known at this stage: `X'59454152'` is the string `YEAR` once Spark coerces
+    // it, so treating a non-string literal as "matches nothing" would answer NULL for a unit that
+    // names a granularity. Let it fall through to the dispatch instead, where the coercion
+    // happens -- a literal is foldable, so the unmatched branch there is the bare NULL anyway and
+    // the value is still not converted.
+    if let Some(
+        ScalarValue::Utf8(Some(literal))
+        | ScalarValue::LargeUtf8(Some(literal))
+        | ScalarValue::Utf8View(Some(literal)),
+    ) = folded_literal(&unit)
+    {
+        // The same matcher the columnar path runs, so a literal and a column resolve a unit
+        // identically. A granularity this function does not accept is filtered out here for the
+        // same reason the dispatch below omits it.
+        let granularity = SparkTruncLevel::level(literal).filter(|level| levels.contains(level));
+        return granularity.map_or(null, truncate);
+    }
+    // The unit resolves to its granularity in ONE evaluation. Doing it with expressions cannot:
+    // the dispatch has to tell three outcomes apart -- named a granularity, was NULL, matched
+    // nothing -- and `CASE x WHEN NULL` never matches, so a NULL selector shares the `ELSE` with
+    // an unmatched one. Splitting them in the plan (`coalesce`, `IS NULL`) mentions the unit
+    // twice, and DataFusion does not share a volatile subtree between the mentions, so a unit
+    // like `IF(rand() < 0.5, NULL, 'YEAR')` gets drawn once per mention.
+    let level = ScalarUDF::from(SparkTruncLevel::new()).call(vec![unit]);
     Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("mon"))
-                        .or(part.clone().ilike(lit("mm"))),
-                ),
-                Box::new(lit("month")),
-            ),
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("yy"))
-                        .or(part.clone().ilike(lit("yyyy"))),
-                ),
-                Box::new(lit("year")),
-            ),
-            (
-                Box::new(part.clone().ilike(lit("dd"))),
-                Box::new(lit("day")),
-            ),
-        ],
-        else_expr: Some(Box::new(part)),
+        expr: Some(Box::new(level)),
+        when_then_expr: levels
+            .iter()
+            .map(|level| (Box::new(lit(*level)), Box::new(truncate(level))))
+            .chain(std::iter::once((
+                Box::new(lit(TRUNC_LEVEL_NULL)),
+                Box::new(null_unit),
+            )))
+            .collect(),
+        // A granularity this function does not accept -- `trunc` takes only the date-level ones --
+        // resolves to a level that no arm above lists, and lands here with the unmatched units.
+        else_expr: Some(Box::new(unmatched)),
     })
 }
 
-fn trunc(date: Expr, part: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), date),
-        DataType::Date32,
-    )
+/// The branch a unit that matches nothing takes when the unit is NOT a literal: Spark has already
+/// evaluated the value by then, so the conversion has to happen and only then yield NULL.
+///
+/// `IS NULL` evaluates the value **once** and throws the answer away; both branches are the same
+/// NULL, so the row is NULL whatever the value held. `nullif(value, value)` would evaluate it
+/// TWICE — DataFusion does not hoist a volatile subtree into a common expression
+/// (`common_subexpr_eliminate.rs`, `!node.is_volatile_node()`), so a value built from `rand()`
+/// draws a different number per copy, the two do not compare equal, and the row keeps a value
+/// where Spark yields NULL.
+///
+/// This leans on the value being nullable: against a non-nullable one the simplifier rewrites
+/// `IsNull(e)` to `false` and can then drop `e` with the branch, taking the conversion — and the
+/// ANSI error that rides on it — with it. Every value reaching here is the result of a UDF call
+/// or a cast, both nullable, so it holds today; a future path that converts to a non-nullable
+/// value would need a different guard.
+fn null_after_converting(value: Expr, null: Expr) -> Expr {
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(Box::new(value.is_null()), Box::new(null.clone()))],
+        else_expr: Some(Box::new(null)),
+    })
+}
+
+/// The literal an expression folds to, looking through the casts that only give it a type. Spark
+/// folds those too, so `CAST(NULL AS STRING)` and an integer unit resolve here rather than
+/// becoming a per-row match.
+fn folded_literal(expr: &Expr) -> Option<&ScalarValue> {
+    match expr {
+        Expr::Literal(value, _) => Some(value),
+        Expr::Cast(expr::Cast { expr, .. }) | Expr::TryCast(expr::TryCast { expr, .. }) => {
+            folded_literal(expr)
+        }
+        _ => None,
+    }
+}
+
+/// Whether an expression is a NULL that Spark would fold. `is_null_literal` sees the bare literal
+/// alone, and a unit written as `CAST(NULL AS STRING)` has to short-circuit just like a bare NULL.
+fn is_folded_null(expr: &Expr) -> bool {
+    folded_literal(expr).is_some_and(ScalarValue::is_null)
+}
+
+/// Spark reports an argument it cannot use for its TYPE while it analyzes the query, as
+/// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`. A Spark client matches on that error class, so the
+/// rejection has to carry it rather than a plain invalid-argument error.
+fn unexpected_input_type_err(
+    function: &str,
+    parameter: &str,
+    required: &str,
+    actual: &DataType,
+) -> PlanError {
+    // `AnalysisError`, not `invalid`: Spark raises this while it analyzes the query, and a Spark
+    // client sees the throwable class. `PlanError::InvalidArgument` surfaces as
+    // `IllegalArgumentException`, where Spark raises `AnalysisException`.
+    PlanError::AnalysisError(format!(
+        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve `{function}` due to data type \
+         mismatch: The {parameter} parameter requires the \"{required}\" type, however the input \
+         has the type \"{actual}\"."
+    ))
+}
+
+/// Spark requires a STRING unit and rejects a complex one while it analyzes the query. Any other
+/// atomic type is measured as its string form and simply matches no granularity.
+///
+/// A unit that is already a string is handed back untouched. Casting it would rewrite a
+/// `Utf8View` -- what Parquet produces by default -- into `Utf8`, copying every value and giving
+/// up the view fast path in `upper`, all to reach a type it already had.
+fn coerce_unit(
+    function: &str,
+    parameter: &str,
+    unit: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Expr> {
+    let data_type = unit.get_type(schema)?;
+    match (&data_type).into() {
+        // Only the plain string types go through untouched. An encoding that merely WRAPS a
+        // string still has to be unwrapped: the matcher's signature brings a dictionary down to a
+        // string but not a run-end-encoded one, and rejecting a unit for its layout is not a
+        // thing Spark does. Casting a `Utf8View` here would copy every value to reach a type it
+        // already is, which is why the plain ones are excluded.
+        //
+        // The run-end-encoded case is traced, not exercised: the tests reach a dictionary through
+        // a pandas categorical, and nothing in the Python client produces a run-end-encoded
+        // column. It mirrors the value path, which IS covered.
+        NativeType::String
+            if matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) =>
+        {
+            Ok(unit)
+        }
+        NativeType::String => Ok(cast(unit, DataType::Utf8)),
+        NativeType::List(_)
+        | NativeType::FixedSizeList(_, _)
+        | NativeType::Struct(_)
+        | NativeType::Map(_)
+        | NativeType::Union(_) => Err(unexpected_input_type_err(
+            function, parameter, "STRING", &data_type,
+        )),
+        // `try_cast`, not `cast`: Spark's coercion to string never fails -- `Cast(binary, string)`
+        // is `UTF8String.fromBytes`, which does not validate UTF-8 -- so an argument Arrow refuses
+        // to convert has to become a unit that matches nothing, not an error. Spark returns NULL
+        // for `date_trunc(X'FF', ts)`.
+        _ => Ok(try_cast(unit, DataType::Utf8)),
+    }
+}
+
+fn trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let schema = input.function_context.schema;
+    let (date, part) = input.arguments.two()?;
+    let part = coerce_unit("trunc", "second", part, schema)?;
+    // Spark's `trunc` coerces its value argument to DateType, and does so before it validates the
+    // unit: the conversion errors under ANSI and is NULL when ANSI is off, whether or not the
+    // unit names a granularity. The type is gated first, and not only for the error class: Arrow
+    // REINTERPRETS an integer as a day count, so `trunc(1, 'YEAR')` would quietly answer
+    // 1970-01-01 where Spark rejects the query.
+    let data_type = date.get_type(schema)?;
+    let date = match (&data_type).into() {
+        // Strings parse with Spark's own grammar, which takes `2009-2-12` and a bare `2024` that
+        // Arrow's fixed-position parser rejects. This is the parser Sail's `CAST(… AS DATE)`
+        // already uses, so the two surfaces agree.
+        NativeType::String => ScalarUDF::from(SparkDate::new(!ansi_mode)).call(vec![date]),
+        NativeType::Null | NativeType::Date | NativeType::Timestamp(_, _) => {
+            if ansi_mode {
+                cast(date, DataType::Date32)
+            } else {
+                try_cast(date, DataType::Date32)
+            }
+        }
+        _ => {
+            return Err(unexpected_input_type_err(
+                "trunc", "first", "DATE", &data_type,
+            ));
+        }
+    };
+    // Truncate through a naive microsecond timestamp rather than handing the DATE straight to the
+    // kernel. `SparkDateTrunc` only takes over for a microsecond timestamp; a DATE falls through
+    // to DataFusion, which coerces it to NANOsecond and multiplies days out with an unchecked
+    // `unary`, so `trunc(DATE '2300-01-01', 'YEAR')` wraps around into the past instead of
+    // truncating. A DATE carries no zone, so converting it to a naive timestamp is exact.
+    let naive = cast(date, DataType::Timestamp(TimeUnit::Microsecond, None));
+    Ok(truncate_by_unit(
+        part,
+        TRUNC_LEVELS,
+        // Truncating goes through the same kernel `date_trunc` uses, which carries Spark's
+        // nullability: `trunc` is nullable whatever its arguments are, because a unit that names
+        // no granularity turns the row NULL.
+        |granularity| {
+            cast(
+                ScalarUDF::from(SparkDateTrunc::new()).call(vec![lit(granularity), naive.clone()]),
+                DataType::Date32,
+            )
+        },
+        lit(ScalarValue::Date32(None)),
+        null_after_converting(naive.clone(), lit(ScalarValue::Date32(None))),
+        // `TruncDate` is `(date, format)`: the date is the left child, so it is evaluated even
+        // when the format is NULL.
+        true,
+    ))
 }
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let session_tz = input.function_context.plan_config.session_timezone.clone();
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let schema = input.function_context.schema;
     let (part, timestamp) = input.arguments.two()?;
-    let truncated =
-        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
+    let part = coerce_unit("date_trunc", "first", part, schema)?;
+    // A string that is not a timestamp errors under ANSI, and is NULL when ANSI is off.
+    let to_timestamp = |expr: Expr| {
+        let timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone()));
+        if ansi_mode {
+            cast(expr, timestamp)
+        } else {
+            try_cast(expr, timestamp)
+        }
+    };
+    // Spark's date_trunc coerces its value argument to TimestampType and always returns
+    // TimestampType, whether the input is DATE, TIMESTAMP, TIMESTAMP_NTZ, or a string.
+    // Leave other types untouched so they are rejected like Spark instead of silently coerced.
+    // The match is on the LOGICAL type, so an encoding that only wraps one of these -- a
+    // dictionary or a run-end-encoded string -- is accepted rather than rejected for its layout.
+    let data_type = timestamp.get_type(schema)?;
+    let timestamp = match (&data_type).into() {
+        // A DATE and a TIMESTAMP_NTZ are both wall clocks, and turning a wall clock into an
+        // instant is the conversion Arrow's cast gets wrong: it resolves the local time with
+        // `.single()`, which has no answer inside a DST gap or inside the repeated hour of a
+        // fall-back. Spark moves the first forward and takes the earlier offset for the second,
+        // which is what `SparkTimestamp` does. A DATE reaches it as a naive timestamp, a
+        // conversion that is pure arithmetic and involves no zone: midnight of that date. Zones
+        // whose transition happens AT midnight (`America/Havana`) make the DATE path fail
+        // exactly like the NTZ one.
+        NativeType::Date | NativeType::Timestamp(_, None) => {
+            let naive = cast(timestamp, DataType::Timestamp(TimeUnit::Microsecond, None));
+            ScalarUDF::from(SparkTimestamp::try_new(
+                Some(session_tz.clone()),
+                ansi_mode,
+                false,
+            )?)
+            .call(vec![naive])
+        }
+        // Strings parse with Spark's own grammar, which takes `2009-2-12` and a bare `2024`.
+        // Arrow's parser demands a fixed-position `YYYY-MM-DD` and at least 10 bytes, so it
+        // rejects both -- and Sail's `CAST(… AS TIMESTAMP)` already routes here, so leaving this
+        // on the Arrow parser made the two surfaces disagree with each other.
+        //
+        // `SparkTimestamp` declares a user-defined signature, which does no coercion of its own,
+        // so an encoding that merely WRAPS a string -- a dictionary, a run-end-encoded column --
+        // has to be unwrapped here or the call is rejected for its layout. Only those are cast:
+        // casting a `Utf8View` would copy every value to reach a type it already is.
+        NativeType::String => {
+            let value = if matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) {
+                timestamp
+            } else {
+                cast(timestamp, DataType::Utf8)
+            };
+            ScalarUDF::from(SparkTimestamp::try_new(
+                Some(session_tz.clone()),
+                ansi_mode,
+                false,
+            )?)
+            .call(vec![value])
+        }
+        NativeType::Null | NativeType::Timestamp(_, _) => to_timestamp(timestamp),
+        // Spark rejects the value for its type when it analyzes the query, so the rejection
+        // must not depend on the unit: an unrecognized or NULL unit does not turn it into NULL.
+        _ => {
+            return Err(unexpected_input_type_err(
+                "date_trunc",
+                "second",
+                "TIMESTAMP",
+                &data_type,
+            ));
+        }
+    };
+    let truncated = truncate_by_unit(
+        part,
+        DATE_TRUNC_LEVELS,
+        |granularity| {
+            ScalarUDF::from(SparkDateTrunc::new()).call(vec![lit(granularity), timestamp.clone()])
+        },
+        lit(ScalarValue::TimestampMicrosecond(
+            None,
+            Some(session_tz.clone()),
+        )),
+        null_after_converting(
+            timestamp.clone(),
+            lit(ScalarValue::TimestampMicrosecond(
+                None,
+                Some(session_tz.clone()),
+            )),
+        ),
+        // `TruncTimestamp` is `(format, timestamp)`: the format is the left child, so a NULL
+        // format short-circuits and the timestamp is never evaluated.
+        false,
+    );
     let truncated = match truncated.get_type(input.function_context.schema)? {
         DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
         DataType::Timestamp(_, tz) => {
@@ -1168,7 +1529,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
-        ("trunc", F::binary(trunc)),
+        ("trunc", F::custom(trunc)),
         ("try_make_interval", F::unknown("try_make_interval")),
         (
             "try_make_timestamp",
