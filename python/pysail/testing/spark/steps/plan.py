@@ -77,14 +77,14 @@ def normalize_plan_text(plan_text: str) -> str:
     # Preserve checkpoint partition layout while removing generated identifiers.
     checkpoint_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
     text = re.sub(
-        rf"(_sail/checkpoints/v1/){checkpoint_uuid}/{checkpoint_uuid}",
+        rf"(__checkpoint_testing__/){checkpoint_uuid}/{checkpoint_uuid}",
         r"\1<session>/<relation>",
         text,
         flags=re.IGNORECASE,
     )
     text = re.sub(
-        rf"(/attempts/partition-\d{{20}}/){checkpoint_uuid}(\.parquet)",
-        r"\1<attempt>\2",
+        rf"(__checkpoint_testing__/<session>/<relation>/part-\d{{5}}-){checkpoint_uuid}(\.parquet)",
+        r"\1<uuid>\2",
         text,
         flags=re.IGNORECASE,
     )

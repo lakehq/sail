@@ -16,14 +16,14 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def checkpoint_root(tmp_path_factory):
-    return tmp_path_factory.mktemp("object-store-checkpoints")
+    root = tmp_path_factory.mktemp("object-store-checkpoints") / "__checkpoint_testing__"
+    root.mkdir()
+    return root
 
 
 @pytest.fixture(scope="module")
 def remote(checkpoint_root):
-    with spark_connect_server(
-        envs={"SAIL_EXECUTION__CHECKPOINT__PATH": checkpoint_root.as_uri()}
-    ) as server:
+    with spark_connect_server(envs={"SAIL_EXECUTION__CHECKPOINT__PATH": checkpoint_root.as_uri()}) as server:
         yield server.remote
 
 
@@ -78,7 +78,7 @@ def test_checkpoint_preserves_field_metadata(spark):
     assert checkpointed.schema["value"].metadata == {"source": "checkpoint-test"}
 
 
-def _weakly_connected_components(nodes, pairs, *, checkpoint):
+def _weakly_connected_components(nodes, pairs):
     forward = pairs.select(sf.col("a").alias("source"), sf.col("b").alias("target"))
     reverse = pairs.select(sf.col("b").alias("source"), sf.col("a").alias("target"))
     edges = forward.unionByName(reverse)
@@ -112,8 +112,7 @@ def _weakly_connected_components(nodes, pairs, *, checkpoint):
         labels = next_labels
         if changed == 0:
             break
-        if checkpoint:
-            labels = labels.checkpoint()
+        labels = labels.checkpoint()
     else:
         pytest.fail("weakly connected components did not converge")
 
@@ -136,11 +135,10 @@ def test_checkpoint_supports_iterative_weakly_connected_components(spark, snapsh
     )
 
     expected = {frozenset(range(6)), frozenset({6})}
-    baseline = _weakly_connected_components(nodes, pairs, checkpoint=False)
-    checkpointed = _weakly_connected_components(nodes, pairs, checkpoint=True)
+    checkpointed = _weakly_connected_components(nodes, pairs)
     checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
 
-    assert _component_partition(checkpointed) == _component_partition(baseline) == expected
+    assert _component_partition(checkpointed) == expected
     assert checkpointed_plan == snapshot
 
 
@@ -157,14 +155,9 @@ def test_checkpoint_preserves_partitioning_and_ordering(spark, local, snapshot):
     checkpointed = source.localCheckpoint() if local else source.checkpoint()
     aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
     ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
-    consumer_plans = "\n".join(
-        [
-            f"== Grouped Aggregate From Checkpoint ==\n{aggregate_plan}",
-            f"== Sort Within Partitions From Checkpoint ==\n{ordered_plan}",
-        ]
-    )
 
-    assert consumer_plans == snapshot
+    assert aggregate_plan == snapshot
+    assert ordered_plan == snapshot
 
 
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):
