@@ -198,6 +198,12 @@ impl SparkTimestamp {
     pub fn is_try(&self) -> bool {
         self.is_try
     }
+
+    /// Whether a parse/cast failure yields NULL: `try_*` always, or the strict
+    /// variant when ANSI is disabled.
+    fn safe(&self) -> bool {
+        self.is_try || !self.ansi_mode
+    }
 }
 
 impl ScalarUDFImpl for SparkTimestamp {
@@ -266,10 +272,10 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
             _ => return exec_err!("spark_timestamp requires 1 or 2 arguments"),
         };
-        let is_try = self.is_try;
+        let safe = self.safe();
         match (arg, format) {
             (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
-                self.parse_array_with_format_array(&array, &format_array, is_try)
+                self.parse_array_with_format_array(&array, &format_array, safe)
             }
             (ColumnarValue::Scalar(scalar), Some(ColumnarValue::Array(format_array))) => {
                 let arrays = ColumnarValue::values_to_arrays(&[
@@ -278,7 +284,7 @@ impl ScalarUDFImpl for SparkTimestamp {
                 ])?;
                 let array = arrays[0].clone();
                 let format_array = arrays[1].clone();
-                self.parse_array_with_format_array(&array, &format_array, is_try)
+                self.parse_array_with_format_array(&array, &format_array, safe)
             }
             (ColumnarValue::Array(array), format) => {
                 let format = parse_scalar_format(format)?;
@@ -289,9 +295,9 @@ impl ScalarUDFImpl for SparkTimestamp {
                             x.map(|v| match &format {
                                 ScalarFormat::Format(format) => self
                                     .parser
-                                    .formatted_string_to_microseconds(v, format, is_try),
+                                    .formatted_string_to_microseconds(v, format, safe),
                                 ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, is_try)
+                                    self.parser.string_to_microseconds(v, safe)
                                 }
                                 ScalarFormat::Null => Ok(None),
                             })
@@ -305,9 +311,9 @@ impl ScalarUDFImpl for SparkTimestamp {
                             x.map(|v| match &format {
                                 ScalarFormat::Format(format) => self
                                     .parser
-                                    .formatted_string_to_microseconds(v, format, is_try),
+                                    .formatted_string_to_microseconds(v, format, safe),
                                 ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, is_try)
+                                    self.parser.string_to_microseconds(v, safe)
                                 }
                                 ScalarFormat::Null => Ok(None),
                             })
@@ -321,9 +327,9 @@ impl ScalarUDFImpl for SparkTimestamp {
                             x.map(|v| match &format {
                                 ScalarFormat::Format(format) => self
                                     .parser
-                                    .formatted_string_to_microseconds(v, format, is_try),
+                                    .formatted_string_to_microseconds(v, format, safe),
                                 ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, is_try)
+                                    self.parser.string_to_microseconds(v, safe)
                                 }
                                 ScalarFormat::Null => Ok(None),
                             })
@@ -350,8 +356,8 @@ impl ScalarUDFImpl for SparkTimestamp {
                         .map(|v| match &format {
                             ScalarFormat::Format(format) => self
                                 .parser
-                                .formatted_string_to_microseconds(v, format, is_try),
-                            ScalarFormat::Omitted => self.parser.string_to_microseconds(v, is_try),
+                                .formatted_string_to_microseconds(v, format, safe),
+                            ScalarFormat::Omitted => self.parser.string_to_microseconds(v, safe),
                             ScalarFormat::Null => unreachable!(),
                         })
                         .transpose()?
@@ -386,7 +392,7 @@ impl SparkTimestamp {
         &self,
         array: &Arc<dyn datafusion::arrow::array::Array>,
         format_array: &Arc<dyn datafusion::arrow::array::Array>,
-        is_try: bool,
+        safe: bool,
     ) -> Result<ColumnarValue> {
         if array.len() != format_array.len() {
             return exec_err!("spark_timestamp value and format arrays must have the same length");
@@ -395,15 +401,15 @@ impl SparkTimestamp {
         let array = match format_array.data_type() {
             DataType::Utf8 => {
                 let formats = as_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
             }
             DataType::LargeUtf8 => {
                 let formats = as_large_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
             }
             DataType::Utf8View => {
                 let formats = as_string_view_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
             }
             _ => return exec_err!("spark_timestamp format argument must be a string array"),
         };
@@ -417,26 +423,26 @@ impl SparkTimestamp {
         array: &Arc<dyn datafusion::arrow::array::Array>,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
-        is_try: bool,
+        safe: bool,
     ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
         match array.data_type() {
             DataType::Utf8 => self.parse_values_with_formats(
                 as_string_array(array)?.iter(),
                 formats,
                 cache,
-                is_try,
+                safe,
             ),
             DataType::LargeUtf8 => self.parse_values_with_formats(
                 as_large_string_array(array)?.iter(),
                 formats,
                 cache,
-                is_try,
+                safe,
             ),
             DataType::Utf8View => self.parse_values_with_formats(
                 as_string_view_array(array)?.iter(),
                 formats,
                 cache,
-                is_try,
+                safe,
             ),
             _ => exec_err!("expected string array for `timestamp`"),
         }
@@ -447,7 +453,7 @@ impl SparkTimestamp {
         values: impl Iterator<Item = Option<&'v str>>,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
-        is_try: bool,
+        safe: bool,
     ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
         values
             .zip(formats)
@@ -455,7 +461,7 @@ impl SparkTimestamp {
                 (Some(value), Some(format)) => {
                     let format = get_or_parse_format(cache, format)?;
                     self.parser
-                        .formatted_string_to_microseconds(value, format, is_try)
+                        .formatted_string_to_microseconds(value, format, safe)
                 }
                 _ => Ok(None),
             })
