@@ -140,3 +140,51 @@ Scenario: a non-null csv column yields a struct
          |-- result: struct (nullable = true)
          |    |-- a: integer (nullable = true)
         """
+
+  Rule: Result values (migrated from test_from_csv.txt doctests)
+
+    Scenario: from_csv doctest #1 (result)
+      When query
+        """
+        SELECT from_csv('1, 0.8', 'a INT, b DOUBLE') AS result, typeof(from_csv('1, 0.8', 'a INT, b DOUBLE')) AS type
+        """
+      Then query result
+        | result | type |
+        | {1, 0.8} | struct<a:int,b:double> |
+
+    Scenario: from_csv doctest #2 (result)
+      When query
+        """
+        SELECT from_csv('2015-08-26 00:00:00', 'time TIMESTAMP') AS result, typeof(from_csv('2015-08-26 00:00:00', 'time TIMESTAMP')) AS type
+        """
+      Then query result
+        | result | type |
+        | {2015-08-26 00:00:00} | struct<time:timestamp> |
+
+    Scenario: from_csv doctest #3 (result)
+      When query
+        """
+        SELECT from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')) AS result, typeof(from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';'))) AS type
+        """
+      Then query result
+        | result | type |
+        | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
+
+    Scenario: from_csv doctest #4 (result)
+      When query
+        """
+        SELECT from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss')) AS result, typeof(from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss'))) AS type
+        """
+      Then query result
+        | result | type |
+        | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
+
+    Scenario: from_csv doctest #5 (result)
+      When query
+        """
+        SELECT from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')) AS result, typeof(from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy'))) AS type
+        """
+      Then query result
+        | result | type |
+        | {2015-08-26 00:00:00} | struct<time:timestamp> |
+

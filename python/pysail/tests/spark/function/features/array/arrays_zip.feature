@@ -570,3 +570,68 @@ Scenario: nullable input elements propagate into the struct fields
          |    |    |-- c: integer (nullable = true)
          |    |    |-- c: integer (nullable = true)
         """
+
+  Rule: Result values (migrated from test_arrays_zip.txt doctests)
+
+    Scenario: arrays_zip doctest #1 (result)
+      When query
+        """
+        SELECT arrays_zip(vals1, vals2, vals3) AS zipped FROM VALUES (array(1L, 2L, 3L), array(2L, 4L, 6L), array(3L, 6L)) AS t(vals1, vals2, vals3)
+        """
+      Then query result
+        | zipped |
+        | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
+
+    Scenario: arrays_zip doctest #3 (result)
+      When query
+        """
+        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, 3), array('a', 'b', 'c')) AS t(nums, letters)
+        """
+      Then query result
+        | r |
+        | [{1, a}, {2, b}, {3, c}] |
+
+    Scenario: arrays_zip doctest #4 (result)
+      When query
+        """
+        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2), array('a', 'b', 'c')) AS t(nums, letters)
+        """
+      Then query result
+        | r |
+        | [{1, a}, {2, b}, {NULL, c}] |
+
+    Scenario: arrays_zip doctest #5 (result)
+      When query
+        """
+        SELECT arrays_zip(nums, letters, bools) AS r FROM VALUES (array(1, 2), array('a', 'b'), array(true, false)) AS t(nums, letters, bools)
+        """
+      Then query result
+        | r |
+        | [{1, a, true}, {2, b, false}] |
+
+    Scenario: arrays_zip doctest #6 (result)
+      When query
+        """
+        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, NULL), array('a', NULL, 'c')) AS t(nums, letters)
+        """
+      Then query result
+        | r |
+        | [{1, a}, {2, NULL}, {NULL, c}] |
+
+  Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
+
+    Scenario: arrays_zip doctest #2 (schema)
+      When query
+        """
+        SELECT arrays_zip(vals1, vals2, vals3) AS zipped FROM VALUES (array(1L, 2L, 3L), array(2L, 4L, 6L), array(3L, 6L)) AS t(vals1, vals2, vals3)
+        """
+      Then query schema
+        """
+        root
+         |-- zipped: array (nullable = true)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- vals1: long (nullable = true)
+         |    |    |-- vals2: long (nullable = true)
+         |    |    |-- vals3: long (nullable = true)
+        """
+
