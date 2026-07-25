@@ -96,3 +96,50 @@ Feature: to_varchar with an argument coming from a column
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_to_varchar.txt doctests)
+
+    Scenario: to_varchar doctest #1 (result)
+      When query
+        """
+        SELECT to_varchar(454, '999') AS r
+        """
+      Then query result
+        | r |
+        | 454 |
+
+    Scenario: to_varchar doctest #2 (result)
+      When query
+        """
+        SELECT to_varchar(78.12, '$99.99') AS r
+        """
+      Then query result
+        | r |
+        | $78.12 |
+
+    Scenario: to_varchar doctest #3 (result)
+      When query
+        """
+        SELECT to_varchar(-12454.8, '99G999D9S') AS r
+        """
+      Then query result
+        | r |
+        | 12,454.8- |
+
+    @sail-only
+    Scenario: to_varchar doctest #5 (result)
+      When query
+        """
+        SELECT to_varchar(encode('Spark SQL', 'utf-8'), 'hex') AS r
+        """
+      Then query result
+        | r |
+        | 537061726B2053514C |
+
+    Scenario: to_varchar doctest #4 (error)
+      When query
+        """
+        SELECT to_varchar(454, 'PR999') AS r
+        """
+      Then query error (?i).*
+

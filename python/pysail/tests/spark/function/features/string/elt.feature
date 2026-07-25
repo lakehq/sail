@@ -36,3 +36,55 @@ Feature: elt output schema
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_elt.txt doctests)
+
+    Scenario: elt doctest #2 (result)
+      When query
+        """
+        SELECT elt(1, 10, 20)
+        """
+      Then query result
+        | elt(1, 10, 20) |
+        | 10 |
+
+    Scenario: elt doctest #3 (result)
+      When query
+        """
+        SELECT elt(1, 'scala', 'java')
+        """
+      Then query result
+        | elt(1, scala, java) |
+        | scala |
+
+    Scenario: elt doctest #4 (result)
+      When query
+        """
+        SELECT elt(11, 10, 20)
+        """
+      Then query result
+        | elt(11, 10, 20) |
+        | NULL |
+
+    Scenario: elt doctest #5 (result)
+      When query
+        """
+        SELECT elt(6, 'scala', 'java', 'c', 'c++', 'python', 'rust')
+        """
+      Then query result
+        | elt(6, scala, java, c, c++, python, rust) |
+        | rust |
+
+  Rule: Output schema (migrated from test_elt.txt printSchema doctests)
+
+    Scenario: elt doctest #1 (schema)
+      When query
+        """
+        SELECT elt(1, 10, 20)
+        """
+      Then query schema
+        """
+        root
+         |-- elt(1, 10, 20): string (nullable = true)
+        """
+

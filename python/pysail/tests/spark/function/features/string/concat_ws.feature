@@ -300,3 +300,24 @@ Feature: concat_ws function
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_concat_ws.txt doctests)
+
+    Scenario: concat_ws doctest #1 (result)
+      When query
+        """
+        SELECT concat_ws('-', string_col, int_col, date_col) AS r FROM VALUES ('a', 1, DATE '2024-01-15') AS t(string_col, int_col, date_col)
+        """
+      Then query result
+        | r |
+        | a-1-2024-01-15 |
+
+    Scenario: concat_ws doctest #2 (result)
+      When query
+        """
+        SELECT concat_ws('-', string_col, int_col) AS r FROM VALUES ('a', CAST(NULL AS INT)) AS t(string_col, int_col)
+        """
+      Then query result
+        | r |
+        | a |
+

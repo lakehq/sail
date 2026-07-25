@@ -597,3 +597,114 @@ Scenario: a non-null string column yields a decimal
         root
          |-- result: decimal(3,0) (nullable = true)
         """
+
+  Rule: Result values (migrated from test_to_number.txt doctests)
+
+    Scenario: to_number doctest #1 (result)
+      When query
+        """
+        SELECT to_number('<-$12,345.67>', 'S$999,099.99PR') AS result, typeof(to_number('<-$12,345.67>', 'S$999,099.99PR')) AS type
+        """
+      Then query result
+        | result | type |
+        | 12345.67 | decimal(8,2) |
+
+    Scenario: to_number doctest #2 (result)
+      When query
+        """
+        SELECT to_number('<$1,212,345.67>', 'S$0,000,000.99PR') AS result, typeof(to_number('<$1,212,345.67>', 'S$0,000,000.99PR')) AS type
+        """
+      Then query result
+        | result | type |
+        | -1212345.67 | decimal(9,2) |
+
+    Scenario: to_number doctest #3 (result)
+      When query
+        """
+        SELECT to_number('$345', 'S$999,099.99') AS result, typeof(to_number('$345', 'S$999,099.99')) AS type
+        """
+      Then query result
+        | result | type |
+        | 345.00 | decimal(8,2) |
+
+    Scenario: to_number doctest #4 (result)
+      When query
+        """
+        SELECT to_number('$045', 'S$999,099.99') AS result, typeof(to_number('$045', 'S$999,099.99')) AS type
+        """
+      Then query result
+        | result | type |
+        | 45.00 | decimal(8,2) |
+
+    Scenario: to_number doctest #5 (result)
+      When query
+        """
+        SELECT to_number('<1234>', '999999PR') AS result, typeof(to_number('<1234>', '999999PR')) AS type
+        """
+      Then query result
+        | result | type |
+        | -1234 | decimal(6,0) |
+
+    Scenario: to_number doctest #6 (result)
+      When query
+        """
+        SELECT to_number('12,454.8-', '99,999.9S') AS result, typeof(to_number('12,454.8-', '99,999.9S')) AS type
+        """
+      Then query result
+        | result | type |
+        | -12454.8 | decimal(6,1) |
+
+    Scenario: to_number doctest #7 (result)
+      When query
+        """
+        SELECT to_number('<-$123,456.32>', 'S$999,999.999999PR') AS result, typeof(to_number('<-$123,456.32>', 'S$999,999.999999PR')) AS type
+        """
+      Then query result
+        | result | type |
+        | 123456.320000 | decimal(12,6) |
+
+    Scenario: to_number doctest #8 (result)
+      When query
+        """
+        SELECT to_number('$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32', 'MI$999,999.99S')) AS type
+        """
+      Then query result
+        | result | type |
+        | 123456.32 | decimal(8,2) |
+
+    Scenario: to_number doctest #9 (result)
+      When query
+        """
+        SELECT to_number('$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32-', 'MI$999,999.99S')) AS type
+        """
+      Then query result
+        | result | type |
+        | -123456.32 | decimal(8,2) |
+
+    Scenario: to_number doctest #10 (result)
+      When query
+        """
+        SELECT to_number('-$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32-', 'MI$999,999.99S')) AS type
+        """
+      Then query result
+        | result | type |
+        | 123456.32 | decimal(8,2) |
+
+    Scenario: to_number doctest #11 (result)
+      When query
+        """
+        SELECT to_number('-$123,456.32+', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32+', 'MI$999,999.99S')) AS type
+        """
+      Then query result
+        | result | type |
+        | -123456.32 | decimal(8,2) |
+
+    Scenario: to_number doctest #12 (result)
+      When query
+        """
+        SELECT to_number('-$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32', 'MI$999,999.99S')) AS type
+        """
+      Then query result
+        | result | type |
+        | -123456.32 | decimal(8,2) |
+
