@@ -174,3 +174,96 @@ Feature: try_parse_url migration tests
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_try_parse_url.txt doctests)
+
+    Scenario: try_parse_url doctest #1 (result)
+      When query
+        """
+        SELECT try_parse_url('https://example.com/a?x=1', 'QUERY', 'x') AS result, typeof(try_parse_url('https://example.com/a?x=1', 'QUERY', 'x')) AS type
+        """
+      Then query result
+        | result | type |
+        | 1 | string |
+
+    Scenario: try_parse_url doctest #2 (result)
+      When query
+        """
+        SELECT try_parse_url('www.example.com/path?x=1', 'HOST') AS result, typeof(try_parse_url('www.example.com/path?x=1', 'HOST')) AS type
+        """
+      Then query result
+        | result | type |
+        | NULL | string |
+
+    Scenario: try_parse_url doctest #3 (result)
+      When query
+        """
+        SELECT try_parse_url('https://example.com/?a=1', 'QUERY', 'b') AS result, typeof(try_parse_url('https://example.com/?a=1', 'QUERY', 'b')) AS type
+        """
+      Then query result
+        | result | type |
+        | NULL | string |
+
+    Scenario: try_parse_url doctest #4 (result)
+      When query
+        """
+        SELECT try_parse_url('https://example.com/path#frag', 'REF') AS result, typeof(try_parse_url('https://example.com/path#frag', 'REF')) AS type
+        """
+      Then query result
+        | result | type |
+        | frag | string |
+
+    Scenario: try_parse_url doctest #5 (result)
+      When query
+        """
+        SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO') AS result, typeof(try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO')) AS type
+        """
+      Then query result
+        | result | type |
+        | user:pwd | string |
+
+    Scenario: try_parse_url doctest #6 (result)
+      When query
+        """
+        SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST') AS result, typeof(try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST')) AS type
+        """
+      Then query result
+        | result | type |
+        | [2001:db8::2] | string |
+
+    Scenario: try_parse_url doctest #7 (result)
+      When query
+        """
+        SELECT try_parse_url('notaurl', 'HOST') AS result, typeof(try_parse_url('notaurl', 'HOST')) AS type
+        """
+      Then query result
+        | result | type |
+        | NULL | string |
+
+    Scenario: try_parse_url doctest #8 (result)
+      When query
+        """
+        SELECT try_parse_url('https://example.com', 'PATH') AS result, typeof(try_parse_url('https://example.com', 'PATH')) AS type
+        """
+      Then query result
+        | result | type |
+        |  | string |
+
+    Scenario: try_parse_url doctest #9 (result)
+      When query
+        """
+        SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL') AS result, typeof(try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL')) AS type
+        """
+      Then query result
+        | result | type |
+        | https | string |
+
+    Scenario: try_parse_url doctest #10 (result)
+      When query
+        """
+        SELECT try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag') AS result, typeof(try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag')) AS type
+        """
+      Then query result
+        | result | type |
+        | NULL | string |
+

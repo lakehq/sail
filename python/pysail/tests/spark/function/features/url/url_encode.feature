@@ -36,3 +36,33 @@ Feature: url_encode output schema
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_url_encode.txt doctests)
+
+    Scenario: url_encode doctest #1 (result)
+      When query
+        """
+        select url_encode('https://spark.apache.org')
+        """
+      Then query result
+        | url_encode(https://spark.apache.org) |
+        | https%3A%2F%2Fspark.apache.org |
+
+    Scenario: url_encode doctest #2 (result)
+      When query
+        """
+        select url_encode('inva lid://user:pass@host/file\;param?query\;p2')
+        """
+      Then query result
+        | url_encode(inva lid://user:pass@host/file;param?query;p2) |
+        | inva+lid%3A%2F%2Fuser%3Apass%40host%2Ffile%3Bparam%3Fquery%3Bp2 |
+
+    Scenario: url_encode doctest #3 (result)
+      When query
+        """
+        select url_encode(null)
+        """
+      Then query result
+        | url_encode(NULL) |
+        | NULL |
+
