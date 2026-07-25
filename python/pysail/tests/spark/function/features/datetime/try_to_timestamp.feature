@@ -195,3 +195,68 @@ Feature: try_to_timestamp
         | NULL                |
         | 2024-01-15 00:00:00 |
         | NULL                |
+
+  Rule: Result values (migrated from test_try_to_timestamp.txt doctests)
+
+    Scenario: try_to_timestamp doctest #1 (result) — input LTZ timestamps under Amsterdam
+      Given config spark.sql.session.timeZone = Europe/Amsterdam
+      When query
+        """
+        SELECT ts FROM VALUES (TIMESTAMP_LTZ '2023-01-01 10:00:00'), (TIMESTAMP_LTZ '2023-01-01 03:00:00') AS t(ts)
+        """
+      Then query result
+        | ts                  |
+        | 2023-01-01 10:00:00 |
+        | 2023-01-01 03:00:00 |
+
+    Scenario: try_to_timestamp doctest #2 (result) — timestampType TIMESTAMP_LTZ
+      Given config spark.sql.session.timeZone = Europe/Amsterdam
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT try_to_timestamp(ts) AS r FROM VALUES (TIMESTAMP_LTZ '2023-01-01 10:00:00'), (TIMESTAMP_LTZ '2023-01-01 03:00:00') AS t(ts)
+        """
+      Then query result
+        | r                   |
+        | 2023-01-01 10:00:00 |
+        | 2023-01-01 03:00:00 |
+
+    Scenario: try_to_timestamp doctest #4 (result) — timestampType TIMESTAMP_NTZ
+      Given config spark.sql.session.timeZone = Europe/Amsterdam
+      And config spark.sql.timestampType = TIMESTAMP_NTZ
+      When query
+        """
+        SELECT try_to_timestamp(ts) AS r FROM VALUES (TIMESTAMP_LTZ '2023-01-01 10:00:00'), (TIMESTAMP_LTZ '2023-01-01 03:00:00') AS t(ts)
+        """
+      Then query result
+        | r                   |
+        | 2023-01-01 10:00:00 |
+        | 2023-01-01 03:00:00 |
+
+  Rule: Output schema (migrated from test_try_to_timestamp.txt printSchema doctests)
+
+    Scenario: try_to_timestamp doctest #3 (schema) — timestampType TIMESTAMP_LTZ
+      Given config spark.sql.session.timeZone = Europe/Amsterdam
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT try_to_timestamp(ts) AS r FROM VALUES (TIMESTAMP_LTZ '2023-01-01 10:00:00'), (TIMESTAMP_LTZ '2023-01-01 03:00:00') AS t(ts)
+        """
+      Then query schema
+        """
+        root
+         |-- r: timestamp (nullable = true)
+        """
+
+    Scenario: try_to_timestamp doctest #5 (schema) — timestampType TIMESTAMP_NTZ
+      Given config spark.sql.session.timeZone = Europe/Amsterdam
+      And config spark.sql.timestampType = TIMESTAMP_NTZ
+      When query
+        """
+        SELECT try_to_timestamp(ts) AS r FROM VALUES (TIMESTAMP_LTZ '2023-01-01 10:00:00'), (TIMESTAMP_LTZ '2023-01-01 03:00:00') AS t(ts)
+        """
+      Then query schema
+        """
+        root
+         |-- r: timestamp_ntz (nullable = true)
+        """
