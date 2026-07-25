@@ -184,6 +184,8 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
+    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
+    SparkDateFormatUdf spark_date_format = 36;
   }
 }
 
@@ -246,7 +248,7 @@ message XpathTypedUdf {
 }
 
 message SparkToXmlUdf {
-    string session_timezone = 1;
+  string session_timezone = 1;
 }
 
 message SparkFromXmlUdf {
@@ -254,7 +256,11 @@ message SparkFromXmlUdf {
 }
 
 message SparkUnixTimestampUdf {
-  string timezone = 1;
+  string session_timezone = 1;
+}
+
+message SparkDateFormatUdf {
+  string session_timezone = 1;
 }
 
 message StructFunctionUdf {
@@ -270,7 +276,7 @@ message UpdateStructFieldUdf {
 }
 
 message TimestampNowUdf {
-  string timezone = 1;
+  string session_timezone = 1;
   string time_unit = 2;
 }
 
@@ -282,6 +288,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkTryToTimestampUdf {
+  optional string timezone = 1;
 }
 
 message SparkVariantGetUdf {

@@ -47,8 +47,7 @@ Feature: to_char with an argument coming from a column
   # numeric format; here the column is legal and each row must use its own format.
   Rule: to_char — a date format is resolved per row
 
-    # Sail applies the first row's value to every row: Sail returns ['2026', '2026'].
-    @column_args @sail-bug
+    @column_args
     Scenario: to_char takes the date format from a column holding two different values
       When query
         """
