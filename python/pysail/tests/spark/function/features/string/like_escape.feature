@@ -1,3 +1,4 @@
+@like_escape
 Feature: LIKE and ILIKE with ESCAPE clause
 
   Rule: Custom ESCAPE character

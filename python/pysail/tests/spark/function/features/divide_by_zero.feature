@@ -1,3 +1,4 @@
+@divide_by_zero
 Feature: Division by zero behavior
 
   Rule: All division by zero returns NULL when ANSI mode is disabled (Spark 4.x behavior)

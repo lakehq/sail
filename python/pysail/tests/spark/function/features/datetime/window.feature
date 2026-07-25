@@ -1,3 +1,4 @@
+@window
 Feature: window() time-based windowing function
 
   Rule: Tumbling window

@@ -1,3 +1,4 @@
+@max_by
 Feature: max_by function
 
   Rule: max_by with all NULLs in ordering column

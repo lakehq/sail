@@ -1,3 +1,4 @@
+@array_update
 Feature: array update functions
 
   Rule: array_append

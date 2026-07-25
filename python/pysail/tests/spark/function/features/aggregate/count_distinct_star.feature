@@ -1,3 +1,4 @@
+@count_distinct_star
 Feature: COUNT(DISTINCT *) function
 
   Rule: COUNT(DISTINCT *) counts distinct rows

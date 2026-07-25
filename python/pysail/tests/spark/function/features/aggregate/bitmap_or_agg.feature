@@ -1,3 +1,4 @@
+@bitmap_or_agg
 Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
 
   Rule: bitmap_or_agg ORs identical bitmaps

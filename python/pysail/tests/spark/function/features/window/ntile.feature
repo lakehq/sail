@@ -1,3 +1,4 @@
+@ntile
 Feature: ntile window function comprehensive tests
 
   Rule: Ntile distributes extra rows to first buckets (Spark behavior)

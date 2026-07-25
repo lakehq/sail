@@ -1,3 +1,4 @@
+@try_to_number
 Feature: try_to_number comprehensive tests (safe version of to_number)
 
   Rule: Argument count validation

@@ -1,3 +1,4 @@
+@window_range_interval
 Feature: Window RANGE frame with interval boundaries
 
   Rule: RANGE frame with INTERVAL PRECEDING on timestamp ORDER BY

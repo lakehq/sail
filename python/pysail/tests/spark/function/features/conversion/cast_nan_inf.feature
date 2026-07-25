@@ -1,3 +1,4 @@
+@cast_nan_inf
 Feature: CAST and type constructors with NaN and Infinity (issue #630)
 
   Rule: FLOAT type constructor

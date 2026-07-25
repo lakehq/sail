@@ -1,3 +1,4 @@
+@window_first_last
 Feature: first_value and last_value window functions with sliding frames
 
   Rule: first_value with sliding window frame

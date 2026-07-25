@@ -1,3 +1,4 @@
+@time_functions
 Feature: TIME functions (make_time, time_diff, time_trunc)
 
   Rule: make_time

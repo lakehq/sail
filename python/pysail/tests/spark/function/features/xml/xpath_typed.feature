@@ -1,3 +1,4 @@
+@xpath_typed
 Feature: xpath_boolean/double/float/int/long/number/short/string extract typed values from XML
 
   Rule: xpath_boolean evaluates XPath to a boolean

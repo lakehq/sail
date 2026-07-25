@@ -1,3 +1,4 @@
+@sequence_date
 Feature: sequence() over DATE returns expected arrays
 
   Scenario: sequence(date, date) uses default step of 1 day

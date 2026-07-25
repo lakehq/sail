@@ -1,3 +1,4 @@
+@percentile_window
 Feature: percentile() window function computes running percentiles
 
   Rule: Running percentile with ORDER BY

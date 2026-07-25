@@ -1,3 +1,4 @@
+@table_function
 Feature: Table function queries
 
   Rule: Wildcard aggregation for table function

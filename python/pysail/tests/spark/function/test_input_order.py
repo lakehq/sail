@@ -20,12 +20,6 @@ from pyspark.sql.functions import pandas_udf
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
-def _people(spark):
-    return spark.createDataFrame(
-        [("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age")
-    )
-
-
 @pytest.mark.skipif(
     not is_jvm_spark(),
     reason="requires the Python UDF worker (JVM Spark or a sail-server-python launch)",

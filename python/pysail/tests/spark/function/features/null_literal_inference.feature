@@ -1,3 +1,4 @@
+@null_literal_inference
 Feature: NULL literal and timestamp inference
 
   Rule: untyped NULL literals
