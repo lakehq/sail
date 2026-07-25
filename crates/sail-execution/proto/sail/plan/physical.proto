@@ -623,7 +623,6 @@ message TextExecNode {
 
 message BinarySourceExecNode {
   bytes base_config = 1;
-  optional string path_glob_filter = 2;
 }
 
 message AvroExecNode {

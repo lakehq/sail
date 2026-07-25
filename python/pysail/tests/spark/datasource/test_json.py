@@ -20,6 +20,18 @@ def test_json_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_json_path_glob_filter_applies_before_schema_inference(spark, tmp_path):
+    path = tmp_path / "json_path_glob_filter"
+    path.mkdir()
+    (path / "keep.json").write_text('{"id": 1}\n')
+    (path / "drop.json").write_text('{"excluded": true}\n')
+
+    df = spark.read.option("pathGlobFilter", "keep.*").json(str(path))
+
+    assert df.columns == ["id"]
+    assert df.collect() == [Row(id=1)]
+
+
 def test_json_write_compression(spark, sample_df, tmp_path):
     """Test JSON write with compression."""
     path = str(tmp_path / "json_compressed")
