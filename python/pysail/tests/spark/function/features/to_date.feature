@@ -15,8 +15,7 @@ Feature: to_date with an argument coming from a column
         | result     |
         | 2016-12-31 |
 
-    # Sail rejects the column: Sail errors: Unsupported data type Array(StringArray [ "%Y-%m-%d", "%Y-%m-%d", ]) for function to_date,...
-    @column_args @sail-bug
+    @column_args
     Scenario: to_date takes argument 2 from a column
       When query
         """

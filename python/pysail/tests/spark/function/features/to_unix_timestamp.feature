@@ -15,8 +15,7 @@ Feature: to_unix_timestamp with an argument coming from a column
         | result     |
         | 1460073600 |
 
-    # Sail rejects the column: Sail errors: Unsupported data type Array(StringArray [ "%Y-%m-%d", "%Y-%m-%d", ]) for function to_times...
-    @column_args @sail-bug
+    @column_args
     Scenario: to_unix_timestamp takes argument 2 from a column
       When query
         """

@@ -443,6 +443,19 @@ fn format_timestamp_array_with_formats<'f>(
                 cache,
             )
         }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            // Handle string arrays by parsing them as timestamps
+            let tz_str = tz.map(|s| s.as_ref()).unwrap_or_else(|| {
+                // This shouldn't happen in practice since we always pass a timezone
+                // from the caller, but we provide a fallback
+                "UTC"
+            });
+            let timestamp_array = parse_string_array_to_timestamp(timestamp_array, tz_str)?;
+            let timestamp_array: Arc<dyn datafusion::arrow::array::Array> =
+                Arc::new(timestamp_array);
+            // Recursively call with the parsed timestamp array
+            format_timestamp_array_with_formats(&timestamp_array, formats, tz, cache)
+        }
         _ => exec_err!(
             "spark_date_format: expected date or timestamp array, got {:?}",
             timestamp_array.data_type()
