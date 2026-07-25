@@ -1,5 +1,7 @@
 # Sail
 
+[![MCP Toplist](https://mcptoplist.com/badge/mcp.so%2Fsail%2Flakehq.svg)](https://mcptoplist.com/server/mcp.so%2Fsail%2Flakehq)
+
 [![Build Status](https://github.com/lakehq/sail/actions/workflows/build.yml/badge.svg?branch=main&event=push)](https://github.com/lakehq/sail/actions)
 [![Codecov](https://codecov.io/gh/lakehq/sail/graph/badge.svg)](https://app.codecov.io/gh/lakehq/sail)
 [![PyPI Release](https://img.shields.io/pypi/v/pysail)](https://pypi.org/project/pysail/)
