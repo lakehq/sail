@@ -20,7 +20,7 @@ index 122c4ca6d4b..11f2de1d53e 100755
              "pyspark.python.pyspark",
              "pyspark.python.lib",
              "pyspark.testing",
-@@ -326,6 +330,65 @@ try:
+@@ -326,6 +330,64 @@ try:
              "pyspark.errors.exceptions",
              "pyspark.examples.src.main.python",
              "pyspark.logger",
@@ -77,7 +77,6 @@ index 122c4ca6d4b..11f2de1d53e 100755
 +            "pyspark.sql.tests.pandas.streaming",
 +            "pyspark.sql.tests.plot",
 +            "pyspark.sql.tests.streaming",
-+            "pyspark.sql.tests.udf_type_tests",
 +            "pyspark.streaming.tests",
 +            "pyspark.testing.tests",
 +            "pyspark.tests",

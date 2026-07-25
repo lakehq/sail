@@ -19,9 +19,8 @@ use crate::spark::connect::{
     ArtifactStatusesRequest, ArtifactStatusesResponse, CloneSessionRequest, CloneSessionResponse,
     Command, ConfigRequest, ConfigResponse, ExecutePlanRequest, FetchErrorDetailsRequest,
     FetchErrorDetailsResponse, GetStatusRequest, GetStatusResponse, InterruptRequest,
-    InterruptResponse, Plan, ReattachExecuteRequest,
-    ReleaseExecuteRequest, ReleaseExecuteResponse, ReleaseSessionRequest, ReleaseSessionResponse,
-    config_request, plan,
+    InterruptResponse, Plan, ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse,
+    ReleaseSessionRequest, ReleaseSessionResponse, config_request, plan,
 };
 
 #[derive(Debug)]
