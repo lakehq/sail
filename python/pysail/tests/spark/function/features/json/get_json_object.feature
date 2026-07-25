@@ -288,3 +288,36 @@ Feature: get_json_object extracts values via a Spark JSONPath
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_get_json_object.txt doctests)
+
+    Scenario: get_json_object doctest #1 (result)
+      When query
+        """
+        SELECT
+  get_json_object('{"a":"x","b":1,"c":{"d":true},"e":[10,20]}', '$.a') AS a,
+  get_json_object('{"a":"x","b":1,"c":{"d":true},"e":[10,20]}', '$.b') AS b,
+  get_json_object('{"a":"x","b":1,"c":{"d":true},"e":[10,20]}', '$.c') AS c,
+  get_json_object('{"a":"x","b":1,"c":{"d":true},"e":[10,20]}', '$.e') AS e
+
+        """
+      Then query result
+        | a | b | c | e |
+        | x | 1 | {"d":true} | [10,20] |
+
+    Scenario: get_json_object doctest #2 (result)
+      When query
+        """
+        SELECT
+  get_json_object('{"a":null}', '$.a') AS null_value,
+  get_json_object('{"a":1}', '$.missing') AS missing_key,
+  get_json_object(CAST(NULL AS STRING), '$.a') AS null_json,
+  get_json_object('{"a":1}', CAST(NULL AS STRING)) AS null_path,
+  get_json_object('not a json', '$.a') AS invalid_json,
+  get_json_object('{"a":1}', 'a') AS invalid_path
+
+        """
+      Then query result
+        | null_value | missing_key | null_json | null_path | invalid_json | invalid_path |
+        | NULL | NULL | NULL | NULL | NULL | NULL |
+

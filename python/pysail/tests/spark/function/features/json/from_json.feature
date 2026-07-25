@@ -1408,3 +1408,62 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
          |-- result: struct (nullable = true)
          |    |-- a: integer (nullable = true)
         """
+
+  Rule: Result values (migrated from test_from_json.txt doctests)
+
+    Scenario: from_json doctest #1 (result)
+      When query
+        """
+        SELECT from_json(value, 'a INT') AS json FROM VALUES (1, '{"a": 1}') AS t(key, value)
+        """
+      Then query result
+        | json |
+        | {1} |
+
+    Scenario: from_json doctest #2 (result)
+      When query
+        """
+        SELECT from_json(value, 'MAP<STRING,INT>') AS json FROM VALUES (1, '{"a": 1}') AS t(key, value)
+        """
+      Then query result
+        | json |
+        | {a -> 1} |
+
+    Scenario: from_json doctest #3 (result)
+      When query
+        """
+        SELECT from_json(value, 'ARRAY<STRUCT<a: INT>>') AS json FROM VALUES (1, '{"a": 1}') AS t(key, value)
+        """
+      Then query result
+        | json |
+        | [{1}] |
+
+    Scenario: from_json doctest #4 (result)
+      When query
+        """
+        SELECT from_json(value, 'a INT') AS json FROM VALUES (1, '{"a": 1}'), (2, '{"a": 2}'), (3, CAST(NULL AS STRING)) AS t(key, value) ORDER BY key
+        """
+      Then query result ordered
+        | json |
+        | {1} |
+        | {2} |
+        | NULL |
+
+    Scenario: from_json doctest #5 (result)
+      When query
+        """
+        SELECT from_json(value, 'a INT, b STRING') AS json FROM VALUES (1, '{"a": 1, "b": "hello"}') AS t(key, value)
+        """
+      Then query result
+        | json |
+        | {1, hello} |
+
+    Scenario: from_json doctest #6 (result)
+      When query
+        """
+        SELECT from_json(value, 'price DECIMAL(10,2)') AS json FROM VALUES (1, '{"price": 19.99}') AS t(key, value)
+        """
+      Then query result
+        | json |
+        | {19.99} |
+

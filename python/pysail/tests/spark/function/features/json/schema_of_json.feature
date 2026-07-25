@@ -1335,3 +1335,878 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         root
          |-- result: string (nullable = false)
         """
+
+  Rule: Result values (migrated from test_schema_of_json.txt doctests)
+
+    Scenario: schema_of_json doctest #1 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 0}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #2 (result)
+      When query
+        """
+        SELECT schema_of_json('{a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #3 (result)
+      When query
+        """
+        SELECT schema_of_json('{a: 1}', map('ALLOWUNQUOTEDFIELDNAMES', 'True')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #4 (result)
+      When query
+        """
+        SELECT schema_of_json('{a: {"b": [1.5], c: "x: {y: 1}"}}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRUCT<b: ARRAY<DOUBLE>, c: STRING>> |
+
+    Scenario: schema_of_json doctest #5 (result)
+      When query
+        """
+        SELECT schema_of_json('{a: 1}', map('allowUnquotedFieldNames', 'true'))
+        """
+      Then query result
+        | schema_of_json({a: 1}) |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #6 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 2}', map('allowUnquotedFieldNames', 'false')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #8 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1}', map('myImaginaryOption', 'banana')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #9 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": \'x\'}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRING> |
+
+    Scenario: schema_of_json doctest #10 (result)
+      When query
+        """
+        SELECT schema_of_json('{\'a\': 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #11 (result)
+      When query
+        """
+        SELECT schema_of_json('{\'a\': \'it\\\'s\'}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRING> |
+
+    Scenario: schema_of_json doctest #12 (result)
+      When query
+        """
+        SELECT schema_of_json('{\'a\': \'say "hi"\'}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRING> |
+
+    Scenario: schema_of_json doctest #13 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": "it\'s"}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRING> |
+
+    Scenario: schema_of_json doctest #15 (result)
+      When query
+        """
+        SELECT schema_of_json('{"x y": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`x y`: BIGINT> |
+
+    Scenario: schema_of_json doctest #16 (result)
+      When query
+        """
+        SELECT schema_of_json('{"x-y": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`x-y`: BIGINT> |
+
+    Scenario: schema_of_json doctest #17 (result)
+      When query
+        """
+        SELECT schema_of_json('{"x.y": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`x.y`: BIGINT> |
+
+    Scenario: schema_of_json doctest #18 (result)
+      When query
+        """
+        SELECT schema_of_json('{"1a": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`1a`: BIGINT> |
+
+    Scenario: schema_of_json doctest #19 (result)
+      When query
+        """
+        SELECT schema_of_json('{"_a": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<_a: BIGINT> |
+
+    Scenario: schema_of_json doctest #20 (result)
+      When query
+        """
+        SELECT schema_of_json('{"ab1_": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<ab1_: BIGINT> |
+
+    Scenario: schema_of_json doctest #21 (result)
+      When query
+        """
+        SELECT schema_of_json('{"x`y": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`x``y`: BIGINT> |
+
+    Scenario: schema_of_json doctest #22 (result)
+      When query
+        """
+        SELECT schema_of_json('{"café": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`café`: BIGINT> |
+
+    Scenario: schema_of_json doctest #23 (result)
+      When query
+        """
+        SELECT schema_of_json('{"": 1}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<> |
+
+    Scenario: schema_of_json doctest #24 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": true}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BOOLEAN> |
+
+    Scenario: schema_of_json doctest #25 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": false}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BOOLEAN> |
+
+    Scenario: schema_of_json doctest #26 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": null}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRING> |
+
+    Scenario: schema_of_json doctest #27 (result)
+      When query
+        """
+        SELECT schema_of_json('null') AS r
+        """
+      Then query result
+        | r |
+        | STRING |
+
+    Scenario: schema_of_json doctest #28 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": {"b": null}}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: STRUCT<b: STRING>> |
+
+    Scenario: schema_of_json doctest #29 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [null]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRING>> |
+
+    Scenario: schema_of_json doctest #30 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [null, 1]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<BIGINT>> |
+
+    Scenario: schema_of_json doctest #31 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [1, "x"]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRING>> |
+
+    Scenario: schema_of_json doctest #32 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [1, 2.5]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<DOUBLE>> |
+
+    Scenario: schema_of_json doctest #33 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [1, 2.5, "x"]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRING>> |
+
+    Scenario: schema_of_json doctest #34 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [1, true]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRING>> |
+
+    Scenario: schema_of_json doctest #35 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [{"b": 1}, {"c": 2}]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRUCT<b: BIGINT, c: BIGINT>>> |
+
+    Scenario: schema_of_json doctest #36 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [{"b": 1}, {"b": "x"}]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRUCT<b: STRING>>> |
+
+    Scenario: schema_of_json doctest #37 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [{"b": 1}, 2]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<STRING>> |
+
+    Scenario: schema_of_json doctest #38 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": [[1], [2.5]]}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: ARRAY<ARRAY<DOUBLE>>> |
+
+    Scenario: schema_of_json doctest #39 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": {}}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<> |
+
+    Scenario: schema_of_json doctest #40 (result)
+      When query
+        """
+        SELECT schema_of_json('{}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<> |
+
+    Scenario: schema_of_json doctest #41 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 9223372036854775807}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #42 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 9223372036854775808}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(19,0)> |
+
+    Scenario: schema_of_json doctest #43 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 99999999999999999999999999}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(26,0)> |
+
+    Scenario: schema_of_json doctest #44 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": -99999999999999999999999999}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(26,0)> |
+
+    Scenario: schema_of_json doctest #45 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 999999999999999999999999999999999999999}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #46 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.7976931348623157E308}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #47 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1E309}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #48 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 12.345678901234567890123}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #49 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,1)> |
+
+    Scenario: schema_of_json doctest #50 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 99999999999999999999999999}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(26,0)> |
+
+    Scenario: schema_of_json doctest #51 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.55E1}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(3,1)> |
+
+    Scenario: schema_of_json doctest #52 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5E-2}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(3,3)> |
+
+    Scenario: schema_of_json doctest #53 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1E-2}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,2)> |
+
+    Scenario: schema_of_json doctest #54 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 15E-1}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,1)> |
+
+    Scenario: schema_of_json doctest #55 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.500E1}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(4,2)> |
+
+    Scenario: schema_of_json doctest #56 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5E0}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,1)> |
+
+    Scenario: schema_of_json doctest #60 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5E2}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #61 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": NaN}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #62 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": Infinity}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #63 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #64 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 0001}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #65 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": -01}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #66 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 007}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #67 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 0}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #68 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 00}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #69 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": -00}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: schema_of_json doctest #70 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01.5}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #71 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 00.5}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #72 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01e2}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #73 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 009223372036854775808}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(19,0)> |
+
+    Scenario: schema_of_json doctest #74 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 0099999999999999999999999999999999999999}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(38,0)> |
+
+    Scenario: schema_of_json doctest #75 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 00999999999999999999999999999999999999999}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #76 (result)
+      When query
+        """
+        SELECT schema_of_json('{"01b": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`01b`: BIGINT, b: STRING> |
+
+    Scenario: schema_of_json doctest #77 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1e02}', map('allowNumericLeadingZeros', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #78 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1e02}') AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: schema_of_json doctest #79 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 00.50}', map('allowNumericLeadingZeros', 'true', 'prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,2)> |
+
+    Scenario: schema_of_json doctest #80 (result)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01.5}', map('allowNumericLeadingZeros', 'true', 'prefersDecimal', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a: DECIMAL(2,1)> |
+
+    Scenario: schema_of_json doctest #83 (result)
+      When query
+        """
+        SELECT schema_of_json('{+a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`+a`: BIGINT> |
+
+    Scenario: schema_of_json doctest #84 (result)
+      When query
+        """
+        SELECT schema_of_json('{a@b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`a@b`: BIGINT> |
+
+    Scenario: schema_of_json doctest #85 (result)
+      When query
+        """
+        SELECT schema_of_json('{a#b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`a#b`: BIGINT> |
+
+    Scenario: schema_of_json doctest #86 (result)
+      When query
+        """
+        SELECT schema_of_json('{a*b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`a*b`: BIGINT> |
+
+    Scenario: schema_of_json doctest #87 (result)
+      When query
+        """
+        SELECT schema_of_json('{a$b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`a$b`: BIGINT> |
+
+    Scenario: schema_of_json doctest #88 (result)
+      When query
+        """
+        SELECT schema_of_json('{$a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`$a`: BIGINT> |
+
+    Scenario: schema_of_json doctest #89 (result)
+      When query
+        """
+        SELECT schema_of_json('{_a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<_a: BIGINT> |
+
+    Scenario: schema_of_json doctest #90 (result)
+      When query
+        """
+        SELECT schema_of_json('{9a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`9a`: BIGINT> |
+
+    Scenario: schema_of_json doctest #91 (result)
+      When query
+        """
+        SELECT schema_of_json('{a9: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<a9: BIGINT> |
+
+    Scenario: schema_of_json doctest #92 (result)
+      When query
+        """
+        SELECT schema_of_json('{ключ: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`ключ`: BIGINT> |
+
+    Scenario: schema_of_json doctest #93 (result)
+      When query
+        """
+        SELECT schema_of_json('{aé: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query result
+        | r |
+        | STRUCT<`aé`: BIGINT> |
+
+    Scenario: schema_of_json doctest #7 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1}', map('allowUnquotedFieldNames', 'yes')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #14 (error)
+      When query
+        """
+        SELECT schema_of_json('{\'a\': 1}', map('allowSingleQuotes', 'false')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #57 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5E2}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #58 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 1E2}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #59 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 15E2}', map('prefersDecimal', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #81 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01}') AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #82 (error)
+      When query
+        """
+        SELECT schema_of_json('{"a": 01}', map('allowNumericLeadingZeros', 'false')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #94 (error)
+      When query
+        """
+        SELECT schema_of_json('{.a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #95 (error)
+      When query
+        """
+        SELECT schema_of_json('{`a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #96 (error)
+      When query
+        """
+        SELECT schema_of_json('{a`b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #97 (error)
+      When query
+        """
+        SELECT schema_of_json('{<a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #98 (error)
+      When query
+        """
+        SELECT schema_of_json('{a<b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #99 (error)
+      When query
+        """
+        SELECT schema_of_json('{>a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: schema_of_json doctest #100 (error)
+      When query
+        """
+        SELECT schema_of_json('{\\a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
+        """
+      Then query error (?i).*
+
