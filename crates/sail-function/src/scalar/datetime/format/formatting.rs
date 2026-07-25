@@ -458,8 +458,13 @@ fn format_field_spec(
         DateTimeField::Era => {
             format_era(datetime.year() <= 0, spec.width, locale, output);
         }
-        DateTimeField::ProlepticYear | DateTimeField::YearOfEra => {
+        DateTimeField::ProlepticYear => {
             format_year(datetime.year(), spec.width, output);
+        }
+        DateTimeField::YearOfEra => {
+            let year = datetime.year();
+            let year_of_era = if year <= 0 { 1 - year } else { year };
+            format_year(year_of_era, spec.width, output);
         }
         DateTimeField::WeekBasedYear => {
             format_year(datetime.iso_week().year(), spec.width, output);
