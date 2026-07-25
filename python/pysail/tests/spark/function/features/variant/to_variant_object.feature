@@ -88,7 +88,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('a', named_struct('b', 1)))) AS result
         """
       Then query result
-        | result         |
+        | result        |
         | {"a":{"b":1}} |
 
     Scenario: to_variant_object deeply nested struct
@@ -97,7 +97,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('a', named_struct('b', named_struct('c', 42))))) AS result
         """
       Then query result
-        | result                  |
+        | result               |
         | {"a":{"b":{"c":42}}} |
 
   Rule: Struct with various types
@@ -108,7 +108,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('x', 3.14))) AS result
         """
       Then query result
-        | result      |
+        | result     |
         | {"x":3.14} |
 
     Scenario: to_variant_object struct with array field
@@ -117,7 +117,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('arr', array(1,2,3)))) AS result
         """
       Then query result
-        | result            |
+        | result          |
         | {"arr":[1,2,3]} |
 
     Scenario: to_variant_object struct with map field
@@ -126,7 +126,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('m', map('k', 'v')))) AS result
         """
       Then query result
-        | result           |
+        | result          |
         | {"m":{"k":"v"}} |
 
     # parquet-variant omits NULL struct fields
@@ -137,7 +137,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(named_struct('a', CAST(NULL AS INT), 'b', CAST(NULL AS STRING)))) AS result
         """
       Then query result
-        | result               |
+        | result              |
         | {"a":null,"b":null} |
 
   Rule: Map edge cases
@@ -148,7 +148,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(map('key', 'value'))) AS result
         """
       Then query result
-        | result            |
+        | result          |
         | {"key":"value"} |
 
     # parquet-variant omits NULL map values
@@ -159,7 +159,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(map('a', CAST(NULL AS INT), 'b', 2))) AS result
         """
       Then query result
-        | result              |
+        | result           |
         | {"a":null,"b":2} |
 
     Scenario: to_variant_object map 3 keys
@@ -168,7 +168,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(map('a', 1, 'b', 2, 'c', 3))) AS result
         """
       Then query result
-        | result                |
+        | result              |
         | {"a":1,"b":2,"c":3} |
 
   Rule: Nested arrays and collections
@@ -179,7 +179,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(array(array(1,2), array(3,4)))) AS result
         """
       Then query result
-        | result          |
+        | result        |
         | [[1,2],[3,4]] |
 
     Scenario: to_variant_object array of maps
@@ -188,7 +188,7 @@ Feature: to_variant_object
         SELECT to_json(to_variant_object(array(map('a', 1), map('b', 2)))) AS result
         """
       Then query result
-        | result                |
+        | result            |
         | [{"a":1},{"b":2}] |
 
   Rule: Multi-row
@@ -240,7 +240,7 @@ Feature: to_variant_object
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to to_variant_object yields the schema Spark declares
+    Scenario: a non-null literal input to to_variant_object yields the schema Spark declares
       When query
         """
         SELECT to_variant_object(named_struct('a', 1, 'b', 2)) AS result
@@ -250,4 +250,3 @@ Scenario: a non-null literal input to to_variant_object yields the schema Spark 
         root
          |-- result: variant (nullable = false)
         """
-

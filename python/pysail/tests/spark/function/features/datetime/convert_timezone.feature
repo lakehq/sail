@@ -3,7 +3,7 @@ Feature: convert_timezone
 
   Rule: Type coercion
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = Asia/Shanghai
 
     Scenario Outline: `convert_timezone` with coercible input
@@ -46,7 +46,7 @@ Feature: convert_timezone
 
   Rule: Daylight saving time handling
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = Asia/Shanghai
 
     Scenario Outline: `convert_timezone` around daylight saving time transition
@@ -70,7 +70,7 @@ Feature: convert_timezone
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to convert_timezone yields the schema Spark declares
+    Scenario: a non-null literal input to convert_timezone yields the schema Spark declares
       When query
         """
         SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') AS result
@@ -82,7 +82,7 @@ Scenario: a non-null literal input to convert_timezone yields the schema Spark d
         """
 
     @sail-bug
-Scenario: a non-null column input to convert_timezone yields the schema Spark declares
+    Scenario: a non-null column input to convert_timezone yields the schema Spark declares
       When query
         """
         SELECT convert_timezone(CAST(id AS STRING), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') AS result FROM range(3)

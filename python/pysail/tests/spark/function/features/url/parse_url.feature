@@ -56,8 +56,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com/path?q=1', 'FILE') AS result
         """
       Then query result
-        | result     |
-        | /path?q=1  |
+        | result    |
+        | /path?q=1 |
 
     Scenario: parse_url authority
       When query
@@ -130,8 +130,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('notaurl?key=value', 'FILE') AS result
         """
       Then query result
-        | result             |
-        | notaurl?key=value  |
+        | result            |
+        | notaurl?key=value |
 
     Scenario: parse_url schemeless URL extracts QUERY
       When query
@@ -319,8 +319,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com/a?x=1', 'QUERY', 'x') AS result, typeof(parse_url('https://example.com/a?x=1', 'QUERY', 'x')) AS type
         """
       Then query result
-        | result | type |
-        | 1 | string |
+        | result | type   |
+        | 1      | string |
 
     Scenario: parse_url doctest #2 (result)
       When query
@@ -328,8 +328,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com/path#frag', 'REF') AS result, typeof(parse_url('https://example.com/path#frag', 'REF')) AS type
         """
       Then query result
-        | result | type |
-        | frag | string |
+        | result | type   |
+        | frag   | string |
 
     Scenario: parse_url doctest #3 (result)
       When query
@@ -337,7 +337,7 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO') AS result, typeof(parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO')) AS type
         """
       Then query result
-        | result | type |
+        | result   | type   |
         | user:pwd | string |
 
     Scenario: parse_url doctest #4 (result)
@@ -346,7 +346,7 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST') AS result, typeof(parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST')) AS type
         """
       Then query result
-        | result | type |
+        | result        | type   |
         | [2001:db8::2] | string |
 
     Scenario: parse_url doctest #5 (result)
@@ -355,8 +355,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com', 'PATH') AS result, typeof(parse_url('https://example.com', 'PATH')) AS type
         """
       Then query result
-        | result | type |
-        |  | string |
+        | result | type   |
+        |        | string |
 
     Scenario: parse_url doctest #6 (result)
       When query
@@ -364,8 +364,8 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL') AS result, typeof(parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL')) AS type
         """
       Then query result
-        | result | type |
-        | https | string |
+        | result | type   |
+        | https  | string |
 
     Scenario: parse_url doctest #7 (result)
       When query
@@ -374,7 +374,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, HOST) |
-        | spark.apache.org |
+        | spark.apache.org                                                   |
 
     Scenario: parse_url doctest #8 (result)
       When query
@@ -383,7 +383,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PATH) |
-        | /path |
+        | /path                                                              |
 
     Scenario: parse_url doctest #9 (result)
       When query
@@ -392,7 +392,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, QUERY) |
-        | query=1 |
+        | query=1                                                             |
 
     Scenario: parse_url doctest #10 (result)
       When query
@@ -401,7 +401,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, REF) |
-        | Ref |
+        | Ref                                                               |
 
     Scenario: parse_url doctest #11 (result)
       When query
@@ -410,7 +410,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PROTOCOL) |
-        | http |
+        | http                                                                   |
 
     Scenario: parse_url doctest #12 (result)
       When query
@@ -419,7 +419,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, FILE) |
-        | /path?query=1 |
+        | /path?query=1                                                      |
 
     Scenario: parse_url doctest #13 (result)
       When query
@@ -428,7 +428,7 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, AUTHORITY) |
-        | userinfo@spark.apache.org |
+        | userinfo@spark.apache.org                                               |
 
     Scenario: parse_url doctest #14 (result)
       When query
@@ -437,5 +437,4 @@ Feature: parse_url() extracts URL component
         """
       Then query result
         | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, USERINFO) |
-        | userinfo |
-
+        | userinfo                                                               |

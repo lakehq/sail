@@ -18,8 +18,8 @@ Feature: array_sort higher-order function
         SELECT array_sort(array(3, NULL, 1)) AS result
         """
       Then query result
-        | result          |
-        | [1, 3, NULL]    |
+        | result       |
+        | [1, 3, NULL] |
 
     Scenario: Sort strings ascending
       When query
@@ -27,8 +27,8 @@ Feature: array_sort higher-order function
         SELECT array_sort(array('b', 'a', 'c')) AS result
         """
       Then query result
-        | result          |
-        | [a, b, c]       |
+        | result    |
+        | [a, b, c] |
 
     Scenario: Sort doubles with NaN and Infinity — NaN is greatest
       When query
@@ -85,8 +85,8 @@ Feature: array_sort higher-order function
         SELECT array_sort(array(named_struct('x', 3), named_struct('x', 1), named_struct('x', 2)), (l, r) -> l.x - r.x) AS result
         """
       Then query result
-        | result                  |
-        | [{1}, {2}, {3}]         |
+        | result          |
+        | [{1}, {2}, {3}] |
 
     Scenario: Comparator over strings with explicit null handling — nulls first
       When query
@@ -94,8 +94,8 @@ Feature: array_sort higher-order function
         SELECT array_sort(array('bc', 'ab', NULL, 'dc'), (l, r) -> CASE WHEN l IS NULL AND r IS NULL THEN 0 WHEN l IS NULL THEN -1 WHEN r IS NULL THEN 1 WHEN l < r THEN 1 WHEN l > r THEN -1 ELSE 0 END) AS result
         """
       Then query result
-        | result                |
-        | [NULL, dc, bc, ab]    |
+        | result             |
+        | [NULL, dc, bc, ab] |
 
   Rule: Comparator form — degenerate inputs
 

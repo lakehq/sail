@@ -5,7 +5,7 @@ Feature: make_date output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to make_date yields the schema Spark declares
+    Scenario: a non-null literal input to make_date yields the schema Spark declares
       When query
         """
         SELECT make_date(2013, 7, 15) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to make_date yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to make_date yields the schema Spark declares
+    Scenario: a non-null column input to make_date yields the schema Spark declares
       When query
         """
         SELECT make_date(CAST(id AS INT), 7, 15) AS result FROM range(3)

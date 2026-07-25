@@ -10,7 +10,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, 2)) |
-        | 1,2                               |
+        | 1,2                              |
 
     Scenario: Convert a struct with mixed types
       When query
@@ -19,7 +19,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, 2.5, c, true)) |
-        | 1,2.5,true                                    |
+        | 1,2.5,true                                  |
 
     Scenario: Convert a struct from a table column
       When query
@@ -30,9 +30,9 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, value, b, value)) |
-        | 1,1                                       |
-        | 2,2                                       |
-        | 3,3                                       |
+        | 1,1                                      |
+        | 2,2                                      |
+        | 3,3                                      |
 
   Rule: NULL handling
 
@@ -43,7 +43,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(CAST(NULL AS STRUCT<A:INT,B:INT>)) |
-        | NULL         |
+        | NULL                                      |
 
     Scenario: Struct with NULL field serializes null field as empty string
       When query
@@ -52,7 +52,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, CAST(NULL AS INT))) |
-        | 1,                                   |
+        | 1,                                               |
 
   Rule: Separator options
 
@@ -63,7 +63,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, 2)) |
-        | 1\|2                               |
+        | 1\|2                             |
 
     Scenario: Custom separator via delimiter option
       When query
@@ -72,7 +72,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, 2)) |
-        | 1\|2                               |
+        | 1\|2                             |
 
   Rule: CSV writer options
 
@@ -89,7 +89,7 @@ Feature: to_csv converts a struct value to a CSV string
         ) AS result
         """
       Then query result
-        | result                         |
+        | result                        |
         | "hello,world","line<LF>break" |
 
     Scenario: Custom escape character is used for quote escaping
@@ -170,7 +170,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 'a#b,c'), map('escape', '#')) AS result
         """
       Then query result
-        | result    |
+        | result   |
         | "a##b,c" |
 
   Rule: Timestamp formatting
@@ -182,7 +182,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(ts, to_timestamp(2015-08-26, yyyy-MM-dd))) |
-        | 2015-08-26T00:00:00.000Z                                        |
+        | 2015-08-26T00:00:00.000Z                                       |
 
     Scenario: Pre-epoch timestamp is formatted correctly
       When query
@@ -191,7 +191,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(ts, to_timestamp(1969-12-31, yyyy-MM-dd))) |
-        | 1969-12-31T00:00:00.000Z                                        |
+        | 1969-12-31T00:00:00.000Z                                       |
 
     Scenario: Custom timestampFormat option changes the output format
       When query
@@ -200,7 +200,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(time, to_timestamp(2015-08-26, yyyy-MM-dd))) |
-        | 26/08/2015                                                         |
+        | 26/08/2015                                                       |
 
   Rule: Date formatting
 
@@ -211,7 +211,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(d, DATE '2015-08-26')) |
-        | 2015-08-26                                  |
+        | 2015-08-26                                 |
 
     Scenario: Pre-epoch date is formatted correctly
       When query
@@ -220,7 +220,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(d, DATE '1969-12-31')) |
-        | 1969-12-31                                  |
+        | 1969-12-31                                 |
 
     Scenario: Custom dateFormat option changes the output format
       When query
@@ -229,7 +229,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(d, DATE '2015-08-26')) |
-        | 26/08/2015                                  |
+        | 26/08/2015                                 |
 
   Rule: Decimal formatting
 
@@ -240,7 +240,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(price, CAST(9.99 AS DECIMAL(5,2)))) |
-        | 9.99                                                      |
+        | 9.99                                                    |
 
     Scenario: Negative decimal preserves sign including fractional-only values
       When query
@@ -249,7 +249,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(price, CAST((- 0.99) AS DECIMAL(5,2)))) |
-        | -0.99                                                      |
+        | -0.99                                                       |
 
   Rule: Complex and special values
 
@@ -259,8 +259,8 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', array(1, 2, CAST(NULL AS INT)), 'm', map('x', 1), 's', named_struct('b', 2))) AS result
         """
       Then query result
-        | result                    |
-        | "[1, 2,]",{x -> 1},{2}   |
+        | result                 |
+        | "[1, 2,]",{x -> 1},{2} |
 
     Scenario: Floating-point special values use Spark display strings
       When query

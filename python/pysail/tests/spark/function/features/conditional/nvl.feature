@@ -5,7 +5,7 @@ Feature: nvl output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to nvl yields the schema Spark declares
+    Scenario: a non-null literal input to nvl yields the schema Spark declares
       When query
         """
         SELECT nvl(NULL, array('2')) AS result

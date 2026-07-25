@@ -5,7 +5,7 @@ Feature: regexp_replace output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to regexp_replace yields the schema Spark declares
+    Scenario: a non-null literal input to regexp_replace yields the schema Spark declares
       When query
         """
         SELECT regexp_replace('100-200', '(\\d+)', 'num') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to regexp_replace yields the schema Spark dec
         """
 
     @sail-bug
-Scenario: a non-null column input to regexp_replace yields the schema Spark declares
+    Scenario: a non-null column input to regexp_replace yields the schema Spark declares
       When query
         """
         SELECT regexp_replace(CAST(id AS STRING), '(\\d+)', 'num') AS result FROM range(3)

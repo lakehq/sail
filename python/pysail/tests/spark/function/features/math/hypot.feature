@@ -5,7 +5,7 @@ Feature: hypot output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to hypot yields the schema Spark declares
+    Scenario: a non-null literal input to hypot yields the schema Spark declares
       When query
         """
         SELECT hypot(3, 4) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to hypot yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to hypot yields the schema Spark declares
+    Scenario: a non-null column input to hypot yields the schema Spark declares
       When query
         """
         SELECT hypot(CAST(id AS INT), 4) AS result FROM range(3)

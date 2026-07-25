@@ -92,7 +92,7 @@ Feature: array_intersect() returns common array elements without duplicates
         AS t(c1, c2)
         """
       Then query result
-        | result  |
+        | result    |
         | [b, a, c] |
 
     Scenario: array_intersect across multiple rows
@@ -224,7 +224,7 @@ Feature: array_intersect() returns common array elements without duplicates
         """
 
     @sail-bug
-Scenario: a nullable array column stays nullable
+    Scenario: a nullable array column stays nullable
       When query
         """
         SELECT array_intersect(c, array(2)) AS result FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
@@ -237,7 +237,7 @@ Scenario: a nullable array column stays nullable
         """
 
     @sail-bug
-Scenario: nullable input elements propagate to the element nullability
+    Scenario: nullable input elements propagate to the element nullability
       When query
         """
         SELECT array_intersect(c, array(1)) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)

@@ -5,7 +5,7 @@ Feature: map_concat output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to map_concat yields the schema Spark declares
+    Scenario: a non-null literal input to map_concat yields the schema Spark declares
       When query
         """
         SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c')) AS result

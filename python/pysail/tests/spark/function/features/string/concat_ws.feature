@@ -9,8 +9,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', 'a', 'b', 'c') AS result
         """
       Then query result
-        | result  |
-        | a,b,c   |
+        | result |
+        | a,b,c  |
 
     Scenario: concat_ws with null arguments
       When query
@@ -18,8 +18,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', 'a', NULL, 'c') AS result
         """
       Then query result
-        | result  |
-        | a,c     |
+        | result |
+        | a,c    |
 
     Scenario: concat_ws with single argument
       When query
@@ -27,8 +27,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', 'a') AS result
         """
       Then query result
-        | result  |
-        | a       |
+        | result |
+        | a      |
 
     Scenario: concat_ws with no arguments after separator
       When query
@@ -36,8 +36,8 @@ Feature: concat_ws function
         SELECT concat_ws(',') AS result
         """
       Then query result
-        | result  |
-        |         |
+        | result |
+        |        |
 
     Scenario: concat_ws with null separator returns null
       When query
@@ -45,8 +45,8 @@ Feature: concat_ws function
         SELECT concat_ws(NULL, 'a', 'b', 'c') AS result
         """
       Then query result
-        | result  |
-        | NULL    |
+        | result |
+        | NULL   |
 
     Scenario: concat_ws coerces integer arguments to string
       When query
@@ -54,8 +54,8 @@ Feature: concat_ws function
         SELECT concat_ws('-', 'a', 1, 2) AS result
         """
       Then query result
-        | result  |
-        | a-1-2   |
+        | result |
+        | a-1-2  |
 
     Scenario: concat_ws coerces double arguments to string
       When query
@@ -63,8 +63,8 @@ Feature: concat_ws function
         SELECT concat_ws('-', 'a', 1.5) AS result
         """
       Then query result
-        | result  |
-        | a-1.5   |
+        | result |
+        | a-1.5  |
 
     Scenario: concat_ws coerces boolean arguments to string
       When query
@@ -72,8 +72,8 @@ Feature: concat_ws function
         SELECT concat_ws('-', 'a', true, false) AS result
         """
       Then query result
-        | result         |
-        | a-true-false   |
+        | result       |
+        | a-true-false |
 
   Rule: concat_ws with array arguments
 
@@ -83,8 +83,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', array('a', 'b', 'c')) AS result
         """
       Then query result
-        | result  |
-        | a,b,c   |
+        | result |
+        | a,b,c  |
 
     Scenario: concat_ws with array containing nulls
       When query
@@ -92,8 +92,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', array('a', NULL, 'c')) AS result
         """
       Then query result
-        | result  |
-        | a,c     |
+        | result |
+        | a,c    |
 
     Scenario: concat_ws with multiple arrays
       When query
@@ -101,8 +101,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', array('a', 'b'), array('c', 'd')) AS result
         """
       Then query result
-        | result    |
-        | a,b,c,d   |
+        | result  |
+        | a,b,c,d |
 
     Scenario: concat_ws with mixed scalar and array arguments
       When query
@@ -110,8 +110,8 @@ Feature: concat_ws function
         SELECT concat_ws(',', 'x', array('a', 'b'), 'y') AS result
         """
       Then query result
-        | result    |
-        | x,a,b,y   |
+        | result  |
+        | x,a,b,y |
 
   Rule: concat_ws over multiple rows (column inputs)
 
@@ -309,7 +309,7 @@ Feature: concat_ws function
         SELECT concat_ws('-', string_col, int_col, date_col) AS r FROM VALUES ('a', 1, DATE '2024-01-15') AS t(string_col, int_col, date_col)
         """
       Then query result
-        | r |
+        | r              |
         | a-1-2024-01-15 |
 
     Scenario: concat_ws doctest #2 (result)
@@ -320,4 +320,3 @@ Feature: concat_ws function
       Then query result
         | r |
         | a |
-

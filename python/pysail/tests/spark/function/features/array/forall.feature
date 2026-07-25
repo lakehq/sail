@@ -507,7 +507,7 @@ Feature: forall higher-order function
         """
 
     @sail-bug
-Scenario: a non-null array column yields a non-nullable boolean
+    Scenario: a non-null array column yields a non-nullable boolean
       When query
         """
         SELECT forall(array(id), x -> x > 0) AS result FROM range(3)

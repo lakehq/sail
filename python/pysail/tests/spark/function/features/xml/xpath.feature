@@ -9,8 +9,8 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b></a>', 'a/b/text()') AS result
         """
       Then query result
-        | result        |
-        | [b1, b2, b3]  |
+        | result       |
+        | [b1, b2, b3] |
 
     Scenario: xpath returns NULL entries for element nodes
       When query
@@ -18,8 +18,8 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         SELECT xpath('<a><b>b1</b><b>b2</b></a>', 'a/b') AS result
         """
       Then query result
-        | result        |
-        | [NULL, NULL]  |
+        | result       |
+        | [NULL, NULL] |
 
     Scenario: xpath returns an empty list when no nodes match
       When query

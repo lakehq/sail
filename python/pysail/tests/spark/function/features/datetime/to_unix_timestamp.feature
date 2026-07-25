@@ -32,7 +32,7 @@ Feature: to_unix_timestamp with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to to_unix_timestamp yields the schema Spark declares
+    Scenario: a non-null literal input to to_unix_timestamp yields the schema Spark declares
       When query
         """
         SELECT to_unix_timestamp('2016-04-08', 'yyyy-MM-dd') AS result
@@ -44,7 +44,7 @@ Scenario: a non-null literal input to to_unix_timestamp yields the schema Spark 
         """
 
     @sail-bug
-Scenario: a non-null column input to to_unix_timestamp yields the schema Spark declares
+    Scenario: a non-null column input to to_unix_timestamp yields the schema Spark declares
       When query
         """
         SELECT to_unix_timestamp(CAST(id AS STRING), 'yyyy-MM-dd') AS result FROM range(3)

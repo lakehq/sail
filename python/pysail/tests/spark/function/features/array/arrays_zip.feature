@@ -36,7 +36,7 @@ Feature: arrays_zip comprehensive tests
         SELECT arrays_zip(array(1), array('a','b'), array(true, false, NULL), array(1.0)) AS result
         """
       Then query result
-        | result                                                              |
+        | result                                                                |
         | [{1, a, true, 1.0}, {NULL, b, false, NULL}, {NULL, NULL, NULL, NULL}] |
 
     Scenario: arrays_zip self-zip same column
@@ -277,8 +277,8 @@ Feature: arrays_zip comprehensive tests
         SELECT arrays_zip(array(1,2), array(1.5,2.5)) AS result
         """
       Then query result
-        | result                |
-        | [{1, 1.5}, {2, 2.5}]  |
+        | result               |
+        | [{1, 1.5}, {2, 2.5}] |
 
     Scenario: arrays_zip nested arrays
       When query
@@ -444,7 +444,7 @@ Feature: arrays_zip comprehensive tests
         """
       Then query result
         | result              |
-        | [{1, x}, {2, y}]   |
+        | [{1, x}, {2, y}]    |
         | [{3, z}, {NULL, w}] |
         | NULL                |
 
@@ -458,10 +458,10 @@ Feature: arrays_zip comprehensive tests
         AS t(a, b)
         """
       Then query result
-        | result                                                |
+        | result                                               |
         | [{1, x}, {2, y}, {3, NULL}]                          |
         | [{1, a}, {NULL, b}, {NULL, c}, {NULL, d}, {NULL, e}] |
-        | [{NULL, z}]                                           |
+        | [{NULL, z}]                                          |
 
     Scenario: arrays_zip multi-row empty row mixed with NULL
       When query
@@ -513,7 +513,7 @@ Feature: arrays_zip comprehensive tests
   Rule: Output schema
 
     @sail-bug
-Scenario: non-null array literals yield a non-nullable array
+    Scenario: non-null array literals yield a non-nullable array
       When query
         """
         SELECT arrays_zip(array(1, 2), array(3, 4)) AS result
@@ -528,7 +528,7 @@ Scenario: non-null array literals yield a non-nullable array
         """
 
     @sail-bug
-Scenario: a non-null array column yields a non-nullable array
+    Scenario: a non-null array column yields a non-nullable array
       When query
         """
         SELECT arrays_zip(array(id), array(id)) AS result FROM range(3)
@@ -557,7 +557,7 @@ Scenario: a non-null array column yields a non-nullable array
         """
 
     @sail-bug
-Scenario: nullable input elements propagate into the struct fields
+    Scenario: nullable input elements propagate into the struct fields
       When query
         """
         SELECT arrays_zip(c, c) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)
@@ -579,7 +579,7 @@ Scenario: nullable input elements propagate into the struct fields
         SELECT arrays_zip(vals1, vals2, vals3) AS zipped FROM VALUES (array(1L, 2L, 3L), array(2L, 4L, 6L), array(3L, 6L)) AS t(vals1, vals2, vals3)
         """
       Then query result
-        | zipped |
+        | zipped                               |
         | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
 
     Scenario: arrays_zip doctest #3 (result)
@@ -588,7 +588,7 @@ Scenario: nullable input elements propagate into the struct fields
         SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, 3), array('a', 'b', 'c')) AS t(nums, letters)
         """
       Then query result
-        | r |
+        | r                        |
         | [{1, a}, {2, b}, {3, c}] |
 
     Scenario: arrays_zip doctest #4 (result)
@@ -597,7 +597,7 @@ Scenario: nullable input elements propagate into the struct fields
         SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2), array('a', 'b', 'c')) AS t(nums, letters)
         """
       Then query result
-        | r |
+        | r                           |
         | [{1, a}, {2, b}, {NULL, c}] |
 
     Scenario: arrays_zip doctest #5 (result)
@@ -606,7 +606,7 @@ Scenario: nullable input elements propagate into the struct fields
         SELECT arrays_zip(nums, letters, bools) AS r FROM VALUES (array(1, 2), array('a', 'b'), array(true, false)) AS t(nums, letters, bools)
         """
       Then query result
-        | r |
+        | r                             |
         | [{1, a, true}, {2, b, false}] |
 
     Scenario: arrays_zip doctest #6 (result)
@@ -615,7 +615,7 @@ Scenario: nullable input elements propagate into the struct fields
         SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, NULL), array('a', NULL, 'c')) AS t(nums, letters)
         """
       Then query result
-        | r |
+        | r                              |
         | [{1, a}, {2, NULL}, {NULL, c}] |
 
   Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
@@ -634,4 +634,3 @@ Scenario: nullable input elements propagate into the struct fields
          |    |    |-- vals2: long (nullable = true)
          |    |    |-- vals3: long (nullable = true)
         """
-

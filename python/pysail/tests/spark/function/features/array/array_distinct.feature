@@ -5,7 +5,7 @@ Feature: array_distinct output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to array_distinct yields the schema Spark declares
+    Scenario: a non-null literal input to array_distinct yields the schema Spark declares
       When query
         """
         SELECT array_distinct(array(1, 2, 3, null, 3)) AS result

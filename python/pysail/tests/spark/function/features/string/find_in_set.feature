@@ -5,7 +5,7 @@ Feature: find_in_set output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to find_in_set yields the schema Spark declares
+    Scenario: a non-null literal input to find_in_set yields the schema Spark declares
       When query
         """
         SELECT find_in_set('ab','abc,b,ab,c,def') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to find_in_set yields the schema Spark declar
         """
 
     @sail-bug
-Scenario: a non-null column input to find_in_set yields the schema Spark declares
+    Scenario: a non-null column input to find_in_set yields the schema Spark declares
       When query
         """
         SELECT find_in_set(CAST(id AS STRING), 'abc,b,ab,c,def') AS result FROM range(3)

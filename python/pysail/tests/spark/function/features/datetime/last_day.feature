@@ -612,7 +612,7 @@ Feature: last_day comprehensive tests
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null date literal yields a date
+    Scenario: a non-null date literal yields a date
       When query
         """
         SELECT last_day(DATE '2024-01-15') AS result
@@ -624,7 +624,7 @@ Scenario: a non-null date literal yields a date
         """
 
     @sail-bug
-Scenario: a non-null date column yields a date
+    Scenario: a non-null date column yields a date
       When query
         """
         SELECT last_day(CAST(CAST(id AS TIMESTAMP) AS DATE)) AS result FROM range(3)

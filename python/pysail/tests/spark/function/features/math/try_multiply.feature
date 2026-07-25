@@ -54,7 +54,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, 0, 10, 0, 0), 4) AS result
         """
       Then query result
-        | result |
+        | result   |
         | 40 hours |
 
     Scenario: try_multiply doctest #3 (result)
@@ -63,7 +63,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, 3, 12, 0, 0), 3) AS result
         """
       Then query result
-        | result |
+        | result          |
         | 9 days 36 hours |
 
     Scenario: try_multiply doctest #4 (result)
@@ -72,7 +72,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, 0, 0, 0, 10.5), 2) AS result
         """
       Then query result
-        | result |
+        | result     |
         | 21 seconds |
 
     Scenario: try_multiply doctest #5 (result)
@@ -81,7 +81,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 1, 0, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result  |
         | 14 days |
 
     Scenario: try_multiply doctest #6 (result)
@@ -91,7 +91,7 @@ Feature: try_multiply output schema
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: try_multiply doctest #7 (result)
       When query
@@ -99,7 +99,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, 1, 0, 0, 0), 0) AS result
         """
       Then query result
-        | result |
+        | result    |
         | 0 seconds |
 
     Scenario: try_multiply doctest #8 (result)
@@ -108,7 +108,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, -1, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result  |
         | -2 days |
 
     Scenario: try_multiply doctest #9 (result)
@@ -117,7 +117,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_interval(0, 0, 0, 1, 0, 90, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result         |
         | 2 days 3 hours |
 
     Scenario: try_multiply doctest #10 (result)
@@ -126,7 +126,7 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_ym_interval(1, 6), 2) AS result
         """
       Then query result
-        | result |
+        | result                       |
         | INTERVAL '3-0' YEAR TO MONTH |
 
     Scenario: try_multiply doctest #11 (result)
@@ -135,6 +135,5 @@ Feature: try_multiply output schema
         SELECT try_multiply(make_ym_interval(1, 6), 2) AS result
         """
       Then query result
-        | result |
+        | result                       |
         | INTERVAL '3-0' YEAR TO MONTH |
-

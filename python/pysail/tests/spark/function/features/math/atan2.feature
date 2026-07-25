@@ -5,7 +5,7 @@ Feature: atan2 output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to atan2 yields the schema Spark declares
+    Scenario: a non-null literal input to atan2 yields the schema Spark declares
       When query
         """
         SELECT atan2(0, 0) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to atan2 yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to atan2 yields the schema Spark declares
+    Scenario: a non-null column input to atan2 yields the schema Spark declares
       When query
         """
         SELECT atan2(CAST(id AS INT), 0) AS result FROM range(3)

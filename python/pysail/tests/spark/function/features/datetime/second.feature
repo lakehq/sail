@@ -5,7 +5,7 @@ Feature: second output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to second yields the schema Spark declares
+    Scenario: a non-null literal input to second yields the schema Spark declares
       When query
         """
         SELECT second('2018-02-14 12:58:59') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to second yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to second yields the schema Spark declares
+    Scenario: a non-null column input to second yields the schema Spark declares
       When query
         """
         SELECT second(CAST(id AS STRING)) AS result FROM range(3)

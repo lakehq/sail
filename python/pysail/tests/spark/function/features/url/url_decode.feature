@@ -46,7 +46,7 @@ Feature: url_decode output schema
         """
       Then query result
         | url_decode(https%3A%2F%2Fspark.apache.org) |
-        | https://spark.apache.org |
+        | https://spark.apache.org                   |
 
     Scenario: url_decode doctest #2 (result)
       When query
@@ -55,7 +55,7 @@ Feature: url_decode output schema
         """
       Then query result
         | url_decode(inva lid://user:pass@host/file;param?query;p2) |
-        | inva lid://user:pass@host/file;param?query;p2 |
+        | inva lid://user:pass@host/file;param?query;p2             |
 
     Scenario: url_decode doctest #3 (result)
       When query
@@ -64,5 +64,4 @@ Feature: url_decode output schema
         """
       Then query result
         | url_decode(NULL) |
-        | NULL |
-
+        | NULL             |

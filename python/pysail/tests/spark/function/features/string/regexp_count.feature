@@ -5,7 +5,7 @@ Feature: regexp_count output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to regexp_count yields the schema Spark declares
+    Scenario: a non-null literal input to regexp_count yields the schema Spark declares
       When query
         """
         SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to regexp_count yields the schema Spark decla
         """
 
     @sail-bug
-Scenario: a non-null column input to regexp_count yields the schema Spark declares
+    Scenario: a non-null column input to regexp_count yields the schema Spark declares
       When query
         """
         SELECT regexp_count(CAST(id AS STRING), 'Ste(v|ph)en') AS result FROM range(3)
@@ -29,7 +29,7 @@ Scenario: a non-null column input to regexp_count yields the schema Spark declar
         """
 
     @sail-bug
-Scenario: a nullable column input to regexp_count stays nullable
+    Scenario: a nullable column input to regexp_count stays nullable
       When query
         """
         SELECT regexp_count(c, 'Ste(v|ph)en') AS result FROM VALUES ('Steven Jones and Stephen Smith are the best players'), (CAST(NULL AS STRING)) AS t(c)

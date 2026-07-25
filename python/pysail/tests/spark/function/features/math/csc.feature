@@ -63,7 +63,7 @@ Feature: csc output schema
         SELECT csc(90) AS csc
         """
       Then query result
-        | csc |
+        | csc                |
         | 1.1185724071637084 |
 
     Scenario: csc doctest #4 (result)
@@ -72,7 +72,7 @@ Feature: csc output schema
         SELECT csc(90.0) AS csc
         """
       Then query result
-        | csc |
+        | csc                |
         | 1.1185724071637084 |
 
     Scenario: csc doctest #5 (result)
@@ -81,7 +81,7 @@ Feature: csc output schema
         SELECT csc(-90.0) AS csc
         """
       Then query result
-        | csc |
+        | csc                 |
         | -1.1185724071637084 |
 
     Scenario: csc doctest #6 (result)
@@ -90,6 +90,5 @@ Feature: csc output schema
         SELECT csc(0) AS csc
         """
       Then query result
-        | csc |
+        | csc      |
         | Infinity |
-

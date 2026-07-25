@@ -97,4 +97,4 @@ Feature: conv with an argument coming from a column
         """
       Then query result
         | to_binary | to_octal | to_hex |
-        | 1010 | 12 | A |
+        | 1010      | 12       | A      |

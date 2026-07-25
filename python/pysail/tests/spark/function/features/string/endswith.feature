@@ -5,7 +5,7 @@ Feature: endswith output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to endswith yields the schema Spark declares
+    Scenario: a non-null literal input to endswith yields the schema Spark declares
       When query
         """
         SELECT endswith('Spark SQL', 'SQL') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to endswith yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to endswith yields the schema Spark declares
+    Scenario: a non-null column input to endswith yields the schema Spark declares
       When query
         """
         SELECT endswith(CAST(id AS STRING), 'SQL') AS result FROM range(3)

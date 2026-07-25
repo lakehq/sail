@@ -126,14 +126,14 @@ Feature: array_compact() removes null values from an array
         SELECT array_compact(array(true, NULL, false)) AS result
         """
       Then query result
-        | result       |
+        | result        |
         | [true, false] |
 
   @spark_null
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null array literal yields a non-nullable array
+    Scenario: a non-null array literal yields a non-nullable array
       When query
         """
         SELECT array_compact(array(1, NULL, 2)) AS result
@@ -146,7 +146,7 @@ Scenario: a non-null array literal yields a non-nullable array
         """
 
     @sail-bug
-Scenario: a non-null array column yields a non-nullable array
+    Scenario: a non-null array column yields a non-nullable array
       When query
         """
         SELECT array_compact(array(id)) AS result FROM range(3)
@@ -159,7 +159,7 @@ Scenario: a non-null array column yields a non-nullable array
         """
 
     @sail-bug
-Scenario: a nullable array column stays nullable
+    Scenario: a nullable array column stays nullable
       When query
         """
         SELECT array_compact(c) AS result FROM VALUES (array(1)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
@@ -172,7 +172,7 @@ Scenario: a nullable array column stays nullable
         """
 
     @sail-bug
-Scenario: removing NULLs makes the element non-nullable regardless of input
+    Scenario: removing NULLs makes the element non-nullable regardless of input
       When query
         """
         SELECT array_compact(c) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)

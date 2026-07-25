@@ -5,7 +5,7 @@ Feature: array_position output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to array_position yields the schema Spark declares
+    Scenario: a non-null literal input to array_position yields the schema Spark declares
       When query
         """
         SELECT array_position(array(312, 773, 708, 708), 708) AS result

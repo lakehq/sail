@@ -11,9 +11,9 @@ Feature: input_order
         SELECT name, first(age) AS f FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) GROUP BY name ORDER BY name
         """
       Then query result ordered
-        | name | f |
+        | name  | f    |
         | Alice | NULL |
-        | Bob | 5 |
+        | Bob   | 5    |
 
     Scenario: input_order doctest #2 — last(age) per name
       When query
@@ -21,9 +21,9 @@ Feature: input_order
         SELECT name, last(age) AS l FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) GROUP BY name ORDER BY name
         """
       Then query result ordered
-        | name | l |
+        | name  | l |
         | Alice | 2 |
-        | Bob | 5 |
+        | Bob   | 5 |
 
     Scenario: input_order doctest #3 — first(v) ordered by a+b
       When query
@@ -31,7 +31,7 @@ Feature: input_order
         SELECT first(v) AS f FROM (SELECT * FROM VALUES (30,2,2),(10,5,-20),(20,1,1) AS t(v,a,b) ORDER BY a+b)
         """
       Then query result
-        | f |
+        | f  |
         | 10 |
 
     Scenario: input_order doctest #4 — first(v) sorted CTE
@@ -40,7 +40,7 @@ Feature: input_order
         WITH sorted AS (SELECT * FROM VALUES (10,'b'),(20,'a'),(30,'d'),(40,'c') AS t(v,k) ORDER BY k) SELECT first(v) AS r FROM sorted
         """
       Then query result
-        | r |
+        | r  |
         | 20 |
 
     Scenario: input_order doctest #5 — collect_list ordered
@@ -49,7 +49,7 @@ Feature: input_order
         SELECT collect_list(v) AS r FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | r |
+        | r            |
         | [10, 20, 30] |
 
     Scenario: input_order doctest #6 — first over partition
@@ -58,10 +58,10 @@ Feature: input_order
         SELECT name, age, first(age) OVER (PARTITION BY name) AS f FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | f |
+        | name  | age  | f    |
         | Alice | NULL | NULL |
-        | Alice | 2 | NULL |
-        | Bob | 5 | 5 |
+        | Alice | 2    | NULL |
+        | Bob   | 5    | 5    |
 
     Scenario: input_order doctest #7 — last over partition
       When query
@@ -69,10 +69,10 @@ Feature: input_order
         SELECT name, age, last(age) OVER (PARTITION BY name) AS l FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | l |
+        | name  | age  | l |
         | Alice | NULL | 2 |
-        | Alice | 2 | 2 |
-        | Bob | 5 | 5 |
+        | Alice | 2    | 2 |
+        | Bob   | 5    | 5 |
 
     Scenario: input_order doctest #8 — first(v) single group same key
       When query
@@ -98,10 +98,10 @@ Feature: input_order
         SELECT name, age, first(age) OVER (PARTITION BY name) AS f, last(age) OVER (PARTITION BY name) AS l FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | f | l |
+        | name  | age  | f    | l |
         | Alice | NULL | NULL | 2 |
-        | Alice | 2 | NULL | 2 |
-        | Bob | 5 | 5 | 5 |
+        | Alice | 2    | NULL | 2 |
+        | Bob   | 5    | 5    | 5 |
 
     Scenario: input_order doctest #11 — last over + last over sum
       When query
@@ -109,10 +109,10 @@ Feature: input_order
         SELECT name, age, (last(age) OVER (PARTITION BY name) + last(age) OVER (PARTITION BY name)) AS s FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | s |
-        | Alice | NULL | 4 |
-        | Alice | 2 | 4 |
-        | Bob | 5 | 10 |
+        | name  | age  | s  |
+        | Alice | NULL | 4  |
+        | Alice | 2    | 4  |
+        | Bob   | 5    | 10 |
 
     Scenario: input_order doctest #12 — sum over + last over
       When query
@@ -120,10 +120,10 @@ Feature: input_order
         SELECT name, age, sum(age) OVER (PARTITION BY name) AS sm, last(age) OVER (PARTITION BY name) AS l FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | sm | l |
-        | Alice | NULL | 2 | 2 |
-        | Alice | 2 | 2 | 2 |
-        | Bob | 5 | 5 | 5 |
+        | name  | age  | sm | l |
+        | Alice | NULL | 2  | 2 |
+        | Alice | 2    | 2  | 2 |
+        | Bob   | 5    | 5  | 5 |
 
     Scenario: input_order doctest #13 — listagg ordered
       When query
@@ -131,7 +131,7 @@ Feature: input_order
         SELECT listagg(k) AS s FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY v)
         """
       Then query result
-        | s |
+        | s   |
         | abc |
 
     Scenario: input_order doctest #14 — HAVING first
@@ -140,7 +140,7 @@ Feature: input_order
         SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30,1),(10,1),(20,2) AS t(v,g) ORDER BY v) GROUP BY g HAVING first(v) > 15
         """
       Then query result
-        | g | f |
+        | g | f  |
         | 2 | 20 |
 
     Scenario: input_order doctest #15 — CUBE first
@@ -149,10 +149,10 @@ Feature: input_order
         SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30,1),(10,1),(20,2) AS t(v,g) ORDER BY v) GROUP BY CUBE(g) ORDER BY g NULLS FIRST
         """
       Then query result ordered
-        | g | f |
+        | g    | f  |
         | NULL | 10 |
-        | 1 | 10 |
-        | 2 | 20 |
+        | 1    | 10 |
+        | 2    | 20 |
 
     Scenario: input_order doctest #16 — nth_value over ordered
       When query
@@ -160,10 +160,10 @@ Feature: input_order
         SELECT name, age, nth_value(age, 2) OVER (PARTITION BY name ORDER BY age) AS n FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | n |
+        | name  | age  | n    |
         | Alice | NULL | NULL |
-        | Alice | 2 | 2 |
-        | Bob | 5 | NULL |
+        | Alice | 2    | 2    |
+        | Bob   | 5    | NULL |
 
     Scenario: input_order doctest #17 — aliased subquery first
       When query
@@ -171,7 +171,7 @@ Feature: input_order
         SELECT first(v) AS f FROM (SELECT v FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k))
         """
       Then query result
-        | f |
+        | f  |
         | 10 |
 
     Scenario: input_order doctest #18 — select v then first
@@ -180,7 +180,7 @@ Feature: input_order
         SELECT first(v) AS f FROM (SELECT v FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k))
         """
       Then query result
-        | f |
+        | f  |
         | 10 |
 
     Scenario: input_order doctest #19 — sum/first/last over
@@ -189,10 +189,10 @@ Feature: input_order
         SELECT name, age, sum(age) OVER (PARTITION BY name) AS sm, first(age) OVER (PARTITION BY name) AS f, last(age) OVER (PARTITION BY name) AS l FROM (SELECT * FROM VALUES ('Alice', 2), ('Bob', 5), ('Alice', CAST(NULL AS INT)) AS t(name, age) ORDER BY age) ORDER BY name, age NULLS FIRST
         """
       Then query result ordered
-        | name | age | sm | f | l |
-        | Alice | NULL | 2 | NULL | 2 |
-        | Alice | 2 | 2 | NULL | 2 |
-        | Bob | 5 | 5 | 5 | 5 |
+        | name  | age  | sm | f    | l |
+        | Alice | NULL | 2  | NULL | 2 |
+        | Alice | 2    | 2  | NULL | 2 |
+        | Bob   | 5    | 5  | 5    | 5 |
 
     Scenario: input_order doctest #20 — first/last DISTINCT
       When query
@@ -200,7 +200,7 @@ Feature: input_order
         SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | f | l |
+        | f  | l  |
         | 10 | 30 |
 
     Scenario: input_order doctest #21 — first/last DISTINCT with dup
@@ -209,7 +209,7 @@ Feature: input_order
         SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(20,'b'),(10,'a'),(20,'d') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | f | l |
+        | f  | l  |
         | 10 | 20 |
 
     Scenario: input_order doctest #22 — count/first/last
@@ -218,7 +218,7 @@ Feature: input_order
         SELECT count(*) AS n, first(v) AS f, last(v) AS l FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | n | f | l |
+        | n | f  | l  |
         | 3 | 10 | 30 |
 
     Scenario: input_order doctest #23 — explode then first
@@ -227,7 +227,7 @@ Feature: input_order
         SELECT first(v) AS f FROM (SELECT v, e FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k) LATERAL VIEW explode(array(1)) AS e)
         """
       Then query result
-        | f |
+        | f  |
         | 10 |
 
     Scenario: input_order doctest #24 — avg ordered
@@ -236,7 +236,7 @@ Feature: input_order
         SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | a |
+        | a                  |
         | 0.3333333333333333 |
 
     Scenario: input_order doctest #25 — sum ordered
@@ -245,7 +245,7 @@ Feature: input_order
         SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v,k) ORDER BY k)
         """
       Then query result
-        | s |
+        | s   |
         | 1.0 |
 
     Scenario: input_order doctest #26 — join then first

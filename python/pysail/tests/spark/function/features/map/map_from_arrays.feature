@@ -36,24 +36,24 @@ Feature: map_from_arrays output schema
       When query
         """
         select map_from_arrays(a, b) as result, typeof(map_from_arrays(a, b)) as type
-   from values 
-       (array(1), array('a')), 
+   from values
+       (array(1), array('a')),
        (NULL, NULL),
        (array(1,2,3), NULL),
-       (NULL, array('b', 'c')), 
-       (array(4, 5), array('d', 'e')), 
+       (NULL, array('b', 'c')),
+       (array(4, 5), array('d', 'e')),
        (array(), array()),
-       (array(6, 7, 8), array('f', 'g', 'h')) 
+       (array(6, 7, 8), array('f', 'g', 'h'))
    as tab(a, b)
         """
       Then query result
-        | result | type |
-        | {1 -> a} | map<int,string> |
-        | NULL | map<int,string> |
-        | NULL | map<int,string> |
-        | NULL | map<int,string> |
-        | {4 -> d, 5 -> e} | map<int,string> |
-        | {} | map<int,string> |
+        | result                   | type            |
+        | {1 -> a}                 | map<int,string> |
+        | NULL                     | map<int,string> |
+        | NULL                     | map<int,string> |
+        | NULL                     | map<int,string> |
+        | {4 -> d, 5 -> e}         | map<int,string> |
+        | {}                       | map<int,string> |
         | {6 -> f, 7 -> g, 8 -> h} | map<int,string> |
 
     Scenario: map_from_arrays doctest #2 (result)
@@ -62,6 +62,5 @@ Feature: map_from_arrays output schema
         select map_from_arrays(NULL, NULL) as result, typeof(map_from_arrays(NULL, NULL)) as type
         """
       Then query result
-        | result | type |
-        | NULL | map<void,void> |
-
+        | result | type           |
+        | NULL   | map<void,void> |

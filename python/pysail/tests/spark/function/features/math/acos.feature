@@ -16,7 +16,7 @@ Feature: acos output schema
         """
 
       Examples:
-        | query                                                                |
-        | SELECT acos(1) AS result                                             |
-        | SELECT acos(CAST(id AS INT)) AS result FROM range(3)                 |
+        | query                                                                 |
+        | SELECT acos(1) AS result                                              |
+        | SELECT acos(CAST(id AS INT)) AS result FROM range(3)                  |
         | SELECT acos(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c) |

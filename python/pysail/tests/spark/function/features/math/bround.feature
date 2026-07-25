@@ -366,7 +366,7 @@ Feature: bround comprehensive tests
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
+    Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
       When query
         """
         SELECT bround(2.5, 0) AS result
@@ -377,7 +377,7 @@ Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
          |-- result: decimal(2,0) (nullable = true)
         """
 
-Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
+    Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
       When query
         """
         SELECT bround(id, 0) AS result FROM range(3)
@@ -388,7 +388,7 @@ Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
          |-- result: long (nullable = true)
         """
 
-Scenario: a nullable numeric column stays nullable
+    Scenario: a nullable numeric column stays nullable
       When query
         """
         SELECT bround(c, 1) AS result FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(NULL AS DOUBLE)) AS t(c)

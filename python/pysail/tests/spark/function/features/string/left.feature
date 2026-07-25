@@ -5,7 +5,7 @@ Feature: left output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to left yields the schema Spark declares
+    Scenario: a non-null literal input to left yields the schema Spark declares
       When query
         """
         SELECT left('Spark SQL', 3) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to left yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to left yields the schema Spark declares
+    Scenario: a non-null column input to left yields the schema Spark declares
       When query
         """
         SELECT left(CAST(id AS STRING), 3) AS result FROM range(3)

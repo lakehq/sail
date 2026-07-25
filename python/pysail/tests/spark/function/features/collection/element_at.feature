@@ -5,7 +5,7 @@ Feature: element_at output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to element_at yields the schema Spark declares
+    Scenario: a non-null literal input to element_at yields the schema Spark declares
       When query
         """
         SELECT element_at(array(1, 2, 3), 2) AS result

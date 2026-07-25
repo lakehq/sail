@@ -231,7 +231,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT xpath_string(to_xml(named_struct('msg', '<script>alert("xss")</script>')), '/ROW/msg') AS result
         """
       Then query result
-        | result                       |
+        | result                        |
         | <script>alert("xss")</script> |
 
   Rule: Timestamp and date formatting
@@ -564,7 +564,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('a', 1, 'b', 2)), '\n', '~') AS r
         """
       Then query result
-        | r                                    |
+        | r                                      |
         | <ROW>~    <a>1</a>~    <b>2</b>~</ROW> |
 
     Scenario: Struct whose only field is NULL is self-closing
@@ -573,8 +573,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('a', CAST(NULL AS INT))), '\n', '~') AS r
         """
       Then query result
-        | r       |
-        | <ROW/>  |
+        | r      |
+        | <ROW/> |
 
     Scenario: declaration option is ignored for string output
       When query
@@ -582,7 +582,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('a', 1), map('declaration', 'version="1.0"')), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                         |
         | <ROW>~    <a>1</a>~</ROW> |
 
   Rule: Primitive arrays are repeated flat tags
@@ -593,7 +593,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('numbers', array(1, 2, 3))), '\n', '~') AS r
         """
       Then query result
-        | r                                                                        |
+        | r                                                                                       |
         | <ROW>~    <numbers>1</numbers>~    <numbers>2</numbers>~    <numbers>3</numbers>~</ROW> |
 
     Scenario: Single-element primitive array
@@ -602,7 +602,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('items', array(1))), '\n', '~') AS r
         """
       Then query result
-        | r                              |
+        | r                                 |
         | <ROW>~    <items>1</items>~</ROW> |
 
     Scenario: NULL elements are dropped from a primitive array
@@ -611,7 +611,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('items', array(1, CAST(NULL AS INT), 3))), '\n', '~') AS r
         """
       Then query result
-        | r                                                    |
+        | r                                                      |
         | <ROW>~    <items>1</items>~    <items>3</items>~</ROW> |
 
     Scenario: Nested arrays wrap inner elements in item, outer keeps field tag
@@ -620,7 +620,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('m', array(array(1, 2), array(3)))), '\n', '~') AS r
         """
       Then query result
-        | r                                                                                                       |
+        | r                                                                                                                   |
         | <ROW>~    <m>~        <item>1</item>~        <item>2</item>~    </m>~    <m>~        <item>3</item>~    </m>~</ROW> |
 
     Scenario: Array of structs repeats the field tag around struct fields
@@ -629,7 +629,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('items', array(named_struct('x', 1), named_struct('x', 2)))), '\n', '~') AS r
         """
       Then query result
-        | r                                                                                       |
+        | r                                                                                                |
         | <ROW>~    <items>~        <x>1</x>~    </items>~    <items>~        <x>2</x>~    </items>~</ROW> |
 
   Rule: Binary fields
@@ -640,7 +640,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('b', X'48656C6C6F')), '\n', '~') AS r
         """
       Then query result
-        | r                                     |
+        | r                                        |
         | <ROW>~    <b>[48 65 6C 6C 6F]</b>~</ROW> |
 
     Scenario: Empty binary renders as empty brackets
@@ -649,7 +649,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('b', X'')), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                          |
         | <ROW>~    <b>[]</b>~</ROW> |
 
   Rule: XML escaping
@@ -660,7 +660,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('msg', 'a < b > c & d')), '\n', '~') AS r
         """
       Then query result
-        | r                                            |
+        | r                                                |
         | <ROW>~    <msg>a &lt; b > c &amp; d</msg>~</ROW> |
 
     Scenario: Attribute escapes ampersand, less-than and double-quote but not greater-than
@@ -669,7 +669,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('_a', 'x<y>z&"q')), '\n', '~') AS r
         """
       Then query result
-        | r                                   |
+        | r                               |
         | <ROW a="x&lt;y>z&amp;&quot;q"/> |
 
   Rule: valueTag is inline text content
@@ -680,8 +680,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('_VALUE', 'hello')), '\n', '~') AS r
         """
       Then query result
-        | r                  |
-        | <ROW>hello</ROW>   |
+        | r                |
+        | <ROW>hello</ROW> |
 
     Scenario: valueTag with an attribute sibling
       When query
@@ -689,8 +689,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('_id', 1, '_VALUE', 'hello')), '\n', '~') AS r
         """
       Then query result
-        | r                        |
-        | <ROW id="1">hello</ROW>  |
+        | r                       |
+        | <ROW id="1">hello</ROW> |
 
     Scenario: valueTag text precedes element siblings inline
       When query
@@ -698,8 +698,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('_VALUE', 'hi', 'child', 5)), '\n', '~') AS r
         """
       Then query result
-        | r                                     |
-        | <ROW>hi~    <child>5</child>~</ROW>    |
+        | r                                   |
+        | <ROW>hi~    <child>5</child>~</ROW> |
 
   Rule: Maps
 
@@ -709,7 +709,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('m', map('k1', 1, 'k2', 2))), '\n', '~') AS r
         """
       Then query result
-        | r                                                              |
+        | r                                                                   |
         | <ROW>~    <m>~        <k1>1</k1>~        <k2>2</k2>~    </m>~</ROW> |
 
     Scenario: Map with array value repeats the key tag
@@ -718,7 +718,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('m', map('nums', array(1, 2, 3)))), '\n', '~') AS r
         """
       Then query result
-        | r                                                                                    |
+        | r                                                                                                  |
         | <ROW>~    <m>~        <nums>1</nums>~        <nums>2</nums>~        <nums>3</nums>~    </m>~</ROW> |
 
   Rule: NULL handling and options
@@ -738,7 +738,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('a', 1, 'b', CAST(NULL AS INT))), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                         |
         | <ROW>~    <a>1</a>~</ROW> |
 
     Scenario: Empty string field is an open-close pair, not self-closing
@@ -747,8 +747,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('text', '')), '\n', '~') AS r
         """
       Then query result
-        | r                                |
-        | <ROW>~    <text></text>~</ROW>   |
+        | r                              |
+        | <ROW>~    <text></text>~</ROW> |
 
     Scenario: nullValue option renders NULL fields with the configured string
       When query
@@ -757,7 +757,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | r                          |
-        | <ROW>~    <a>NA</a>~</ROW>  |
+        | <ROW>~    <a>NA</a>~</ROW> |
 
   Rule: Temporal and decimal formatting
 
@@ -767,7 +767,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', DATE '2026-06-06')), '\n', '~') AS r
         """
       Then query result
-        | r                                |
+        | r                                  |
         | <ROW>~    <d>2026-06-06</d>~</ROW> |
 
     Scenario: Decimal keeps trailing zeros to scale
@@ -776,7 +776,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('price', CAST(2.99 AS DECIMAL(5,2)))), '\n', '~') AS r
         """
       Then query result
-        | r                                  |
+        | r                                    |
         | <ROW>~    <price>2.99</price>~</ROW> |
 
     Scenario: TIMESTAMP_NTZ uses ISO 8601 with millisecond precision and no offset
@@ -785,8 +785,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('ts', CAST('2026-06-06 12:00:00' AS TIMESTAMP_NTZ))), '\n', '~') AS r
         """
       Then query result
-        | r                                                  |
-        | <ROW>~    <ts>2026-06-06T12:00:00.000</ts>~</ROW>   |
+        | r                                                 |
+        | <ROW>~    <ts>2026-06-06T12:00:00.000</ts>~</ROW> |
 
   Rule: Special float values
 
@@ -796,7 +796,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST('NaN' AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                           |
         | <ROW>~    <d>NaN</d>~</ROW> |
 
     Scenario: Positive infinity renders as Infinity
@@ -805,7 +805,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST('Infinity' AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                             |
+        | r                                |
         | <ROW>~    <d>Infinity</d>~</ROW> |
 
   Rule: Double and float use Java toString formatting
@@ -816,7 +816,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST(1.0 AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                           |
         | <ROW>~    <d>1.0</d>~</ROW> |
 
     Scenario: Large double uses scientific notation
@@ -825,7 +825,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST(1e20 AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                            |
+        | r                              |
         | <ROW>~    <d>1.0E20</d>~</ROW> |
 
     Scenario: Small double uses scientific notation
@@ -834,8 +834,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST(1e-7 AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                             |
-        | <ROW>~    <d>1.0E-7</d>~</ROW>  |
+        | r                              |
+        | <ROW>~    <d>1.0E-7</d>~</ROW> |
 
     Scenario: Medium whole double keeps a decimal point
       When query
@@ -843,7 +843,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST(123456.0 AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                             |
+        | r                                |
         | <ROW>~    <d>123456.0</d>~</ROW> |
 
     Scenario: Negative zero double normalizes to positive zero
@@ -852,7 +852,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('d', CAST(-0.0 AS DOUBLE))), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                           |
         | <ROW>~    <d>0.0</d>~</ROW> |
 
     Scenario: Whole float keeps a decimal point
@@ -861,7 +861,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('f', CAST(1.0 AS FLOAT))), '\n', '~') AS r
         """
       Then query result
-        | r                        |
+        | r                           |
         | <ROW>~    <f>1.0</f>~</ROW> |
 
     Scenario: Double array repeats the field tag with formatted values
@@ -870,7 +870,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('v', array(CAST(1.0 AS DOUBLE), CAST(2.5 AS DOUBLE)))), '\n', '~') AS r
         """
       Then query result
-        | r                                    |
+        | r                                          |
         | <ROW>~    <v>1.0</v>~    <v>2.5</v>~</ROW> |
 
   Rule: Array element naming option
@@ -881,7 +881,7 @@ Feature: to_xml converts a struct value to an XML string
         SELECT replace(to_xml(named_struct('m', array(array(10, 20))), map('arrayElementName', 'val')), '\n', '~') AS r
         """
       Then query result
-        | r                                                                    |
+        | r                                                                         |
         | <ROW>~    <m>~        <val>10</val>~        <val>20</val>~    </m>~</ROW> |
 
   @spark_null

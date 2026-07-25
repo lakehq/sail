@@ -593,5 +593,5 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         FROM (VALUES (INTERVAL '2' DAY), (INTERVAL '5' DAY), (INTERVAL '11' DAY)) AS t(x)
         """
       Then query result
-        | p                                                                                                                      |
+        | p                                                                                                                |
         | [INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '5 00:00:00' DAY TO SECOND, INTERVAL '11 00:00:00' DAY TO SECOND] |

@@ -79,7 +79,7 @@ Feature: array_remove with an argument coming from a column
         """
 
     @sail-bug
-Scenario: nullable input elements propagate to the element nullability
+    Scenario: nullable input elements propagate to the element nullability
       When query
         """
         SELECT array_remove(c, 2) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)

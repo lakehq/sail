@@ -5,7 +5,7 @@ Feature: width_bucket output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to width_bucket yields the schema Spark declares
+    Scenario: a non-null literal input to width_bucket yields the schema Spark declares
       When query
         """
         SELECT width_bucket(5.3, 0.2, 10.6, 5) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to width_bucket yields the schema Spark decla
         """
 
     @sail-bug
-Scenario: a nullable column input to width_bucket stays nullable
+    Scenario: a nullable column input to width_bucket stays nullable
       When query
         """
         SELECT width_bucket(c, 0.2, 10.6, 5) AS result FROM VALUES (5.3), (CAST(NULL AS DECIMAL(2,1))) AS t(c)
@@ -37,11 +37,11 @@ Scenario: a nullable column input to width_bucket stays nullable
         """
       Then query result
         | result |
-        | 1 |
-        | 2 |
-        | 6 |
-        | 6 |
-        | 0 |
+        | 1      |
+        | 2      |
+        | 6      |
+        | 6      |
+        | 0      |
 
     Scenario: width_bucket doctest #2 (result)
       When query
@@ -50,7 +50,7 @@ Scenario: a nullable column input to width_bucket stays nullable
         """
       Then query result
         | width_bucket(0.0, 10.0, 0.0, 5) |
-        | 6 |
+        | 6                               |
 
     Scenario: width_bucket doctest #3 (result)
       When query
@@ -59,7 +59,7 @@ Scenario: a nullable column input to width_bucket stays nullable
         """
       Then query result
         | width_bucket(10.0, 0.0, 10.0, 5) |
-        | 6 |
+        | 6                                |
 
     Scenario: width_bucket doctest #4 (result)
       When query
@@ -68,5 +68,4 @@ Scenario: a nullable column input to width_bucket stays nullable
         """
       Then query result
         | width_bucket(10.0, 0.0, 0.0, 5) |
-        | NULL |
-
+        | NULL                            |

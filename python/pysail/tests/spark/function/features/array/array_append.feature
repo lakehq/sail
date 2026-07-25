@@ -5,7 +5,7 @@ Feature: array_append output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to array_append yields the schema Spark declares
+    Scenario: a non-null literal input to array_append yields the schema Spark declares
       When query
         """
         SELECT array_append(array('b', 'd', 'c', 'a'), 'd') AS result

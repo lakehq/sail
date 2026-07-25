@@ -142,7 +142,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('[{"a":1},{"a":2}]')) AS result
         """
       Then query result
-        | result                 |
+        | result                   |
         | ARRAY<OBJECT<a: BIGINT>> |
 
     Scenario: schema_of_variant array of mixed objects merges fields
@@ -160,7 +160,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('{"a":[1,2,3]}')) AS result
         """
       Then query result
-        | result                  |
+        | result                   |
         | OBJECT<a: ARRAY<BIGINT>> |
 
     Scenario: schema_of_variant object with nested array
@@ -169,7 +169,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('{"a":[[1],[2]]}')) AS result
         """
       Then query result
-        | result                         |
+        | result                          |
         | OBJECT<a: ARRAY<ARRAY<BIGINT>>> |
 
     Scenario: schema_of_variant deeply nested object
@@ -178,7 +178,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('{"a":{"b":{"c":{"d":1}}}}')) AS result
         """
       Then query result
-        | result                                              |
+        | result                                             |
         | OBJECT<a: OBJECT<b: OBJECT<c: OBJECT<d: BIGINT>>>> |
 
     Scenario: schema_of_variant array of array of objects
@@ -196,7 +196,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('[[],[]]')) AS result
         """
       Then query result
-        | result              |
+        | result             |
         | ARRAY<ARRAY<VOID>> |
 
     Scenario: schema_of_variant array of empty objects
@@ -205,7 +205,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('[{},{}]')) AS result
         """
       Then query result
-        | result            |
+        | result          |
         | ARRAY<OBJECT<>> |
 
     Scenario: schema_of_variant object with empty array
@@ -223,7 +223,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('{"a":{}}')) AS result
         """
       Then query result
-        | result               |
+        | result              |
         | OBJECT<a: OBJECT<>> |
 
   Rule: NULL edge cases
@@ -279,7 +279,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('{"a":null,"b":1}')) AS result
         """
       Then query result
-        | result                      |
+        | result                     |
         | OBJECT<a: VOID, b: BIGINT> |
 
     Scenario: schema_of_variant nested null array
@@ -288,7 +288,7 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('[[null]]')) AS result
         """
       Then query result
-        | result              |
+        | result             |
         | ARRAY<ARRAY<VOID>> |
 
     Scenario: schema_of_variant array with objects and null merges
@@ -297,14 +297,14 @@ Feature: schema_of_variant
         SELECT schema_of_variant(parse_json('[{"a":1}, null, {"a":2}]')) AS result
         """
       Then query result
-        | result                 |
+        | result                   |
         | ARRAY<OBJECT<a: BIGINT>> |
 
   @spark_null
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to schema_of_variant yields the schema Spark declares
+    Scenario: a non-null literal input to schema_of_variant yields the schema Spark declares
       When query
         """
         SELECT schema_of_variant(parse_json('null')) AS result

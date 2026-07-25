@@ -107,7 +107,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || to_char(e, '$99.99') || ']' AS r FROM VALUES (CAST(78.12 AS DOUBLE)) AS t(e)
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #2 (result)
@@ -116,7 +116,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [454] |
 
     Scenario: to_char doctest #3 (result)
@@ -125,7 +125,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '9999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [ 454] |
 
     Scenario: to_char doctest #4 (result)
@@ -134,7 +134,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '99999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [  454] |
 
     Scenario: to_char doctest #5 (result)
@@ -143,7 +143,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '0999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0454] |
 
     Scenario: to_char doctest #6 (result)
@@ -152,7 +152,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '00999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [00454] |
 
     Scenario: to_char doctest #7 (result)
@@ -161,7 +161,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '0000')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0454] |
 
     Scenario: to_char doctest #8 (result)
@@ -170,7 +170,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '90999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [  454] |
 
     Scenario: to_char doctest #9 (result)
@@ -179,7 +179,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '99099')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [  454] |
 
     Scenario: to_char doctest #10 (result)
@@ -188,7 +188,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1, '9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r   |
         | [1] |
 
     Scenario: to_char doctest #11 (result)
@@ -197,7 +197,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1, '0')) || ']' AS r
         """
       Then query result
-        | r |
+        | r   |
         | [1] |
 
     Scenario: to_char doctest #12 (result)
@@ -206,7 +206,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | [##] |
 
     Scenario: to_char doctest #13 (result)
@@ -215,7 +215,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '00')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | [##] |
 
     Scenario: to_char doctest #14 (result)
@@ -224,7 +224,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(123.456, '999D9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [###.#] |
 
     Scenario: to_char doctest #15 (result)
@@ -233,7 +233,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78.123, '99.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [##.#] |
 
     Scenario: to_char doctest #16 (result)
@@ -242,7 +242,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(12345, '9,999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [# ###] |
 
     Scenario: to_char doctest #17 (result)
@@ -251,7 +251,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.05, '9.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [#.#] |
 
     Scenario: to_char doctest #18 (result)
@@ -260,7 +260,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r   |
         | [ ] |
 
     Scenario: to_char doctest #19 (result)
@@ -269,7 +269,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | [  ] |
 
     Scenario: to_char doctest #20 (result)
@@ -278,7 +278,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '0')) || ']' AS r
         """
       Then query result
-        | r |
+        | r   |
         | [0] |
 
     Scenario: to_char doctest #21 (result)
@@ -287,7 +287,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '00')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | [00] |
 
     Scenario: to_char doctest #22 (result)
@@ -296,7 +296,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [ 0.00] |
 
     Scenario: to_char doctest #23 (result)
@@ -305,7 +305,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '00.00')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [00.00] |
 
     Scenario: to_char doctest #24 (result)
@@ -314,7 +314,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, 'S99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [  +] |
 
     Scenario: to_char doctest #25 (result)
@@ -323,7 +323,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '99S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [+  ] |
 
     Scenario: to_char doctest #26 (result)
@@ -332,7 +332,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0, '$99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$ 0.00] |
 
     Scenario: to_char doctest #27 (result)
@@ -341,7 +341,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.0, '9.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [0.0] |
 
     Scenario: to_char doctest #28 (result)
@@ -350,7 +350,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78, '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [78.00] |
 
     Scenario: to_char doctest #29 (result)
@@ -359,7 +359,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78, '99.')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [78 ] |
 
     Scenario: to_char doctest #30 (result)
@@ -368,7 +368,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78, '99D')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [78 ] |
 
     Scenario: to_char doctest #31 (result)
@@ -377,7 +377,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.45, '.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [.45] |
 
     Scenario: to_char doctest #32 (result)
@@ -386,7 +386,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.45, 'D99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [.45] |
 
     Scenario: to_char doctest #33 (result)
@@ -395,7 +395,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.45, '9.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0.45] |
 
     Scenario: to_char doctest #34 (result)
@@ -404,7 +404,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.45, '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [ 0.45] |
 
     Scenario: to_char doctest #35 (result)
@@ -413,7 +413,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(12454, '99G999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [12,454] |
 
     Scenario: to_char doctest #36 (result)
@@ -422,7 +422,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1234, '9,999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [1,234] |
 
     Scenario: to_char doctest #37 (result)
@@ -431,7 +431,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1234, '9G999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [1,234] |
 
     Scenario: to_char doctest #38 (result)
@@ -440,7 +440,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(45, '9,999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [   45] |
 
     Scenario: to_char doctest #39 (result)
@@ -449,7 +449,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(45, '0,000')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [0,045] |
 
     Scenario: to_char doctest #40 (result)
@@ -458,7 +458,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1234567, '9,999,999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r           |
         | [1,234,567] |
 
     Scenario: to_char doctest #41 (result)
@@ -467,7 +467,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1234567, '9999,999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r          |
         | [1234,567] |
 
     Scenario: to_char doctest #42 (result)
@@ -476,7 +476,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(12454, '99G99,9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r         |
         | [12,45,4] |
 
     Scenario: to_char doctest #43 (result)
@@ -485,7 +485,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1234.56, '9,999.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r          |
         | [1,234.56] |
 
     Scenario: to_char doctest #44 (result)
@@ -494,7 +494,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78.12, '$99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #45 (result)
@@ -503,7 +503,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78.12, '$00.00')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #46 (result)
@@ -512,7 +512,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78.12, '$99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #47 (result)
@@ -521,7 +521,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.12, '$.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [$.12] |
 
     Scenario: to_char doctest #48 (result)
@@ -530,7 +530,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, 'S999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [+454] |
 
     Scenario: to_char doctest #49 (result)
@@ -539,7 +539,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, 'S999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [-454] |
 
     Scenario: to_char doctest #50 (result)
@@ -548,7 +548,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '999S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [454+] |
 
     Scenario: to_char doctest #51 (result)
@@ -557,7 +557,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '999S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [454-] |
 
     Scenario: to_char doctest #52 (result)
@@ -566,7 +566,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-12454.8, '99G999D9S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r           |
         | [12,454.8-] |
 
     Scenario: to_char doctest #53 (result)
@@ -575,7 +575,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-1, 'S9999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [   -1] |
 
     Scenario: to_char doctest #54 (result)
@@ -584,7 +584,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(1, 'S9999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [   +1] |
 
     Scenario: to_char doctest #55 (result)
@@ -593,7 +593,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-1, 'S0000')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [-0001] |
 
     Scenario: to_char doctest #56 (result)
@@ -602,7 +602,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, 'S$999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [-$454] |
 
     Scenario: to_char doctest #57 (result)
@@ -611,7 +611,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78.12, 'S$99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r         |
         | [-$78.12] |
 
     Scenario: to_char doctest #58 (result)
@@ -620,7 +620,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78.12, '$99.99S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r         |
         | [$78.12-] |
 
     Scenario: to_char doctest #59 (result)
@@ -629,7 +629,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, 'MI999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [ 454] |
 
     Scenario: to_char doctest #60 (result)
@@ -638,7 +638,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, 'MI999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [-454] |
 
     Scenario: to_char doctest #61 (result)
@@ -647,7 +647,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '999MI')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [454 ] |
 
     Scenario: to_char doctest #62 (result)
@@ -656,7 +656,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '999MI')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [454-] |
 
     Scenario: to_char doctest #63 (result)
@@ -665,7 +665,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-1, 'MI9999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [   -1] |
 
     Scenario: to_char doctest #64 (result)
@@ -674,7 +674,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-1, '9999MI')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [   1-] |
 
     Scenario: to_char doctest #65 (result)
@@ -683,7 +683,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, '999PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [454  ] |
 
     Scenario: to_char doctest #66 (result)
@@ -692,7 +692,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '999PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [<454>] |
 
     Scenario: to_char doctest #67 (result)
@@ -701,7 +701,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '9999PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [ <454>] |
 
     Scenario: to_char doctest #68 (result)
@@ -710,7 +710,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-4, '9999PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [   <4>] |
 
     Scenario: to_char doctest #69 (result)
@@ -719,7 +719,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78.12, '$99.99PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r          |
         | [<$78.12>] |
 
     Scenario: to_char doctest #70 (result)
@@ -728,7 +728,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, 'S999PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [<-454>] |
 
     Scenario: to_char doctest #71 (result)
@@ -737,7 +737,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-0.1, 'S9.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [ -.1] |
 
     Scenario: to_char doctest #72 (result)
@@ -746,7 +746,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-0.1, '9.9S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0.1-] |
 
     Scenario: to_char doctest #73 (result)
@@ -755,7 +755,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-0.1, '9.9MI')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0.1-] |
 
     Scenario: to_char doctest #74 (result)
@@ -764,7 +764,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(0.1, '9.9S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [0.1+] |
 
     Scenario: to_char doctest #75 (result)
@@ -773,7 +773,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78, '99.S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [78+ ] |
 
     Scenario: to_char doctest #76 (result)
@@ -782,7 +782,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78, '99.S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [78- ] |
 
     Scenario: to_char doctest #77 (result)
@@ -791,7 +791,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-78, '99.PR')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [<78> ] |
 
     Scenario: to_char doctest #78 (result)
@@ -800,7 +800,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [454] |
 
     Scenario: to_char doctest #79 (result)
@@ -809,7 +809,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-12.34, '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [12.34] |
 
     Scenario: to_char doctest #80 (result)
@@ -818,7 +818,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(78.12 AS DECIMAL(10,4)), '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [78.12] |
 
     Scenario: to_char doctest #81 (result)
@@ -827,7 +827,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(78.1 AS DECIMAL(10,4)), '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [78.10] |
 
     Scenario: to_char doctest #82 (result)
@@ -836,7 +836,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(78 AS DECIMAL(10,4)), '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [78.00] |
 
     Scenario: to_char doctest #83 (result)
@@ -845,7 +845,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(0.5 AS DECIMAL(10,4)), '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [ 0.50] |
 
     Scenario: to_char doctest #84 (result)
@@ -854,7 +854,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454.00, '000D00')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [454.00] |
 
     Scenario: to_char doctest #85 (result)
@@ -863,7 +863,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(12454.8 AS DECIMAL(20,10)), '99G999D9S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r           |
         | [12,454.8+] |
 
     Scenario: to_char doctest #86 (result)
@@ -872,7 +872,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78.12D, '$99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #87 (result)
@@ -881,7 +881,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(0.001 AS DOUBLE), '9.999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [0.001] |
 
     Scenario: to_char doctest #88 (result)
@@ -890,7 +890,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(0.1 AS DOUBLE), '9.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [0.1] |
 
     Scenario: to_char doctest #89 (result)
@@ -899,7 +899,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(-12454.8 AS DOUBLE), '99G999D9S')) || ']' AS r
         """
       Then query result
-        | r |
+        | r           |
         | [12,454.8-] |
 
     Scenario: to_char doctest #90 (result)
@@ -908,7 +908,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(0.12345678901234567 AS DOUBLE), '9.99999999999999999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                     |
         | [0.12345678901234600] |
 
     Scenario: to_char doctest #91 (result)
@@ -917,7 +917,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(1.5 AS FLOAT), '9.9')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [1.5] |
 
     Scenario: to_char doctest #92 (result)
@@ -926,7 +926,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(78.12 AS FLOAT), '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [##.##] |
 
     Scenario: to_char doctest #93 (result)
@@ -935,7 +935,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(127 AS TINYINT), '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [127] |
 
     Scenario: to_char doctest #94 (result)
@@ -944,7 +944,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(-32768 AS SMALLINT), 'S99999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [-32768] |
 
     Scenario: to_char doctest #95 (result)
@@ -953,7 +953,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(2147483647 AS INT), '9999999999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r            |
         | [2147483647] |
 
     Scenario: to_char doctest #96 (result)
@@ -962,7 +962,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(9223372036854775807 AS BIGINT), '9999999999999999999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                     |
         | [9223372036854775807] |
 
     Scenario: to_char doctest #97 (result)
@@ -971,7 +971,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char('78.12', '99.99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [78.12] |
 
     Scenario: to_char doctest #98 (result)
@@ -980,7 +980,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char('454', '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [454] |
 
     Scenario: to_char doctest #99 (result)
@@ -989,7 +989,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char('-454', 'S999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [-454] |
 
     Scenario: to_char doctest #100 (result)
@@ -998,7 +998,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(NULL AS DECIMAL(5,2)), '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: to_char doctest #101 (result)
@@ -1007,7 +1007,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(NULL AS INT), '999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: to_char doctest #102 (result)
@@ -1016,7 +1016,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(454, CAST(NULL AS STRING))) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: to_char doctest #103 (result)
@@ -1025,7 +1025,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)), '99999999999999999999999999999999999999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                                        |
         | [12345678901234567890123456789012345678] |
 
     Scenario: to_char doctest #104 (result)
@@ -1034,7 +1034,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST('1234567890.0987654321' AS DECIMAL(38,18)), '9999999999.999999999999999999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                               |
         | [1234567890.098765432100000000] |
 
     Scenario: to_char doctest #105 (result)
@@ -1043,7 +1043,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-12454.8, '99g999d9s')) || ']' AS r
         """
       Then query result
-        | r |
+        | r           |
         | [12,454.8-] |
 
     Scenario: to_char doctest #106 (result)
@@ -1052,7 +1052,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, '999pr')) || ']' AS r
         """
       Then query result
-        | r |
+        | r       |
         | [<454>] |
 
     Scenario: to_char doctest #107 (result)
@@ -1061,7 +1061,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(-454, 'mi999')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [-454] |
 
     Scenario: to_char doctest #108 (result)
@@ -1070,7 +1070,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(78.12, '$99d99')) || ']' AS r
         """
       Then query result
-        | r |
+        | r        |
         | [$78.12] |
 
     Scenario: to_char doctest #109 (error)
@@ -1227,7 +1227,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(date'2016-04-08', 'y')) || ']' AS r
         """
       Then query result
-        | r |
+        | r      |
         | [2016] |
 
     @sail-only
@@ -1237,7 +1237,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(date'2022-04-08', 'yyyy-MM-dd')) || ']' AS r
         """
       Then query result
-        | r |
+        | r            |
         | [2022-04-08] |
 
     @sail-only
@@ -1247,7 +1247,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(timestamp'2016-04-08 13:14:15', 'yyyy-MM-dd HH:mm:ss')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                     |
         | [2016-04-08 13:14:15] |
 
     @sail-only
@@ -1257,7 +1257,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(date'2022-04-08', 'MMM')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [Apr] |
 
     @sail-only
@@ -1267,7 +1267,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(date'2022-04-08', 'E')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [Fri] |
 
     @sail-only
@@ -1277,7 +1277,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(timestamp_ntz'2016-04-08 13:14:15', 'yyyy MM dd')) || ']' AS r
         """
       Then query result
-        | r |
+        | r            |
         | [2016 04 08] |
 
     @sail-only
@@ -1287,7 +1287,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(CAST(NULL AS DATE), 'yyyy')) || ']' AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     @sail-only
@@ -1297,7 +1297,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('Spark SQL', 'utf-8'), 'base64')) || ']' AS r
         """
       Then query result
-        | r |
+        | r              |
         | [U3BhcmsgU1FM] |
 
     @sail-only
@@ -1307,7 +1307,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('Spark SQL', 'utf-8'), 'hex')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                    |
         | [537061726B2053514C] |
 
     @sail-only
@@ -1317,7 +1317,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('abc', 'utf-8'), 'utf-8')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [abc] |
 
     @sail-only
@@ -1327,7 +1327,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('Spark SQL', 'utf-8'), 'BASE64')) || ']' AS r
         """
       Then query result
-        | r |
+        | r              |
         | [U3BhcmsgU1FM] |
 
     @sail-only
@@ -1337,7 +1337,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('Spark SQL', 'utf-8'), ' hex ')) || ']' AS r
         """
       Then query result
-        | r |
+        | r                    |
         | [537061726B2053514C] |
 
     @sail-only
@@ -1347,7 +1347,7 @@ Feature: to_char with an argument coming from a column
         SELECT '[' || (to_char(encode('abc', 'utf-8'), 'UTF-8')) || ']' AS r
         """
       Then query result
-        | r |
+        | r     |
         | [abc] |
 
     @sail-only
@@ -1365,4 +1365,3 @@ Feature: to_char with an argument coming from a column
         SELECT to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING)) AS r
         """
       Then query error (?i).*
-

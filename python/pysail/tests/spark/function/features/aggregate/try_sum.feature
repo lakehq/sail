@@ -10,7 +10,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | 6 |
+        | 6     |
 
     Scenario: try_sum doctest #2 (result)
       When query
@@ -19,7 +19,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | 2 |
+        | 2     |
 
     Scenario: try_sum doctest #3 (result)
       When query
@@ -28,7 +28,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | NULL |
+        | NULL  |
 
     Scenario: try_sum doctest #4 (result)
       When query
@@ -37,7 +37,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | 7.0 |
+        | 7.0   |
 
     Scenario: try_sum doctest #5 (result)
       When query
@@ -45,7 +45,7 @@ Feature: try_sum
         SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE)) AS t(x)
         """
       Then query result
-        | sum_x |
+        | sum_x    |
         | Infinity |
 
     Scenario: try_sum doctest #6 (result)
@@ -55,7 +55,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | NaN |
+        | NaN   |
 
     Scenario: try_sum doctest #7 (result)
       When query
@@ -63,7 +63,7 @@ Feature: try_sum
         SELECT try_sum(x) AS sum_x FROM VALUES (CAST('Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) AS t(x)
         """
       Then query result
-        | sum_x |
+        | sum_x    |
         | Infinity |
 
     Scenario: try_sum doctest #8 (result)
@@ -73,7 +73,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | 6.00 |
+        | 6.00  |
 
     Scenario: try_sum doctest #10 (result)
       When query
@@ -82,7 +82,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | 3.50 |
+        | 3.50  |
 
     Scenario: try_sum doctest #11 (result)
       When query
@@ -90,7 +90,7 @@ Feature: try_sum
         SELECT try_sum(x) AS sum_x FROM VALUES (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0))) AS t(x)
         """
       Then query result
-        | sum_x |
+        | sum_x  |
         | 110000 |
 
     Scenario: try_sum doctest #13 (result)
@@ -100,7 +100,7 @@ Feature: try_sum
         """
       Then query result
         | sum_x |
-        | NULL |
+        | NULL  |
 
     Scenario: try_sum doctest #15 (result)
       When query
@@ -108,9 +108,9 @@ Feature: try_sum
         SELECT g, try_sum(x) AS sum_x FROM VALUES ('bad', CAST(9223372036854775807 AS BIGINT)), ('bad', CAST(1 AS BIGINT)), ('ok', CAST(10 AS BIGINT)), ('ok', CAST(NULL AS BIGINT)), ('ok', CAST(5 AS BIGINT)) AS t(g, x) GROUP BY g ORDER BY g
         """
       Then query result ordered
-        | g | sum_x |
-        | bad | NULL |
-        | ok | 15 |
+        | g   | sum_x |
+        | bad | NULL  |
+        | ok  | 15    |
 
   Rule: Output schema (migrated from test_try_sum.txt printSchema doctests)
 
@@ -158,4 +158,3 @@ Feature: try_sum
          |-- g: string (nullable = true)
          |-- sum_x: long (nullable = true)
         """
-

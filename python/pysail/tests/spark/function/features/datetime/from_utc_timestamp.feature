@@ -3,7 +3,7 @@ Feature: from_utc_timestamp
 
   Rule: Type coercion
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = Asia/Shanghai
 
     Scenario Outline: `from_utc_timestamp` with coercible input
@@ -27,7 +27,7 @@ Feature: from_utc_timestamp
 
   Rule: Daylight saving time handling
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = Asia/Shanghai
 
     Scenario Outline: `from_utc_timestamp` around daylight saving time transition

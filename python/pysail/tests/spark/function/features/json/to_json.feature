@@ -14,4 +14,3 @@ Feature: to_json output schema
         root
          |-- result: string (nullable = true)
         """
-

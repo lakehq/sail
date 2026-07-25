@@ -361,7 +361,7 @@ Feature: bin converts integral values to binary strings
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null integer literal yields a non-nullable string
+    Scenario: a non-null integer literal yields a non-nullable string
       When query
         """
         SELECT bin(5) AS result
@@ -373,7 +373,7 @@ Scenario: a non-null integer literal yields a non-nullable string
         """
 
     @sail-bug
-Scenario: a non-null integer column yields a non-nullable string
+    Scenario: a non-null integer column yields a non-nullable string
       When query
         """
         SELECT bin(id) AS result FROM range(3)
@@ -384,7 +384,7 @@ Scenario: a non-null integer column yields a non-nullable string
          |-- result: string (nullable = false)
         """
 
-Scenario: a nullable integer column stays nullable
+    Scenario: a nullable integer column stays nullable
       When query
         """
         SELECT bin(c) AS result FROM VALUES (5), (CAST(NULL AS INT)) AS t(c)

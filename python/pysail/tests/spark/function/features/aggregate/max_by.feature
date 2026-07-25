@@ -5,29 +5,29 @@ Feature: max_by function
 
     Scenario: max_by with all NULLs in ordering column
       When query
-      """
-      SELECT max_by(name, age) AS result
-      FROM VALUES ('Alice', CAST(NULL AS INT)), ('Bob', CAST(NULL AS INT)) AS t(name, age)
-      """
+        """
+        SELECT max_by(name, age) AS result
+        FROM VALUES ('Alice', CAST(NULL AS INT)), ('Bob', CAST(NULL AS INT)) AS t(name, age)
+        """
       Then query result
-      | result |
-      | NULL   |
+        | result |
+        | NULL   |
 
   Rule: max_by as window function
 
     Scenario: max_by over window
       When query
-      """
-      SELECT name, age,
-             max_by(name, age) OVER (ORDER BY age ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
-      FROM VALUES ('Alice', 30), ('Bob', 50), ('Carol', 40) AS t(name, age)
-      ORDER BY age
-      """
+        """
+        SELECT name, age,
+               max_by(name, age) OVER (ORDER BY age ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('Alice', 30), ('Bob', 50), ('Carol', 40) AS t(name, age)
+        ORDER BY age
+        """
       Then query result ordered
-      | name  | age | result |
-      | Alice | 30  | Alice  |
-      | Carol | 40  | Carol  |
-      | Bob   | 50  | Bob    |
+        | name  | age | result |
+        | Alice | 30  | Alice  |
+        | Carol | 40  | Carol  |
+        | Bob   | 50  | Bob    |
 
   Rule: Result values (migrated from test_max_by.txt doctests)
 
@@ -38,7 +38,7 @@ Feature: max_by function
         """
       Then query result
         | result |
-        | 80 |
+        | 80     |
 
     Scenario: max_by doctest #2 (result)
       When query
@@ -47,7 +47,7 @@ Feature: max_by function
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: max_by doctest #3 (result)
       When query
@@ -56,7 +56,7 @@ Feature: max_by function
         """
       Then query result
         | result |
-        | 70 |
+        | 70     |
 
     Scenario: max_by doctest #4 (result)
       When query
@@ -65,5 +65,4 @@ Feature: max_by function
         """
       Then query result
         | result |
-        | NULL |
-
+        | NULL   |

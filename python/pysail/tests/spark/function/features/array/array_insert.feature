@@ -43,7 +43,7 @@ Feature: array_insert with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null array literal yields a non-nullable array
+    Scenario: a non-null array literal yields a non-nullable array
       When query
         """
         SELECT array_insert(array(1, 2), 1, 9) AS result
@@ -56,7 +56,7 @@ Scenario: a non-null array literal yields a non-nullable array
         """
 
     @sail-bug
-Scenario: a non-null array column yields a non-nullable array
+    Scenario: a non-null array column yields a non-nullable array
       When query
         """
         SELECT array_insert(array(id), 1, 9) AS result FROM range(3)
@@ -81,7 +81,7 @@ Scenario: a non-null array column yields a non-nullable array
         """
 
     @sail-bug
-Scenario: nullable input elements propagate to the element nullability
+    Scenario: nullable input elements propagate to the element nullability
       When query
         """
         SELECT array_insert(c, 1, 9) AS result FROM VALUES (array(1, CAST(NULL AS INT))) AS t(c)

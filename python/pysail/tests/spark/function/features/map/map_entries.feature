@@ -18,7 +18,7 @@ Feature: map_entries function
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null map literal yields a non-nullable array
+    Scenario: a non-null map literal yields a non-nullable array
       When query
         """
         SELECT map_entries(map('a', 1)) AS result
@@ -33,7 +33,7 @@ Scenario: a non-null map literal yields a non-nullable array
         """
 
     @sail-bug
-Scenario: a non-null map column yields a non-nullable array
+    Scenario: a non-null map column yields a non-nullable array
       When query
         """
         SELECT map_entries(map('a', id)) AS result FROM range(3)
@@ -62,7 +62,7 @@ Scenario: a non-null map column yields a non-nullable array
         """
 
     @sail-bug
-Scenario: a nullable map value propagates to the struct value field
+    Scenario: a nullable map value propagates to the struct value field
       When query
         """
         SELECT map_entries(c) AS result FROM VALUES (map('a', CAST(NULL AS INT))) AS t(c)

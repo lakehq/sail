@@ -9,8 +9,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><a>1</a><b>0.4</b></p>', 'a INT, b DOUBLE') AS r
         """
       Then query result
-        | r          |
-        | {1, 0.4}   |
+        | r        |
+        | {1, 0.4} |
 
     Scenario: Parse STRING field
       When query
@@ -19,7 +19,7 @@ Feature: from_xml parses an XML string into a struct value
         """
       Then query result
         | result |
-        | sunset  |
+        | sunset |
 
     Scenario: Parse BOOLEAN true
       When query
@@ -55,7 +55,7 @@ Feature: from_xml parses an XML string into a struct value
         """
       Then query result
         | result |
-        | 3.5    |    
+        | 3.5    |
 
   Rule: Root tag is ignored
 
@@ -167,8 +167,8 @@ Feature: from_xml parses an XML string into a struct value
         ) AS r
         """
       Then query result
-        | r                           |
-        | {Pablo, {Ana, 1}}           |
+        | r                 |
+        | {Pablo, {Ana, 1}} |
 
     Scenario: Three levels of nesting
       When query
@@ -199,8 +199,8 @@ Feature: from_xml parses an XML string into a struct value
         ).student AS result
         """
       Then query result
-        | result                              |
-        | [{Bob, 1}, {Charlie, 2}]            |
+        | result                   |
+        | [{Bob, 1}, {Charlie, 2}] |
 
   Rule: Date and timestamp types
 
@@ -241,7 +241,7 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><ts>2026-06-17T18:00:00.000</ts></p>', 'ts TIMESTAMP_NTZ').ts AS result
         """
       Then query result
-        | result                  |
+        | result              |
         | 2026-06-17 18:00:00 |
 
     Scenario: Custom timestampNTZFormat option
@@ -254,7 +254,7 @@ Feature: from_xml parses an XML string into a struct value
         ).ts AS result
         """
       Then query result
-        | result                  |
+        | result              |
         | 2026-06-17 18:00:00 |
 
   Rule: XML entity unescaping
@@ -265,8 +265,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><s>a &lt; b</s></p>', 's STRING').s AS result
         """
       Then query result
-        | result  |
-        | a < b   |
+        | result |
+        | a < b  |
 
     Scenario: Ampersand entity is unescaped
       When query
@@ -274,8 +274,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><s>a &amp; b</s></p>', 's STRING').s AS result
         """
       Then query result
-        | result  |
-        | a & b   |
+        | result |
+        | a & b  |
 
     Scenario: Greater-than entity is unescaped
       When query
@@ -283,8 +283,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><s>a &gt; b</s></p>', 's STRING').s AS result
         """
       Then query result
-        | result  |
-        | a > b   |
+        | result |
+        | a > b  |
 
     Scenario: Quote entity is unescaped
       When query
@@ -292,8 +292,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><s>say &quot;hi&quot;</s></p>', 's STRING').s AS result
         """
       Then query result
-        | result    |
-        | say "hi"  |
+        | result   |
+        | say "hi" |
 
   Rule: Attributes
 
@@ -303,8 +303,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p id="99"><name>Agua</name></p>', '_id STRING, name STRING') AS r
         """
       Then query result
-        | r             |
-        | {99, Agua}   |
+        | r          |
+        | {99, Agua} |
 
     Scenario: Custom attributePrefix option
       When query
@@ -312,8 +312,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p id="99"><name>Amber</name></p>', 'id STRING, name STRING', map('attributePrefix', '')) AS r
         """
       Then query result
-        | r             |
-        | {99, Amber}   |
+        | r           |
+        | {99, Amber} |
 
   Rule: valueTag option
 
@@ -323,7 +323,7 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p id="7">colors</p>', '_id STRING, _VALUE STRING') AS r
         """
       Then query result
-        | r          |
+        | r           |
         | {7, colors} |
 
   Rule: Parse mode
@@ -390,8 +390,8 @@ Feature: from_xml parses an XML string into a struct value
         SELECT from_xml('<p><a>1.10</a><a>2.20</a></p>', 'a ARRAY<DECIMAL(10,2)>').a AS result
         """
       Then query result
-        | result         |
-        | [1.10, 2.20]   |
+        | result       |
+        | [1.10, 2.20] |
 
   @spark_null
   Rule: Output schema

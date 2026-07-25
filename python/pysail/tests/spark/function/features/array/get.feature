@@ -43,7 +43,7 @@ Feature: get with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to get yields the schema Spark declares
+    Scenario: a non-null literal input to get yields the schema Spark declares
       When query
         """
         SELECT get(array(1, 2, 3), 0) AS result

@@ -105,7 +105,7 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(454, '999') AS r
         """
       Then query result
-        | r |
+        | r   |
         | 454 |
 
     Scenario: to_varchar doctest #2 (result)
@@ -114,7 +114,7 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(78.12, '$99.99') AS r
         """
       Then query result
-        | r |
+        | r      |
         | $78.12 |
 
     Scenario: to_varchar doctest #3 (result)
@@ -123,7 +123,7 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(-12454.8, '99G999D9S') AS r
         """
       Then query result
-        | r |
+        | r         |
         | 12,454.8- |
 
     @sail-only
@@ -133,7 +133,7 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(encode('Spark SQL', 'utf-8'), 'hex') AS r
         """
       Then query result
-        | r |
+        | r                  |
         | 537061726B2053514C |
 
     Scenario: to_varchar doctest #4 (error)
@@ -142,4 +142,3 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(454, 'PR999') AS r
         """
       Then query error (?i).*
-

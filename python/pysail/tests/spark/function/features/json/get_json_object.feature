@@ -302,7 +302,7 @@ Feature: get_json_object extracts values via a Spark JSONPath
 
         """
       Then query result
-        | a | b | c | e |
+        | a | b | c          | e       |
         | x | 1 | {"d":true} | [10,20] |
 
     Scenario: get_json_object doctest #2 (result)
@@ -319,5 +319,4 @@ Feature: get_json_object extracts values via a Spark JSONPath
         """
       Then query result
         | null_value | missing_key | null_json | null_path | invalid_json | invalid_path |
-        | NULL | NULL | NULL | NULL | NULL | NULL |
-
+        | NULL       | NULL        | NULL      | NULL      | NULL         | NULL         |

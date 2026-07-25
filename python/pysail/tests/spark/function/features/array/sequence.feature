@@ -5,7 +5,7 @@ Feature: sequence output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to sequence yields the schema Spark declares
+    Scenario: a non-null literal input to sequence yields the schema Spark declares
       When query
         """
         SELECT sequence(1, 5) AS result
@@ -18,7 +18,7 @@ Scenario: a non-null literal input to sequence yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to sequence yields the schema Spark declares
+    Scenario: a non-null column input to sequence yields the schema Spark declares
       When query
         """
         SELECT sequence(CAST(id AS INT), 5) AS result FROM range(3)
@@ -31,7 +31,7 @@ Scenario: a non-null column input to sequence yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a nullable column input to sequence stays nullable
+    Scenario: a nullable column input to sequence stays nullable
       When query
         """
         SELECT sequence(c, 5) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)

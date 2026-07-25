@@ -51,7 +51,7 @@ Feature: json_object_keys output schema
 
         """
       Then query result
-        | keys | type |
+        | keys     | type          |
         | [f1, f2] | array<string> |
 
     Scenario: json_object_keys doctest #2 (result)
@@ -60,8 +60,8 @@ Feature: json_object_keys output schema
         SELECT json_object_keys('{}') AS keys, typeof(json_object_keys('{}')) AS type
         """
       Then query result
-        | keys | type |
-        | [] | array<string> |
+        | keys | type          |
+        | []   | array<string> |
 
     Scenario: json_object_keys doctest #3 (result)
       When query
@@ -74,5 +74,4 @@ Feature: json_object_keys output schema
         """
       Then query result
         | non_object | null_json | invalid_json |
-        | NULL | NULL | NULL |
-
+        | NULL       | NULL      | NULL         |

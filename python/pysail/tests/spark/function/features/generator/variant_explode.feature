@@ -227,10 +227,10 @@ Feature: variant_explode and variant_explode_outer
         LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
-        | pos | key  | value    |
-        | 0   | NULL | 1        |
-        | 1   | NULL | [2,3]    |
-        | 2   | NULL | {"a":4}  |
+        | pos | key  | value   |
+        | 0   | NULL | 1       |
+        | 1   | NULL | [2,3]   |
+        | 2   | NULL | {"a":4} |
 
     Scenario: Explode object with nested values
       When query
@@ -240,9 +240,9 @@ Feature: variant_explode and variant_explode_outer
         LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
-        | pos | key | value     |
-        | 0   | x   | [1,2]     |
-        | 1   | y   | {"z":3}   |
+        | pos | key | value   |
+        | 0   | x   | [1,2]   |
+        | 1   | y   | {"z":3} |
 
   Rule: variant_explode_outer with non-empty input
 
@@ -254,9 +254,9 @@ Feature: variant_explode and variant_explode_outer
         LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result ordered
-        | pos  | key  | value   |
-        | 0    | NULL | "hello" |
-        | 1    | NULL | "world" |
+        | pos | key  | value   |
+        | 0   | NULL | "hello" |
+        | 1   | NULL | "world" |
 
     Scenario: Outer explode a variant object
       When query
@@ -421,4 +421,3 @@ Feature: variant_explode and variant_explode_outer
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
-

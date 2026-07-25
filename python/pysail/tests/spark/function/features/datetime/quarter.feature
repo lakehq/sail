@@ -5,7 +5,7 @@ Feature: quarter output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to quarter yields the schema Spark declares
+    Scenario: a non-null literal input to quarter yields the schema Spark declares
       When query
         """
         SELECT quarter('2016-08-31') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to quarter yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to quarter yields the schema Spark declares
+    Scenario: a non-null column input to quarter yields the schema Spark declares
       When query
         """
         SELECT quarter(CAST(id AS STRING)) AS result FROM range(3)

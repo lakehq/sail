@@ -5,7 +5,7 @@ Feature: sentences output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to sentences yields the schema Spark declares
+    Scenario: a non-null literal input to sentences yields the schema Spark declares
       When query
         """
         SELECT sentences('Hi there! Good morning.') AS result
@@ -19,7 +19,7 @@ Scenario: a non-null literal input to sentences yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to sentences yields the schema Spark declares
+    Scenario: a non-null column input to sentences yields the schema Spark declares
       When query
         """
         SELECT sentences(CAST(id AS STRING)) AS result FROM range(3)
@@ -33,7 +33,7 @@ Scenario: a non-null column input to sentences yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a nullable column input to sentences stays nullable
+    Scenario: a nullable column input to sentences stays nullable
       When query
         """
         SELECT sentences(c) AS result FROM VALUES ('Hi there! Good morning.'), (CAST(NULL AS STRING)) AS t(c)
@@ -54,7 +54,7 @@ Scenario: a nullable column input to sentences stays nullable
         SELECT sentences('Hi there! Good morning.') AS result
         """
       Then query result
-        | result |
+        | result                         |
         | [[Hi, there], [Good, morning]] |
 
     Scenario: sentences doctest #2 (result)
@@ -63,7 +63,7 @@ Scenario: a nullable column input to sentences stays nullable
         SELECT sentences('Hello world') AS result
         """
       Then query result
-        | result |
+        | result           |
         | [[Hello, world]] |
 
     Scenario: sentences doctest #3 (result)
@@ -72,7 +72,7 @@ Scenario: a nullable column input to sentences stays nullable
         SELECT sentences('What? Yes! OK.') AS result
         """
       Then query result
-        | result |
+        | result                |
         | [[What], [Yes], [OK]] |
 
     Scenario: sentences doctest #4 (result)
@@ -82,7 +82,7 @@ Scenario: a nullable column input to sentences stays nullable
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: sentences doctest #5 (result)
       When query
@@ -91,7 +91,7 @@ Scenario: a nullable column input to sentences stays nullable
         """
       Then query result
         | result |
-        | [] |
+        | []     |
 
     Scenario: sentences doctest #6 (result)
       When query
@@ -99,7 +99,7 @@ Scenario: a nullable column input to sentences stays nullable
         SELECT sentences('Hi there!', 'en') AS result
         """
       Then query result
-        | result |
+        | result        |
         | [[Hi, there]] |
 
     Scenario: sentences doctest #7 (result)
@@ -108,6 +108,5 @@ Scenario: a nullable column input to sentences stays nullable
         SELECT sentences('Hi there!', 'en', 'US') AS result
         """
       Then query result
-        | result |
+        | result        |
         | [[Hi, there]] |
-

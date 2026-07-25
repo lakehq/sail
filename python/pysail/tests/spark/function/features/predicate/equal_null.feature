@@ -27,7 +27,7 @@ Feature: equal_null output schema
         """
 
     @sail-bug
-Scenario: a nullable column input to equal_null stays nullable
+    Scenario: a nullable column input to equal_null stays nullable
       When query
         """
         SELECT equal_null(c, 3) AS result FROM VALUES (3), (CAST(NULL AS INT)) AS t(c)

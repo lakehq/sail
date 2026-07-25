@@ -5,7 +5,7 @@ Feature: str_to_map output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to str_to_map yields the schema Spark declares
+    Scenario: a non-null literal input to str_to_map yields the schema Spark declares
       When query
         """
         SELECT str_to_map('a:1,b:2,c:3', ',', ':') AS result
@@ -19,7 +19,7 @@ Scenario: a non-null literal input to str_to_map yields the schema Spark declare
         """
 
     @sail-bug
-Scenario: a non-null column input to str_to_map yields the schema Spark declares
+    Scenario: a non-null column input to str_to_map yields the schema Spark declares
       When query
         """
         SELECT str_to_map(CAST(id AS STRING), ',', ':') AS result FROM range(3)

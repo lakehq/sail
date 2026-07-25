@@ -5,7 +5,7 @@ Feature: map_values output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to map_values yields the schema Spark declares
+    Scenario: a non-null literal input to map_values yields the schema Spark declares
       When query
         """
         SELECT map_values(map(1, 'a', 2, 'b')) AS result

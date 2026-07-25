@@ -299,7 +299,7 @@ Feature: unary minus (negative) honors ANSI overflow semantics
   @spark_null
   Rule: Output schema
 
-Scenario: a non-null integer literal yields a non-nullable integer
+    Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
         SELECT negative(5) AS result
@@ -311,7 +311,7 @@ Scenario: a non-null integer literal yields a non-nullable integer
         """
 
     @sail-bug
-Scenario: a non-null integer column yields a non-nullable integer
+    Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
         SELECT negative(id) AS result FROM range(3)
@@ -322,7 +322,7 @@ Scenario: a non-null integer column yields a non-nullable integer
          |-- result: long (nullable = false)
         """
 
-Scenario: a nullable integer column stays nullable
+    Scenario: a nullable integer column stays nullable
       When query
         """
         SELECT negative(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)

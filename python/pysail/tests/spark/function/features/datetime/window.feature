@@ -174,7 +174,7 @@ Feature: window() time-based windowing function
 
   Rule: Date time column
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = America/Los_Angeles
 
     Scenario: a date is cast to a session time zone timestamp, not timestamp_ntz

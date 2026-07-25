@@ -5,7 +5,7 @@ Feature: bitmap_bit_position output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to bitmap_bit_position yields the schema Spark declares
+    Scenario: a non-null literal input to bitmap_bit_position yields the schema Spark declares
       When query
         """
         SELECT bitmap_bit_position(1) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to bitmap_bit_position yields the schema Spar
         """
 
     @sail-bug
-Scenario: a non-null column input to bitmap_bit_position yields the schema Spark declares
+    Scenario: a non-null column input to bitmap_bit_position yields the schema Spark declares
       When query
         """
         SELECT bitmap_bit_position(CAST(id AS INT)) AS result FROM range(3)
@@ -29,7 +29,7 @@ Scenario: a non-null column input to bitmap_bit_position yields the schema Spark
         """
 
     @sail-bug
-Scenario: a nullable column input to bitmap_bit_position stays nullable
+    Scenario: a nullable column input to bitmap_bit_position stays nullable
       When query
         """
         SELECT bitmap_bit_position(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)

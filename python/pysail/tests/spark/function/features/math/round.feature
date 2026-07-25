@@ -38,7 +38,7 @@ Feature: round with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
+    Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
       When query
         """
         SELECT round(2.567, 2) AS result
@@ -50,7 +50,7 @@ Scenario: a non-null numeric literal is nullable (inherently nullable in Spark)
         """
 
     @sail-bug
-Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
+    Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
       When query
         """
         SELECT round(id, 0) AS result FROM range(3)
@@ -61,7 +61,7 @@ Scenario: a non-null numeric column is nullable (inherently nullable in Spark)
          |-- result: long (nullable = true)
         """
 
-Scenario: a nullable numeric column stays nullable
+    Scenario: a nullable numeric column stays nullable
       When query
         """
         SELECT round(c, 1) AS result FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(NULL AS DOUBLE)) AS t(c)

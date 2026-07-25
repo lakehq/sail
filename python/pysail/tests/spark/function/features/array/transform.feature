@@ -19,8 +19,8 @@ Feature: transform higher-order function
         SELECT transform(array(10, 20, 30), x -> x + 100) AS result
         """
       Then query result
-        | result            |
-        | [110, 120, 130]   |
+        | result          |
+        | [110, 120, 130] |
 
     Scenario: Transform integers by negating
       When query
@@ -37,7 +37,7 @@ Feature: transform higher-order function
         SELECT transform(array(1, 2, 3, 4, 5), x -> x % 3) AS result
         """
       Then query result
-        | result         |
+        | result          |
         | [1, 2, 0, 1, 2] |
 
     Scenario: Transform integers multiplied by zero
@@ -46,8 +46,8 @@ Feature: transform higher-order function
         SELECT transform(array(5, 10, 15), x -> x * 0) AS result
         """
       Then query result
-        | result      |
-        | [0, 0, 0]   |
+        | result    |
+        | [0, 0, 0] |
 
     Scenario: Transform single-element array
       When query
@@ -93,8 +93,8 @@ Feature: transform higher-order function
         SELECT transform(sequence(1, 5), (x, i) -> x * i) AS result
         """
       Then query result
-        | result              |
-        | [0, 2, 6, 12, 20]  |
+        | result            |
+        | [0, 2, 6, 12, 20] |
 
     Scenario: Transform with index from sequence — return index only
       When query
@@ -149,7 +149,7 @@ Feature: transform higher-order function
         SELECT transform(array(true, false, true), x -> NOT x) AS result
         """
       Then query result
-        | result              |
+        | result               |
         | [false, true, false] |
 
     Scenario: Transform booleans to integers
@@ -170,8 +170,8 @@ Feature: transform higher-order function
         FROM VALUES (array("hello", "world")) AS t(arr)
         """
       Then query result
-        | result          |
-        | [HELLO, WORLD]  |
+        | result         |
+        | [HELLO, WORLD] |
 
     Scenario: Transform string array to length of each string
       When query
@@ -190,8 +190,8 @@ Feature: transform higher-order function
         FROM VALUES (array("a", "b", "c")) AS t(arr)
         """
       Then query result
-        | result          |
-        | [a0, b1, c2]    |
+        | result       |
+        | [a0, b1, c2] |
 
     Scenario: Transform string array with index — concat longer strings and index
       When query
@@ -230,8 +230,8 @@ Feature: transform higher-order function
         SELECT transform(array(1, NULL, 3), x -> x + 10) AS result
         """
       Then query result
-        | result          |
-        | [11, NULL, 13]  |
+        | result         |
+        | [11, NULL, 13] |
 
     Scenario: Transform null elements with coalesce — substitute null with default
       When query
@@ -298,8 +298,8 @@ Feature: transform higher-order function
         FROM VALUES (10) AS t(id)
         """
       Then query result
-        | result         |
-        | [11, 12, 13]   |
+        | result       |
+        | [11, 12, 13] |
 
     Scenario: Transform with varying outer column per row
       When query
@@ -321,10 +321,10 @@ Feature: transform higher-order function
         FROM VALUES (array(1, 2, 3)), (array(10, 20)), (CAST(NULL AS ARRAY<INT>)) AS t(a)
         """
       Then query result
-        | result     |
-        | [2, 3, 4]  |
-        | [11, 21]   |
-        | NULL       |
+        | result    |
+        | [2, 3, 4] |
+        | [11, 21]  |
+        | NULL      |
 
     Scenario: Two-param transform across multiple rows with null array row
       When query
@@ -333,10 +333,10 @@ Feature: transform higher-order function
         FROM VALUES (array(10, 20)), (CAST(NULL AS ARRAY<INT>)), (array(30, 40, 50)) AS t(arr)
         """
       Then query result
-        | result        |
-        | [10, 21]      |
-        | NULL          |
-        | [30, 41, 52]  |
+        | result       |
+        | [10, 21]     |
+        | NULL         |
+        | [30, 41, 52] |
 
   Rule: Arrays of arrays
 
@@ -355,8 +355,8 @@ Feature: transform higher-order function
         SELECT transform(array(array(1, 2), array(3, 4)), x -> size(x) + 10) AS result
         """
       Then query result
-        | result    |
-        | [12, 12]  |
+        | result   |
+        | [12, 12] |
 
     Scenario: Nested transform — transform within transform
       When query
@@ -364,8 +364,8 @@ Feature: transform higher-order function
         SELECT transform(array(1, 2, 3), x -> transform(array(x, x + 1), y -> y * 2)) AS result
         """
       Then query result
-        | result                     |
-        | [[2, 4], [4, 6], [6, 8]]   |
+        | result                   |
+        | [[2, 4], [4, 6], [6, 8]] |
 
   Rule: Struct output from lambda
 
@@ -375,8 +375,8 @@ Feature: transform higher-order function
         SELECT transform(array(1, 2, 3), x -> struct(x, x * 2)) AS result
         """
       Then query result
-        | result                     |
-        | [{1, 2}, {2, 4}, {3, 6}]   |
+        | result                   |
+        | [{1, 2}, {2, 4}, {3, 6}] |
 
     Scenario: Transform string array with index into struct of index and value
       When query
@@ -385,8 +385,8 @@ Feature: transform higher-order function
         FROM VALUES (array("x", "y", "z")) AS t(arr)
         """
       Then query result
-        | result                     |
-        | [{0, x}, {1, y}, {2, z}]   |
+        | result                   |
+        | [{0, x}, {1, y}, {2, z}] |
 
   Rule: Chaining with other higher-order functions
 
@@ -407,8 +407,8 @@ Feature: transform higher-order function
         SELECT transform(array(2147483647, -2147483648), x -> x + 0) AS result
         """
       Then query result
-        | result                         |
-        | [2147483647, -2147483648]       |
+        | result                    |
+        | [2147483647, -2147483648] |
 
   Rule: Lambda body honors ANSI mode
 

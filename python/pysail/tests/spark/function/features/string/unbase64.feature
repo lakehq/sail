@@ -5,7 +5,7 @@ Feature: unbase64 output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to unbase64 yields the schema Spark declares
+    Scenario: a non-null literal input to unbase64 yields the schema Spark declares
       When query
         """
         SELECT unbase64('U3BhcmsgU1FM') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to unbase64 yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to unbase64 yields the schema Spark declares
+    Scenario: a non-null column input to unbase64 yields the schema Spark declares
       When query
         """
         SELECT unbase64(CAST(id AS STRING)) AS result FROM range(3)

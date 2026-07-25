@@ -50,7 +50,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"name":"Alice","age":30,"active":true}') AS result
         """
       Then query result
-        | result                                            |
+        | result                                             |
         | STRUCT<active: BOOLEAN, age: BIGINT, name: STRING> |
 
     Scenario: numeric types integer and double
@@ -68,8 +68,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":-42}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: BIGINT>    |
+        | result            |
+        | STRUCT<v: BIGINT> |
 
     Scenario: negative float
       When query
@@ -77,8 +77,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":-3.14}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: DOUBLE>    |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
     Scenario: scientific notation
       When query
@@ -86,8 +86,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":1.5e10}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: DOUBLE>    |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
     Scenario: zero
       When query
@@ -95,8 +95,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":0}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: BIGINT>    |
+        | result            |
+        | STRUCT<v: BIGINT> |
 
     Scenario: large integer
       When query
@@ -104,8 +104,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":9999999999999}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: BIGINT>    |
+        | result            |
+        | STRUCT<v: BIGINT> |
 
     Scenario: string containing numbers
       When query
@@ -113,8 +113,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"id":"123","value":"456.78"}') AS result
         """
       Then query result
-        | result                               |
-        | STRUCT<id: STRING, value: STRING>    |
+        | result                            |
+        | STRUCT<id: STRING, value: STRING> |
 
     Scenario: boolean true and false
       When query
@@ -122,8 +122,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":true,"b":false}') AS result
         """
       Then query result
-        | result                              |
-        | STRUCT<a: BOOLEAN, b: BOOLEAN>      |
+        | result                         |
+        | STRUCT<a: BOOLEAN, b: BOOLEAN> |
 
   Rule: Nested structures
 
@@ -133,7 +133,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"user":{"name":"Bob","age":25},"active":true}') AS result
         """
       Then query result
-        | result                                                        |
+        | result                                                           |
         | STRUCT<active: BOOLEAN, user: STRUCT<age: BIGINT, name: STRING>> |
 
     Scenario: deeply nested structure
@@ -142,8 +142,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":{"b":{"c":{"d":1}}}}') AS result
         """
       Then query result
-        | result                                               |
-        | STRUCT<a: STRUCT<b: STRUCT<c: STRUCT<d: BIGINT>>>>  |
+        | result                                             |
+        | STRUCT<a: STRUCT<b: STRUCT<c: STRUCT<d: BIGINT>>>> |
 
     Scenario: array and nested object
       When query
@@ -151,7 +151,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"data":[1,2,3],"meta":{"count":3}}') AS result
         """
       Then query result
-        | result                                                  |
+        | result                                                   |
         | STRUCT<data: ARRAY<BIGINT>, meta: STRUCT<count: BIGINT>> |
 
   Rule: Array type inference
@@ -162,8 +162,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"tags":["a","b","c"],"count":3}') AS result
         """
       Then query result
-        | result                                      |
-        | STRUCT<count: BIGINT, tags: ARRAY<STRING>>  |
+        | result                                     |
+        | STRUCT<count: BIGINT, tags: ARRAY<STRING>> |
 
     Scenario: array of objects with same schema
       When query
@@ -171,8 +171,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"items":[{"id":1,"name":"x"},{"id":2,"name":"y"}]}') AS result
         """
       Then query result
-        | result                                                    |
-        | STRUCT<items: ARRAY<STRUCT<id: BIGINT, name: STRING>>>   |
+        | result                                                 |
+        | STRUCT<items: ARRAY<STRUCT<id: BIGINT, name: STRING>>> |
 
     Scenario: single element array
       When query
@@ -180,8 +180,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[42]}') AS result
         """
       Then query result
-        | result                    |
-        | STRUCT<v: ARRAY<BIGINT>>  |
+        | result                   |
+        | STRUCT<v: ARRAY<BIGINT>> |
 
     Scenario: array of arrays
       When query
@@ -189,8 +189,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[[1,2],[3,4]]}') AS result
         """
       Then query result
-        | result                            |
-        | STRUCT<v: ARRAY<ARRAY<BIGINT>>>   |
+        | result                          |
+        | STRUCT<v: ARRAY<ARRAY<BIGINT>>> |
 
   Rule: Array supertype inference (mixed types)
 
@@ -200,8 +200,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1, "two", true]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<STRING>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<STRING>> |
 
     Scenario: int and double in array
       When query
@@ -209,8 +209,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1, 2.5]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<DOUBLE>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<DOUBLE>> |
 
     Scenario: int and null in array
       When query
@@ -218,8 +218,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1, null]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<BIGINT>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<BIGINT>> |
 
     Scenario: bool and null in array
       When query
@@ -227,8 +227,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[true, null]}') AS result
         """
       Then query result
-        | result                      |
-        | STRUCT<v: ARRAY<BOOLEAN>>   |
+        | result                    |
+        | STRUCT<v: ARRAY<BOOLEAN>> |
 
     Scenario: all null array
       When query
@@ -236,8 +236,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[null, null]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<STRING>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<STRING>> |
 
     Scenario: double and string in array
       When query
@@ -245,8 +245,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1.5, "hi"]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<STRING>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<STRING>> |
 
     Scenario: nested arrays with mixed types
       When query
@@ -254,8 +254,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[[1],["a"]]}') AS result
         """
       Then query result
-        | result                              |
-        | STRUCT<v: ARRAY<ARRAY<STRING>>>     |
+        | result                          |
+        | STRUCT<v: ARRAY<ARRAY<STRING>>> |
 
     Scenario: object and null in array
       When query
@@ -263,8 +263,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[{"a":1}, null]}') AS result
         """
       Then query result
-        | result                                    |
-        | STRUCT<v: ARRAY<STRUCT<a: BIGINT>>>       |
+        | result                              |
+        | STRUCT<v: ARRAY<STRUCT<a: BIGINT>>> |
 
     Scenario: array of objects with different fields merges schemas
       When query
@@ -272,8 +272,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[{"a":1},{"a":2,"b":"x"}]') AS result
         """
       Then query result
-        | result                                |
-        | ARRAY<STRUCT<a: BIGINT, b: STRING>>   |
+        | result                              |
+        | ARRAY<STRUCT<a: BIGINT, b: STRING>> |
 
     Scenario: array of objects with mixed field types
       When query
@@ -281,8 +281,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[{"a":1},{"a":"x"}]}') AS result
         """
       Then query result
-        | result                                |
-        | STRUCT<v: ARRAY<STRUCT<a: STRING>>>   |
+        | result                              |
+        | STRUCT<v: ARRAY<STRUCT<a: STRING>>> |
 
   Rule: Null handling
 
@@ -292,8 +292,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"name":"Alice","age":null}') AS result
         """
       Then query result
-        | result                                  |
-        | STRUCT<age: STRING, name: STRING>       |
+        | result                            |
+        | STRUCT<age: STRING, name: STRING> |
 
     Scenario: all null fields
       When query
@@ -301,8 +301,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":null,"b":null}') AS result
         """
       Then query result
-        | result                          |
-        | STRUCT<a: STRING, b: STRING>    |
+        | result                       |
+        | STRUCT<a: STRING, b: STRING> |
 
     Scenario: top-level null
       When query
@@ -321,8 +321,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{}') AS result
         """
       Then query result
-        | result     |
-        | STRUCT<>   |
+        | result   |
+        | STRUCT<> |
 
     Scenario: empty array
       When query
@@ -339,8 +339,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[]') AS result
         """
       Then query result
-        | result          |
-        | ARRAY<STRING>   |
+        | result        |
+        | ARRAY<STRING> |
 
   Rule: Top-level types
 
@@ -350,8 +350,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[1,2,3]') AS result
         """
       Then query result
-        | result          |
-        | ARRAY<BIGINT>   |
+        | result        |
+        | ARRAY<BIGINT> |
 
     Scenario: top-level string
       When query
@@ -401,9 +401,9 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         ) ORDER BY result
         """
       Then query result ordered
-        | result                                |
-        | STRUCT<age: BIGINT, name: STRING>     |
-        | STRUCT<x: DOUBLE, y: BOOLEAN>         |
+        | result                            |
+        | STRUCT<age: BIGINT, name: STRING> |
+        | STRUCT<x: DOUBLE, y: BOOLEAN>     |
 
   Rule: Numeric edge cases
 
@@ -413,8 +413,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":0.0}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: DOUBLE>    |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
     Scenario: negative zero
       When query
@@ -422,8 +422,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":-0}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: BIGINT>    |
+        | result            |
+        | STRUCT<v: BIGINT> |
 
   Rule: String edge cases
 
@@ -433,8 +433,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":""}') AS result
         """
       Then query result
-        | result               |
-        | STRUCT<v: STRING>    |
+        | result            |
+        | STRUCT<v: STRING> |
 
     Scenario: empty string input
       When query
@@ -453,8 +453,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[{},{"a":1}]}') AS result
         """
       Then query result
-        | result                                    |
-        | STRUCT<v: ARRAY<STRUCT<a: BIGINT>>>       |
+        | result                              |
+        | STRUCT<v: ARRAY<STRUCT<a: BIGINT>>> |
 
     Scenario: mixed array element and nested array
       When query
@@ -462,8 +462,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1,[2]]}') AS result
         """
       Then query result
-        | result                     |
-        | STRUCT<v: ARRAY<STRING>>   |
+        | result                   |
+        | STRUCT<v: ARRAY<STRING>> |
 
     Scenario: nested struct with same-named fields at different levels
       When query
@@ -471,8 +471,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":1,"b":{"a":"hello","b":2.5}}') AS result
         """
       Then query result
-        | result                                                  |
-        | STRUCT<a: BIGINT, b: STRUCT<a: STRING, b: DOUBLE>>     |
+        | result                                             |
+        | STRUCT<a: BIGINT, b: STRUCT<a: STRING, b: DOUBLE>> |
 
     Scenario: duplicate keys in object
       When query
@@ -480,8 +480,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":1,"a":"x"}') AS result
         """
       Then query result
-        | result                          |
-        | STRUCT<a: BIGINT, a: STRING>    |
+        | result                       |
+        | STRUCT<a: BIGINT, a: STRING> |
 
   Rule: Error cases
 
@@ -510,7 +510,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":99999999999999999999}') AS result
         """
       Then query result
-        | result                  |
+        | result                   |
         | STRUCT<v: DECIMAL(20,0)> |
 
     Scenario: BIGINT max stays BIGINT
@@ -528,7 +528,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":9223372036854775808}') AS result
         """
       Then query result
-        | result                  |
+        | result                   |
         | STRUCT<v: DECIMAL(19,0)> |
 
     Scenario: INT max stays BIGINT
@@ -546,8 +546,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":-0.0}') AS result
         """
       Then query result
-        | result             |
-        | STRUCT<v: DOUBLE>  |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
     Scenario: negative scientific notation
       When query
@@ -555,8 +555,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":1.5e-3}') AS result
         """
       Then query result
-        | result             |
-        | STRUCT<v: DOUBLE>  |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
   Rule: Deep nesting
 
@@ -566,7 +566,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":{"b":{"c":{"d":{"e":1}}}}}') AS result
         """
       Then query result
-        | result                                                       |
+        | result                                                        |
         | STRUCT<a: STRUCT<b: STRUCT<c: STRUCT<d: STRUCT<e: BIGINT>>>>> |
 
   Rule: Array of objects with missing fields
@@ -597,7 +597,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a.b":1}') AS result
         """
       Then query result
-        | result               |
+        | result                |
         | STRUCT<`a.b`: BIGINT> |
 
     Scenario: space in key name
@@ -606,7 +606,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a b":1}') AS result
         """
       Then query result
-        | result               |
+        | result                |
         | STRUCT<`a b`: BIGINT> |
 
   Rule: Nested null values
@@ -626,8 +626,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a":[null]}') AS result
         """
       Then query result
-        | result                    |
-        | STRUCT<a: ARRAY<STRING>>  |
+        | result                   |
+        | STRUCT<a: ARRAY<STRING>> |
 
   Rule: Invalid JSON errors
 
@@ -696,8 +696,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":999999999999999999999999999999999999999}') AS result
         """
       Then query result
-        | result             |
-        | STRUCT<v: DOUBLE>  |
+        | result            |
+        | STRUCT<v: DOUBLE> |
 
     Scenario: top-level DECIMAL(19,0) for number just above i64 max
       When query
@@ -705,8 +705,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('9223372036854775808') AS result
         """
       Then query result
-        | result          |
-        | DECIMAL(19,0)   |
+        | result        |
+        | DECIMAL(19,0) |
 
     Scenario: top-level 38 digit integer is DECIMAL(38,0)
       When query
@@ -752,7 +752,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"v":[1,9223372036854775808]}') AS result
         """
       Then query result
-        | result                        |
+        | result                          |
         | STRUCT<v: ARRAY<DECIMAL(20,0)>> |
 
     Scenario: three integers triggering DECIMAL promotion in array
@@ -772,8 +772,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[true, false]') AS result
         """
       Then query result
-        | result           |
-        | ARRAY<BOOLEAN>   |
+        | result         |
+        | ARRAY<BOOLEAN> |
 
     Scenario: top-level array of bool and null
       When query
@@ -781,8 +781,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[true, null]') AS result
         """
       Then query result
-        | result           |
-        | ARRAY<BOOLEAN>   |
+        | result         |
+        | ARRAY<BOOLEAN> |
 
     Scenario: top-level array of bool and string
       When query
@@ -835,7 +835,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[{"a":1}, null, {"b":2}]') AS result
         """
       Then query result
-        | result                            |
+        | result                              |
         | ARRAY<STRUCT<a: BIGINT, b: BIGINT>> |
 
     Scenario: top-level array of single null
@@ -855,7 +855,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"z": 1, "a": 2}') AS result
         """
       Then query result
-        | result                     |
+        | result                       |
         | STRUCT<a: BIGINT, z: BIGINT> |
 
     Scenario: three fields sorted alphabetically regardless of insertion order
@@ -873,7 +873,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[{"z":1},{"a":2}]') AS result
         """
       Then query result
-        | result                            |
+        | result                              |
         | ARRAY<STRUCT<a: BIGINT, z: BIGINT>> |
 
   Rule: Additional special key names
@@ -884,8 +884,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a-b":1}') AS result
         """
       Then query result
-        | result                 |
-        | STRUCT<`a-b`: BIGINT>  |
+        | result                |
+        | STRUCT<`a-b`: BIGINT> |
 
     Scenario: slash in key name requires backtick quoting
       When query
@@ -893,8 +893,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a/b":1}') AS result
         """
       Then query result
-        | result                 |
-        | STRUCT<`a/b`: BIGINT>  |
+        | result                |
+        | STRUCT<`a/b`: BIGINT> |
 
     Scenario: colon in key name requires backtick quoting
       When query
@@ -902,8 +902,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a:b":1}') AS result
         """
       Then query result
-        | result                 |
-        | STRUCT<`a:b`: BIGINT>  |
+        | result                |
+        | STRUCT<`a:b`: BIGINT> |
 
     Scenario: backtick in key name is escaped as double backtick
       When query
@@ -911,8 +911,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a`b":1}') AS result
         """
       Then query result
-        | result                   |
-        | STRUCT<`a``b`: BIGINT>   |
+        | result                 |
+        | STRUCT<`a``b`: BIGINT> |
 
     Scenario: empty string key produces empty struct
       When query
@@ -931,8 +931,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1, "b": 1.5, "c": true}', map('primitivesAsString', 'true')) AS result
         """
       Then query result
-        | result                                      |
-        | STRUCT<a: STRING, b: STRING, c: STRING>     |
+        | result                                  |
+        | STRUCT<a: STRING, b: STRING, c: STRING> |
 
     Scenario: primitivesAsString keeps arrays of primitives as ARRAY<STRING>
       When query
@@ -940,8 +940,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [1, 2]}', map('primitivesAsString', 'true')) AS result
         """
       Then query result
-        | result                        |
-        | STRUCT<a: ARRAY<STRING>>      |
+        | result                   |
+        | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: primitivesAsString keeps nested structs intact with STRING leaf values
       When query
@@ -949,8 +949,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": {"b": 1}}', map('primitivesAsString', 'true')) AS result
         """
       Then query result
-        | result                        |
-        | STRUCT<a: STRUCT<b: STRING>>  |
+        | result                       |
+        | STRUCT<a: STRUCT<b: STRING>> |
 
   Rule: inferTimestamp option
 
@@ -960,8 +960,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": "2021-01-01 00:00:00"}', map('inferTimestamp', 'true')) AS result
         """
       Then query result
-        | result                   |
-        | STRUCT<a: TIMESTAMP>     |
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
 
     Scenario: inferTimestamp true infers TIMESTAMP from date-only string
       When query
@@ -978,8 +978,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": "2021-01-01 00:00:00"}') AS result
         """
       Then query result
-        | result             |
-        | STRUCT<a: STRING>  |
+        | result            |
+        | STRUCT<a: STRING> |
 
     Scenario: inferTimestamp with non-timestamp string keeps STRING
       When query
@@ -987,8 +987,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": "hello"}', map('inferTimestamp', 'true')) AS result
         """
       Then query result
-        | result             |
-        | STRUCT<a: STRING>  |
+        | result            |
+        | STRUCT<a: STRING> |
 
     # Spark's `inferTimestamp` uses a lenient timestamp parser that also accepts
     # fractional seconds, a trailing `Z`, timezone offsets, partial time
@@ -1064,8 +1064,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": NaN}', map('allowNonNumericNumbers', 'true')) AS result
         """
       Then query result
-        | result             |
-        | STRUCT<a: DOUBLE>  |
+        | result            |
+        | STRUCT<a: DOUBLE> |
 
     Scenario: allowNonNumericNumbers true allows Infinity as DOUBLE
       When query
@@ -1073,8 +1073,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": Infinity}', map('allowNonNumericNumbers', 'true')) AS result
         """
       Then query result
-        | result             |
-        | STRUCT<a: DOUBLE>  |
+        | result            |
+        | STRUCT<a: DOUBLE> |
 
   Rule: Nested struct merging in arrays
 
@@ -1124,7 +1124,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[{"z":1,"a":2,"m":3},{"b":4,"n":5,"c":6}]') AS result
         """
       Then query result
-        | result                                                              |
+        | result                                                                          |
         | ARRAY<STRUCT<a: BIGINT, b: BIGINT, c: BIGINT, m: BIGINT, n: BIGINT, z: BIGINT>> |
 
     Scenario: merging structs with shared and disjoint fields promotes types correctly
@@ -1133,8 +1133,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('[{"a":1,"b":"x","c":1.5},{"a":"text","b":2,"d":true}]') AS result
         """
       Then query result
-        | result                                                          |
-        | ARRAY<STRUCT<a: STRING, b: STRING, c: DOUBLE, d: BOOLEAN>>     |
+        | result                                                     |
+        | ARRAY<STRUCT<a: STRING, b: STRING, c: DOUBLE, d: BOOLEAN>> |
 
   Rule: Array with mixed null, normal, and unusual values
 
@@ -1158,7 +1158,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
           schema_of_json('{"n": 99999999999999999999}') AS big_num
         """
       Then query result
-        | from_null | normal_struct                    | big_num               |
+        | from_null | normal_struct                    | big_num                  |
         | STRING    | STRUCT<id: BIGINT, name: STRING> | STRUCT<n: DECIMAL(20,0)> |
 
   Rule: Result nullability
@@ -1344,7 +1344,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 0}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #2 (result)
@@ -1353,7 +1353,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #3 (result)
@@ -1362,7 +1362,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a: 1}', map('ALLOWUNQUOTEDFIELDNAMES', 'True')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #4 (result)
@@ -1371,7 +1371,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a: {"b": [1.5], c: "x: {y: 1}"}}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                                              |
         | STRUCT<a: STRUCT<b: ARRAY<DOUBLE>, c: STRING>> |
 
     Scenario: schema_of_json doctest #5 (result)
@@ -1381,7 +1381,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         """
       Then query result
         | schema_of_json({a: 1}) |
-        | STRUCT<a: BIGINT> |
+        | STRUCT<a: BIGINT>      |
 
     Scenario: schema_of_json doctest #6 (result)
       When query
@@ -1389,7 +1389,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 2}', map('allowUnquotedFieldNames', 'false')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #8 (result)
@@ -1398,7 +1398,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1}', map('myImaginaryOption', 'banana')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #9 (result)
@@ -1407,7 +1407,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": \'x\'}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: STRING> |
 
     Scenario: schema_of_json doctest #10 (result)
@@ -1416,7 +1416,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{\'a\': 1}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #11 (result)
@@ -1425,7 +1425,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{\'a\': \'it\\\'s\'}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: STRING> |
 
     Scenario: schema_of_json doctest #12 (result)
@@ -1434,7 +1434,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{\'a\': \'say "hi"\'}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: STRING> |
 
     Scenario: schema_of_json doctest #13 (result)
@@ -1443,7 +1443,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": "it\'s"}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: STRING> |
 
     Scenario: schema_of_json doctest #15 (result)
@@ -1452,7 +1452,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"x y": 1}') AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`x y`: BIGINT> |
 
     Scenario: schema_of_json doctest #16 (result)
@@ -1461,7 +1461,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"x-y": 1}') AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`x-y`: BIGINT> |
 
     Scenario: schema_of_json doctest #17 (result)
@@ -1470,7 +1470,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"x.y": 1}') AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`x.y`: BIGINT> |
 
     Scenario: schema_of_json doctest #18 (result)
@@ -1479,7 +1479,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"1a": 1}') AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<`1a`: BIGINT> |
 
     Scenario: schema_of_json doctest #19 (result)
@@ -1488,7 +1488,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"_a": 1}') AS r
         """
       Then query result
-        | r |
+        | r                  |
         | STRUCT<_a: BIGINT> |
 
     Scenario: schema_of_json doctest #20 (result)
@@ -1497,7 +1497,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"ab1_": 1}') AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<ab1_: BIGINT> |
 
     Scenario: schema_of_json doctest #21 (result)
@@ -1506,7 +1506,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"x`y": 1}') AS r
         """
       Then query result
-        | r |
+        | r                      |
         | STRUCT<`x``y`: BIGINT> |
 
     Scenario: schema_of_json doctest #22 (result)
@@ -1515,7 +1515,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"café": 1}') AS r
         """
       Then query result
-        | r |
+        | r                      |
         | STRUCT<`café`: BIGINT> |
 
     Scenario: schema_of_json doctest #23 (result)
@@ -1524,7 +1524,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"": 1}') AS r
         """
       Then query result
-        | r |
+        | r        |
         | STRUCT<> |
 
     Scenario: schema_of_json doctest #24 (result)
@@ -1533,7 +1533,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": true}') AS r
         """
       Then query result
-        | r |
+        | r                  |
         | STRUCT<a: BOOLEAN> |
 
     Scenario: schema_of_json doctest #25 (result)
@@ -1542,7 +1542,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": false}') AS r
         """
       Then query result
-        | r |
+        | r                  |
         | STRUCT<a: BOOLEAN> |
 
     Scenario: schema_of_json doctest #26 (result)
@@ -1551,7 +1551,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": null}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: STRING> |
 
     Scenario: schema_of_json doctest #27 (result)
@@ -1560,7 +1560,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('null') AS r
         """
       Then query result
-        | r |
+        | r      |
         | STRING |
 
     Scenario: schema_of_json doctest #28 (result)
@@ -1569,7 +1569,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": {"b": null}}') AS r
         """
       Then query result
-        | r |
+        | r                            |
         | STRUCT<a: STRUCT<b: STRING>> |
 
     Scenario: schema_of_json doctest #29 (result)
@@ -1578,7 +1578,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [null]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: schema_of_json doctest #30 (result)
@@ -1587,7 +1587,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [null, 1]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<BIGINT>> |
 
     Scenario: schema_of_json doctest #31 (result)
@@ -1596,7 +1596,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [1, "x"]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: schema_of_json doctest #32 (result)
@@ -1605,7 +1605,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [1, 2.5]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<DOUBLE>> |
 
     Scenario: schema_of_json doctest #33 (result)
@@ -1614,7 +1614,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [1, 2.5, "x"]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: schema_of_json doctest #34 (result)
@@ -1623,7 +1623,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [1, true]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: schema_of_json doctest #35 (result)
@@ -1632,7 +1632,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [{"b": 1}, {"c": 2}]}') AS r
         """
       Then query result
-        | r |
+        | r                                              |
         | STRUCT<a: ARRAY<STRUCT<b: BIGINT, c: BIGINT>>> |
 
     Scenario: schema_of_json doctest #36 (result)
@@ -1641,7 +1641,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [{"b": 1}, {"b": "x"}]}') AS r
         """
       Then query result
-        | r |
+        | r                                   |
         | STRUCT<a: ARRAY<STRUCT<b: STRING>>> |
 
     Scenario: schema_of_json doctest #37 (result)
@@ -1650,7 +1650,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [{"b": 1}, 2]}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: ARRAY<STRING>> |
 
     Scenario: schema_of_json doctest #38 (result)
@@ -1659,7 +1659,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": [[1], [2.5]]}') AS r
         """
       Then query result
-        | r |
+        | r                               |
         | STRUCT<a: ARRAY<ARRAY<DOUBLE>>> |
 
     Scenario: schema_of_json doctest #39 (result)
@@ -1668,7 +1668,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": {}}') AS r
         """
       Then query result
-        | r |
+        | r        |
         | STRUCT<> |
 
     Scenario: schema_of_json doctest #40 (result)
@@ -1677,7 +1677,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{}') AS r
         """
       Then query result
-        | r |
+        | r        |
         | STRUCT<> |
 
     Scenario: schema_of_json doctest #41 (result)
@@ -1686,7 +1686,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 9223372036854775807}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #42 (result)
@@ -1695,7 +1695,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 9223372036854775808}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(19,0)> |
 
     Scenario: schema_of_json doctest #43 (result)
@@ -1704,7 +1704,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 99999999999999999999999999}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(26,0)> |
 
     Scenario: schema_of_json doctest #44 (result)
@@ -1713,7 +1713,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": -99999999999999999999999999}') AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(26,0)> |
 
     Scenario: schema_of_json doctest #45 (result)
@@ -1722,7 +1722,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 999999999999999999999999999999999999999}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #46 (result)
@@ -1731,7 +1731,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.7976931348623157E308}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #47 (result)
@@ -1740,7 +1740,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1E309}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #48 (result)
@@ -1749,7 +1749,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 12.345678901234567890123}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #49 (result)
@@ -1758,7 +1758,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.5}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,1)> |
 
     Scenario: schema_of_json doctest #50 (result)
@@ -1767,7 +1767,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 99999999999999999999999999}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(26,0)> |
 
     Scenario: schema_of_json doctest #51 (result)
@@ -1776,7 +1776,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.55E1}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(3,1)> |
 
     Scenario: schema_of_json doctest #52 (result)
@@ -1785,7 +1785,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.5E-2}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(3,3)> |
 
     Scenario: schema_of_json doctest #53 (result)
@@ -1794,7 +1794,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1E-2}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,2)> |
 
     Scenario: schema_of_json doctest #54 (result)
@@ -1803,7 +1803,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 15E-1}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,1)> |
 
     Scenario: schema_of_json doctest #55 (result)
@@ -1812,7 +1812,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.500E1}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(4,2)> |
 
     Scenario: schema_of_json doctest #56 (result)
@@ -1821,7 +1821,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.5E0}', map('prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,1)> |
 
     Scenario: schema_of_json doctest #60 (result)
@@ -1830,7 +1830,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1.5E2}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #61 (result)
@@ -1839,7 +1839,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": NaN}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #62 (result)
@@ -1848,7 +1848,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": Infinity}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #63 (result)
@@ -1857,7 +1857,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 01}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #64 (result)
@@ -1866,7 +1866,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 0001}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #65 (result)
@@ -1875,7 +1875,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": -01}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #66 (result)
@@ -1884,7 +1884,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 007}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #67 (result)
@@ -1893,7 +1893,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 0}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #68 (result)
@@ -1902,7 +1902,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 00}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #69 (result)
@@ -1911,7 +1911,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": -00}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: BIGINT> |
 
     Scenario: schema_of_json doctest #70 (result)
@@ -1920,7 +1920,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 01.5}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #71 (result)
@@ -1929,7 +1929,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 00.5}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #72 (result)
@@ -1938,7 +1938,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 01e2}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #73 (result)
@@ -1947,7 +1947,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 009223372036854775808}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(19,0)> |
 
     Scenario: schema_of_json doctest #74 (result)
@@ -1956,7 +1956,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 0099999999999999999999999999999999999999}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                        |
         | STRUCT<a: DECIMAL(38,0)> |
 
     Scenario: schema_of_json doctest #75 (result)
@@ -1965,7 +1965,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 00999999999999999999999999999999999999999}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #76 (result)
@@ -1974,7 +1974,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"01b": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                                |
         | STRUCT<`01b`: BIGINT, b: STRING> |
 
     Scenario: schema_of_json doctest #77 (result)
@@ -1983,7 +1983,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1e02}', map('allowNumericLeadingZeros', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #78 (result)
@@ -1992,7 +1992,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 1e02}') AS r
         """
       Then query result
-        | r |
+        | r                 |
         | STRUCT<a: DOUBLE> |
 
     Scenario: schema_of_json doctest #79 (result)
@@ -2001,7 +2001,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 00.50}', map('allowNumericLeadingZeros', 'true', 'prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,2)> |
 
     Scenario: schema_of_json doctest #80 (result)
@@ -2010,7 +2010,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 01.5}', map('allowNumericLeadingZeros', 'true', 'prefersDecimal', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                       |
         | STRUCT<a: DECIMAL(2,1)> |
 
     Scenario: schema_of_json doctest #83 (result)
@@ -2019,7 +2019,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{+a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<`+a`: BIGINT> |
 
     Scenario: schema_of_json doctest #84 (result)
@@ -2028,7 +2028,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a@b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`a@b`: BIGINT> |
 
     Scenario: schema_of_json doctest #85 (result)
@@ -2037,7 +2037,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a#b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`a#b`: BIGINT> |
 
     Scenario: schema_of_json doctest #86 (result)
@@ -2046,7 +2046,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a*b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`a*b`: BIGINT> |
 
     Scenario: schema_of_json doctest #87 (result)
@@ -2055,7 +2055,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a$b: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                     |
         | STRUCT<`a$b`: BIGINT> |
 
     Scenario: schema_of_json doctest #88 (result)
@@ -2064,7 +2064,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{$a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<`$a`: BIGINT> |
 
     Scenario: schema_of_json doctest #89 (result)
@@ -2073,7 +2073,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{_a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                  |
         | STRUCT<_a: BIGINT> |
 
     Scenario: schema_of_json doctest #90 (result)
@@ -2082,7 +2082,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{9a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<`9a`: BIGINT> |
 
     Scenario: schema_of_json doctest #91 (result)
@@ -2091,7 +2091,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{a9: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                  |
         | STRUCT<a9: BIGINT> |
 
     Scenario: schema_of_json doctest #92 (result)
@@ -2100,7 +2100,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{ключ: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                      |
         | STRUCT<`ключ`: BIGINT> |
 
     Scenario: schema_of_json doctest #93 (result)
@@ -2109,7 +2109,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{aé: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query result
-        | r |
+        | r                    |
         | STRUCT<`aé`: BIGINT> |
 
     Scenario: schema_of_json doctest #7 (error)
@@ -2209,4 +2209,3 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{\\a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
         """
       Then query error (?i).*
-

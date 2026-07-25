@@ -46,7 +46,7 @@ Feature: json_array_length output schema
         """
       Then query result
         | arr_len | type |
-        | 3 | int |
+        | 3       | int  |
 
     Scenario: json_array_length doctest #2 (result)
       When query
@@ -55,7 +55,7 @@ Feature: json_array_length output schema
         """
       Then query result
         | arr_len | type |
-        | 0 | int |
+        | 0       | int  |
 
     Scenario: json_array_length doctest #3 (result)
       When query
@@ -68,5 +68,4 @@ Feature: json_array_length output schema
         """
       Then query result
         | null_json | invalid_json | scalar_json |
-        | NULL | NULL | NULL |
-
+        | NULL      | NULL         | NULL        |

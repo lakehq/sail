@@ -5,7 +5,7 @@ Feature: arrays_overlap output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to arrays_overlap yields the schema Spark declares
+    Scenario: a non-null literal input to arrays_overlap yields the schema Spark declares
       When query
         """
         SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5)) AS result

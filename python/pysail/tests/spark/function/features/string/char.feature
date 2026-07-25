@@ -5,7 +5,7 @@ Feature: char output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to char yields the schema Spark declares
+    Scenario: a non-null literal input to char yields the schema Spark declares
       When query
         """
         SELECT char(65) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to char yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to char yields the schema Spark declares
+    Scenario: a non-null column input to char yields the schema Spark declares
       When query
         """
         SELECT char(CAST(id AS INT)) AS result FROM range(3)

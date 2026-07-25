@@ -43,7 +43,7 @@ Feature: date_format with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null timestamp literal yields a string
+    Scenario: a non-null timestamp literal yields a string
       When query
         """
         SELECT date_format(TIMESTAMP '2024-01-15 10:00:00', 'yyyy-MM') AS result
@@ -55,7 +55,7 @@ Scenario: a non-null timestamp literal yields a string
         """
 
     @sail-bug
-Scenario: a non-null timestamp column yields a string
+    Scenario: a non-null timestamp column yields a string
       When query
         """
         SELECT date_format(CAST(id AS TIMESTAMP), 'yyyy') AS result FROM range(3)

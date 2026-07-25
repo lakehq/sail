@@ -72,13 +72,13 @@ Feature: abs comprehensive tests
         | <result> |
 
       Examples:
-        | input                     | result   |
-        | CAST(-1.5 AS DOUBLE)      | 1.5      |
-        | CAST(1.5 AS FLOAT)        | 1.5      |
-        | CAST(-0.0 AS DOUBLE)      | 0.0      |
-        | CAST(-0.0 AS FLOAT)       | 0.0      |
-        | CAST('NaN' AS DOUBLE)     | NaN      |
-        | CAST('Infinity' AS DOUBLE) | Infinity |
+        | input                       | result   |
+        | CAST(-1.5 AS DOUBLE)        | 1.5      |
+        | CAST(1.5 AS FLOAT)          | 1.5      |
+        | CAST(-0.0 AS DOUBLE)        | 0.0      |
+        | CAST(-0.0 AS FLOAT)         | 0.0      |
+        | CAST('NaN' AS DOUBLE)       | NaN      |
+        | CAST('Infinity' AS DOUBLE)  | Infinity |
         | CAST('-Infinity' AS DOUBLE) | Infinity |
 
   Rule: Decimal values
@@ -93,9 +93,9 @@ Feature: abs comprehensive tests
         | <result> |
 
       Examples:
-        | input                       | result |
-        | CAST(-1.5 AS DECIMAL(5,2))  | 1.50   |
-        | CAST(0 AS DECIMAL(10,2))    | 0.00   |
+        | input                         | result |
+        | CAST(-1.5 AS DECIMAL(5,2))    | 1.50   |
+        | CAST(0 AS DECIMAL(10,2))      | 0.00   |
         | CAST(-0.001 AS DECIMAL(10,3)) | 0.001  |
 
     @sail-bug
@@ -112,8 +112,8 @@ Feature: abs comprehensive tests
         SELECT abs(CAST(-9999999999999999999999999999999999999 AS DECIMAL(38,0))) AS result
         """
       Then query result
-        | result                                  |
-        | 10000000000000000000000000000000000000  |
+        | result                                 |
+        | 10000000000000000000000000000000000000 |
 
     @sail-bug
     # Same root cause as the scenario above (CAST rounding) — JVM rounds
@@ -142,11 +142,11 @@ Feature: abs comprehensive tests
         | <result> |
 
       Examples:
-        | input                                 | result               |
-        | CAST(-128 AS TINYINT)                 | -128                 |
-        | CAST(-32768 AS SMALLINT)              | -32768               |
-        | CAST(-2147483648 AS INT)              | -2147483648          |
-        | CAST(-9223372036854775808 AS BIGINT)  | -9223372036854775808 |
+        | input                                | result               |
+        | CAST(-128 AS TINYINT)                | -128                 |
+        | CAST(-32768 AS SMALLINT)             | -32768               |
+        | CAST(-2147483648 AS INT)             | -2147483648          |
+        | CAST(-9223372036854775808 AS BIGINT) | -9223372036854775808 |
 
     @sail-bug
     # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
@@ -311,7 +311,7 @@ Feature: abs comprehensive tests
         SELECT abs(INTERVAL '-1:30' HOUR TO MINUTE) AS result
         """
       Then query result
-        | result                         |
+        | result                          |
         | INTERVAL '01:30' HOUR TO MINUTE |
 
   Rule: Interval overflow always errors (regardless of ANSI mode)
@@ -332,9 +332,9 @@ Feature: abs comprehensive tests
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
       Examples:
-        | ansi  | input                                                                                   |
-        | false | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                    |
-        | true  | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                    |
+        | ansi  | input                                                                                            |
+        | false | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                            |
+        | true  | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                            |
         | false | INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND |
         | true  | INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND |
 
@@ -413,11 +413,11 @@ Feature: abs comprehensive tests
         AS t(v)
         """
       Then query result
-        | result             |
-        | INTERVAL '5' DAY   |
-        | INTERVAL '0' DAY   |
-        | INTERVAL '10' DAY  |
-        | NULL               |
+        | result            |
+        | INTERVAL '5' DAY  |
+        | INTERVAL '0' DAY  |
+        | INTERVAL '10' DAY |
+        | NULL              |
 
   Rule: All-null short-circuit
     # When every input row is NULL, invoke returns an all-null result
@@ -657,7 +657,7 @@ Feature: abs comprehensive tests
         SELECT abs(abs(CAST(-2147483648 AS INT))) AS result
         """
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
-        | 5      |
+        | 5 |
 
   @spark_null
   Rule: Output schema

@@ -45,7 +45,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(3.0  AS DECIMAL(2,1)), CAST(2.00 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 1.00 |
 
     Scenario: try_mod doctest #2 (result)
@@ -54,7 +54,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(12.34 AS DECIMAL(4,2)), CAST(5.67 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 1.00 |
 
     Scenario: try_mod doctest #3 (result)
@@ -63,7 +63,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(1.2 AS DECIMAL(2,1)), CAST(0.03 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 0.00 |
 
     Scenario: try_mod doctest #4 (result)
@@ -72,7 +72,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.00 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: try_mod doctest #5 (result)
@@ -81,7 +81,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(0.00 AS DECIMAL(3,2)), CAST(2.50 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 0.00 |
 
     Scenario: try_mod doctest #6 (result)
@@ -90,7 +90,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(9.99 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 1.23 |
 
     Scenario: try_mod doctest #7 (result)
@@ -99,7 +99,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(5.00 AS DECIMAL(3,2)), CAST(5.00 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 0.00 |
 
     Scenario: try_mod doctest #8 (result)
@@ -108,7 +108,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(9.9 AS DECIMAL(38,1)), CAST(0.000000000000000001 AS DECIMAL(18,18))) AS r
         """
       Then query result
-        | r |
+        | r                    |
         | 0.000000000000000000 |
 
     Scenario: try_mod doctest #9 (result)
@@ -126,7 +126,7 @@ Feature: try_mod output schema
         SELECT try_mod(3, CAST(2.00 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 1.00 |
 
     Scenario: try_mod doctest #11 (result)
@@ -135,7 +135,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), 2) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 1.00 |
 
     Scenario: try_mod doctest #12 (result)
@@ -144,7 +144,7 @@ Feature: try_mod output schema
         SELECT try_mod(NULL, CAST(2.00 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: try_mod doctest #13 (result)
@@ -153,7 +153,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), NULL) AS r
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: try_mod doctest #14 (result)
@@ -162,7 +162,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.000000000001 AS DECIMAL(13,12))) AS r
         """
       Then query result
-        | r |
+        | r              |
         | 0.000000000000 |
 
     Scenario: try_mod doctest #15 (result)
@@ -171,7 +171,7 @@ Feature: try_mod output schema
         SELECT try_mod(CAST(10.00 AS DECIMAL(4,2)), CAST(2.50 AS DECIMAL(3,2))) AS r
         """
       Then query result
-        | r |
+        | r    |
         | 0.00 |
 
     Scenario: try_mod doctest #16 (result)
@@ -184,7 +184,7 @@ Feature: try_mod output schema
           try_mod(CAST(-7.5 AS DECIMAL(3,1)), CAST(-2.0 AS DECIMAL(2,1))) AS n_n
         """
       Then query result
-        | p_p | n_p | p_n | n_n |
+        | p_p | n_p  | p_n | n_n  |
         | 1.5 | -1.5 | 1.5 | -1.5 |
 
   Rule: Output schema (migrated from test_try_mod.txt printSchema doctests)
@@ -371,4 +371,3 @@ Feature: try_mod output schema
          |-- p_n: decimal(2,1) (nullable = true)
          |-- n_n: decimal(2,1) (nullable = true)
         """
-

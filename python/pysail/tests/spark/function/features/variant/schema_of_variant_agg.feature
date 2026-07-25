@@ -192,7 +192,7 @@ Feature: schema_of_variant_agg
         FROM VALUES ('{"a":1}'), ('{"a":"x"}') AS t(v)
         """
       Then query result
-        | result              |
+        | result             |
         | OBJECT<a: VARIANT> |
 
     Scenario: schema_of_variant_agg objects 3 rows merge
@@ -212,7 +212,7 @@ Feature: schema_of_variant_agg
         FROM VALUES ('{"a":{"x":1}}'), ('{"a":{"y":2}}') AS t(v)
         """
       Then query result
-        | result                                   |
+        | result                                  |
         | OBJECT<a: OBJECT<x: BIGINT, y: BIGINT>> |
 
     Scenario: schema_of_variant_agg deeply nested objects
@@ -222,7 +222,7 @@ Feature: schema_of_variant_agg
         FROM VALUES ('{"a":{"b":1}}'), ('{"a":{"c":2}}') AS t(v)
         """
       Then query result
-        | result                                   |
+        | result                                  |
         | OBJECT<a: OBJECT<b: BIGINT, c: BIGINT>> |
 
   Rule: Array merging
@@ -234,7 +234,7 @@ Feature: schema_of_variant_agg
         FROM VALUES ('[1,2]'), ('["a"]') AS t(v)
         """
       Then query result
-        | result          |
+        | result         |
         | ARRAY<VARIANT> |
 
     Scenario: schema_of_variant_agg array and empty array

@@ -3,7 +3,7 @@ Feature: make_timestamp_ltz
 
   Rule: Daylight saving time handling
 
-    Background:
+  Background:
       Given config spark.sql.session.timeZone = America/Los_Angeles
 
     Scenario Outline: `make_timestamp_ltz` around daylight saving time transition

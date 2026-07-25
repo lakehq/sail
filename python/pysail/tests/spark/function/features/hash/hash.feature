@@ -45,7 +45,7 @@ Feature: hash() returns murmur3 hash
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal yields a non-nullable integer
+    Scenario: a non-null literal yields a non-nullable integer
       When query
         """
         SELECT hash('a') AS result
@@ -57,7 +57,7 @@ Scenario: a non-null literal yields a non-nullable integer
         """
 
     @sail-bug
-Scenario: a non-null column yields a non-nullable integer
+    Scenario: a non-null column yields a non-nullable integer
       When query
         """
         SELECT hash(id) AS result FROM range(3)
@@ -69,7 +69,7 @@ Scenario: a non-null column yields a non-nullable integer
         """
 
     @sail-bug
-Scenario: a nullable column: hash is still non-nullable (hash of NULL is defined)
+    Scenario: a nullable column: hash is still non-nullable (hash of NULL is defined)
       When query
         """
         SELECT hash(c) AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(c)

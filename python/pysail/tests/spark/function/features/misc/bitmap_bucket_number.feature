@@ -5,7 +5,7 @@ Feature: bitmap_bucket_number output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to bitmap_bucket_number yields the schema Spark declares
+    Scenario: a non-null literal input to bitmap_bucket_number yields the schema Spark declares
       When query
         """
         SELECT bitmap_bucket_number(123) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to bitmap_bucket_number yields the schema Spa
         """
 
     @sail-bug
-Scenario: a non-null column input to bitmap_bucket_number yields the schema Spark declares
+    Scenario: a non-null column input to bitmap_bucket_number yields the schema Spark declares
       When query
         """
         SELECT bitmap_bucket_number(CAST(id AS INT)) AS result FROM range(3)
@@ -29,7 +29,7 @@ Scenario: a non-null column input to bitmap_bucket_number yields the schema Spar
         """
 
     @sail-bug
-Scenario: a nullable column input to bitmap_bucket_number stays nullable
+    Scenario: a nullable column input to bitmap_bucket_number stays nullable
       When query
         """
         SELECT bitmap_bucket_number(c) AS result FROM VALUES (123), (CAST(NULL AS INT)) AS t(c)

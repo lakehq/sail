@@ -5,29 +5,29 @@ Feature: min_by function
 
     Scenario: min_by with all NULLs in ordering column
       When query
-      """
-      SELECT min_by(name, age) AS result
-      FROM VALUES ('Alice', CAST(NULL AS INT)), ('Bob', CAST(NULL AS INT)) AS t(name, age)
-      """
+        """
+        SELECT min_by(name, age) AS result
+        FROM VALUES ('Alice', CAST(NULL AS INT)), ('Bob', CAST(NULL AS INT)) AS t(name, age)
+        """
       Then query result
-      | result |
-      | NULL   |
+        | result |
+        | NULL   |
 
   Rule: min_by as window function
 
     Scenario: min_by over window
       When query
-      """
-      SELECT name, age,
-             min_by(name, age) OVER (ORDER BY age ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
-      FROM VALUES ('Alice', 30), ('Bob', 50), ('Carol', 40) AS t(name, age)
-      ORDER BY age
-      """
+        """
+        SELECT name, age,
+               min_by(name, age) OVER (ORDER BY age ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('Alice', 30), ('Bob', 50), ('Carol', 40) AS t(name, age)
+        ORDER BY age
+        """
       Then query result ordered
-      | name  | age | result |
-      | Alice | 30  | Alice  |
-      | Carol | 40  | Alice  |
-      | Bob   | 50  | Alice  |
+        | name  | age | result |
+        | Alice | 30  | Alice  |
+        | Carol | 40  | Alice  |
+        | Bob   | 50  | Alice  |
 
   Rule: Result values (migrated from test_min_by.txt doctests)
 
@@ -38,16 +38,16 @@ Feature: min_by function
         """
       Then query result
         | int_col | bigint_col | by_col | val_col |
-        | 0 | 0 | NULL | 0 |
-        | 1 | 1 | 1 | 10 |
-        | 2 | 2 | 2 | 20 |
-        | 3 | 0 | 3 | 30 |
-        | 4 | 1 | 4 | 40 |
-        | 5 | 2 | 5 | 50 |
-        | 6 | 0 | 6 | 60 |
-        | 7 | 1 | 7 | 70 |
-        | 8 | 2 | 8 | 80 |
-        | 9 | 0 | NULL | 90 |
+        | 0       | 0          | NULL   | 0       |
+        | 1       | 1          | 1      | 10      |
+        | 2       | 2          | 2      | 20      |
+        | 3       | 0          | 3      | 30      |
+        | 4       | 1          | 4      | 40      |
+        | 5       | 2          | 5      | 50      |
+        | 6       | 0          | 6      | 60      |
+        | 7       | 1          | 7      | 70      |
+        | 8       | 2          | 8      | 80      |
+        | 9       | 0          | NULL   | 90      |
 
     Scenario: min_by doctest #2 (result)
       When query
@@ -56,7 +56,7 @@ Feature: min_by function
         """
       Then query result
         | result |
-        | 10 |
+        | 10     |
 
     Scenario: min_by doctest #3 (result)
       When query
@@ -65,7 +65,7 @@ Feature: min_by function
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: min_by doctest #4 (result)
       When query
@@ -74,7 +74,7 @@ Feature: min_by function
         """
       Then query result
         | result |
-        | 20 |
+        | 20     |
 
     Scenario: min_by doctest #5 (result)
       When query
@@ -83,5 +83,4 @@ Feature: min_by function
         """
       Then query result
         | result |
-        | NULL |
-
+        | NULL   |

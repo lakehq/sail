@@ -5,7 +5,7 @@ Feature: rpad output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to rpad yields the schema Spark declares
+    Scenario: a non-null literal input to rpad yields the schema Spark declares
       When query
         """
         SELECT rpad('hi', 5, '??') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to rpad yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to rpad yields the schema Spark declares
+    Scenario: a non-null column input to rpad yields the schema Spark declares
       When query
         """
         SELECT rpad(CAST(id AS STRING), 5, '??') AS result FROM range(3)

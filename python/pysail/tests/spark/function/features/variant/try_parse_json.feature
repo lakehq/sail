@@ -214,7 +214,7 @@ Feature: try_parse_json comprehensive tests
         SELECT to_json(try_parse_json('{"a":{"b":{"c":1}}}')) AS result
         """
       Then query result
-        | result                |
+        | result              |
         | {"a":{"b":{"c":1}}} |
 
     Scenario: try_parse_json unicode string
@@ -335,8 +335,8 @@ Feature: try_parse_json comprehensive tests
         SELECT to_json(try_parse_json('99999999999999999999')) AS result
         """
       Then query result
-        | result                |
-        | 99999999999999999999  |
+        | result               |
+        | 99999999999999999999 |
 
     Scenario: try_parse_json raw control char returns NULL
       When query
@@ -583,7 +583,7 @@ Feature: try_parse_json comprehensive tests
         SELECT to_json(try_parse_json('{"a":{"b":{"c":{"d":1}}}}')) AS result
         """
       Then query result
-        | result                     |
+        | result                    |
         | {"a":{"b":{"c":{"d":1}}}} |
 
     Scenario: object with array value
@@ -592,7 +592,7 @@ Feature: try_parse_json comprehensive tests
         SELECT to_json(try_parse_json('{"a":[1,2,3]}')) AS result
         """
       Then query result
-        | result         |
+        | result        |
         | {"a":[1,2,3]} |
 
     Scenario: object with null value

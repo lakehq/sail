@@ -45,12 +45,12 @@ Feature: try_add output schema
         SELECT birth, age, try_add(birth, age) AS birth_plus_age FROM VALUES (CAST(1982 AS INT), CAST(15 AS INT)), (CAST(1990 AS INT), CAST(2 AS INT)), (CAST(NULL AS INT), CAST(10 AS INT)), (CAST(2147483647 AS INT), CAST(1 AS INT)), (CAST(-2147483648 AS INT), CAST(-1 AS INT)) AS t(birth, age)
         """
       Then query result
-        | birth | age | birth_plus_age |
-        | 1982 | 15 | 1997 |
-        | 1990 | 2 | 1992 |
-        | NULL | 10 | NULL |
-        | 2147483647 | 1 | NULL |
-        | -2147483648 | -1 | NULL |
+        | birth       | age | birth_plus_age |
+        | 1982        | 15  | 1997           |
+        | 1990        | 2   | 1992           |
+        | NULL        | 10  | NULL           |
+        | 2147483647  | 1   | NULL           |
+        | -2147483648 | -1  | NULL           |
 
     Scenario: try_add doctest #2 (result)
       When query
@@ -58,7 +58,7 @@ Feature: try_add output schema
         SELECT try_add(DATE '2015-09-30', 1) as d1, try_add(DATE '2000-01-01', 366) as d2, try_add(DATE '2021-01-01', 1) as d3, try_add(NULL, 100) as d4
         """
       Then query result
-        | d1 | d2 | d3 | d4 |
+        | d1         | d2         | d3         | d4   |
         | 2015-10-01 | 2001-01-01 | 2021-01-02 | NULL |
 
     Scenario: try_add doctest #3 (result)
@@ -67,7 +67,7 @@ Feature: try_add output schema
         SELECT try_add(DATE '2015-01-31', INTERVAL 1 MONTH) as d1, try_add(DATE '2020-02-29', INTERVAL 12 MONTH) as d2, try_add(NULL, INTERVAL 3 MONTH) as d3
         """
       Then query result
-        | d1 | d2 | d3 |
+        | d1         | d2         | d3   |
         | 2015-02-28 | 2021-02-28 | NULL |
 
     Scenario: try_add doctest #4 (result)
@@ -76,7 +76,7 @@ Feature: try_add output schema
         SELECT try_add(DATE '2000-07-31', INTERVAL -1 MONTH) as d1, try_add(DATE '2021-01-31', INTERVAL -1 MONTH) as d2
         """
       Then query result
-        | d1 | d2 |
+        | d1         | d2         |
         | 2000-06-30 | 2020-12-31 |
 
     Scenario: try_add doctest #5 (result)
@@ -85,7 +85,7 @@ Feature: try_add output schema
         SELECT try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR) as result
         """
       Then query result
-        | result |
+        | result                       |
         | INTERVAL '3-0' YEAR TO MONTH |
 
     Scenario: try_add doctest #6 (result)
@@ -94,5 +94,5 @@ Feature: try_add output schema
         SELECT try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY) as result
         """
       Then query result
-        | result |
+        | result              |
         | 2021-01-02 00:00:00 |

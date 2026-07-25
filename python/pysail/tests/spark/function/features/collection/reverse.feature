@@ -5,7 +5,7 @@ Feature: reverse output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to reverse yields the schema Spark declares
+    Scenario: a non-null literal input to reverse yields the schema Spark declares
       When query
         """
         SELECT reverse('Spark SQL') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to reverse yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to reverse yields the schema Spark declares
+    Scenario: a non-null column input to reverse yields the schema Spark declares
       When query
         """
         SELECT reverse(CAST(id AS STRING)) AS result FROM range(3)

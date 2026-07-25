@@ -10,7 +10,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | 2.0 |
+        | 2.0   |
 
     Scenario: try_avg doctest #3 (result)
       When query
@@ -19,7 +19,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | 2.0 |
+        | 2.0   |
 
     Scenario: try_avg doctest #4 (result)
       When query
@@ -27,7 +27,7 @@ Feature: try_avg
         SELECT try_avg(x) AS avg_x FROM VALUES (CAST(9223372036854775807 AS BIGINT)), (CAST(1 AS BIGINT)) AS t(x)
         """
       Then query result
-        | avg_x |
+        | avg_x                |
         | 4.611686018427388e18 |
 
     Scenario: try_avg doctest #5 (result)
@@ -36,7 +36,7 @@ Feature: try_avg
         SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) AS t(x)
         """
       Then query result
-        | avg_x |
+        | avg_x              |
         | 2.3333333333333335 |
 
     Scenario: try_avg doctest #6 (result)
@@ -45,7 +45,7 @@ Feature: try_avg
         SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE)) AS t(x)
         """
       Then query result
-        | avg_x |
+        | avg_x    |
         | Infinity |
 
     Scenario: try_avg doctest #7 (result)
@@ -55,7 +55,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | NaN |
+        | NaN   |
 
     Scenario: try_avg doctest #8 (result)
       When query
@@ -64,7 +64,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | 3.00 |
+        | 3.00  |
 
     Scenario: try_avg doctest #9 (result)
       When query
@@ -73,7 +73,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | 1.75 |
+        | 1.75  |
 
     Scenario: try_avg doctest #10 (result)
       When query
@@ -91,7 +91,7 @@ Feature: try_avg
         """
       Then query result
         | avg_x |
-        | NULL |
+        | NULL  |
 
     Scenario: try_avg doctest #12 (result)
       When query
@@ -99,9 +99,9 @@ Feature: try_avg
         SELECT g, try_avg(x) AS avg_x FROM VALUES ('bad', CAST(9223372036854775807 AS BIGINT)), ('bad', CAST(1 AS BIGINT)), ('ok', CAST(10 AS BIGINT)), ('ok', CAST(NULL AS BIGINT)), ('ok', CAST(5 AS BIGINT)) AS t(g, x) GROUP BY g ORDER BY g
         """
       Then query result ordered
-        | g | avg_x |
+        | g   | avg_x                |
         | bad | 4.611686018427388e18 |
-        | ok | 7.5 |
+        | ok  | 7.5                  |
 
     Scenario: try_avg doctest #14 (result)
       When query
@@ -109,7 +109,7 @@ Feature: try_avg
         SELECT try_avg(col) AS r FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col)
         """
       Then query result
-        | r |
+        | r    |
         | NULL |
 
     Scenario: try_avg doctest #15 (result)
@@ -118,7 +118,7 @@ Feature: try_avg
         SELECT try_avg(col) AS r FROM VALUES (interval '7 months'), (interval '1 months') AS tab(col)
         """
       Then query result
-        | r |
+        | r                            |
         | INTERVAL '0-4' YEAR TO MONTH |
 
     Scenario: try_avg doctest #16 (result)
@@ -127,7 +127,7 @@ Feature: try_avg
         SELECT try_avg(col) AS r FROM VALUES (interval '10 months'), null, (interval '5 months') AS tab(col)
         """
       Then query result
-        | r |
+        | r                            |
         | INTERVAL '0-8' YEAR TO MONTH |
 
   Rule: Output schema (migrated from test_try_avg.txt printSchema doctests)
@@ -154,4 +154,3 @@ Feature: try_avg
          |-- g: string (nullable = true)
          |-- avg_x: double (nullable = true)
         """
-

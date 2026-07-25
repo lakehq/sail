@@ -5,7 +5,7 @@ Feature: dayofyear output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to dayofyear yields the schema Spark declares
+    Scenario: a non-null literal input to dayofyear yields the schema Spark declares
       When query
         """
         SELECT dayofyear('2016-04-09') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to dayofyear yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to dayofyear yields the schema Spark declares
+    Scenario: a non-null column input to dayofyear yields the schema Spark declares
       When query
         """
         SELECT dayofyear(CAST(id AS STRING)) AS result FROM range(3)

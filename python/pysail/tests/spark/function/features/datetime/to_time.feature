@@ -13,32 +13,32 @@ Feature: to_time (strict variant)
     @sail-only
     Scenario: HH:MM:SS basic
       When query
-      """
-      SELECT to_time('10:30:45') AS result
-      """
+        """
+        SELECT to_time('10:30:45') AS result
+        """
       Then query result
-      | result   |
-      | 10:30:45 |
+        | result   |
+        | 10:30:45 |
 
     @sail-only
     Scenario: With microseconds
       When query
-      """
-      SELECT to_time('10:30:45.123456') AS result
-      """
+        """
+        SELECT to_time('10:30:45.123456') AS result
+        """
       Then query result
-      | result          |
-      | 10:30:45.123456 |
+        | result          |
+        | 10:30:45.123456 |
 
     @sail-only
     Scenario: With format
       When query
-      """
-      SELECT to_time('10-30-45', 'HH-mm-ss') AS result
-      """
+        """
+        SELECT to_time('10-30-45', 'HH-mm-ss') AS result
+        """
       Then query result
-      | result   |
-      | 10:30:45 |
+        | result   |
+        | 10:30:45 |
 
   Rule: Two-argument form is type-consistent with the one-argument form
 
@@ -50,29 +50,29 @@ Feature: to_time (strict variant)
     @sail-only
     Scenario: TIMESTAMP first argument ignores the format and extracts the time
       When query
-      """
-      SELECT to_time(TIMESTAMP '2024-01-15 10:30:45', 'HH:mm:ss') AS result
-      """
+        """
+        SELECT to_time(TIMESTAMP '2024-01-15 10:30:45', 'HH:mm:ss') AS result
+        """
       Then query result
-      | result   |
-      | 10:30:45 |
+        | result   |
+        | 10:30:45 |
 
     @sail-only
     Scenario: TIME first argument ignores the format
       When query
-      """
-      SELECT to_time(TIME '10:30:45', 'HH-mm-ss') AS result
-      """
+        """
+        SELECT to_time(TIME '10:30:45', 'HH-mm-ss') AS result
+        """
       Then query result
-      | result   |
-      | 10:30:45 |
+        | result   |
+        | 10:30:45 |
 
     @sail-only
     Scenario: Unsupported first-argument type is rejected with a format too
       When query
-      """
-      SELECT to_time(123, 'HH:mm:ss')
-      """
+        """
+        SELECT to_time(123, 'HH:mm:ss')
+        """
       Then query error (?i)STRING, TIME, TIMESTAMP or NULL|data type|Unsupported
 
   Rule: Wrong argument count is rejected
@@ -80,9 +80,9 @@ Feature: to_time (strict variant)
     @sail-only
     Scenario: Three arguments raise an error
       When query
-      """
-      SELECT to_time('10:30:45', 'HH:mm:ss', 'extra')
-      """
+        """
+        SELECT to_time('10:30:45', 'HH:mm:ss', 'extra')
+        """
       Then query error (?i)requires 1 or 2 arguments|arguments
 
   Rule: Invalid input throws
@@ -90,17 +90,17 @@ Feature: to_time (strict variant)
     @sail-only
     Scenario: Garbage string raises error
       When query
-      """
-      SELECT to_time('not-a-time')
-      """
+        """
+        SELECT to_time('not-a-time')
+        """
       Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
 
     @sail-only
     Scenario: Out-of-range hour raises error
       When query
-      """
-      SELECT to_time('25:00:00')
-      """
+        """
+        SELECT to_time('25:00:00')
+        """
       Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
 
   Rule: NULL input propagates
@@ -108,9 +108,9 @@ Feature: to_time (strict variant)
     @sail-only
     Scenario: NULL input returns NULL
       When query
-      """
-      SELECT to_time(CAST(NULL AS STRING)) AS result
-      """
+        """
+        SELECT to_time(CAST(NULL AS STRING)) AS result
+        """
       Then query result
-      | result |
-      | NULL   |
+        | result |
+        | NULL   |

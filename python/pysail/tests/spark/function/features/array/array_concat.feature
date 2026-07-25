@@ -9,63 +9,63 @@ Feature: array_concat() concatenates arrays (Sail extension)
     @sail-only
     Scenario: array_concat two integer arrays
       When query
-      """
-      SELECT array_concat(array(1, 2, 3), array(4, 5)) AS result
-      """
+        """
+        SELECT array_concat(array(1, 2, 3), array(4, 5)) AS result
+        """
       Then query result
-      | result          |
-      | [1, 2, 3, 4, 5] |
+        | result          |
+        | [1, 2, 3, 4, 5] |
 
     @sail-only
     Scenario: array_concat two string arrays
       When query
-      """
-      SELECT array_concat(array('a', 'b'), array('c')) AS result
-      """
+        """
+        SELECT array_concat(array('a', 'b'), array('c')) AS result
+        """
       Then query result
-      | result    |
-      | [a, b, c] |
+        | result    |
+        | [a, b, c] |
 
   Rule: Empty array handling
 
     @sail-only
     Scenario: array_concat empty array with typed array
       When query
-      """
-      SELECT array_concat(array(), array(1, 2, 3)) AS result
-      """
+        """
+        SELECT array_concat(array(), array(1, 2, 3)) AS result
+        """
       Then query result
-      | result    |
-      | [1, 2, 3] |
+        | result    |
+        | [1, 2, 3] |
 
     @sail-only
     Scenario: array_concat typed array with empty array
       When query
-      """
-      SELECT array_concat(array(1, 2), array()) AS result
-      """
+        """
+        SELECT array_concat(array(1, 2), array()) AS result
+        """
       Then query result
-      | result |
-      | [1, 2] |
+        | result |
+        | [1, 2] |
 
   Rule: Null propagation
 
     @sail-only
     Scenario: array_concat array with null returns null
       When query
-      """
-      SELECT array_concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
-      """
+        """
+        SELECT array_concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
+        """
       Then query result
-      | result |
-      | NULL   |
+        | result |
+        | NULL   |
 
     @sail-only
     Scenario: array_concat null with array returns null
       When query
-      """
-      SELECT array_concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
-      """
+        """
+        SELECT array_concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
+        """
       Then query result
-      | result |
-      | NULL   |
+        | result |
+        | NULL   |

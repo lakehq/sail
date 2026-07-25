@@ -5,7 +5,7 @@ Feature: month output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to month yields the schema Spark declares
+    Scenario: a non-null literal input to month yields the schema Spark declares
       When query
         """
         SELECT month('2016-07-30') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to month yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to month yields the schema Spark declares
+    Scenario: a non-null column input to month yields the schema Spark declares
       When query
         """
         SELECT month(CAST(id AS STRING)) AS result FROM range(3)

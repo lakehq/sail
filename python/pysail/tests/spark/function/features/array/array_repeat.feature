@@ -5,7 +5,7 @@ Feature: array_repeat output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to array_repeat yields the schema Spark declares
+    Scenario: a non-null literal input to array_repeat yields the schema Spark declares
       When query
         """
         SELECT array_repeat('123', 2) AS result
@@ -18,7 +18,7 @@ Scenario: a non-null literal input to array_repeat yields the schema Spark decla
         """
 
     @sail-bug
-Scenario: a non-null column input to array_repeat yields the schema Spark declares
+    Scenario: a non-null column input to array_repeat yields the schema Spark declares
       When query
         """
         SELECT array_repeat(CAST(id AS STRING), 2) AS result FROM range(3)
@@ -31,7 +31,7 @@ Scenario: a non-null column input to array_repeat yields the schema Spark declar
         """
 
     @sail-bug
-Scenario: a nullable column input to array_repeat stays nullable
+    Scenario: a nullable column input to array_repeat stays nullable
       When query
         """
         SELECT array_repeat(c, 2) AS result FROM VALUES ('123'), (CAST(NULL AS STRING)) AS t(c)

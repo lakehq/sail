@@ -5,7 +5,7 @@ Feature: shiftrightunsigned output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to shiftrightunsigned yields the schema Spark declares
+    Scenario: a non-null literal input to shiftrightunsigned yields the schema Spark declares
       When query
         """
         SELECT shiftrightunsigned(4, 1) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to shiftrightunsigned yields the schema Spark
         """
 
     @sail-bug
-Scenario: a non-null column input to shiftrightunsigned yields the schema Spark declares
+    Scenario: a non-null column input to shiftrightunsigned yields the schema Spark declares
       When query
         """
         SELECT shiftrightunsigned(CAST(id AS INT), 1) AS result FROM range(3)

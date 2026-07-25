@@ -32,7 +32,7 @@ Feature: unix_timestamp with an argument coming from a column
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null string literal yields a bigint
+    Scenario: a non-null string literal yields a bigint
       When query
         """
         SELECT unix_timestamp('2024-01-15', 'yyyy-MM-dd') AS result
@@ -44,7 +44,7 @@ Scenario: a non-null string literal yields a bigint
         """
 
     @sail-bug
-Scenario: a non-null string column yields a bigint
+    Scenario: a non-null string column yields a bigint
       When query
         """
         SELECT unix_timestamp(date_format(CAST(id AS TIMESTAMP), 'yyyy-MM-dd'), 'yyyy-MM-dd') AS result FROM range(3)

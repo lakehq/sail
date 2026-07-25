@@ -72,10 +72,10 @@ Feature: concat() — simplify hook (single-argument identity)
         AS t(v) ORDER BY result
         """
       Then query result ordered
-        | result            |
-        | NULL              |
-        | [68 65 6C 6C 6F]  |
-        | [77 6F 72 6C 64]  |
+        | result           |
+        | NULL             |
+        | [68 65 6C 6C 6F] |
+        | [77 6F 72 6C 64] |
 
   Rule: Non-string inputs — coerced to string, not simplified away
 

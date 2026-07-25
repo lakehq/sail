@@ -133,7 +133,7 @@ Feature: DataSketches functions
         FROM VALUES (1), (2), (1) AS tab(col)
         """
       Then query result
-        | result                                                                                                                       |
+        | result                                                                                                                   |
         | 0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000 |
 
     Scenario: count_min_sketch truncates bigint seeds like Spark
@@ -158,7 +158,7 @@ Feature: DataSketches functions
         LIMIT 1
         """
       Then query result
-        | result                                                                                                                       |
+        | result                                                                                                                   |
         | 0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000 |
 
   Rule: DataSketches functions return Spark-compatible types

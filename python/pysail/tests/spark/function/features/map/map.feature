@@ -5,7 +5,7 @@ Feature: map output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to map yields the schema Spark declares
+    Scenario: a non-null literal input to map yields the schema Spark declares
       When query
         """
         SELECT map(1.0, '2', 3.0, '4') AS result
@@ -19,7 +19,7 @@ Scenario: a non-null literal input to map yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a nullable column input to map stays nullable
+    Scenario: a nullable column input to map stays nullable
       When query
         """
         SELECT map(c, '2', 3.0, '4') AS result FROM VALUES (1.0), (CAST(NULL AS DECIMAL(2,1))) AS t(c)

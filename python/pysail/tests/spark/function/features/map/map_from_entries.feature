@@ -24,22 +24,22 @@ Feature: map_from_entries output schema
         """
         SELECT map_from_entries(data) as result, typeof(map_from_entries(data)) as type
 from VALUES
-    (NULL), 
+    (NULL),
     (
-        array(struct(1 as a, 'b' as b), 
-        struct(2 as a, NULL as b), 
+        array(struct(1 as a, 'b' as b),
+        struct(2 as a, NULL as b),
         struct(3 as a, 'd' as b))
-    ), 
+    ),
     (array()),
-    (cast(NULL as array<struct<a: int, b: string>>)) 
+    (cast(NULL as array<struct<a: int, b: string>>))
 as tab(data)
         """
       Then query result
-        | result | type |
-        | NULL | map<int,string> |
+        | result                      | type            |
+        | NULL                        | map<int,string> |
         | {1 -> b, 2 -> NULL, 3 -> d} | map<int,string> |
-        | {} | map<int,string> |
-        | NULL | map<int,string> |
+        | {}                          | map<int,string> |
+        | NULL                        | map<int,string> |
 
     Scenario: map_from_entries doctest #2 (result)
       When query
@@ -47,13 +47,13 @@ as tab(data)
         SELECT map_from_entries(data) as result, typeof(map_from_entries(data)) as type
 from values
     (array(
-        struct(1 as a, "a" as b), 
-        cast(NULL as struct<a: int, b: string>), 
+        struct(1 as a, "a" as b),
+        cast(NULL as struct<a: int, b: string>),
         cast(NULL as struct<a: int, b: string>)
     )),
     (NULL),
     (array(
-        struct(2 as a, "b" as b), 
+        struct(2 as a, "b" as b),
         struct(3 as a, "c" as b)
     )),
     (array(
@@ -65,9 +65,8 @@ from values
 as tab(data)
         """
       Then query result
-        | result | type |
-        | NULL | map<int,string> |
-        | NULL | map<int,string> |
+        | result           | type            |
+        | NULL             | map<int,string> |
+        | NULL             | map<int,string> |
         | {2 -> b, 3 -> c} | map<int,string> |
-        | NULL | map<int,string> |
-
+        | NULL             | map<int,string> |

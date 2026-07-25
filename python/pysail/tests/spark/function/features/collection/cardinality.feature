@@ -5,7 +5,7 @@ Feature: cardinality output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to cardinality yields the schema Spark declares
+    Scenario: a non-null literal input to cardinality yields the schema Spark declares
       When query
         """
         SELECT cardinality(array('b', 'd', 'c', 'a')) AS result

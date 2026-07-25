@@ -46,7 +46,7 @@ Feature: elt output schema
         """
       Then query result
         | elt(1, 10, 20) |
-        | 10 |
+        | 10             |
 
     Scenario: elt doctest #3 (result)
       When query
@@ -55,7 +55,7 @@ Feature: elt output schema
         """
       Then query result
         | elt(1, scala, java) |
-        | scala |
+        | scala               |
 
     Scenario: elt doctest #4 (result)
       When query
@@ -64,7 +64,7 @@ Feature: elt output schema
         """
       Then query result
         | elt(11, 10, 20) |
-        | NULL |
+        | NULL            |
 
     Scenario: elt doctest #5 (result)
       When query
@@ -73,7 +73,7 @@ Feature: elt output schema
         """
       Then query result
         | elt(6, scala, java, c, c++, python, rust) |
-        | rust |
+        | rust                                      |
 
   Rule: Output schema (migrated from test_elt.txt printSchema doctests)
 
@@ -87,4 +87,3 @@ Feature: elt output schema
         root
          |-- elt(1, 10, 20): string (nullable = true)
         """
-

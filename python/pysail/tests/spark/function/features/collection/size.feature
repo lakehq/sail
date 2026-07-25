@@ -5,7 +5,7 @@ Feature: size output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to size yields the schema Spark declares
+    Scenario: a non-null literal input to size yields the schema Spark declares
       When query
         """
         SELECT size(array('b', 'd', 'c', 'a')) AS result

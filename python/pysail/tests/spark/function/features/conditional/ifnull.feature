@@ -5,7 +5,7 @@ Feature: ifnull output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to ifnull yields the schema Spark declares
+    Scenario: a non-null literal input to ifnull yields the schema Spark declares
       When query
         """
         SELECT ifnull(NULL, array('2')) AS result

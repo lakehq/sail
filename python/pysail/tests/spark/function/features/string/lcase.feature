@@ -5,7 +5,7 @@ Feature: lcase output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to lcase yields the schema Spark declares
+    Scenario: a non-null literal input to lcase yields the schema Spark declares
       When query
         """
         SELECT lcase('SparkSql') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to lcase yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to lcase yields the schema Spark declares
+    Scenario: a non-null column input to lcase yields the schema Spark declares
       When query
         """
         SELECT lcase(CAST(id AS STRING)) AS result FROM range(3)

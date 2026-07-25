@@ -185,8 +185,8 @@ Feature: parse_json (strict version; errors on invalid JSON)
         SELECT to_json(parse_json('99999999999999999999')) AS result
         """
       Then query result
-        | result                |
-        | 99999999999999999999  |
+        | result               |
+        | 99999999999999999999 |
 
     Scenario: parse_json accepts trailing garbage (Spark parses prefix)
       When query
@@ -274,7 +274,7 @@ Feature: parse_json (strict version; errors on invalid JSON)
   Rule: Output schema
 
     @sail-bug
-Scenario: strict parse_json of a non-null literal yields a non-nullable variant
+    Scenario: strict parse_json of a non-null literal yields a non-nullable variant
       When query
         """
         SELECT parse_json('{"a":1}') AS result
@@ -297,7 +297,7 @@ Scenario: strict parse_json of a non-null literal yields a non-nullable variant
         """
 
     @sail-bug
-Scenario: strict parse_json of a non-null column yields a non-nullable variant
+    Scenario: strict parse_json of a non-null column yields a non-nullable variant
       When query
         """
         SELECT parse_json(CONCAT('{"n":', CAST(id AS STRING), '}')) AS result FROM range(3)

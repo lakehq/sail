@@ -5,7 +5,7 @@ Feature: repeat output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to repeat yields the schema Spark declares
+    Scenario: a non-null literal input to repeat yields the schema Spark declares
       When query
         """
         SELECT repeat('123', 2) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to repeat yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to repeat yields the schema Spark declares
+    Scenario: a non-null column input to repeat yields the schema Spark declares
       When query
         """
         SELECT repeat(CAST(id AS STRING), 2) AS result FROM range(3)

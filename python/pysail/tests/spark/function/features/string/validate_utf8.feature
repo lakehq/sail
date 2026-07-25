@@ -5,7 +5,7 @@ Feature: validate_utf8 output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to validate_utf8 yields the schema Spark declares
+    Scenario: a non-null literal input to validate_utf8 yields the schema Spark declares
       When query
         """
         SELECT validate_utf8('Spark') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to validate_utf8 yields the schema Spark decl
         """
 
     @sail-bug
-Scenario: a non-null column input to validate_utf8 yields the schema Spark declares
+    Scenario: a non-null column input to validate_utf8 yields the schema Spark declares
       When query
         """
         SELECT validate_utf8(CAST(id AS STRING)) AS result FROM range(3)

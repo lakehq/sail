@@ -46,7 +46,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(0) | typeof(nullifzero(0)) |
-        | NULL | int |
+        | NULL          | int                   |
 
     Scenario: nullifzero doctest #2 (result)
       When query
@@ -55,7 +55,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(2) | typeof(nullifzero(2)) |
-        | 2 | int |
+        | 2             | int                   |
 
     Scenario: nullifzero doctest #3 (result)
       When query
@@ -64,7 +64,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0 AS TINYINT)) | typeof(nullifzero(CAST(0 AS TINYINT))) |
-        | NULL | tinyint |
+        | NULL                           | tinyint                                |
 
     Scenario: nullifzero doctest #4 (result)
       When query
@@ -73,7 +73,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(2 AS TINYINT)) | typeof(nullifzero(CAST(2 AS TINYINT))) |
-        | 2 | tinyint |
+        | 2                              | tinyint                                |
 
     Scenario: nullifzero doctest #5 (result)
       When query
@@ -82,7 +82,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0 AS SMALLINT)) | typeof(nullifzero(CAST(0 AS SMALLINT))) |
-        | NULL | smallint |
+        | NULL                            | smallint                                |
 
     Scenario: nullifzero doctest #6 (result)
       When query
@@ -91,7 +91,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0 AS BIGINT)) | typeof(nullifzero(CAST(0 AS BIGINT))) |
-        | NULL | bigint |
+        | NULL                          | bigint                                |
 
     Scenario: nullifzero doctest #7 (result)
       When query
@@ -100,7 +100,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0.0 AS FLOAT)) | typeof(nullifzero(CAST(0.0 AS FLOAT))) |
-        | NULL | float |
+        | NULL                           | float                                  |
 
     Scenario: nullifzero doctest #8 (result)
       When query
@@ -109,7 +109,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(1.5 AS FLOAT)) | typeof(nullifzero(CAST(1.5 AS FLOAT))) |
-        | 1.5 | float |
+        | 1.5                            | float                                  |
 
     Scenario: nullifzero doctest #9 (result)
       When query
@@ -118,7 +118,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0.0 AS DOUBLE)) | typeof(nullifzero(CAST(0.0 AS DOUBLE))) |
-        | NULL | double |
+        | NULL                            | double                                  |
 
     Scenario: nullifzero doctest #10 (result)
       When query
@@ -127,7 +127,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(2.5 AS DOUBLE)) | typeof(nullifzero(CAST(2.5 AS DOUBLE))) |
-        | 2.5 | double |
+        | 2.5                             | double                                  |
 
     Scenario: nullifzero doctest #11 (result)
       When query
@@ -136,7 +136,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(0.00 AS DECIMAL(10,2))) | typeof(nullifzero(CAST(0.00 AS DECIMAL(10,2)))) |
-        | NULL | decimal(10,2) |
+        | NULL                                    | decimal(10,2)                                   |
 
     Scenario: nullifzero doctest #12 (result)
       When query
@@ -145,7 +145,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(CAST(5.25 AS DECIMAL(10,2))) | typeof(nullifzero(CAST(5.25 AS DECIMAL(10,2)))) |
-        | 5.25 | decimal(10,2) |
+        | 5.25                                    | decimal(10,2)                                   |
 
     Scenario: nullifzero doctest #13 (result)
       When query
@@ -154,7 +154,7 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero((- 1)) | typeof(nullifzero((- 1))) |
-        | -1 | int |
+        | -1                | int                       |
 
     Scenario: nullifzero doctest #14 (result)
       When query
@@ -163,5 +163,4 @@ Feature: nullifzero output schema
         """
       Then query result
         | nullifzero(NULL) | typeof(nullifzero(NULL)) |
-        | NULL | int |
-
+        | NULL             | int                      |

@@ -9,8 +9,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT INTERVAL '-3 04:05:06' DAY TO SECOND AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '-3 04:05:06' DAY TO SECOND         |
+        | result                               |
+        | INTERVAL '-3 04:05:06' DAY TO SECOND |
 
     Scenario: negative hours in interval is invalid
       When query
@@ -25,8 +25,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT INTERVAL '-0 00:00:00' DAY TO SECOND AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '0 00:00:00' DAY TO SECOND          |
+        | result                              |
+        | INTERVAL '0 00:00:00' DAY TO SECOND |
 
   Rule: Overflow and large values
 
@@ -36,8 +36,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT INTERVAL '0 25:00:00' DAY TO SECOND AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '1 01:00:00' DAY TO SECOND          |
+        | result                              |
+        | INTERVAL '1 01:00:00' DAY TO SECOND |
 
   Rule: Cast operations
 
@@ -47,8 +47,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT CAST(CAST(INTERVAL '2 10:20:30' DAY TO SECOND AS STRING) AS INTERVAL DAY TO SECOND) AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '2 10:20:30' DAY TO SECOND          |
+        | result                              |
+        | INTERVAL '2 10:20:30' DAY TO SECOND |
 
     Scenario: cast HOUR TO SECOND to DAY TO SECOND
       When query
@@ -56,8 +56,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT CAST(INTERVAL '12:30:45' HOUR TO SECOND AS INTERVAL DAY TO SECOND) AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '0 12:30:45' DAY TO SECOND          |
+        | result                              |
+        | INTERVAL '0 12:30:45' DAY TO SECOND |
 
   Rule: Arithmetic and comparison
 
@@ -76,8 +76,8 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT INTERVAL '0 23:00:00' DAY TO SECOND + INTERVAL '0 02:00:00' DAY TO SECOND AS result
         """
       Then query result
-        | result                                       |
-        | INTERVAL '1 01:00:00' DAY TO SECOND          |
+        | result                              |
+        | INTERVAL '1 01:00:00' DAY TO SECOND |
 
     Scenario: comparison in WHERE clause
       When query
@@ -97,5 +97,5 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT x FROM (SELECT INTERVAL '3 10:00:00' DAY TO SECOND AS x) t
         """
       Then query result
-        | x                                            |
-        | INTERVAL '3 10:00:00' DAY TO SECOND          |
+        | x                                   |
+        | INTERVAL '3 10:00:00' DAY TO SECOND |

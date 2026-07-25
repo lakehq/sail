@@ -442,7 +442,7 @@ Feature: year
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null date literal yields a non-nullable integer
+    Scenario: a non-null date literal yields a non-nullable integer
       When query
         """
         SELECT year(DATE '2024-01-15') AS result
@@ -454,7 +454,7 @@ Scenario: a non-null date literal yields a non-nullable integer
         """
 
     @sail-bug
-Scenario: a non-null date column yields a non-nullable integer
+    Scenario: a non-null date column yields a non-nullable integer
       When query
         """
         SELECT year(CAST(CAST(id AS TIMESTAMP) AS DATE)) AS result FROM range(3)

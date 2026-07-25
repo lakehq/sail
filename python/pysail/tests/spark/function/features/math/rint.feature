@@ -5,7 +5,7 @@ Feature: rint output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to rint yields the schema Spark declares
+    Scenario: a non-null literal input to rint yields the schema Spark declares
       When query
         """
         SELECT rint(12.3456) AS result

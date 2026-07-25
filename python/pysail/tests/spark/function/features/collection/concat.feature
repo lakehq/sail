@@ -78,8 +78,8 @@ Feature: concat function
         SELECT concat('Hello', ', ', 'World') AS result
         """
       Then query result
-        | result        |
-        | Hello, World  |
+        | result       |
+        | Hello, World |
 
     Scenario: single string argument
       When query
@@ -515,8 +515,8 @@ Feature: concat function
         SELECT concat(TIMESTAMP '2024-01-15 12:00:00', '_suffix') AS result
         """
       Then query result
-        | result                      |
-        | 2024-01-15 12:00:00_suffix  |
+        | result                     |
+        | 2024-01-15 12:00:00_suffix |
 
     Scenario: string prefix concatenated with TIMESTAMP
       When query
@@ -524,8 +524,8 @@ Feature: concat function
         SELECT concat('prefix_', TIMESTAMP '2024-01-15 12:00:00') AS result
         """
       Then query result
-        | result                      |
-        | prefix_2024-01-15 12:00:00  |
+        | result                     |
+        | prefix_2024-01-15 12:00:00 |
 
     Scenario: two TIMESTAMPs cast to string concatenated with separator
       When query
@@ -537,8 +537,8 @@ Feature: concat function
         ) AS result
         """
       Then query result
-        | result                                    |
-        | 2024-01-15 12:00:00_2024-01-16 13:14:15  |
+        | result                                  |
+        | 2024-01-15 12:00:00_2024-01-16 13:14:15 |
 
     Scenario: TIMESTAMP NULL with string returns NULL
       When query

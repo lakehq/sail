@@ -5,7 +5,7 @@ Feature: power output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to power yields the schema Spark declares
+    Scenario: a non-null literal input to power yields the schema Spark declares
       When query
         """
         SELECT power(2, 3) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to power yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to power yields the schema Spark declares
+    Scenario: a non-null column input to power yields the schema Spark declares
       When query
         """
         SELECT power(CAST(id AS INT), 3) AS result FROM range(3)

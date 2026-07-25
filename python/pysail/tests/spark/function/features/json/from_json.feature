@@ -8,8 +8,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE') AS result
         """
       Then query result
-        | result       |
-        | {1, 0.8}     |
+        | result   |
+        | {1, 0.8} |
 
     Scenario: Parse struct with string fields
       When query
@@ -17,8 +17,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"name":"Alice", "age":30}', 'name STRING, age INT') AS result
         """
       Then query result
-        | result          |
-        | {Alice, 30}     |
+        | result      |
+        | {Alice, 30} |
 
     Scenario: Parse nested struct from JSON
       When query
@@ -26,8 +26,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":{"c":3}}', 'a INT, b STRUCT<c: INT>') AS result
         """
       Then query result
-        | result          |
-        | {1, {3}}        |
+        | result   |
+        | {1, {3}} |
 
   Rule: Struct with STRUCT<> schema syntax
     Scenario: Parse struct using explicit STRUCT syntax
@@ -36,8 +36,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"teacher":"Alice","student":[{"name":"Bob","rank":1},{"name":"Charlie","rank":2}]}', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>') AS result
         """
       Then query result
-        | result                                         |
-        | {Alice, [{Bob, 1}, {Charlie, 2}]}              |
+        | result                            |
+        | {Alice, [{Bob, 1}, {Charlie, 2}]} |
 
   Rule: Null and error handling (PERMISSIVE mode)
     Scenario: Null input returns null struct
@@ -55,8 +55,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('not valid json', 'a INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Missing fields return null values
       When query
@@ -64,8 +64,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1}', 'a INT, b STRING') AS result
         """
       Then query result
-        | result      |
-        | {1, NULL}   |
+        | result    |
+        | {1, NULL} |
 
   Rule: Timestamp formatting with options
     Scenario: Parse struct with timestamp using custom format
@@ -74,8 +74,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"time":"26/08/2015"}', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) AS result
         """
       Then query result
-        | result                       |
-        | {2015-08-26 00:00:00}        |
+        | result                |
+        | {2015-08-26 00:00:00} |
 
   Rule: Boolean and numeric types
     Scenario: Parse boolean values
@@ -84,8 +84,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"flag":true}', 'flag BOOLEAN') AS result
         """
       Then query result
-        | result  |
-        | {true}  |
+        | result |
+        | {true} |
 
     Scenario: Parse various numeric types
       When query
@@ -93,8 +93,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":2.5}', 'a BIGINT, b DOUBLE') AS result
         """
       Then query result
-        | result    |
-        | {1, 2.5}  |
+        | result   |
+        | {1, 2.5} |
 
     Scenario: Parse tinyint smallint and float types
       When query
@@ -149,7 +149,7 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":2}', 'MAP<STRING, INT>') AS result
         """
       Then query result
-        | result          |
+        | result           |
         | {a -> 1, b -> 2} |
 
     Scenario: Null input returns null for map
@@ -206,8 +206,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"items":[1,2,3]}', 'STRUCT<items: ARRAY<INT>>') AS result
         """
       Then query result
-        | result        |
-        | {[1, 2, 3]}   |
+        | result      |
+        | {[1, 2, 3]} |
 
     Scenario: Parse struct with nested map
       When query
@@ -215,8 +215,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"m":{"x":1,"y":2}}', 'STRUCT<m: MAP<STRING, INT>>') AS result
         """
       Then query result
-        | result               |
-        | {{x -> 1, y -> 2}}   |
+        | result             |
+        | {{x -> 1, y -> 2}} |
 
   Rule: String coercion
     Scenario: Parse number as string type
@@ -243,8 +243,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":null}', 'a STRING') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
     Scenario: Parse float value as string type
       When query
@@ -252,8 +252,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1.5}', 'a STRING') AS result
         """
       Then query result
-        | result  |
-        | {1.5}   |
+        | result |
+        | {1.5}  |
 
   Rule: Batch processing
     Scenario: Parse multiple valid JSON rows as struct
@@ -268,10 +268,10 @@ Feature: from_json function parses JSON strings into structured types
         ORDER BY result.a
         """
       Then query result ordered
-        | result   |
-        | {1, x}   |
-        | {2, y}   |
-        | {3, z}   |
+        | result |
+        | {1, x} |
+        | {2, y} |
+        | {3, z} |
 
     Scenario: Parse batch with mixed valid invalid and null rows
       When query
@@ -286,11 +286,11 @@ Feature: from_json function parses JSON strings into structured types
         ORDER BY result.a NULLS FIRST
         """
       Then query result ordered
-        | result  |
-        | NULL    |
-        | {NULL}  |
-        | {10}    |
-        | {20}    |
+        | result |
+        | NULL   |
+        | {NULL} |
+        | {10}   |
+        | {20}   |
 
     Scenario: Parse multiple rows returning arrays
       When query
@@ -304,10 +304,10 @@ Feature: from_json function parses JSON strings into structured types
         ORDER BY size(result)
         """
       Then query result ordered
-        | result      |
-        | []          |
-        | [1, 2]      |
-        | [3, 4, 5]   |
+        | result    |
+        | []        |
+        | [1, 2]    |
+        | [3, 4, 5] |
 
     Scenario: Parse multiple rows returning maps
       When query
@@ -320,9 +320,9 @@ Feature: from_json function parses JSON strings into structured types
         ORDER BY to_json(result)
         """
       Then query result ordered
-        | result    |
-        | {x -> 1}  |
-        | {y -> 2}  |
+        | result   |
+        | {x -> 1} |
+        | {y -> 2} |
 
   Rule: Type mismatch returns null
     Scenario: Boolean field with numeric JSON value returns null
@@ -331,8 +331,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"flag":1}', 'flag BOOLEAN') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Int field with string JSON value returns null
       When query
@@ -340,8 +340,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"n":"not_a_number"}', 'n INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Float field with string JSON value returns null
       When query
@@ -349,8 +349,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"f":"text"}', 'f DOUBLE') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Date field with numeric JSON value returns null
       When query
@@ -358,8 +358,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"d":20240115}', 'd DATE') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Nested struct field with non-object value returns null
       When query
@@ -367,8 +367,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"s":"not_object"}', 'STRUCT<s: STRUCT<x: INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
     Scenario: Nested array field with non-array value returns null
       When query
@@ -376,8 +376,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"arr":"not_array"}', 'STRUCT<arr: ARRAY<INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
     Scenario: Nested map field with non-object value returns null
       When query
@@ -385,8 +385,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"m":"not_map"}', 'STRUCT<m: MAP<STRING, INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
   Rule: Decimal edge cases
     Scenario: Parse negative decimal from number
@@ -432,8 +432,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[true, false, true]', 'ARRAY<BOOLEAN>') AS result
         """
       Then query result
-        | result               |
-        | [true, false, true]  |
+        | result              |
+        | [true, false, true] |
 
     Scenario: Parse array of strings
       When query
@@ -441,8 +441,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('["hello", "world"]', 'ARRAY<STRING>') AS result
         """
       Then query result
-        | result           |
-        | [hello, world]   |
+        | result         |
+        | [hello, world] |
 
     Scenario: Parse array of doubles
       When query
@@ -459,8 +459,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[{"x":1},{"x":2}]', 'ARRAY<STRUCT<x: INT>>') AS result
         """
       Then query result
-        | result          |
-        | [{1}, {2}]      |
+        | result     |
+        | [{1}, {2}] |
 
     Scenario: Parse array of arrays
       When query
@@ -468,8 +468,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[[1,2],[3,4]]', 'ARRAY<ARRAY<INT>>') AS result
         """
       Then query result
-        | result              |
-        | [[1, 2], [3, 4]]    |
+        | result           |
+        | [[1, 2], [3, 4]] |
 
     Scenario: Parse array with null elements
       When query
@@ -477,8 +477,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[1, null, 3]', 'ARRAY<INT>') AS result
         """
       Then query result
-        | result          |
-        | [1, NULL, 3]    |
+        | result       |
+        | [1, NULL, 3] |
 
   Rule: Struct edge cases
     Scenario: Explicit JSON null value for a typed field returns null
@@ -487,8 +487,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1,"b":null}', 'a INT, b STRING') AS result
         """
       Then query result
-        | result      |
-        | {1, NULL}   |
+        | result    |
+        | {1, NULL} |
 
     Scenario: Extra JSON fields not in schema are ignored
       When query
@@ -496,8 +496,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1,"extra":"ignored","b":2}', 'a INT, b INT') AS result
         """
       Then query result
-        | result   |
-        | {1, 2}   |
+        | result |
+        | {1, 2} |
 
   Rule: Map edge cases
     Scenario: Invalid JSON for map returns null
@@ -534,8 +534,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ') AS result
         """
       Then query result
-        | result                    |
-        | {2024-06-15 10:30:00}     |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
     Scenario: Parse timestamp without timezone with custom format
       When query
@@ -543,8 +543,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"15/06/2024 10:30"}', 'ts TIMESTAMP_NTZ', map('timestampFormat', 'dd/MM/yyyy HH:mm')) AS result
         """
       Then query result
-        | result                    |
-        | {2024-06-15 10:30:00}     |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
   Rule: Null value handling
     Scenario: JSON null for boolean field returns null
@@ -553,8 +553,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"flag":null}', 'flag BOOLEAN') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: JSON null for int field returns null
       When query
@@ -562,8 +562,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"n":null}', 'n INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: JSON null for decimal field returns null
       When query
@@ -571,8 +571,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"v":null}', 'v DECIMAL(10,2)') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: JSON null for date field returns null
       When query
@@ -580,8 +580,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"d":null}', 'd DATE') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: JSON null for timestamp field returns null
       When query
@@ -589,8 +589,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":null}', 'ts TIMESTAMP') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
   Rule: Decimal advanced parsing
     Scenario: Parse decimal with scientific notation
@@ -644,8 +644,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"v":true}', 'v DECIMAL(10,2)') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse decimal with negative scientific notation
       When query
@@ -662,8 +662,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"v":"100"}', 'v DECIMAL(10,2)') AS result
         """
       Then query result
-        | result    |
-        | {100.00}  |
+        | result   |
+        | {100.00} |
 
   Rule: Timestamp error and edge cases
     Scenario: Timestamp field with non-string value returns null
@@ -672,8 +672,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":12345}', 'ts TIMESTAMP') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Timestamp NTZ field with non-string value returns null
       When query
@@ -681,8 +681,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":true}', 'ts TIMESTAMP_NTZ') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse date-only string as timestamp
       When query
@@ -690,8 +690,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15"}', 'ts TIMESTAMP_NTZ', map('timestampFormat', 'yyyy-MM-dd')) AS result
         """
       Then query result
-        | result                    |
-        | {2024-06-15 00:00:00}     |
+        | result                |
+        | {2024-06-15 00:00:00} |
 
   Rule: Array of maps and nested collections
     Scenario: Parse array of maps
@@ -700,8 +700,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[{"a":1},{"b":2}]', 'ARRAY<MAP<STRING, INT>>') AS result
         """
       Then query result
-        | result                    |
-        | [{a -> 1}, {b -> 2}]     |
+        | result               |
+        | [{a -> 1}, {b -> 2}] |
 
     Scenario: Parse struct with nested array and map
       When query
@@ -709,8 +709,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"arr":[1,2],"m":{"k":"v"}}', 'STRUCT<arr: ARRAY<INT>, m: MAP<STRING, STRING>>') AS result
         """
       Then query result
-        | result                  |
-        | {[1, 2], {k -> v}}     |
+        | result             |
+        | {[1, 2], {k -> v}} |
 
     Scenario: Parse map with double values
       When query
@@ -718,8 +718,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"x":1.5,"y":2.5}', 'MAP<STRING, DOUBLE>') AS result
         """
       Then query result
-        | result                  |
-        | {x -> 1.5, y -> 2.5}   |
+        | result               |
+        | {x -> 1.5, y -> 2.5} |
 
     Scenario: Parse array of nested structs with mixed types
       When query
@@ -727,8 +727,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[{"a":1,"b":"x"},{"a":2,"b":"y"}]', 'ARRAY<STRUCT<a: INT, b: STRING>>') AS result
         """
       Then query result
-        | result                  |
-        | [{1, x}, {2, y}]       |
+        | result           |
+        | [{1, x}, {2, y}] |
 
   Rule: Non-string JSON values as string type
     Scenario: Parse object value as string type
@@ -737,8 +737,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":{"nested":"obj"}}', 'a STRING') AS result
         """
       Then query result
-        | result                      |
-        | {{"nested":"obj"}}          |
+        | result             |
+        | {{"nested":"obj"}} |
 
     Scenario: Parse array value as string type
       When query
@@ -746,8 +746,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":[1,2,3]}', 'a STRING') AS result
         """
       Then query result
-        | result        |
-        | {[1,2,3]}     |
+        | result    |
+        | {[1,2,3]} |
 
   Rule: Decimal from nested struct
     Scenario: Parse struct with decimal field
@@ -756,8 +756,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"price":19.99,"qty":5}', 'price DECIMAL(10,2), qty INT') AS result
         """
       Then query result
-        | result       |
-        | {19.99, 5}   |
+        | result     |
+        | {19.99, 5} |
 
   Rule: Multiple fields with various types
     Scenario: Parse struct with boolean int float string and date
@@ -766,7 +766,7 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"flag":true,"count":42,"ratio":0.5,"name":"test","dt":"2024-01-01"}', 'flag BOOLEAN, count INT, ratio DOUBLE, name STRING, dt DATE') AS result
         """
       Then query result
-        | result                           |
+        | result                            |
         | {true, 42, 0.5, test, 2024-01-01} |
 
   Rule: Empty and edge case collections
@@ -776,8 +776,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{}', 'MAP<STRING, INT>') AS result
         """
       Then query result
-        | result  |
-        | {}      |
+        | result |
+        | {}     |
 
     Scenario: Parse struct from empty JSON object
       When query
@@ -794,8 +794,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"s":null}', 'STRUCT<s: STRUCT<x: INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
     Scenario: Parse struct with nested null array
       When query
@@ -803,8 +803,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"arr":null}', 'STRUCT<arr: ARRAY<INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
     Scenario: Parse struct with nested null map
       When query
@@ -812,8 +812,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"m":null}', 'STRUCT<m: MAP<STRING, INT>>') AS result
         """
       Then query result
-        | result   |
-        | {NULL}   |
+        | result |
+        | {NULL} |
 
   Rule: Map with nested struct values
     Scenario: Parse map with struct values
@@ -822,8 +822,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"k1":{"a":1},"k2":{"a":2}}', 'MAP<STRING, STRUCT<a: INT>>') AS result
         """
       Then query result
-        | result                        |
-        | {k1 -> {1}, k2 -> {2}}       |
+        | result                 |
+        | {k1 -> {1}, k2 -> {2}} |
 
   Rule: Deeply nested structures
     Scenario: Parse triple nested struct
@@ -832,8 +832,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":{"b":{"c":42}}}', 'STRUCT<a: STRUCT<b: STRUCT<c: INT>>>') AS result
         """
       Then query result
-        | result      |
-        | {{{42}}}    |
+        | result   |
+        | {{{42}}} |
 
     Scenario: Parse struct with list of lists
       When query
@@ -841,8 +841,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"matrix":[[1,2],[3,4]]}', 'STRUCT<matrix: ARRAY<ARRAY<INT>>>') AS result
         """
       Then query result
-        | result                    |
-        | {[[1, 2], [3, 4]]}       |
+        | result             |
+        | {[[1, 2], [3, 4]]} |
 
   Rule: Struct field ordering
     Scenario: JSON field order does not matter
@@ -851,8 +851,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"b":2,"a":1}', 'a INT, b INT') AS result
         """
       Then query result
-        | result   |
-        | {1, 2}   |
+        | result |
+        | {1, 2} |
 
   Rule: LargeUtf8 schema support
     Scenario: Parse struct with string value to verify string handling
@@ -861,8 +861,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":"hello","b":"world"}', 'a STRING, b STRING') AS result
         """
       Then query result
-        | result           |
-        | {hello, world}   |
+        | result         |
+        | {hello, world} |
 
   Rule: Map with nested array values
     Scenario: Parse map with array values
@@ -871,8 +871,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"nums":[1,2,3]}', 'MAP<STRING, ARRAY<INT>>') AS result
         """
       Then query result
-        | result                |
-        | {nums -> [1, 2, 3]}  |
+        | result              |
+        | {nums -> [1, 2, 3]} |
 
   Rule: TEXT (LargeUtf8) schema type
     Scenario: Parse string value to TEXT field
@@ -909,8 +909,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"b":"hello"}', 'b BINARY') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse JSON to DATE64 field returns null
       When query
@@ -918,8 +918,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"d":"2024-01-15"}', 'd DATE64') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse JSON to DECIMAL with precision greater than 38 returns null
       When query
@@ -927,8 +927,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"v":3.14}', 'v DECIMAL(40,2)') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse JSON to TIME field returns null
       When query
@@ -936,8 +936,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"t":"12:00:00"}', 't TIME') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse JSON to TIME(0) field (Time32) returns null
       When query
@@ -945,8 +945,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"t":"12:00:00"}', 't TIME(0)') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
   Rule: Timestamp schema precision variants
     Scenario: Parse timestamp with second precision (TIMESTAMP_NTZ(0))
@@ -955,8 +955,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(0)') AS result
         """
       Then query result
-        | result                  |
-        | {2024-06-15 10:30:00}   |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
     Scenario: Parse timestamp with millisecond precision (TIMESTAMP_NTZ(3))
       When query
@@ -964,8 +964,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(3)') AS result
         """
       Then query result
-        | result                  |
-        | {2024-06-15 10:30:00}   |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
     Scenario: Parse timestamp with nanosecond precision (TIMESTAMP_NTZ(9))
       When query
@@ -973,8 +973,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(9)') AS result
         """
       Then query result
-        | result                  |
-        | {2024-06-15 10:30:00}   |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
     Scenario: Parse timestamp with TIMESTAMP_LTZ schema
       When query
@@ -982,8 +982,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_LTZ') AS result
         """
       Then query result
-        | result                  |
-        | {2024-06-15 10:30:00}   |
+        | result                |
+        | {2024-06-15 10:30:00} |
 
   Rule: Schema parsing errors
     Scenario: Schema with unsupported type produces error
@@ -1023,8 +1023,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a": 1, "b": "hello"}', '{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}},{"name":"b","type":"string","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result      |
-        | {1, hello}  |
+        | result     |
+        | {1, hello} |
 
     Scenario: Parse array using Spark JSON schema
       When query
@@ -1041,8 +1041,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":2}', '{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}') AS result
         """
       Then query result
-        | result            |
-        | {a -> 1, b -> 2}  |
+        | result           |
+        | {a -> 1, b -> 2} |
 
     Scenario: Parse decimal type using JSON schema
       When query
@@ -1059,8 +1059,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":{"b":42}}', '{"type":"struct","fields":[{"name":"a","type":{"type":"struct","fields":[{"name":"b","type":"integer","nullable":true,"metadata":{}}]},"nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result   |
-        | {{42}}   |
+        | result |
+        | {{42}} |
 
     Scenario: Invalid JSON schema string returns error
       When query
@@ -1075,8 +1075,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse struct with time(0) field using Spark JSON schema
       When query
@@ -1084,8 +1084,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time(0)","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parse struct with char and varchar fields using Spark JSON schema
       When query
@@ -1102,8 +1102,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"items":["a","b"],"m":{"k":"value"}}', '{"type":"struct","fields":[{"name":"items","type":{"type":"array","elementType":"char(1)","containsNull":true},"nullable":true,"metadata":{}},{"name":"m","type":{"type":"map","keyType":"string","valueType":"varchar(5)","valueContainsNull":true},"nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result                      |
-        | {[a, b], {k -> value}}      |
+        | result                 |
+        | {[a, b], {k -> value}} |
 
     Scenario: Parse struct with interval fields using Spark JSON schema
       When query
@@ -1111,8 +1111,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"cal":null,"ym":null,"dt":null}', '{"type":"struct","fields":[{"name":"cal","type":"interval","nullable":true,"metadata":{}},{"name":"ym","type":"interval year to month","nullable":true,"metadata":{}},{"name":"dt","type":"interval day to second","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result              |
-        | {NULL, NULL, NULL}  |
+        | result             |
+        | {NULL, NULL, NULL} |
 
     Scenario: Parse struct with variant and geospatial fields using Spark JSON schema
       When query
@@ -1120,8 +1120,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"v":null,"g":null,"p":null}', '{"type":"struct","fields":[{"name":"v","type":"variant","nullable":true,"metadata":{}},{"name":"g","type":"geometry(ANY)","nullable":true,"metadata":{}},{"name":"p","type":"geography(ANY, spherical)","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result              |
-        | {NULL, NULL, NULL}  |
+        | result             |
+        | {NULL, NULL, NULL} |
 
     Scenario: Parse UDT field using its Spark JSON sqlType
       When query
@@ -1150,8 +1150,8 @@ Feature: from_json function parses JSON strings into structured types
         FROM VALUES ('{"a":1}') AS t(value)
         """
       Then query result
-        | entries   |
-        | {a -> 1}  |
+        | entries  |
+        | {a -> 1} |
 
     Scenario: from_json column name shows entries for MAP JSON schema
       When query
@@ -1160,8 +1160,8 @@ Feature: from_json function parses JSON strings into structured types
         FROM VALUES ('{"a":1}') AS t(value)
         """
       Then query result
-        | entries   |
-        | {a -> 1}  |
+        | entries  |
+        | {a -> 1} |
 
     Scenario: from_json column name for struct with nested map does not use entries
       When query
@@ -1192,8 +1192,8 @@ Feature: from_json function parses JSON strings into structured types
         FROM VALUES ('{"a":42,"b":"world"}') AS t(value)
         """
       Then query result
-        | result        |
-        | {42, world}   |
+        | result      |
+        | {42, world} |
 
     Scenario: from_json with schema_of_json handles multiple rows
       When query
@@ -1235,8 +1235,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1}', 'ARRAY<STRUCT<a: INT>>') AS result
         """
       Then query result
-        | result   |
-        | [{1}]    |
+        | result |
+        | [{1}]  |
 
   Rule: Binary field type
     Scenario: Parse binary field returns null value
@@ -1245,8 +1245,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"b":"aGVsbG8="}', 'b BINARY') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
   Rule: Null propagation through nested structures
     Scenario: Null in array of structs
@@ -1255,8 +1255,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('[{"a":1}, null, {"a":3}]', 'ARRAY<STRUCT<a: INT>>') AS result
         """
       Then query result
-        | result              |
-        | [{1}, NULL, {3}]    |
+        | result           |
+        | [{1}, NULL, {3}] |
 
     Scenario: Null values in map
       When query
@@ -1264,8 +1264,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1, "b":null}', 'MAP<STRING, INT>') AS result
         """
       Then query result
-        | result                |
-        | {a -> 1, b -> NULL}   |
+        | result              |
+        | {a -> 1, b -> NULL} |
 
   Rule: Unicode handling
     Scenario: Parse JSON with unicode characters
@@ -1274,8 +1274,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"name":"héllo wörld"}', 'name STRING') AS result
         """
       Then query result
-        | result           |
-        | {héllo wörld}    |
+        | result        |
+        | {héllo wörld} |
 
   Rule: Escaped strings in JSON
     Scenario: Parse JSON with escaped quotes
@@ -1284,8 +1284,8 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":"he said \\"hello\\""}', 'a STRING') AS result
         """
       Then query result
-        | result              |
-        | {he said "hello"}   |
+        | result            |
+        | {he said "hello"} |
 
   Rule: Large batch processing
     Scenario: Parse many rows with mixed valid and null inputs
@@ -1315,15 +1315,15 @@ Feature: from_json function parses JSON strings into structured types
         | {3}    |
         | {4}    |
 
-Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
+  Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
     Scenario: Parseable JSON number as struct target returns struct with null fields
       When query
         """
         SELECT from_json('42', 'a INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parseable JSON string as struct target returns struct with null fields
       When query
@@ -1331,8 +1331,8 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json('"hello"', 'a INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parseable JSON array as struct target returns struct with null fields
       When query
@@ -1340,8 +1340,8 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json('[1,2,3]', 'a INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parseable JSON boolean as struct target returns struct with null fields
       When query
@@ -1349,8 +1349,8 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json('true', 'a INT') AS result
         """
       Then query result
-        | result  |
-        | {NULL}  |
+        | result |
+        | {NULL} |
 
     Scenario: Parseable JSON number as array target returns null
       When query
@@ -1418,7 +1418,7 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         """
       Then query result
         | json |
-        | {1} |
+        | {1}  |
 
     Scenario: from_json doctest #2 (result)
       When query
@@ -1426,7 +1426,7 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json(value, 'MAP<STRING,INT>') AS json FROM VALUES (1, '{"a": 1}') AS t(key, value)
         """
       Then query result
-        | json |
+        | json     |
         | {a -> 1} |
 
     Scenario: from_json doctest #3 (result)
@@ -1435,7 +1435,7 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json(value, 'ARRAY<STRUCT<a: INT>>') AS json FROM VALUES (1, '{"a": 1}') AS t(key, value)
         """
       Then query result
-        | json |
+        | json  |
         | [{1}] |
 
     Scenario: from_json doctest #4 (result)
@@ -1445,8 +1445,8 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         """
       Then query result ordered
         | json |
-        | {1} |
-        | {2} |
+        | {1}  |
+        | {2}  |
         | NULL |
 
     Scenario: from_json doctest #5 (result)
@@ -1455,7 +1455,7 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json(value, 'a INT, b STRING') AS json FROM VALUES (1, '{"a": 1, "b": "hello"}') AS t(key, value)
         """
       Then query result
-        | json |
+        | json       |
         | {1, hello} |
 
     Scenario: from_json doctest #6 (result)
@@ -1464,6 +1464,5 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         SELECT from_json(value, 'price DECIMAL(10,2)') AS json FROM VALUES (1, '{"price": 19.99}') AS t(key, value)
         """
       Then query result
-        | json |
+        | json    |
         | {19.99} |
-

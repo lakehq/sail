@@ -58,7 +58,7 @@ Feature: window_time() event-time extraction function
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to window_time yields the schema Spark declares
+    Scenario: a non-null literal input to window_time yields the schema Spark declares
       When query
         """
         SELECT a, window.start as start, window.end as end, window_time(window), cnt FROM (SELECT a, window, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '5 minutes') ORDER BY a, window.start) AS result

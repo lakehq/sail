@@ -146,7 +146,7 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
   @spark_null
   Rule: Output schema
 
-Scenario: a non-null integer literal is nullable (inherently nullable in Spark)
+    Scenario: a non-null integer literal is nullable (inherently nullable in Spark)
       When query
         """
         SELECT pmod(10, 3) AS result
@@ -157,7 +157,7 @@ Scenario: a non-null integer literal is nullable (inherently nullable in Spark)
          |-- result: integer (nullable = true)
         """
 
-Scenario: a non-null integer column is nullable (inherently nullable in Spark)
+    Scenario: a non-null integer column is nullable (inherently nullable in Spark)
       When query
         """
         SELECT pmod(id, 3) AS result FROM range(3)
@@ -168,7 +168,7 @@ Scenario: a non-null integer column is nullable (inherently nullable in Spark)
          |-- result: long (nullable = true)
         """
 
-Scenario: a nullable integer column stays nullable
+    Scenario: a nullable integer column stays nullable
       When query
         """
         SELECT pmod(c, 3) AS result FROM VALUES (10), (CAST(NULL AS INT)) AS t(c)

@@ -16,7 +16,7 @@ Feature: nanvl output schema
         """
 
     @sail-bug
-Scenario: a non-null column input to nanvl yields the schema Spark declares
+    Scenario: a non-null column input to nanvl yields the schema Spark declares
       When query
         """
         SELECT nanvl(CAST(id AS DOUBLE), 123) AS result FROM range(3)

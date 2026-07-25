@@ -5,7 +5,7 @@ Feature: is_variant_null output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to is_variant_null yields the schema Spark declares
+    Scenario: a non-null literal input to is_variant_null yields the schema Spark declares
       When query
         """
         SELECT is_variant_null(parse_json('null')) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to is_variant_null yields the schema Spark de
         """
 
     @sail-bug
-Scenario: a nullable column input to is_variant_null stays nullable
+    Scenario: a nullable column input to is_variant_null stays nullable
       When query
         """
         SELECT is_variant_null(c) AS result FROM VALUES (parse_json('null')), (CAST(NULL AS VARIANT)) AS t(c)

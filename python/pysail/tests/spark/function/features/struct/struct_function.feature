@@ -74,8 +74,8 @@ Feature: struct function
         SELECT struct(1, struct(2, 3)) AS result
         """
       Then query result
-        | result       |
-        | {1, {2, 3}}  |
+        | result      |
+        | {1, {2, 3}} |
 
   Rule: named_struct
 

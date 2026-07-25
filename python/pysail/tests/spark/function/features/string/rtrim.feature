@@ -5,7 +5,7 @@ Feature: rtrim output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to rtrim yields the schema Spark declares
+    Scenario: a non-null literal input to rtrim yields the schema Spark declares
       When query
         """
         SELECT rtrim('    SparkSQL   ') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to rtrim yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to rtrim yields the schema Spark declares
+    Scenario: a non-null column input to rtrim yields the schema Spark declares
       When query
         """
         SELECT rtrim(CAST(id AS STRING)) AS result FROM range(3)

@@ -74,8 +74,8 @@ Feature: array filter with lambda
         SELECT filter(array(10, 20, 30, 40, 50), (x, i) -> i % 2 = 0) AS result
         """
       Then query result
-        | result         |
-        | [10, 30, 50]   |
+        | result       |
+        | [10, 30, 50] |
 
     Scenario: Filter using element and index - element greater than index
       When query
@@ -83,8 +83,8 @@ Feature: array filter with lambda
         SELECT filter(array(0, 5, 1, 10, 2), (x, i) -> x > i) AS result
         """
       Then query result
-        | result    |
-        | [5, 10]   |
+        | result  |
+        | [5, 10] |
 
   Rule: Filter with complex expressions
 
@@ -94,8 +94,8 @@ Feature: array filter with lambda
         SELECT filter(array(1, 2, 3, 4, 5), x -> x > 1 AND x < 5) AS result
         """
       Then query result
-        | result      |
-        | [2, 3, 4]   |
+        | result    |
+        | [2, 3, 4] |
 
     Scenario: Filter with OR condition
       When query
@@ -112,8 +112,8 @@ Feature: array filter with lambda
         SELECT filter(array(1, 2, 3, 4, 5, 6), x -> x % 2 = 0) AS result
         """
       Then query result
-        | result      |
-        | [2, 4, 6]   |
+        | result    |
+        | [2, 4, 6] |
 
   Rule: Filter with external column references
 
@@ -134,8 +134,8 @@ Feature: array filter with lambda
         FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 1 AS min_val, 5 AS max_val)
         """
       Then query result
-        | result      |
-        | [2, 3, 4]   |
+        | result    |
+        | [2, 3, 4] |
 
     Scenario: Filter with varying thresholds per row
       When query
@@ -147,9 +147,9 @@ Feature: array filter with lambda
         AS t(arr, threshold)
         """
       Then query result
-        | result       |
-        | [3, 4, 5]    |
-        | [20, 30]     |
+        | result    |
+        | [3, 4, 5] |
+        | [20, 30]  |
 
   Rule: Filter with null handling
 
@@ -199,8 +199,8 @@ Feature: array filter with lambda
         SELECT filter(array('apple', 'banana', 'cherry'), x -> x > 'b') AS result
         """
       Then query result
-        | result             |
-        | [banana, cherry]   |
+        | result           |
+        | [banana, cherry] |
 
     Scenario: Filter string array with length condition
       When query
@@ -217,7 +217,7 @@ Feature: array filter with lambda
         SELECT filter(array(-5, -2, 0, 3, 7), x -> x >= 0) AS result
         """
       Then query result
-        | result   |
+        | result    |
         | [0, 3, 7] |
 
     Scenario: Filter double array
@@ -277,8 +277,8 @@ Feature: array filter with lambda
         SELECT filter(array('a', 'bb', 'ccc'), x -> length(x) > 1) AS result
         """
       Then query result
-        | result      |
-        | [bb, ccc]   |
+        | result    |
+        | [bb, ccc] |
 
     Scenario: Filter with arithmetic in predicate
       When query
@@ -298,7 +298,7 @@ Feature: array filter with lambda
         FROM (SELECT array(1, 5, 2, 8, 3) AS arr, 2 AS threshold)
         """
       Then query result
-        | result   |
+        | result    |
         | [5, 8, 3] |
 
     Scenario: Filter with index less than value and external threshold
@@ -725,8 +725,8 @@ Feature: array filter with lambda
         SELECT filter(array(DATE '2020-01-01', DATE '2021-06-15', DATE '2019-03-03'), x -> x > DATE '2020-01-01') AS result
         """
       Then query result
-        | result         |
-        | [2021-06-15]   |
+        | result       |
+        | [2021-06-15] |
 
   Rule: Filter with index and a nested higher-order function
 
@@ -736,7 +736,7 @@ Feature: array filter with lambda
         SELECT filter(array(array(1, 2, 3), array(0), array(5, 6)), (x, i) -> size(filter(x, y -> y > i)) > 1) AS result
         """
       Then query result
-        | result             |
+        | result              |
         | [[1, 2, 3], [5, 6]] |
 
   Rule: Filter inside a join condition

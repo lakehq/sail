@@ -383,8 +383,8 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         SELECT ceil(123.456, -37) AS result
         """
       Then query result
-        | result                                  |
-        | 10000000000000000000000000000000000000  |
+        | result                                 |
+        | 10000000000000000000000000000000000000 |
 
     Scenario: ceil negative with negative scale
       When query
@@ -908,8 +908,8 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         SELECT ceil(1.5, -37) AS result
         """
       Then query result
-        | result                                  |
-        | 10000000000000000000000000000000000000  |
+        | result                                 |
+        | 10000000000000000000000000000000000000 |
 
     Scenario: floor scale -37 truncates small value to zero
       When query
@@ -1021,8 +1021,8 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         SELECT floor(CAST(-9223372036854775808 AS BIGINT)) AS result
         """
       Then query result
-        | result                |
-        | -9223372036854775808  |
+        | result               |
+        | -9223372036854775808 |
 
 
   Rule: Adversarial — preimage edge cases (floor-only filter pushdown)

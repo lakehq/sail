@@ -5,7 +5,7 @@ Feature: dayofmonth output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to dayofmonth yields the schema Spark declares
+    Scenario: a non-null literal input to dayofmonth yields the schema Spark declares
       When query
         """
         SELECT dayofmonth('2009-07-30') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to dayofmonth yields the schema Spark declare
         """
 
     @sail-bug
-Scenario: a non-null column input to dayofmonth yields the schema Spark declares
+    Scenario: a non-null column input to dayofmonth yields the schema Spark declares
       When query
         """
         SELECT dayofmonth(CAST(id AS STRING)) AS result FROM range(3)

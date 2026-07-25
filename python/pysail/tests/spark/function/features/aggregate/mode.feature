@@ -10,7 +10,7 @@ Feature: mode
         """
       Then query result
         | mode(col) |
-        | 10 |
+        | 10        |
 
     Scenario: mode doctest #2 (result)
       When query
@@ -19,7 +19,7 @@ Feature: mode
         """
       Then query result
         | mode() WITHIN GROUP (ORDER BY col DESC) |
-        | 10 |
+        | 10                                      |
 
     Scenario: mode doctest #3 (result)
       When query
@@ -28,7 +28,7 @@ Feature: mode
         """
       Then query result
         | mode() WITHIN GROUP (ORDER BY col DESC) |
-        | 10 |
+        | 10                                      |
 
     Scenario: mode doctest #4 (result)
       When query
@@ -37,5 +37,4 @@ Feature: mode
         """
       Then query result
         | mode() WITHIN GROUP (ORDER BY col) |
-        | 20 |
-
+        | 20                                 |

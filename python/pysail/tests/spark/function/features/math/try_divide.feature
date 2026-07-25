@@ -45,7 +45,7 @@ Feature: try_divide output schema
         SELECT try_divide(a, b) AS r FROM VALUES (6000, 15), (1990, 2) AS t(a, b)
         """
       Then query result
-        | r |
+        | r     |
         | 400.0 |
         | 995.0 |
 
@@ -55,7 +55,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 1, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result   |
         | 12 hours |
 
     Scenario: try_divide doctest #3 (result)
@@ -64,7 +64,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 0, 10, 0, 0), 4) AS result
         """
       Then query result
-        | result |
+        | result             |
         | 2 hours 30 minutes |
 
     Scenario: try_divide doctest #4 (result)
@@ -73,7 +73,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 3, 12, 0, 0), 3) AS result
         """
       Then query result
-        | result |
+        | result         |
         | 1 days 4 hours |
 
     Scenario: try_divide doctest #5 (result)
@@ -82,7 +82,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 0, 0, 0, 10.5), 2) AS result
         """
       Then query result
-        | result |
+        | result       |
         | 5.25 seconds |
 
     Scenario: try_divide doctest #6 (result)
@@ -91,7 +91,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 1, 0, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result          |
         | 3 days 12 hours |
 
     Scenario: try_divide doctest #7 (result)
@@ -101,7 +101,7 @@ Feature: try_divide output schema
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: try_divide doctest #8 (result)
       When query
@@ -110,7 +110,7 @@ Feature: try_divide output schema
         """
       Then query result
         | result |
-        | NULL |
+        | NULL   |
 
     Scenario: try_divide doctest #9 (result)
       When query
@@ -118,7 +118,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 1, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result   |
         | 12 hours |
 
     Scenario: try_divide doctest #10 (result)
@@ -127,7 +127,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, -1, 0, 0, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result    |
         | -12 hours |
 
     Scenario: try_divide doctest #11 (result)
@@ -136,7 +136,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 1, 0, 90, 0), 2) AS result
         """
       Then query result
-        | result |
+        | result              |
         | 12 hours 45 minutes |
 
     Scenario: try_divide doctest #12 (result)
@@ -145,7 +145,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_ym_interval(1, 6), 2) AS result
         """
       Then query result
-        | result |
+        | result                       |
         | INTERVAL '0-9' YEAR TO MONTH |
 
     Scenario: try_divide doctest #13 (result)
@@ -154,7 +154,7 @@ Feature: try_divide output schema
         SELECT try_divide(make_ym_interval(1, 6), 2) AS result
         """
       Then query result
-        | result |
+        | result                       |
         | INTERVAL '0-9' YEAR TO MONTH |
 
     Scenario: try_divide doctest #14 (result)
@@ -163,6 +163,5 @@ Feature: try_divide output schema
         SELECT try_divide(make_interval(0, 0, 0, 0, 0, 0, 1), 2) AS result
         """
       Then query result
-        | result |
+        | result      |
         | 0.5 seconds |
-

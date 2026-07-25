@@ -5,7 +5,7 @@ Feature: substring_index output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to substring_index yields the schema Spark declares
+    Scenario: a non-null literal input to substring_index yields the schema Spark declares
       When query
         """
         SELECT substring_index('www.apache.org', '.', 2) AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to substring_index yields the schema Spark de
         """
 
     @sail-bug
-Scenario: a non-null column input to substring_index yields the schema Spark declares
+    Scenario: a non-null column input to substring_index yields the schema Spark declares
       When query
         """
         SELECT substring_index(CAST(id AS STRING), '.', 2) AS result FROM range(3)

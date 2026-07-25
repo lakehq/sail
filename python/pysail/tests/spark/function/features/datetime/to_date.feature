@@ -73,7 +73,7 @@ Feature: to_date with an argument coming from a column
         """
       Then query result
         | to_date(TIMESTAMP_NTZ '2025-11-02 23:30:45.123456') |
-        | 2025-11-02 |
+        | 2025-11-02                                          |
 
     Scenario: to_date doctest #2 (result)
       When query
@@ -82,7 +82,7 @@ Feature: to_date with an argument coming from a column
         """
       Then query result
         | to_date(TIMESTAMP '2025-11-02 23:30:45.123456') |
-        | 2025-11-02 |
+        | 2025-11-02                                      |
 
     Scenario: to_date doctest #3 (result)
       When query
@@ -91,7 +91,7 @@ Feature: to_date with an argument coming from a column
         """
       Then query result
         | to_date(TIMESTAMP '2025-11-03 04:30:45.123456') |
-        | 2025-11-03 |
+        | 2025-11-03                                      |
 
     Scenario: to_date doctest #4 (result)
       When query
@@ -100,7 +100,7 @@ Feature: to_date with an argument coming from a column
         """
       Then query result
         | to_date(TIMESTAMP '2025-11-03 23:30:45.123456', invalid_format) |
-        | 2025-11-03 |
+        | 2025-11-03                                                      |
 
     Scenario: to_date doctest #5 (result)
       When query
@@ -108,8 +108,7 @@ Feature: to_date with an argument coming from a column
         SELECT ts, CAST(ts AS TIMESTAMP_NTZ) AS ts_ntz, CAST(ts AS TIMESTAMP_LTZ) AS ts_ltz, to_date(CAST(ts AS TIMESTAMP_NTZ)) AS date_ntz, to_date(CAST(ts AS TIMESTAMP_LTZ)) AS date_ltz FROM VALUES ('2025-11-02 23:30:45.123456'), ('2025-11-02 23:30:45.123456-08:00'), ('2025-11-02 23:30:45.123456+01:00') AS t(ts)
         """
       Then query result
-        | ts | ts_ntz | ts_ltz | date_ntz | date_ltz |
-        | 2025-11-02 23:30:45.123456 | 2025-11-02 23:30:45.123456 | 2025-11-02 23:30:45.123456 | 2025-11-02 | 2025-11-02 |
+        | ts                               | ts_ntz                     | ts_ltz                     | date_ntz   | date_ltz   |
+        | 2025-11-02 23:30:45.123456       | 2025-11-02 23:30:45.123456 | 2025-11-02 23:30:45.123456 | 2025-11-02 | 2025-11-02 |
         | 2025-11-02 23:30:45.123456-08:00 | 2025-11-02 23:30:45.123456 | 2025-11-03 07:30:45.123456 | 2025-11-02 | 2025-11-03 |
         | 2025-11-02 23:30:45.123456+01:00 | 2025-11-02 23:30:45.123456 | 2025-11-02 22:30:45.123456 | 2025-11-02 | 2025-11-02 |
-

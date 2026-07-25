@@ -5,7 +5,7 @@ Feature: array_union output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to array_union yields the schema Spark declares
+    Scenario: a non-null literal input to array_union yields the schema Spark declares
       When query
         """
         SELECT array_union(array(1, 2, 3), array(1, 3, 5)) AS result

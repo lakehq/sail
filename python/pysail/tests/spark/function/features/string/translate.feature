@@ -5,7 +5,7 @@ Feature: translate output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to translate yields the schema Spark declares
+    Scenario: a non-null literal input to translate yields the schema Spark declares
       When query
         """
         SELECT translate('AaBbCc', 'abc', '123') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to translate yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to translate yields the schema Spark declares
+    Scenario: a non-null column input to translate yields the schema Spark declares
       When query
         """
         SELECT translate(CAST(id AS STRING), 'abc', '123') AS result FROM range(3)

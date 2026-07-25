@@ -5,7 +5,7 @@ Feature: replace output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to replace yields the schema Spark declares
+    Scenario: a non-null literal input to replace yields the schema Spark declares
       When query
         """
         SELECT replace('ABCabc', 'abc', 'DEF') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to replace yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to replace yields the schema Spark declares
+    Scenario: a non-null column input to replace yields the schema Spark declares
       When query
         """
         SELECT replace(CAST(id AS STRING), 'abc', 'DEF') AS result FROM range(3)

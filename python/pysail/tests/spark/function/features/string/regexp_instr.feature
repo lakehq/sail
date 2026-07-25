@@ -5,7 +5,7 @@ Feature: regexp_instr output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to regexp_instr yields the schema Spark declares
+    Scenario: a non-null literal input to regexp_instr yields the schema Spark declares
       When query
         """
         SELECT regexp_instr(r"\abc", r"^\\abc$") AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to regexp_instr yields the schema Spark decla
         """
 
     @sail-bug
-Scenario: a non-null column input to regexp_instr yields the schema Spark declares
+    Scenario: a non-null column input to regexp_instr yields the schema Spark declares
       When query
         """
         SELECT regexp_instr(CAST(id AS STRING), r"^\\abc$") AS result FROM range(3)
@@ -29,7 +29,7 @@ Scenario: a non-null column input to regexp_instr yields the schema Spark declar
         """
 
     @sail-bug
-Scenario: a nullable column input to regexp_instr stays nullable
+    Scenario: a nullable column input to regexp_instr stays nullable
       When query
         """
         SELECT regexp_instr(c, r"^\\abc$") AS result FROM VALUES (r"\abc"), (CAST(NULL AS STRING)) AS t(c)

@@ -84,7 +84,7 @@ Feature: soundex() returns the Soundex code of a string
         """
       Then query result
         | result |
-        |  abc   |
+        | abc    |
 
     Scenario: null input returns null
       When query

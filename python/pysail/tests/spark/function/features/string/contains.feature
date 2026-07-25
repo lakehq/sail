@@ -5,7 +5,7 @@ Feature: contains output schema
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null literal input to contains yields the schema Spark declares
+    Scenario: a non-null literal input to contains yields the schema Spark declares
       When query
         """
         SELECT contains('Spark SQL', 'Spark') AS result
@@ -17,7 +17,7 @@ Scenario: a non-null literal input to contains yields the schema Spark declares
         """
 
     @sail-bug
-Scenario: a non-null column input to contains yields the schema Spark declares
+    Scenario: a non-null column input to contains yields the schema Spark declares
       When query
         """
         SELECT contains(CAST(id AS STRING), 'Spark') AS result FROM range(3)
