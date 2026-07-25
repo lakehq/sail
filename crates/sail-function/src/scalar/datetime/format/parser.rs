@@ -352,7 +352,7 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
         'S' => Ok(DateTimeItem::Fraction(FractionSpec {
             field: FractionField::NanoOfSecond,
             min_width: count,
-            max_width: 9,
+            max_width: count.min(9),
             decimal_point: false,
         })),
         'A' => Ok(DateTimeItem::Field(DateTimeFieldSpec {
