@@ -421,7 +421,7 @@ fn format_timestamp_field(
             timestamp_kind: TimestampKind::Normal,
             precision: TimePrecision::Microsecond,
         };
-        if options.timestamp_format == SparkToCsvOptions::default().timestamp_format {
+        if options.timestamp_format == *DEFAULT_TIMESTAMP_FORMAT {
             DEFAULT_LTZ_FORMAT.format(input)
         } else {
             options.timestamp_format.format(input)
