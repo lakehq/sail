@@ -87,3 +87,14 @@ Feature: conv with an argument coming from a column
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Result values (migrated from test_conv.txt doctests)
+
+    Scenario: conv doctest #1 — to_binary/octal/hex
+      When query
+        """
+        SELECT conv('10', 10, 2) as to_binary, conv('10', 10, 8) as to_octal, conv('10', 10, 16) as to_hex
+        """
+      Then query result
+        | to_binary | to_octal | to_hex |
+        | 1010 | 12 | A |

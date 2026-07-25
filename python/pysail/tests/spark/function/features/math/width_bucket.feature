@@ -27,3 +27,46 @@ Scenario: a nullable column input to width_bucket stays nullable
         root
          |-- result: long (nullable = true)
         """
+
+  Rule: Result values (migrated from test_width_bucket.txt doctests)
+
+    Scenario: width_bucket doctest #1 (result)
+      When query
+        """
+        SELECT width_bucket(v, lo, hi, n) AS result FROM VALUES (CAST(0.00 AS DECIMAL(10,2)), CAST(0.00 AS DECIMAL(10,2)), CAST(10.00 AS DECIMAL(10,2)), 5), (CAST(2.00 AS DECIMAL(10,2)), CAST(0.00 AS DECIMAL(10,2)), CAST(10.00 AS DECIMAL(10,2)), 5), (CAST(10.00 AS DECIMAL(10,2)), CAST(0.00 AS DECIMAL(10,2)), CAST(10.00 AS DECIMAL(10,2)), 5), (CAST(10.01 AS DECIMAL(10,2)), CAST(0.00 AS DECIMAL(10,2)), CAST(10.00 AS DECIMAL(10,2)), 5), (CAST(-0.01 AS DECIMAL(10,2)), CAST(0.00 AS DECIMAL(10,2)), CAST(10.00 AS DECIMAL(10,2)), 5) AS t(v, lo, hi, n)
+        """
+      Then query result
+        | result |
+        | 1 |
+        | 2 |
+        | 6 |
+        | 6 |
+        | 0 |
+
+    Scenario: width_bucket doctest #2 (result)
+      When query
+        """
+        SELECT width_bucket(0.0, 10.0, 0.0, 5)
+        """
+      Then query result
+        | width_bucket(0.0, 10.0, 0.0, 5) |
+        | 6 |
+
+    Scenario: width_bucket doctest #3 (result)
+      When query
+        """
+        SELECT width_bucket(10.0, 0.0, 10.0, 5)
+        """
+      Then query result
+        | width_bucket(10.0, 0.0, 10.0, 5) |
+        | 6 |
+
+    Scenario: width_bucket doctest #4 (result)
+      When query
+        """
+        SELECT width_bucket(10.0, 0.0, 0.0, 5)
+        """
+      Then query result
+        | width_bucket(10.0, 0.0, 0.0, 5) |
+        | NULL |
+
