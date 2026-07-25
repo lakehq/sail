@@ -19,236 +19,84 @@ Feature: abs comprehensive tests
 
   Rule: NULL propagation
 
-    Scenario: abs untyped NULL
+    Scenario Outline: abs of a NULL input propagates NULL
       When query
         """
-        SELECT abs(NULL) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: abs NULL typed INT
-      When query
-        """
-        SELECT abs(CAST(NULL AS INT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed TINYINT
-      When query
-        """
-        SELECT abs(CAST(NULL AS TINYINT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed SMALLINT
-      When query
-        """
-        SELECT abs(CAST(NULL AS SMALLINT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed BIGINT
-      When query
-        """
-        SELECT abs(CAST(NULL AS BIGINT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed FLOAT
-      When query
-        """
-        SELECT abs(CAST(NULL AS FLOAT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed DOUBLE
-      When query
-        """
-        SELECT abs(CAST(NULL AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed DECIMAL
-      When query
-        """
-        SELECT abs(CAST(NULL AS DECIMAL(10,2))) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: abs NULL typed INTERVAL DAY TO SECOND
-      When query
-        """
-        SELECT abs(CAST(NULL AS INTERVAL DAY TO SECOND)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | input                                |
+        | NULL                                 |
+        | CAST(NULL AS INT)                    |
+        | CAST(NULL AS TINYINT)                |
+        | CAST(NULL AS SMALLINT)               |
+        | CAST(NULL AS BIGINT)                 |
+        | CAST(NULL AS FLOAT)                  |
+        | CAST(NULL AS DOUBLE)                 |
+        | CAST(NULL AS DECIMAL(10,2))          |
+        | CAST(NULL AS INTERVAL DAY TO SECOND) |
 
   Rule: Basic integer types happy path
 
-    Scenario: abs negative INT
+    Scenario Outline: abs on basic integer values
       When query
         """
-        SELECT abs(-5) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result |
-        | 5      |
+        | result   |
+        | <result> |
 
-    Scenario: abs positive INT
-      When query
-        """
-        SELECT abs(5) AS result
-        """
-      Then query result
-        | result |
-        | 5      |
-
-    Scenario: abs zero INT
-      When query
-        """
-        SELECT abs(0) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: abs negative TINYINT safe
-      When query
-        """
-        SELECT abs(CAST(-127 AS TINYINT)) AS result
-        """
-      Then query result
-        | result |
-        | 127    |
-
-    Scenario: abs negative SMALLINT safe
-      When query
-        """
-        SELECT abs(CAST(-32767 AS SMALLINT)) AS result
-        """
-      Then query result
-        | result |
-        | 32767  |
-
-    Scenario: abs negative BIGINT safe
-      When query
-        """
-        SELECT abs(CAST(-9223372036854775807 AS BIGINT)) AS result
-        """
-      Then query result
-        | result              |
-        | 9223372036854775807 |
+      Examples:
+        | input                                | result              |
+        | -5                                   | 5                   |
+        | 5                                    | 5                   |
+        | 0                                    | 0                   |
+        | CAST(-127 AS TINYINT)                | 127                 |
+        | CAST(-32767 AS SMALLINT)             | 32767               |
+        | CAST(-9223372036854775807 AS BIGINT) | 9223372036854775807 |
 
   Rule: Float and double values
 
-    Scenario: abs negative DOUBLE
+    Scenario Outline: abs on float and double values
       When query
         """
-        SELECT abs(CAST(-1.5 AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: abs positive FLOAT
-      When query
-        """
-        SELECT abs(CAST(1.5 AS FLOAT)) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: abs DOUBLE negative zero
-      When query
-        """
-        SELECT abs(CAST(-0.0 AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | 0.0    |
-
-    Scenario: abs FLOAT negative zero
-      When query
-        """
-        SELECT abs(CAST(-0.0 AS FLOAT)) AS result
-        """
-      Then query result
-        | result |
-        | 0.0    |
-
-    Scenario: abs DOUBLE NaN
-      When query
-        """
-        SELECT abs(CAST('NaN' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: abs DOUBLE Infinity
-      When query
-        """
-        SELECT abs(CAST('Infinity' AS DOUBLE)) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
         | result   |
-        | Infinity |
+        | <result> |
 
-    Scenario: abs DOUBLE negative Infinity
-      When query
-        """
-        SELECT abs(CAST('-Infinity' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result   |
-        | Infinity |
+      Examples:
+        | input                     | result   |
+        | CAST(-1.5 AS DOUBLE)      | 1.5      |
+        | CAST(1.5 AS FLOAT)        | 1.5      |
+        | CAST(-0.0 AS DOUBLE)      | 0.0      |
+        | CAST(-0.0 AS FLOAT)       | 0.0      |
+        | CAST('NaN' AS DOUBLE)     | NaN      |
+        | CAST('Infinity' AS DOUBLE) | Infinity |
+        | CAST('-Infinity' AS DOUBLE) | Infinity |
 
   Rule: Decimal values
 
-    Scenario: abs negative DECIMAL
+    Scenario Outline: abs on decimal values
       When query
         """
-        SELECT abs(CAST(-1.5 AS DECIMAL(5,2))) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result |
-        | 1.50   |
+        | result   |
+        | <result> |
 
-    Scenario: abs DECIMAL zero
-      When query
-        """
-        SELECT abs(CAST(0 AS DECIMAL(10,2))) AS result
-        """
-      Then query result
-        | result |
-        | 0.00   |
-
-    Scenario: abs DECIMAL very small
-      When query
-        """
-        SELECT abs(CAST(-0.001 AS DECIMAL(10,3))) AS result
-        """
-      Then query result
-        | result |
-        | 0.001  |
+      Examples:
+        | input                       | result |
+        | CAST(-1.5 AS DECIMAL(5,2))  | 1.50   |
+        | CAST(0 AS DECIMAL(10,2))    | 0.00   |
+        | CAST(-0.001 AS DECIMAL(10,3)) | 0.001  |
 
     @sail-bug
     # Tagged @sail-bug purely for Spark-compat tracking — Sail's behaviour here
@@ -283,45 +131,22 @@ Feature: abs comprehensive tests
     # under ANSI=false matches Java's Math.abs(int) and returns MIN itself
     # (wrap-around) instead of erroring. ANSI=true raises ARITHMETIC_OVERFLOW.
 
-    Scenario: abs TINYINT MIN wraps to MIN under ANSI false
+    Scenario Outline: abs of typed MIN wraps to MIN under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT abs(CAST(-128 AS TINYINT)) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result |
-        | -128   |
+        | result   |
+        | <result> |
 
-    Scenario: abs SMALLINT MIN wraps to MIN under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs(CAST(-32768 AS SMALLINT)) AS result
-        """
-      Then query result
-        | result |
-        | -32768 |
-
-    Scenario: abs INT MIN via CAST wraps to MIN under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs(CAST(-2147483648 AS INT)) AS result
-        """
-      Then query result
-        | result      |
-        | -2147483648 |
-
-    Scenario: abs BIGINT MIN wraps to MIN under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs(CAST(-9223372036854775808 AS BIGINT)) AS result
-        """
-      Then query result
-        | result                |
-        | -9223372036854775808  |
+      Examples:
+        | input                                 | result               |
+        | CAST(-128 AS TINYINT)                 | -128                 |
+        | CAST(-32768 AS SMALLINT)              | -32768               |
+        | CAST(-2147483648 AS INT)              | -2147483648          |
+        | CAST(-9223372036854775808 AS BIGINT)  | -9223372036854775808 |
 
     @sail-bug
     # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
@@ -345,29 +170,19 @@ Feature: abs comprehensive tests
 
   Rule: Integer overflow under ANSI=true errors
 
-    Scenario: abs TINYINT MIN errors under ANSI true
+    Scenario Outline: abs of typed MIN errors under ANSI true
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT abs(CAST(-128 AS TINYINT)) AS result
+        SELECT abs(<input>) AS result
         """
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
-    Scenario: abs INT MIN errors under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT abs(CAST(-2147483648 AS INT)) AS result
-        """
-      Then query error .*\[ARITHMETIC_OVERFLOW\].*
-
-    Scenario: abs BIGINT MIN errors under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT abs(CAST(-9223372036854775808 AS BIGINT)) AS result
-        """
-      Then query error .*\[ARITHMETIC_OVERFLOW\].*
+      Examples:
+        | input                                |
+        | CAST(-128 AS TINYINT)                |
+        | CAST(-2147483648 AS INT)             |
+        | CAST(-9223372036854775808 AS BIGINT) |
 
   Rule: String coercion under ANSI=false
     # Sail now coerces STRING → DOUBLE (via `coerce_types` in spark_abs), but
@@ -380,25 +195,21 @@ Feature: abs comprehensive tests
     # into `CastOptions { safe: !ansi }` when wrapping the coerced expr).
     # Affects every UDF that coerces STRING → numeric, not just abs.
 
-    Scenario: abs negative numeric string
+    Scenario Outline: abs of a parseable numeric string under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT abs('-5') AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result |
-        | 5.0    |
+        | result   |
+        | <result> |
 
-    Scenario: abs numeric string with decimal
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs('5.5') AS result
-        """
-      Then query result
-        | result |
-        | 5.5    |
+      Examples:
+        | input | result |
+        | '-5'  | 5.0    |
+        | '5.5' | 5.5    |
+        | 'NaN' | NaN    |
 
     @sail-bug
     Scenario: abs whitespace-padded numeric string
@@ -432,16 +243,6 @@ Feature: abs comprehensive tests
       Then query result
         | result |
         | NULL   |
-
-    Scenario: abs NaN string
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs('NaN') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
 
     Scenario: abs Infinity string
       Given config spark.sql.ansi.enabled = false
@@ -522,37 +323,20 @@ Feature: abs comprehensive tests
     # (i64::MIN microseconds). The MIN values must be constructed via
     # subtraction since literal parsers reject them.
 
-    Scenario: abs INTERVAL YEAR TO MONTH MIN errors under ANSI=false
-      Given config spark.sql.ansi.enabled = false
+    Scenario Outline: abs of interval MIN errors regardless of ANSI mode
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
+        SELECT abs(<input>) AS result
         """
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
-    Scenario: abs INTERVAL YEAR TO MONTH MIN errors under ANSI=true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
-        """
-      Then query error .*\[ARITHMETIC_OVERFLOW\].*
-
-    Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
-        """
-      Then query error .*\[ARITHMETIC_OVERFLOW\].*
-
-    Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
-        """
-      Then query error .*\[ARITHMETIC_OVERFLOW\].*
+      Examples:
+        | ansi  | input                                                                                   |
+        | false | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                    |
+        | true  | INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH                    |
+        | false | INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND |
+        | true  | INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND |
 
   Rule: Multi-row vectorized path
 
@@ -692,40 +476,20 @@ Feature: abs comprehensive tests
         """
       Then query error .*
 
-    Scenario: abs on TIMESTAMP errors
+    Scenario Outline: abs on an unsupported type errors
       When query
         """
-        SELECT abs(TIMESTAMP '2024-01-15 12:00:00') AS result
+        SELECT abs(<input>) AS result
         """
       Then query error .*
 
-    Scenario: abs on BINARY errors
-      When query
-        """
-        SELECT abs(X'48656C6C6F') AS result
-        """
-      Then query error .*
-
-    Scenario: abs on ARRAY errors
-      When query
-        """
-        SELECT abs(array(1,2,3)) AS result
-        """
-      Then query error .*
-
-    Scenario: abs on MAP errors
-      When query
-        """
-        SELECT abs(map('a',1)) AS result
-        """
-      Then query error .*
-
-    Scenario: abs on STRUCT errors
-      When query
-        """
-        SELECT abs(named_struct('a',1)) AS result
-        """
-      Then query error .*
+      Examples:
+        | input                           |
+        | TIMESTAMP '2024-01-15 12:00:00' |
+        | X'48656C6C6F'                   |
+        | array(1,2,3)                    |
+        | map('a',1)                      |
+        | named_struct('a',1)             |
 
   Rule: cross-nesting result correctness
 
@@ -899,7 +663,7 @@ Feature: abs comprehensive tests
   Rule: Output schema
 
     @sail-bug
-Scenario: a non-null integer literal yields a non-nullable integer
+    Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
         SELECT abs(-5) AS result
@@ -911,7 +675,7 @@ Scenario: a non-null integer literal yields a non-nullable integer
         """
 
     @sail-bug
-Scenario: a non-null integer column yields a non-nullable integer
+    Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
         SELECT abs(id) AS result FROM range(3)
@@ -922,7 +686,7 @@ Scenario: a non-null integer column yields a non-nullable integer
          |-- result: long (nullable = false)
         """
 
-Scenario: a nullable integer column stays nullable
+    Scenario: a nullable integer column stays nullable
       When query
         """
         SELECT abs(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)

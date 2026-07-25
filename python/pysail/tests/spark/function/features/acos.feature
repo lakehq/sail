@@ -4,10 +4,10 @@ Feature: acos output schema
   @spark_null
   Rule: Output schema
 
-    Scenario: a non-null literal input to acos yields the schema Spark declares
+    Scenario Outline: acos output schema matches Spark (nullable double)
       When query
         """
-        SELECT acos(1) AS result
+        <query>
         """
       Then query schema
         """
@@ -15,24 +15,8 @@ Feature: acos output schema
          |-- result: double (nullable = true)
         """
 
-    Scenario: a non-null column input to acos yields the schema Spark declares
-      When query
-        """
-        SELECT acos(CAST(id AS INT)) AS result FROM range(3)
-        """
-      Then query schema
-        """
-        root
-         |-- result: double (nullable = true)
-        """
-
-    Scenario: a nullable column input to acos stays nullable
-      When query
-        """
-        SELECT acos(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c)
-        """
-      Then query schema
-        """
-        root
-         |-- result: double (nullable = true)
-        """
+      Examples:
+        | query                                                                |
+        | SELECT acos(1) AS result                                             |
+        | SELECT acos(CAST(id AS INT)) AS result FROM range(3)                 |
+        | SELECT acos(c) AS result FROM VALUES (1), (CAST(NULL AS INT)) AS t(c) |
