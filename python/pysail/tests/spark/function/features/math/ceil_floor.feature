@@ -3,7 +3,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: ceil basic
 
-    Scenario: positive integer
+    Scenario: ceil positive integer
       When query
         """
         SELECT ceil(1) AS result
@@ -12,7 +12,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 1      |
 
-    Scenario: zero
+    Scenario: ceil zero
       When query
         """
         SELECT ceil(0) AS result
@@ -39,7 +39,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | -1     |
 
-    Scenario: negative small value
+    Scenario: ceil negative small value
       When query
         """
         SELECT ceil(-0.1) AS result
@@ -77,7 +77,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: floor basic
 
-    Scenario: positive integer
+    Scenario: floor positive integer
       When query
         """
         SELECT floor(1) AS result
@@ -86,7 +86,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 1      |
 
-    Scenario: zero
+    Scenario: floor zero
       When query
         """
         SELECT floor(0) AS result
@@ -113,7 +113,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | -2     |
 
-    Scenario: negative small value
+    Scenario: floor negative small value
       When query
         """
         SELECT floor(-0.1) AS result

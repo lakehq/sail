@@ -309,7 +309,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin(CAST('NaN' AS DOUBLE)) AS result
         """
-      Then query error .*
+      Then query error CAST_OVERFLOW
 
     Scenario: bin NaN truncates to zero under ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -327,7 +327,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin(CAST('Infinity' AS DOUBLE)) AS result
         """
-      Then query error .*
+      Then query error CAST_OVERFLOW
 
     Scenario: bin Infinity saturates to LONG_MAX under ANSI off
       Given config spark.sql.ansi.enabled = false
