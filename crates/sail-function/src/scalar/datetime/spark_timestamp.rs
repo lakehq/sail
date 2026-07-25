@@ -426,12 +426,9 @@ impl SparkTimestamp {
         safe: bool,
     ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
         match array.data_type() {
-            DataType::Utf8 => self.parse_values_with_formats(
-                as_string_array(array)?.iter(),
-                formats,
-                cache,
-                safe,
-            ),
+            DataType::Utf8 => {
+                self.parse_values_with_formats(as_string_array(array)?.iter(), formats, cache, safe)
+            }
             DataType::LargeUtf8 => self.parse_values_with_formats(
                 as_large_string_array(array)?.iter(),
                 formats,
