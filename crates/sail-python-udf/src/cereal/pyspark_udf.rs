@@ -70,12 +70,11 @@ impl PySparkUdfPayload {
                 // Spark 4.2 reads both maps before dispatching to read_udfs.
                 write_conf(&mut data, config.to_key_value_pairs());
                 let mut eval_conf = vec![];
-                match eval_type {
-                    spec::PySparkUdfType::ArrowBatched => eval_conf.push((
+                if eval_type == spec::PySparkUdfType::ArrowBatched {
+                    eval_conf.push((
                         "input_type".to_string(),
                         build_input_types_json(input_types)?,
-                    )),
-                    _ => {}
+                    ))
                 }
                 write_conf(&mut data, eval_conf);
             }
@@ -86,13 +85,12 @@ impl PySparkUdfPayload {
 
                 // PySpark 4.1 reads input types for ArrowBatched UDFs.
                 // PySpark 4.0.x does not read input types and would misparse the stream.
-                match (pyspark_version, eval_type) {
-                    (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowBatched) => {
-                        let schema_json = build_input_types_json(input_types)?;
-                        data.extend((schema_json.len() as i32).to_be_bytes());
-                        data.extend(schema_json.as_bytes());
-                    }
-                    _ => {}
+                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowBatched) =
+                    (pyspark_version, eval_type)
+                {
+                    let schema_json = build_input_types_json(input_types)?;
+                    data.extend((schema_json.len() as i32).to_be_bytes());
+                    data.extend(schema_json.as_bytes());
                 }
             }
         }

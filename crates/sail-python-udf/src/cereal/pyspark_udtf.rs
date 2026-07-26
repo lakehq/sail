@@ -157,12 +157,11 @@ impl PySparkUdtfPayload {
             PySparkVersion::V4_2 => {
                 write_conf(&mut data, config.to_key_value_pairs());
                 let mut eval_conf = vec![];
-                match eval_type {
-                    spec::PySparkUdfType::ArrowTable => eval_conf.push((
+                if eval_type == spec::PySparkUdfType::ArrowTable {
+                    eval_conf.push((
                         "input_type".to_string(),
                         build_input_types_json(input_types)?,
-                    )),
-                    _ => {}
+                    ))
                 }
                 write_conf(&mut data, eval_conf);
             }
@@ -173,22 +172,20 @@ impl PySparkUdtfPayload {
 
                 // PySpark 4.1+ reads input types for ArrowTable UDTFs.
                 // PySpark 4.0.x does not read input types and would misparse the stream.
-                match (pyspark_version, eval_type) {
-                    (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowTable) => {
-                        let schema_json = build_input_types_json(input_types)?;
-                        data.extend((schema_json.len() as i32).to_be_bytes());
-                        data.extend(schema_json.as_bytes());
-                    }
-                    _ => {}
+                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowTable) =
+                    (pyspark_version, eval_type)
+                {
+                    let schema_json = build_input_types_json(input_types)?;
+                    data.extend((schema_json.len() as i32).to_be_bytes());
+                    data.extend(schema_json.as_bytes());
                 }
 
                 // PySpark 4.1+ reads table argument offsets for ArrowUdtf before the arg offsets.
                 // PySpark 4.0.x does not use the ArrowUdtf eval type.
-                match (pyspark_version, eval_type) {
-                    (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowUdtf) => {
-                        data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
-                    }
-                    _ => {}
+                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowUdtf) =
+                    (pyspark_version, eval_type)
+                {
+                    data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
                 }
             }
         }
