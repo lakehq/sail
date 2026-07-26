@@ -11,15 +11,14 @@ use datafusion_physical_expr::Partitioning;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 /// `EliminateRedundantRepartition` optimizer rule removes a `RepartitionExec`
-/// with `Partitioning::RoundRobinBatch` that sits directly on top of an
-/// `ExplicitRepartitionExec`.
+/// with `Partitioning::RoundRobinBatch` inserted by `EnforceDistribution` rule,
+/// that sits directly on top of an `ExplicitRepartitionExec`.
 ///
 /// `RepartitionExec` with `Partitioning::Hash(..)` or `Partitioning::UnknownPartitioning`
 /// is left untouched, since eliminating it could violate the parent node's
 /// distribution requirement.
 ///
-/// This rule should be applied after the `EnforceDistribution`
-/// rule and before the `RewriteExplicitRepartition` rule.
+/// This rule should be applied right after the `EnforceDistribution` rule.
 pub struct EliminateRedundantRepartition {}
 
 impl EliminateRedundantRepartition {
@@ -133,6 +132,7 @@ mod tests {
         let result = optimize(redundant);
 
         assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
+        assert_eq!(result.output_partitioning().partition_count(), 3);
     }
 
     #[test]
@@ -147,6 +147,7 @@ mod tests {
         let result = optimize(redundant);
 
         assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
+        assert_eq!(result.output_partitioning().partition_count(), 3);
     }
 
     #[test]

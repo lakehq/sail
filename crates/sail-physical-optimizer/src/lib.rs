@@ -54,6 +54,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     rules.push(Arc::new(EnforceDistribution::new()));
+    rules.push(Arc::new(EliminateRedundantRepartition::new()));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(EnforceSorting::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
@@ -69,7 +70,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
-    rules.push(Arc::new(EliminateRedundantRepartition::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
