@@ -109,14 +109,23 @@ def test_udtf_kwargs_reversed_order(udtf_concat):
 
 
 def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
-    from pyspark.errors.exceptions.connect import PickleException
+    if pyspark_version() >= (4, 2):
+        from pyspark.errors.exceptions.connect import PythonException
+
+        exception = PythonException
+        match = "UDTF_ARROW_DATA_CONVERSION_ERROR"
+    else:
+        from pyspark.errors.exceptions.connect import PickleException
+
+        exception = PickleException
+        match = "PickleException"
 
     @udtf(returnType="x: boolean")
     class RowOutputUDTF:
         def eval(self):
             yield (Row(a=0, b=1.1, c=2),)
 
-    with pytest.raises(PickleException, match="PickleException"):
+    with pytest.raises(exception, match=match):
         RowOutputUDTF().collect()
 
 
@@ -132,7 +141,7 @@ def test_arrow_udtf_type_conversion_error_class_is_preserved():
         def eval(self):
             yield (1,)
 
-    with pytest.raises(PythonException, match="UDTF_ARROW_TYPE_CONVERSION_ERROR"):
+    with pytest.raises(PythonException, match=r"UDTF_ARROW_(TYPE|DATA)_CONVERSION_ERROR"):
         ArrowOutputUDTF().collect()
 
 
