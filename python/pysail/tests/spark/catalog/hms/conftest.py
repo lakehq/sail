@@ -367,10 +367,10 @@ def _wait_for_hms_catalog(remote: str) -> None:
 # 4.x uses Scala 2.13) instead of hardcoding a single Spark minor.
 import pyspark as _pyspark  # noqa: E402
 
-_SPARK_VERSION = _pyspark.__version__  # e.g. "4.1.1", "3.5.7"
+_SPARK_VERSION = _pyspark.__version__
 _SPARK_MAJOR, _SPARK_MINOR_PART = _SPARK_VERSION.split(".")[:2]
 _SCALA_BINARY = "2.12" if _SPARK_MAJOR == "3" else "2.13"
-_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"  # e.g. "4.1", "3.5"
+_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"
 # Delta Maven coordinates per Spark minor version. Delta renamed its artifact at
 # 4.1.0 to embed the Spark minor (``delta-spark_<spark-minor>_<scala>``); earlier
 # releases (3.3.x, 4.0.x) keep the legacy ``delta-spark_<scala>`` name. The previous

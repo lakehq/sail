@@ -35,7 +35,9 @@ use sail_physical_plan::barrier::BarrierExec;
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
-use crate::listing::utils::{can_be_evaluated_for_partition_pruning, has_hidden_path_component};
+use crate::listing::utils::{
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
@@ -460,16 +462,18 @@ async fn list_partitioned_files<'a>(
         datafusion_common::Result<datafusion_datasource::PartitionedFile>,
     >,
 > {
+    let path_glob_filter = source.config().path_glob_filter.as_ref();
     let file_list = future::try_join_all(source.config().table_paths.iter().map(
         |table_path| async move {
             let files =
                 pruned_partition_list(ctx, store, table_path, filters, "", partition_cols).await?;
-            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
+            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
             let files = files.try_filter(move |file| {
-                futures::future::ready(!has_hidden_path_component(
-                    table_path,
-                    &file.object_meta.location,
-                ))
+                let location = &file.object_meta.location;
+                futures::future::ready(
+                    !has_hidden_path_component(table_path, location)
+                        && matches_path_glob_filter(path_glob_filter, location),
+                )
             });
             Ok::<_, datafusion_common::DataFusionError>(files.boxed())
         },
@@ -705,6 +709,7 @@ mod tests {
             read_format: Arc::new(CountingReadFormat {
                 inference_count: Arc::clone(&inference_count),
             }),
+            path_glob_filter: None,
             compression: CompressionTypeVariant::UNCOMPRESSED,
         };
         let warmup_source = ListingTableSource::try_new(config.clone()).unwrap();

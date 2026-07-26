@@ -1,7 +1,7 @@
 Feature: unix_timestamp with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
-  # through a column. All expected values were captured on Spark JVM 4.1.1.
+  # through a column. All expected values were captured on Spark JVM 4.x.
 
   Rule: unix_timestamp — the argument may come from a column
 
@@ -15,8 +15,7 @@ Feature: unix_timestamp with an argument coming from a column
         | result     |
         | 1460073600 |
 
-    # Sail rejects the column: Sail errors: Unsupported data type Array(StringArray [ "%Y-%m-%d", "%Y-%m-%d", ]) for function to_times...
-    @column_args @sail-bug
+    @column_args
     Scenario: unix_timestamp takes argument 2 from a column
       When query
         """
