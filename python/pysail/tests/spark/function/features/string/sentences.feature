@@ -48,65 +48,21 @@ Feature: sentences output schema
 
   Rule: Result values (migrated from test_sentences.txt doctests)
 
-    Scenario: sentences doctest #1 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT sentences('Hi there! Good morning.') AS result
+        SELECT sentences(<args>) AS result
         """
       Then query result
-        | result                         |
-        | [[Hi, there], [Good, morning]] |
+        | result   |
+        | <result> |
 
-    Scenario: sentences doctest #2 (result)
-      When query
-        """
-        SELECT sentences('Hello world') AS result
-        """
-      Then query result
-        | result           |
-        | [[Hello, world]] |
-
-    Scenario: sentences doctest #3 (result)
-      When query
-        """
-        SELECT sentences('What? Yes! OK.') AS result
-        """
-      Then query result
-        | result                |
-        | [[What], [Yes], [OK]] |
-
-    Scenario: sentences doctest #4 (result)
-      When query
-        """
-        SELECT sentences(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: sentences doctest #5 (result)
-      When query
-        """
-        SELECT sentences('') AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: sentences doctest #6 (result)
-      When query
-        """
-        SELECT sentences('Hi there!', 'en') AS result
-        """
-      Then query result
-        | result        |
-        | [[Hi, there]] |
-
-    Scenario: sentences doctest #7 (result)
-      When query
-        """
-        SELECT sentences('Hi there!', 'en', 'US') AS result
-        """
-      Then query result
-        | result        |
-        | [[Hi, there]] |
+      Examples:
+        | case                          | args                      | result                         |
+        | sentences doctest #1 (result) | 'Hi there! Good morning.' | [[Hi, there], [Good, morning]] |
+        | sentences doctest #2 (result) | 'Hello world'             | [[Hello, world]]               |
+        | sentences doctest #3 (result) | 'What? Yes! OK.'          | [[What], [Yes], [OK]]          |
+        | sentences doctest #4 (result) | NULL                      | NULL                           |
+        | sentences doctest #5 (result) | ''                        | []                             |
+        | sentences doctest #6 (result) | 'Hi there!', 'en'         | [[Hi, there]]                  |
+        | sentences doctest #7 (result) | 'Hi there!', 'en', 'US'   | [[Hi, there]]                  |

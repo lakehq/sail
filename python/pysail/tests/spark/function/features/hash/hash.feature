@@ -3,32 +3,20 @@ Feature: hash() returns murmur3 hash
 
   Rule: Basic usage
 
-    Scenario: hash integer
+    Scenario Outline: Basic usage: <case>
       When query
         """
-        SELECT hash(42) AS result
+        SELECT hash(<args>) AS result
         """
       Then query result
         | result   |
-        | 29417773 |
+        | <result> |
 
-    Scenario: hash string
-      When query
-        """
-        SELECT hash('hello') AS result
-        """
-      Then query result
-        | result      |
-        | -1008564952 |
-
-    Scenario: hash multiple args
-      When query
-        """
-        SELECT hash(1, 'a', 2) AS result
-        """
-      Then query result
-        | result     |
-        | -355304976 |
+      Examples:
+        | case               | args      | result      |
+        | hash integer       | 42        | 29417773    |
+        | hash string        | 'hello'   | -1008564952 |
+        | hash multiple args | 1, 'a', 2 | -355304976  |
 
   Rule: Null handling
 

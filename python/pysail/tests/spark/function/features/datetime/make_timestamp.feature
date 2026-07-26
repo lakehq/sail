@@ -3,61 +3,37 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: Basic timestamp creation with 6 arguments
 
-    Scenario: create timestamp from date and time components
+    Scenario Outline: Six arguments: <case>
       When query
         """
-        SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887) AS result
+        SELECT make_timestamp_ntz(<args>) AS result
         """
       Then query result
-        | result                  |
-        | 2014-12-28 06:30:45.887 |
+        | result   |
+        | <result> |
 
-    Scenario: create timestamp at midnight
-      When query
-        """
-        SELECT make_timestamp_ntz(2023, 12, 31, 0, 0, 0.0) AS result
-        """
-      Then query result
-        | result              |
-        | 2023-12-31 00:00:00 |
-
-    Scenario: create timestamp near end of valid range
-      When query
-        """
-        SELECT make_timestamp_ntz(9999, 12, 31, 23, 58, 59.999999) AS result
-        """
-      Then query result
-        | result                     |
-        | 9999-12-31 23:58:59.999999 |
-
-    Scenario: sec=60 adds one minute
-      When query
-        """
-        SELECT make_timestamp_ntz(2024, 6, 15, 14, 30, 60.0) AS result
-        """
-      Then query result
-        | result              |
-        | 2024-06-15 14:31:00 |
+      Examples:
+        | case                                           | args                            | result                     |
+        | create timestamp from date and time components | 2014, 12, 28, 6, 30, 45.887     | 2014-12-28 06:30:45.887    |
+        | create timestamp at midnight                   | 2023, 12, 31, 0, 0, 0.0         | 2023-12-31 00:00:00        |
+        | create timestamp near end of valid range       | 9999, 12, 31, 23, 58, 59.999999 | 9999-12-31 23:58:59.999999 |
+        | sec=60 adds one minute                         | 2024, 6, 15, 14, 30, 60.0       | 2024-06-15 14:31:00        |
 
   Rule: Timestamp creation with date and time arguments
 
-    Scenario: combine date and time
+    Scenario Outline: Date and time: <case>
       When query
         """
-        SELECT make_timestamp_ntz(DATE '2024-03-15', TIME '14:30:00') AS result
+        SELECT make_timestamp_ntz(DATE <date>, TIME <time>) AS result
         """
       Then query result
-        | result              |
-        | 2024-03-15 14:30:00 |
+        | result   |
+        | <result> |
 
-    Scenario: combine date and time with microsecond precision
-      When query
-        """
-        SELECT make_timestamp_ntz(DATE '2024-01-01', TIME '12:34:56.123456') AS result
-        """
-      Then query result
-        | result                     |
-        | 2024-01-01 12:34:56.123456 |
+      Examples:
+        | case                                             | date         | time              | result                     |
+        | combine date and time                            | '2024-03-15' | '14:30:00'        | 2024-03-15 14:30:00        |
+        | combine date and time with microsecond precision | '2024-01-01' | '12:34:56.123456' | 2024-01-01 12:34:56.123456 |
 
   Rule: try_make_timestamp_ntz with valid inputs
 
@@ -81,50 +57,22 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: try_make_timestamp_ntz with invalid inputs returns NULL
 
-    Scenario: invalid month
+    Scenario Outline: Invalid component: <case>
       When query
         """
-        SELECT try_make_timestamp_ntz(2024, 13, 1, 0, 0, 0.0) AS result
+        SELECT try_make_timestamp_ntz(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: invalid day
-      When query
-        """
-        SELECT try_make_timestamp_ntz(2024, 2, 30, 0, 0, 0.0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: invalid hour
-      When query
-        """
-        SELECT try_make_timestamp_ntz(2024, 1, 1, 24, 0, 0.0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: invalid minute
-      When query
-        """
-        SELECT try_make_timestamp_ntz(2024, 1, 1, 0, 60, 0.0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: invalid second
-      When query
-        """
-        SELECT try_make_timestamp_ntz(2024, 1, 1, 0, 0, 61.0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case           | args                   |
+        | invalid month  | 2024, 13, 1, 0, 0, 0.0 |
+        | invalid day    | 2024, 2, 30, 0, 0, 0.0 |
+        | invalid hour   | 2024, 1, 1, 24, 0, 0.0 |
+        | invalid minute | 2024, 1, 1, 0, 60, 0.0 |
+        | invalid second | 2024, 1, 1, 0, 0, 61.0 |
 
   Rule: NULL handling
 

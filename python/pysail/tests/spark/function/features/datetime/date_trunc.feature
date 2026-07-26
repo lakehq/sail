@@ -3,29 +3,22 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: date_trunc on timestamp preserves type
 
-    Scenario: date_trunc on timestamp column preserves timestamp type
+    Scenario Outline: Preserves type: <case>
       When query
         """
-        WITH t(ts) AS (VALUES (TIMESTAMP '2026-02-02 00:00:00 UTC'))
+        WITH t(ts) AS (VALUES (<type> '<value>'))
         SELECT date_trunc('YEAR', ts) AS result FROM t
         """
       Then query schema
         """
         root
-         |-- result: timestamp (nullable = true)
+         |-- result: <schema> (nullable = true)
         """
 
-    Scenario: date_trunc on timestamp_ntz column preserves timestamp_ntz type
-      When query
-        """
-        WITH t(ts) AS (VALUES (TIMESTAMP_NTZ '2026-02-02 00:00:00'))
-        SELECT date_trunc('YEAR', ts) AS result FROM t
-        """
-      Then query schema
-        """
-        root
-         |-- result: timestamp_ntz (nullable = true)
-        """
+      Examples:
+        | case                                                            | type          | value                   | schema        |
+        | date_trunc on timestamp column preserves timestamp type         | TIMESTAMP     | 2026-02-02 00:00:00 UTC | timestamp     |
+        | date_trunc on timestamp_ntz column preserves timestamp_ntz type | TIMESTAMP_NTZ | 2026-02-02 00:00:00     | timestamp_ntz |
 
     Scenario: date_trunc on timestamp_ntz literal preserves timestamp_ntz type
       When query
@@ -108,27 +101,20 @@ Feature: DATE_TRUNC preserves timestamp type
 
     # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
     @column_args @sail-bug
-    Scenario: date_trunc takes argument 1 from a column holding two different values
+    Scenario Outline: Date_trunc: <case>
       When query
         """
-        SELECT date_trunc(c, '2015-03-05T09:32:05.359') AS result FROM VALUES (1, 'YEAR'), (2, 'MM') AS t(i, c) ORDER BY i
+        SELECT date_trunc(c, '2015-03-05T09:32:05.359') AS result FROM VALUES (1, <v1>), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query result ordered
-        | result              |
-        | 2015-01-01 00:00:00 |
-        | 2015-03-01 00:00:00 |
+        | result |
+        | <r1>   |
+        | <r2>   |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
-    Scenario: date_trunc takes argument 1 from a column
-      When query
-        """
-        SELECT date_trunc(c, '2015-03-05T09:32:05.359') AS result FROM VALUES (1, 'YEAR'), (2, 'YEAR') AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result              |
-        | 2015-01-01 00:00:00 |
-        | 2015-01-01 00:00:00 |
+      Examples:
+        | case                                                                   | v1     | v2     | r1                  | r2                  |
+        | date_trunc takes argument 1 from a column holding two different values | 'YEAR' | 'MM'   | 2015-01-01 00:00:00 | 2015-03-01 00:00:00 |
+        | date_trunc takes argument 1 from a column                              | 'YEAR' | 'YEAR' | 2015-01-01 00:00:00 | 2015-01-01 00:00:00 |
 
   @spark_null
   Rule: Output schema

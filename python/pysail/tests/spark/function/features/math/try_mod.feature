@@ -39,140 +39,32 @@ Feature: try_mod output schema
 
   Rule: Result values (migrated from test_try_mod.txt doctests)
 
-    Scenario: try_mod doctest #1 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT try_mod(CAST(3.0  AS DECIMAL(2,1)), CAST(2.00 AS DECIMAL(3,2))) AS r
+        SELECT try_mod(<args>) AS r
         """
       Then query result
-        | r    |
-        | 1.00 |
+        | r        |
+        | <result> |
 
-    Scenario: try_mod doctest #2 (result)
-      When query
-        """
-        SELECT try_mod(CAST(12.34 AS DECIMAL(4,2)), CAST(5.67 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 1.00 |
-
-    Scenario: try_mod doctest #3 (result)
-      When query
-        """
-        SELECT try_mod(CAST(1.2 AS DECIMAL(2,1)), CAST(0.03 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 0.00 |
-
-    Scenario: try_mod doctest #4 (result)
-      When query
-        """
-        SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.00 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | NULL |
-
-    Scenario: try_mod doctest #5 (result)
-      When query
-        """
-        SELECT try_mod(CAST(0.00 AS DECIMAL(3,2)), CAST(2.50 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 0.00 |
-
-    Scenario: try_mod doctest #6 (result)
-      When query
-        """
-        SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(9.99 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 1.23 |
-
-    Scenario: try_mod doctest #7 (result)
-      When query
-        """
-        SELECT try_mod(CAST(5.00 AS DECIMAL(3,2)), CAST(5.00 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 0.00 |
-
-    Scenario: try_mod doctest #8 (result)
-      When query
-        """
-        SELECT try_mod(CAST(9.9 AS DECIMAL(38,1)), CAST(0.000000000000000001 AS DECIMAL(18,18))) AS r
-        """
-      Then query result
-        | r                    |
-        | 0.000000000000000000 |
-
-    Scenario: try_mod doctest #9 (result)
-      When query
-        """
-        SELECT try_mod(CAST(99999999999999999999999999999999999999 AS DECIMAL(38,0)), CAST(10 AS DECIMAL(2,0))) AS r
-        """
-      Then query result
-        | r |
-        | 9 |
-
-    Scenario: try_mod doctest #10 (result)
-      When query
-        """
-        SELECT try_mod(3, CAST(2.00 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 1.00 |
-
-    Scenario: try_mod doctest #11 (result)
-      When query
-        """
-        SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), 2) AS r
-        """
-      Then query result
-        | r    |
-        | 1.00 |
-
-    Scenario: try_mod doctest #12 (result)
-      When query
-        """
-        SELECT try_mod(NULL, CAST(2.00 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | NULL |
-
-    Scenario: try_mod doctest #13 (result)
-      When query
-        """
-        SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), NULL) AS r
-        """
-      Then query result
-        | r    |
-        | NULL |
-
-    Scenario: try_mod doctest #14 (result)
-      When query
-        """
-        SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.000000000001 AS DECIMAL(13,12))) AS r
-        """
-      Then query result
-        | r              |
-        | 0.000000000000 |
-
-    Scenario: try_mod doctest #15 (result)
-      When query
-        """
-        SELECT try_mod(CAST(10.00 AS DECIMAL(4,2)), CAST(2.50 AS DECIMAL(3,2))) AS r
-        """
-      Then query result
-        | r    |
-        | 0.00 |
+      Examples:
+        | case                         | args                                                                                    | result               |
+        | try_mod doctest #1 (result)  | CAST(3.0  AS DECIMAL(2,1)), CAST(2.00 AS DECIMAL(3,2))                                  | 1.00                 |
+        | try_mod doctest #2 (result)  | CAST(12.34 AS DECIMAL(4,2)), CAST(5.67 AS DECIMAL(3,2))                                 | 1.00                 |
+        | try_mod doctest #3 (result)  | CAST(1.2 AS DECIMAL(2,1)), CAST(0.03 AS DECIMAL(3,2))                                   | 0.00                 |
+        | try_mod doctest #4 (result)  | CAST(1.23 AS DECIMAL(3,2)), CAST(0.00 AS DECIMAL(3,2))                                  | NULL                 |
+        | try_mod doctest #5 (result)  | CAST(0.00 AS DECIMAL(3,2)), CAST(2.50 AS DECIMAL(3,2))                                  | 0.00                 |
+        | try_mod doctest #6 (result)  | CAST(1.23 AS DECIMAL(3,2)), CAST(9.99 AS DECIMAL(3,2))                                  | 1.23                 |
+        | try_mod doctest #7 (result)  | CAST(5.00 AS DECIMAL(3,2)), CAST(5.00 AS DECIMAL(3,2))                                  | 0.00                 |
+        | try_mod doctest #8 (result)  | CAST(9.9 AS DECIMAL(38,1)), CAST(0.000000000000000001 AS DECIMAL(18,18))                | 0.000000000000000000 |
+        | try_mod doctest #9 (result)  | CAST(99999999999999999999999999999999999999 AS DECIMAL(38,0)), CAST(10 AS DECIMAL(2,0)) | 9                    |
+        | try_mod doctest #10 (result) | 3, CAST(2.00 AS DECIMAL(3,2))                                                           | 1.00                 |
+        | try_mod doctest #11 (result) | CAST(3.00 AS DECIMAL(3,2)), 2                                                           | 1.00                 |
+        | try_mod doctest #12 (result) | NULL, CAST(2.00 AS DECIMAL(3,2))                                                        | NULL                 |
+        | try_mod doctest #13 (result) | CAST(3.00 AS DECIMAL(3,2)), NULL                                                        | NULL                 |
+        | try_mod doctest #14 (result) | CAST(1.23 AS DECIMAL(3,2)), CAST(0.000000000001 AS DECIMAL(13,12))                      | 0.000000000000       |
+        | try_mod doctest #15 (result) | CAST(10.00 AS DECIMAL(4,2)), CAST(2.50 AS DECIMAL(3,2))                                 | 0.00                 |
 
     Scenario: try_mod doctest #16 (result)
       When query

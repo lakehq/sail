@@ -7,79 +7,39 @@ Feature: bround comprehensive tests
 
   Rule: Double tie-to-even (round-half-to-even) at scale 0
 
-    Scenario: bround DOUBLE 2.5 rounds down to even
+    Scenario Outline: Scale 0: <case>
       When query
         """
-        SELECT bround(CAST(2.5 AS DOUBLE), 0) AS result
+        SELECT bround(CAST(<v> AS DOUBLE), 0) AS result
         """
       Then query result
-        | result |
-        | 2.0    |
+        | result   |
+        | <result> |
 
-    Scenario: bround DOUBLE 3.5 rounds up to even
-      When query
-        """
-        SELECT bround(CAST(3.5 AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | 4.0    |
-
-    Scenario: bround DOUBLE -2.5 rounds to even
-      When query
-        """
-        SELECT bround(CAST(-2.5 AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | -2.0   |
-
-    Scenario: bround DOUBLE -3.5 rounds to even
-      When query
-        """
-        SELECT bround(CAST(-3.5 AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | -4.0   |
-
-    Scenario: bround DOUBLE 2.4 no tie rounds down
-      When query
-        """
-        SELECT bround(CAST(2.4 AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | 2.0    |
-
-    Scenario: bround DOUBLE 2.6 no tie rounds up
-      When query
-        """
-        SELECT bround(CAST(2.6 AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | 3.0    |
+      Examples:
+        | case                                  | v    | result |
+        | bround DOUBLE 2.5 rounds down to even | 2.5  | 2.0    |
+        | bround DOUBLE 3.5 rounds up to even   | 3.5  | 4.0    |
+        | bround DOUBLE -2.5 rounds to even     | -2.5 | -2.0   |
+        | bround DOUBLE -3.5 rounds to even     | -3.5 | -4.0   |
+        | bround DOUBLE 2.4 no tie rounds down  | 2.4  | 2.0    |
+        | bround DOUBLE 2.6 no tie rounds up    | 2.6  | 3.0    |
 
   Rule: Double tie-to-even at positive scale
 
-    Scenario: bround DOUBLE 1.25 scale 1
+    Scenario Outline: Positive scale: <case>
       When query
         """
-        SELECT bround(CAST(1.25 AS DOUBLE), 1) AS result
+        SELECT bround(CAST(<v> AS DOUBLE), 1) AS result
         """
       Then query result
-        | result |
-        | 1.2    |
+        | result   |
+        | <result> |
 
-    Scenario: bround DOUBLE 1.35 scale 1
-      When query
-        """
-        SELECT bround(CAST(1.35 AS DOUBLE), 1) AS result
-        """
-      Then query result
-        | result |
-        | 1.4    |
+      Examples:
+        | case                       | v    | result |
+        | bround DOUBLE 1.25 scale 1 | 1.25 | 1.2    |
+        | bround DOUBLE 1.35 scale 1 | 1.35 | 1.4    |
 
   # FIXME: The type mismatch assertion is only active in debug builds,
   #   so the following tests would fail with XPASS in release builds.
@@ -113,34 +73,23 @@ Feature: bround comprehensive tests
   #         | result |
   #         | 4.0    |
   #
+
   Rule: Integer paths with negative scale preserve input type
 
-    Scenario: bround INT 25 scale -1
+    Scenario Outline: Integer negative scale: <case>
       When query
         """
-        SELECT bround(CAST(25 AS INT), -1) AS result
+        SELECT bround(CAST(<v> AS <type>), -1) AS result
         """
       Then query result
-        | result |
-        | 20     |
+        | result   |
+        | <result> |
 
-    Scenario: bround INT 35 scale -1
-      When query
-        """
-        SELECT bround(CAST(35 AS INT), -1) AS result
-        """
-      Then query result
-        | result |
-        | 40     |
-
-    Scenario: bround BIGINT 25 scale -1
-      When query
-        """
-        SELECT bround(CAST(25 AS BIGINT), -1) AS result
-        """
-      Then query result
-        | result |
-        | 20     |
+      Examples:
+        | case                      | v  | type   | result |
+        | bround INT 25 scale -1    | 25 | INT    | 20     |
+        | bround INT 35 scale -1    | 35 | INT    | 40     |
+        | bround BIGINT 25 scale -1 | 25 | BIGINT | 20     |
 
   Rule: NULL propagation
 
@@ -206,50 +155,22 @@ Feature: bround comprehensive tests
     # binary kernel applies the closure per value; the closure's round path is a
     # no-op on non-finite inputs.
 
-    Scenario: bround DOUBLE NaN scale 0
+    Scenario Outline: Special value: <case>
       When query
         """
-        SELECT bround(CAST('NaN' AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: bround DOUBLE Infinity scale 0
-      When query
-        """
-        SELECT bround(CAST('Infinity' AS DOUBLE), 0) AS result
+        SELECT bround(CAST(<v> AS DOUBLE), <scale>) AS result
         """
       Then query result
         | result   |
-        | Infinity |
+        | <result> |
 
-    Scenario: bround DOUBLE negative Infinity scale 0
-      When query
-        """
-        SELECT bround(CAST('-Infinity' AS DOUBLE), 0) AS result
-        """
-      Then query result
-        | result    |
-        | -Infinity |
-
-    Scenario: bround DOUBLE NaN positive scale
-      When query
-        """
-        SELECT bround(CAST('NaN' AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: bround DOUBLE Infinity negative scale
-      When query
-        """
-        SELECT bround(CAST('Infinity' AS DOUBLE), -1) AS result
-        """
-      Then query result
-        | result   |
-        | Infinity |
+      Examples:
+        | case                                    | v           | scale | result    |
+        | bround DOUBLE NaN scale 0               | 'NaN'       | 0     | NaN       |
+        | bround DOUBLE Infinity scale 0          | 'Infinity'  | 0     | Infinity  |
+        | bround DOUBLE negative Infinity scale 0 | '-Infinity' | 0     | -Infinity |
+        | bround DOUBLE NaN positive scale        | 'NaN'       | 2     | NaN       |
+        | bround DOUBLE Infinity negative scale   | 'Infinity'  | -1    | Infinity  |
 
   Rule: Multi-row DOUBLE with NULL, NaN and Infinity mix
     # Exercises the binary-kernel null-buffer intersection alongside non-finite
@@ -310,27 +231,21 @@ Feature: bround comprehensive tests
     # doctest: bround(n, -1) over an INT column and over a DOUBLE column,
     # preserving each input type.
 
-    Scenario: bround INT column scale -1
+    Scenario Outline: Column negative scale: <case>
       When query
         """
         SELECT bround(n, -1) AS result
-        FROM VALUES (25), (35) AS t(n)
+        FROM VALUES <values> AS t(n)
         """
       Then query result ordered
         | result |
-        | 20     |
-        | 40     |
+        | <r1>   |
+        | <r2>   |
 
-    Scenario: bround DOUBLE column scale -1
-      When query
-        """
-        SELECT bround(n, -1) AS result
-        FROM VALUES (CAST(25.0 AS DOUBLE)), (CAST(35.0 AS DOUBLE)) AS t(n)
-        """
-      Then query result ordered
-        | result |
-        | 20.0   |
-        | 40.0   |
+      Examples:
+        | case                          | values                                         | r1   | r2   |
+        | bround INT column scale -1    | (25), (35)                                     | 20   | 40   |
+        | bround DOUBLE column scale -1 | (CAST(25.0 AS DOUBLE)), (CAST(35.0 AS DOUBLE)) | 20.0 | 40.0 |
 
   Rule: bround — the argument must be foldable
 
@@ -344,23 +259,20 @@ Feature: bround comprehensive tests
         | result |
         | 20     |
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '25'].
+    # Spark requires a foldable argument here; Sail accepts a column and returns
+    # a value per row instead of raising.
     @column_args @sail-bug
-    Scenario: bround takes argument 2 from a column holding two different values
+    Scenario Outline: Bround: <case>
       When query
         """
-        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, 0) AS t(i, c) ORDER BY i
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '20'].
-    @column_args @sail-bug
-    Scenario: bround takes argument 2 from a column
-      When query
-        """
-        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
-        """
-      Then query error NON_FOLDABLE_INPUT
+      Examples:
+        | case                                                               | v2 |
+        | bround takes argument 2 from a column holding two different values | 0  |
+        | bround takes argument 2 from a column                              | -1 |
 
   @spark_null
   Rule: Output schema

@@ -184,69 +184,24 @@ Feature: NULL literal and timestamp inference
         | to_timestamp_ltz | timestamp     |
         | to_timestamp_ntz | timestamp_ntz |
 
-    Scenario: DataFrame to_timestamp of NULL literal is inferred as timestamp
-      When dataframe for to_timestamp null literal
+    Scenario Outline: DataFrame: <case>
+      When dataframe for <dataframe>
       Then dataframe schema
         """
         root
-         |-- result: timestamp (nullable = true)
+         |-- result: <type> (nullable = true)
         """
 
-    Scenario: DataFrame try_to_timestamp of NULL literal with format is inferred as timestamp
-      When dataframe for try_to_timestamp null literal with format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp (nullable = true)
-        """
-
-    Scenario: DataFrame try_to_timestamp of value with NULL format is inferred as timestamp
-      When dataframe for try_to_timestamp value with null format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp (nullable = true)
-        """
-
-    Scenario: DataFrame to_timestamp_ltz of NULL literal with format is inferred as timestamp
-      When dataframe for to_timestamp_ltz null literal with format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp (nullable = true)
-        """
-
-    Scenario: DataFrame to_timestamp_ltz of value with NULL format is inferred as timestamp
-      When dataframe for to_timestamp_ltz value with null format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp (nullable = true)
-        """
-
-    Scenario: DataFrame to_timestamp_ntz of NULL literal with format keeps timestamp_ntz
-      When dataframe for to_timestamp_ntz null literal with format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp_ntz (nullable = true)
-        """
-
-    Scenario: DataFrame to_timestamp_ntz of value with NULL format keeps timestamp_ntz
-      When dataframe for to_timestamp_ntz value with null format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp_ntz (nullable = true)
-        """
-
-    Scenario: DataFrame to_timestamp of NULL literal with format is inferred as timestamp
-      When dataframe for to_timestamp null literal with format
-      Then dataframe schema
-        """
-        root
-         |-- result: timestamp (nullable = true)
-        """
+      Examples:
+        | case                                                                            | dataframe                                 | type          |
+        | DataFrame to_timestamp of NULL literal is inferred as timestamp                 | to_timestamp null literal                 | timestamp     |
+        | DataFrame try_to_timestamp of NULL literal with format is inferred as timestamp | try_to_timestamp null literal with format | timestamp     |
+        | DataFrame try_to_timestamp of value with NULL format is inferred as timestamp   | try_to_timestamp value with null format   | timestamp     |
+        | DataFrame to_timestamp_ltz of NULL literal with format is inferred as timestamp | to_timestamp_ltz null literal with format | timestamp     |
+        | DataFrame to_timestamp_ltz of value with NULL format is inferred as timestamp   | to_timestamp_ltz value with null format   | timestamp     |
+        | DataFrame to_timestamp_ntz of NULL literal with format keeps timestamp_ntz      | to_timestamp_ntz null literal with format | timestamp_ntz |
+        | DataFrame to_timestamp_ntz of value with NULL format keeps timestamp_ntz        | to_timestamp_ntz value with null format   | timestamp_ntz |
+        | DataFrame to_timestamp of NULL literal with format is inferred as timestamp     | to_timestamp null literal with format     | timestamp     |
 
     Scenario: DataFrame to_timestamp follows configured default timestamp type
       Given config spark.sql.timestampType = TIMESTAMP_NTZ

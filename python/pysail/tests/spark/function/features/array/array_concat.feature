@@ -7,65 +7,50 @@ Feature: array_concat() concatenates arrays (Sail extension)
   Rule: Basic concatenation
 
     @sail-only
-    Scenario: array_concat two integer arrays
+    Scenario Outline: array_concat two <case> arrays
       When query
         """
-        SELECT array_concat(array(1, 2, 3), array(4, 5)) AS result
+        SELECT array_concat(<left>, <right>) AS result
         """
       Then query result
-        | result          |
-        | [1, 2, 3, 4, 5] |
+        | result   |
+        | <result> |
 
-    @sail-only
-    Scenario: array_concat two string arrays
-      When query
-        """
-        SELECT array_concat(array('a', 'b'), array('c')) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
+      Examples:
+        | case    | left            | right       | result          |
+        | integer | array(1, 2, 3)  | array(4, 5) | [1, 2, 3, 4, 5] |
+        | string  | array('a', 'b') | array('c')  | [a, b, c]       |
 
   Rule: Empty array handling
 
     @sail-only
-    Scenario: array_concat empty array with typed array
+    Scenario Outline: array_concat <case>
       When query
         """
-        SELECT array_concat(array(), array(1, 2, 3)) AS result
+        SELECT array_concat(<left>, <right>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    @sail-only
-    Scenario: array_concat typed array with empty array
-      When query
-        """
-        SELECT array_concat(array(1, 2), array()) AS result
-        """
-      Then query result
-        | result |
-        | [1, 2] |
+      Examples:
+        | case                         | left        | right          | result    |
+        | empty array with typed array | array()     | array(1, 2, 3) | [1, 2, 3] |
+        | typed array with empty array | array(1, 2) | array()        | [1, 2]    |
 
   Rule: Null propagation
 
     @sail-only
-    Scenario: array_concat array with null returns null
+    Scenario Outline: array_concat <case> returns null
       When query
         """
-        SELECT array_concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
+        SELECT array_concat(<left>, <right>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    @sail-only
-    Scenario: array_concat null with array returns null
-      When query
-        """
-        SELECT array_concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case            | left                     | right                    |
+        | array with null | array(1, 2)              | CAST(NULL AS ARRAY<INT>) |
+        | null with array | CAST(NULL AS ARRAY<INT>) | array(1, 2)              |

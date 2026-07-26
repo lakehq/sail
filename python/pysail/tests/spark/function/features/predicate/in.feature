@@ -1,4 +1,4 @@
-@in
+@predicate_in
 Feature: in output schema
 
   @spark_null

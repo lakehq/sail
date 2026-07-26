@@ -3,57 +3,40 @@ Feature: Theta sketch functions
 
   Rule: theta_sketch_agg builds compact theta sketches
 
-    Scenario: theta_sketch_agg estimates distinct integer values
+    Scenario Outline: Sketch agg: <case>
       When query
         """
-        SELECT theta_sketch_estimate(theta_sketch_agg(col)) AS result
-        FROM VALUES (1), (1), (2), (2), (3) AS tab(col)
+        SELECT theta_sketch_estimate(theta_sketch_agg(<args>)) AS result
+        FROM VALUES <values> AS tab(col)
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: theta_sketch_agg accepts an explicit lgNomEntries value
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(col, 15)) AS result
-        FROM VALUES (1), (1), (2), (2), (3) AS tab(col)
-        """
-      Then query result
-        | result |
-        | 3      |
-
-    Scenario: theta_sketch_agg ignores null input values
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(col)) AS result
-        FROM VALUES (1), (CAST(NULL AS INT)), (2), (2) AS tab(col)
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: theta_sketch_agg follows Spark array null-element hashing
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(col)) AS result
-        FROM VALUES (array(CAST(NULL AS INT))), (array(0)) AS tab(col)
-        """
-      Then query result
-        | result |
-        | 1      |
+      Examples:
+        | case                                                      | args    | values                                 | result |
+        | theta_sketch_agg estimates distinct integer values        | col     | (1), (1), (2), (2), (3)                | 3      |
+        | theta_sketch_agg accepts an explicit lgNomEntries value   | col, 15 | (1), (1), (2), (2), (3)                | 3      |
+        | theta_sketch_agg ignores null input values                | col     | (1), (CAST(NULL AS INT)), (2), (2)     | 2      |
+        | theta_sketch_agg follows Spark array null-element hashing | col     | (array(CAST(NULL AS INT))), (array(0)) | 1      |
 
   Rule: theta sketch set operations combine sketches
 
-    Scenario: theta_union merges two sketches
+    Scenario Outline: Set operation: <case>
       When query
         """
-        SELECT theta_sketch_estimate(theta_union(theta_sketch_agg(col1), theta_sketch_agg(col2))) AS result
-        FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) AS tab(col1, col2)
+        SELECT theta_sketch_estimate(<op>(theta_sketch_agg(col1), theta_sketch_agg(col2))) AS result
+        FROM VALUES <values> AS tab(col1, col2)
         """
       Then query result
-        | result |
-        | 6      |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                       | op                 | values                                 | result |
+        | theta_union merges two sketches            | theta_union        | (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) | 6      |
+        | theta_intersection intersects two sketches | theta_intersection | (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) | 2      |
+        | theta_difference subtracts sketches        | theta_difference   | (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) | 2      |
 
     Scenario: theta_union accepts null arguments in three-argument form
       When query
@@ -72,26 +55,6 @@ Feature: Theta sketch functions
       Then query result
         | estimate | left_null | right_null | config_null | intersection_null | difference_null |
         | NULL     | true      | true       | true        | true              | true            |
-
-    Scenario: theta_intersection intersects two sketches
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_intersection(theta_sketch_agg(col1), theta_sketch_agg(col2))) AS result
-        FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) AS tab(col1, col2)
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: theta_difference subtracts sketches
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) AS result
-        FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) AS tab(col1, col2)
-        """
-      Then query result
-        | result |
-        | 2      |
 
     Scenario: theta sketch outputs use Spark compressed serialization when applicable
       When query
@@ -237,45 +200,22 @@ Feature: Theta sketch functions
 
   Rule: theta_sketch_agg normalizes floating-point special values
 
-    Scenario: theta_sketch_agg accepts float input and treats all NaNs as one value
+    Scenario Outline: Float special: <case>
       When query
         """
-        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
-        FROM VALUES (float('NaN')), (float('NaN')) AS tab(c)
+        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS <type>))) AS result
+        FROM VALUES (<v1>), (<v2>) AS tab(c)
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: theta_sketch_agg treats positive and negative zero as equal
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
-        FROM VALUES (float('0.0')), (float('-0.0')) AS tab(c)
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: theta_sketch_agg keeps positive and negative infinity distinct
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
-        FROM VALUES (float('Infinity')), (float('-Infinity')) AS tab(c)
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: theta_sketch_agg accepts double input and normalizes NaN
-      When query
-        """
-        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS DOUBLE))) AS result
-        FROM VALUES (double('NaN')), (double('NaN')) AS tab(c)
-        """
-      Then query result
-        | result |
-        | 1      |
+      Examples:
+        | case                                                                  | type   | v1                | v2                 | result |
+        | theta_sketch_agg accepts float input and treats all NaNs as one value | FLOAT  | float('NaN')      | float('NaN')       | 1      |
+        | theta_sketch_agg treats positive and negative zero as equal           | FLOAT  | float('0.0')      | float('-0.0')      | 1      |
+        | theta_sketch_agg keeps positive and negative infinity distinct        | FLOAT  | float('Infinity') | float('-Infinity') | 2      |
+        | theta_sketch_agg accepts double input and normalizes NaN              | DOUBLE | double('NaN')     | double('NaN')      | 1      |
 
   Rule: theta_sketch_agg validates input types and lgNomEntries bounds
 
@@ -308,16 +248,14 @@ Feature: Theta sketch functions
         | lo | hi |
         | 1  | 1  |
 
-    Scenario: theta_sketch_agg rejects lgNomEntries below the valid range
+    Scenario Outline: lgNomEntries bound: <case>
       When query
         """
-        SELECT theta_sketch_agg(col, 3) FROM VALUES (1) AS tab(col)
+        SELECT theta_sketch_agg(col, <n>) FROM VALUES (1) AS tab(col)
         """
       Then query error (THETA_INVALID_LG_NOM_ENTRIES|lgNomEntries between 4 and 26)
 
-    Scenario: theta_sketch_agg rejects lgNomEntries above the valid range
-      When query
-        """
-        SELECT theta_sketch_agg(col, 27) FROM VALUES (1) AS tab(col)
-        """
-      Then query error (THETA_INVALID_LG_NOM_ENTRIES|lgNomEntries between 4 and 26)
+      Examples:
+        | case                                                        | n  |
+        | theta_sketch_agg rejects lgNomEntries below the valid range | 3  |
+        | theta_sketch_agg rejects lgNomEntries above the valid range | 27 |

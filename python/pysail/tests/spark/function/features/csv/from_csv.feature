@@ -6,25 +6,20 @@ Feature: from_csv column display name matches Spark
   are dropped. The same convention applies to `any_value`, `first_value`,
   and `last_value`, which share Sail's unary display-name match arm.
 
-    Scenario: from_csv with a schema string
+    Scenario Outline: from_csv <case>
       When query
         """
-        SELECT from_csv(value, 'a INT, b INT, c INT')
+        SELECT from_csv(value, <args>)
         FROM VALUES ('1,2,3') AS t(value)
         """
       Then query result
         | from_csv(value) |
         | {1, 2, 3}       |
 
-    Scenario: from_csv with a schema string and an options map
-      When query
-        """
-        SELECT from_csv(value, 'a INT, b INT, c INT', map('sep', ','))
-        FROM VALUES ('1,2,3') AS t(value)
-        """
-      Then query result
-        | from_csv(value) |
-        | {1, 2, 3}       |
+      Examples:
+        | case                                    | args                                   |
+        | with a schema string                    | 'a INT, b INT, c INT'                  |
+        | with a schema string and an options map | 'a INT, b INT, c INT', map('sep', ',') |
 
     Scenario: from_csv with schema_of_csv as the schema argument
       When query
@@ -69,35 +64,21 @@ Feature: from_csv column display name matches Spark
         | result      |
         | {42, hello} |
 
-    Scenario: any_value drops the ignoreNulls argument from its display name
+    Scenario Outline: <fn> drops the ignoreNulls argument from its display name
       When query
         """
-        SELECT any_value(x, true)
+        SELECT <fn>(x, true)
         FROM VALUES (1) AS t(x)
         """
       Then query result
-        | any_value(x) |
-        | 1            |
+        | <fn>(x) |
+        | 1       |
 
-    Scenario: first_value drops the ignoreNulls argument from its display name
-      When query
-        """
-        SELECT first_value(x, true)
-        FROM VALUES (1) AS t(x)
-        """
-      Then query result
-        | first_value(x) |
-        | 1              |
-
-    Scenario: last_value drops the ignoreNulls argument from its display name
-      When query
-        """
-        SELECT last_value(x, true)
-        FROM VALUES (1) AS t(x)
-        """
-      Then query result
-        | last_value(x) |
-        | 1             |
+      Examples:
+        | fn          |
+        | any_value   |
+        | first_value |
+        | last_value  |
 
   @spark_null
   Rule: Output schema
@@ -143,47 +124,19 @@ Feature: from_csv column display name matches Spark
 
   Rule: Result values (migrated from test_from_csv.txt doctests)
 
-    Scenario: from_csv doctest #1 (result)
+    Scenario Outline: Result values: <case>
       When query
         """
-        SELECT from_csv('1, 0.8', 'a INT, b DOUBLE') AS result, typeof(from_csv('1, 0.8', 'a INT, b DOUBLE')) AS type
+        SELECT from_csv(<args>) AS result, typeof(from_csv(<args>)) AS type
         """
       Then query result
-        | result   | type                   |
-        | {1, 0.8} | struct<a:int,b:double> |
+        | result   | type   |
+        | <result> | <type> |
 
-    Scenario: from_csv doctest #2 (result)
-      When query
-        """
-        SELECT from_csv('2015-08-26 00:00:00', 'time TIMESTAMP') AS result, typeof(from_csv('2015-08-26 00:00:00', 'time TIMESTAMP')) AS type
-        """
-      Then query result
-        | result                | type                   |
-        | {2015-08-26 00:00:00} | struct<time:timestamp> |
-
-    Scenario: from_csv doctest #3 (result)
-      When query
-        """
-        SELECT from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')) AS result, typeof(from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';'))) AS type
-        """
-      Then query result
-        | result                          | type                                            |
-        | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
-
-    Scenario: from_csv doctest #4 (result)
-      When query
-        """
-        SELECT from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss')) AS result, typeof(from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss'))) AS type
-        """
-      Then query result
-        | result                          | type                                            |
-        | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
-
-    Scenario: from_csv doctest #5 (result)
-      When query
-        """
-        SELECT from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')) AS result, typeof(from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy'))) AS type
-        """
-      Then query result
-        | result                | type                   |
-        | {2015-08-26 00:00:00} | struct<time:timestamp> |
+      Examples:
+        | case                         | args                                                                                                                                  | result                          | type                                            |
+        | from_csv doctest #1 (result) | '1, 0.8', 'a INT, b DOUBLE'                                                                                                           | {1, 0.8}                        | struct<a:int,b:double>                          |
+        | from_csv doctest #2 (result) | '2015-08-26 00:00:00', 'time TIMESTAMP'                                                                                               | {2015-08-26 00:00:00}           | struct<time:timestamp>                          |
+        | from_csv doctest #3 (result) | '42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')                                           | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
+        | from_csv doctest #4 (result) | '42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss') | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
+        | from_csv doctest #5 (result) | '26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')                                                                  | {2015-08-26 00:00:00}           | struct<time:timestamp>                          |

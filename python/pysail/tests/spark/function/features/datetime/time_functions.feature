@@ -3,164 +3,59 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
 
   Rule: make_time
 
-    Scenario: basic make_time
+    Scenario Outline: make_time: <case>
       When query
         """
-        SELECT make_time(6, 30, 45.887) AS result
-        """
-      Then query result
-        | result       |
-        | 06:30:45.887 |
-
-    Scenario: make_time midnight
-      When query
-        """
-        SELECT make_time(0, 0, 0) AS result
+        SELECT make_time(<args>) AS result
         """
       Then query result
         | result   |
-        | 00:00:00 |
+        | <result> |
 
-    Scenario: make_time max precision
+      Examples:
+        | case                       | args              | result          |
+        | basic make_time            | 6, 30, 45.887     | 06:30:45.887    |
+        | make_time midnight         | 0, 0, 0           | 00:00:00        |
+        | make_time max precision    | 23, 59, 59.999999 | 23:59:59.999999 |
+        | make_time integer seconds  | 12, 0, 30         | 12:00:30        |
+        | make_time NULL propagation | NULL, 30, 0       | NULL            |
+
+    Scenario Outline: make_time invalid: <case>
       When query
         """
-        SELECT make_time(23, 59, 59.999999) AS result
+        SELECT CAST(make_time(<args>) AS STRING)
         """
-      Then query result
-        | result          |
-        | 23:59:59.999999 |
+      Then query error <error>
 
-    Scenario: make_time integer seconds
-      When query
-        """
-        SELECT make_time(12, 0, 30) AS result
-        """
-      Then query result
-        | result   |
-        | 12:00:30 |
-
-    Scenario: make_time NULL propagation
-      When query
-        """
-        SELECT make_time(NULL, 30, 0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: make_time invalid hour errors
-      When query
-        """
-        SELECT CAST(make_time(25, 0, 0) AS STRING)
-        """
-      Then query error HourOfDay
-
-    Scenario: make_time invalid minute errors
-      When query
-        """
-        SELECT CAST(make_time(0, 60, 0) AS STRING)
-        """
-      Then query error MinuteOfHour
-
-    Scenario: make_time invalid second errors
-      When query
-        """
-        SELECT CAST(make_time(0, 0, 60) AS STRING)
-        """
-      Then query error SecondOfMinute
-
+      Examples:
+        | case                            | args     | error          |
+        | make_time invalid hour errors   | 25, 0, 0 | HourOfDay      |
+        | make_time invalid minute errors | 0, 60, 0 | MinuteOfHour   |
+        | make_time invalid second errors | 0, 0, 60 | SecondOfMinute |
 
   Rule: time_diff
 
-    Scenario: time_diff hours exact
+    Scenario Outline: time_diff: <case>
       When query
         """
-        SELECT time_diff('HOUR', TIME '20:30:29', TIME '21:30:29') AS result
+        SELECT time_diff(<unit>, <start>, <end>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: time_diff hours truncation
-      When query
-        """
-        SELECT time_diff('HOUR', TIME '20:30:29', TIME '21:30:28') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: time_diff negative
-      When query
-        """
-        SELECT time_diff('HOUR', TIME '20:30:29', TIME '12:00:00') AS result
-        """
-      Then query result
-        | result |
-        | -8     |
-
-    Scenario: time_diff minutes
-      When query
-        """
-        SELECT time_diff('MINUTE', TIME '10:00:00', TIME '10:45:30') AS result
-        """
-      Then query result
-        | result |
-        | 45     |
-
-    Scenario: time_diff seconds
-      When query
-        """
-        SELECT time_diff('SECOND', TIME '10:00:00', TIME '10:00:30') AS result
-        """
-      Then query result
-        | result |
-        | 30     |
-
-    Scenario: time_diff microseconds
-      When query
-        """
-        SELECT time_diff('MICROSECOND', TIME '00:00:00', TIME '00:00:01') AS result
-        """
-      Then query result
-        | result  |
-        | 1000000 |
-
-    Scenario: time_diff milliseconds
-      When query
-        """
-        SELECT time_diff('MILLISECOND', TIME '00:00:00', TIME '00:00:01.500') AS result
-        """
-      Then query result
-        | result |
-        | 1500   |
-
-    Scenario: time_diff NULL start propagates to NULL
-      When query
-        """
-        SELECT time_diff('HOUR', NULL, TIME '01:00:00') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: time_diff NULL end propagates to NULL
-      When query
-        """
-        SELECT time_diff('MINUTE', TIME '10:00:00', NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: time_diff NULL unit propagates to NULL
-      When query
-        """
-        SELECT time_diff(NULL, TIME '10:00:00', TIME '11:00:00') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                    | unit          | start           | end                 | result  |
+        | time_diff hours exact                   | 'HOUR'        | TIME '20:30:29' | TIME '21:30:29'     | 1       |
+        | time_diff hours truncation              | 'HOUR'        | TIME '20:30:29' | TIME '21:30:28'     | 0       |
+        | time_diff negative                      | 'HOUR'        | TIME '20:30:29' | TIME '12:00:00'     | -8      |
+        | time_diff minutes                       | 'MINUTE'      | TIME '10:00:00' | TIME '10:45:30'     | 45      |
+        | time_diff seconds                       | 'SECOND'      | TIME '10:00:00' | TIME '10:00:30'     | 30      |
+        | time_diff microseconds                  | 'MICROSECOND' | TIME '00:00:00' | TIME '00:00:01'     | 1000000 |
+        | time_diff milliseconds                  | 'MILLISECOND' | TIME '00:00:00' | TIME '00:00:01.500' | 1500    |
+        | time_diff NULL start propagates to NULL | 'HOUR'        | NULL            | TIME '01:00:00'     | NULL    |
+        | time_diff NULL end propagates to NULL   | 'MINUTE'      | TIME '10:00:00' | NULL                | NULL    |
+        | time_diff NULL unit propagates to NULL  | NULL          | TIME '10:00:00' | TIME '11:00:00'     | NULL    |
 
     Scenario: time_diff invalid unit errors
       When query
@@ -182,68 +77,24 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
 
   Rule: time_trunc
 
-    Scenario: time_trunc hour
+    Scenario Outline: time_trunc: <case>
       When query
         """
-        SELECT time_trunc('HOUR', TIME '09:32:05.359') AS result
+        SELECT time_trunc(<unit>, <time>) AS result
         """
       Then query result
         | result   |
-        | 09:00:00 |
+        | <result> |
 
-    Scenario: time_trunc minute
-      When query
-        """
-        SELECT time_trunc('MINUTE', TIME '09:32:05.359') AS result
-        """
-      Then query result
-        | result   |
-        | 09:32:00 |
-
-    Scenario: time_trunc second
-      When query
-        """
-        SELECT time_trunc('SECOND', TIME '09:32:05.359') AS result
-        """
-      Then query result
-        | result   |
-        | 09:32:05 |
-
-    Scenario: time_trunc millisecond
-      When query
-        """
-        SELECT time_trunc('MILLISECOND', TIME '09:32:05.123456') AS result
-        """
-      Then query result
-        | result       |
-        | 09:32:05.123 |
-
-    Scenario: time_trunc microsecond passthrough
-      When query
-        """
-        SELECT time_trunc('MICROSECOND', TIME '09:32:05.123456') AS result
-        """
-      Then query result
-        | result          |
-        | 09:32:05.123456 |
-
-    Scenario: time_trunc NULL unit propagates to NULL
-      When query
-        """
-        SELECT time_trunc(NULL, TIME '09:32:05.123456') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: time_trunc NULL time propagates to NULL
-      When query
-        """
-        SELECT time_trunc('HOUR', NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                    | unit          | time                   | result          |
+        | time_trunc hour                         | 'HOUR'        | TIME '09:32:05.359'    | 09:00:00        |
+        | time_trunc minute                       | 'MINUTE'      | TIME '09:32:05.359'    | 09:32:00        |
+        | time_trunc second                       | 'SECOND'      | TIME '09:32:05.359'    | 09:32:05        |
+        | time_trunc millisecond                  | 'MILLISECOND' | TIME '09:32:05.123456' | 09:32:05.123    |
+        | time_trunc microsecond passthrough      | 'MICROSECOND' | TIME '09:32:05.123456' | 09:32:05.123456 |
+        | time_trunc NULL unit propagates to NULL | NULL          | TIME '09:32:05.123456' | NULL            |
+        | time_trunc NULL time propagates to NULL | 'HOUR'        | NULL                   | NULL            |
 
     Scenario: time_trunc invalid unit errors
       When query

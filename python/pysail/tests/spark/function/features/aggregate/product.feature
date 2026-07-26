@@ -55,25 +55,20 @@ Feature: product returns the multiplicative product of all non-null input values
 
   Rule: product handles null inputs
 
-    Scenario: product skips null values
+    Scenario Outline: product <case>
       When query
         """
         SELECT product(col) AS p
-        FROM VALUES (2), (CAST(NULL AS INT)), (3), (4) AS tab(col)
+        FROM VALUES <values> AS tab(col)
         """
       Then query result
-        | p    |
-        | 24.0 |
+        | p   |
+        | <p> |
 
-    Scenario: product over all-null group returns null
-      When query
-        """
-        SELECT product(col) AS p
-        FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS tab(col)
-        """
-      Then query result
-        | p    |
-        | NULL |
+      Examples:
+        | case                             | values                                   | p    |
+        | skips null values                | (2), (CAST(NULL AS INT)), (3), (4)       | 24.0 |
+        | over all-null group returns null | (CAST(NULL AS INT)), (CAST(NULL AS INT)) | NULL |
 
     Scenario: product over an empty group returns null
       When query

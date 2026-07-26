@@ -66,41 +66,23 @@ Feature: to_date with an argument coming from a column
 
   Rule: Result values (migrated from test_to_date.txt doctests)
 
-    Scenario: to_date doctest #1 (result)
+    # `name` is a separate slot because Spark rewrites the derived column name:
+    # TIMESTAMP_LTZ becomes TIMESTAMP and the value is shown already converted.
+    Scenario Outline: Result values: <case>
       When query
         """
-        SELECT to_date(TIMESTAMP_NTZ '2025-11-02 23:30:45.123456')
+        SELECT to_date(<args>)
         """
       Then query result
-        | to_date(TIMESTAMP_NTZ '2025-11-02 23:30:45.123456') |
-        | 2025-11-02                                          |
+        | to_date(<name>) |
+        | <result>        |
 
-    Scenario: to_date doctest #2 (result)
-      When query
-        """
-        SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456')
-        """
-      Then query result
-        | to_date(TIMESTAMP '2025-11-02 23:30:45.123456') |
-        | 2025-11-02                                      |
-
-    Scenario: to_date doctest #3 (result)
-      When query
-        """
-        SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456 America/New_York')
-        """
-      Then query result
-        | to_date(TIMESTAMP '2025-11-03 04:30:45.123456') |
-        | 2025-11-03                                      |
-
-    Scenario: to_date doctest #4 (result)
-      When query
-        """
-        SELECT to_date(TIMESTAMP '2025-11-03 23:30:45.123456', 'invalid_format')
-        """
-      Then query result
-        | to_date(TIMESTAMP '2025-11-03 23:30:45.123456', invalid_format) |
-        | 2025-11-03                                                      |
+      Examples:
+        | case                        | args                                                        | name                                                   | result     |
+        | to_date doctest #1 (result) | TIMESTAMP_NTZ '2025-11-02 23:30:45.123456'                  | TIMESTAMP_NTZ '2025-11-02 23:30:45.123456'             | 2025-11-02 |
+        | to_date doctest #2 (result) | TIMESTAMP_LTZ '2025-11-02 23:30:45.123456'                  | TIMESTAMP '2025-11-02 23:30:45.123456'                 | 2025-11-02 |
+        | to_date doctest #3 (result) | TIMESTAMP_LTZ '2025-11-02 23:30:45.123456 America/New_York' | TIMESTAMP '2025-11-03 04:30:45.123456'                 | 2025-11-03 |
+        | to_date doctest #4 (result) | TIMESTAMP '2025-11-03 23:30:45.123456', 'invalid_format'    | TIMESTAMP '2025-11-03 23:30:45.123456', invalid_format | 2025-11-03 |
 
     Scenario: to_date doctest #5 (result)
       When query

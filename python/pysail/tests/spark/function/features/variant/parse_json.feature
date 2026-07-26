@@ -4,55 +4,27 @@ Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Valid JSON parsing
 
-    Scenario: parse_json valid integer
+    Scenario Outline: Valid JSON: <case>
       When query
         """
-        SELECT variant_get(parse_json('42'), '$', 'int') AS result
+        SELECT variant_get(parse_json(<json>), <path>, <type>) AS result
         """
       Then query result
-        | result |
-        | 42     |
+        | result   |
+        | <result> |
 
-    Scenario: parse_json valid string
-      When query
-        """
-        SELECT variant_get(parse_json('"hello"'), '$', 'string') AS result
-        """
-      Then query result
-        | result |
-        | hello  |
-
-    Scenario: parse_json valid object
-      When query
-        """
-        SELECT variant_get(parse_json('{"a":1}'), '$.a', 'int') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: parse_json valid array
-      When query
-        """
-        SELECT variant_get(parse_json('[1,2,3]'), '$[1]', 'int') AS result
-        """
-      Then query result
-        | result |
-        | 2      |
+      Examples:
+        | case                     | json      | path   | type      | result |
+        | parse_json valid integer | '42'      | '$'    | 'int'     | 42     |
+        | parse_json valid string  | '"hello"' | '$'    | 'string'  | hello  |
+        | parse_json valid object  | '{"a":1}' | '$.a'  | 'int'     | 1      |
+        | parse_json valid array   | '[1,2,3]' | '$[1]' | 'int'     | 2      |
+        | parse_json boolean true  | 'true'    | '$'    | 'boolean' | true   |
 
     Scenario: parse_json valid JSON null
       When query
         """
         SELECT is_variant_null(parse_json('null')) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: parse_json boolean true
-      When query
-        """
-        SELECT variant_get(parse_json('true'), '$', 'boolean') AS result
         """
       Then query result
         | result |
@@ -83,45 +55,25 @@ Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Invalid JSON raises MALFORMED_RECORD_IN_PARSING
 
-    Scenario: parse_json invalid text errors with Spark code
+    Scenario Outline: Malformed: <case>
       When query
         """
-        SELECT parse_json('bad json')
+        SELECT parse_json(<json>)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    Scenario: parse_json empty string errors with Spark code
-      When query
-        """
-        SELECT parse_json('')
-        """
-      Then query error MALFORMED_RECORD_IN_PARSING
-
-    Scenario: parse_json unclosed brace errors with Spark code
-      When query
-        """
-        SELECT parse_json('{')
-        """
-      Then query error MALFORMED_RECORD_IN_PARSING
-
-    Scenario: parse_json unclosed bracket errors with Spark code
-      When query
-        """
-        SELECT parse_json('[')
-        """
-      Then query error MALFORMED_RECORD_IN_PARSING
+      Examples:
+        | case                                                          | json            |
+        | parse_json invalid text errors with Spark code                | 'bad json'      |
+        | parse_json empty string errors with Spark code                | ''              |
+        | parse_json unclosed brace errors with Spark code              | '{'             |
+        | parse_json unclosed bracket errors with Spark code            | '['             |
+        | parse_json duplicate keys errors (Spark rejects as malformed) | '{"a":1,"a":2}' |
 
     Scenario: parse_json raw control char errors with Spark code
       When query
         """
         SELECT parse_json('"a\tb"')
-        """
-      Then query error MALFORMED_RECORD_IN_PARSING
-
-    Scenario: parse_json duplicate keys errors (Spark rejects as malformed)
-      When query
-        """
-        SELECT parse_json('{"a":1,"a":2}')
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
@@ -136,33 +88,35 @@ Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Numeric preservation (Sail currently diverges from Spark)
 
+    Scenario Outline: Numeric: <case>
+      When query
+        """
+        SELECT to_json(parse_json(<json>)) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                                      | json       | result |
+        | parse_json negative scientific notation                   | '1.5e-1'   | 0.15   |
+        | parse_json negative zero                                  | '-0'       | 0      |
+        | parse_json accepts trailing garbage (Spark parses prefix) | '42 extra' | 42     |
+
     @sail-bug
-    Scenario: parse_json scientific notation preserves decimal
+    Scenario Outline: Numeric (sail-bug): <case>
       When query
         """
-        SELECT to_json(parse_json('1.5e3')) AS result
+        SELECT to_json(parse_json(<json>)) AS result
         """
       Then query result
-        | result |
-        | 1500.0 |
+        | result   |
+        | <result> |
 
-    Scenario: parse_json negative scientific notation
-      When query
-        """
-        SELECT to_json(parse_json('1.5e-1')) AS result
-        """
-      Then query result
-        | result |
-        | 0.15   |
-
-    Scenario: parse_json negative zero
-      When query
-        """
-        SELECT to_json(parse_json('-0')) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                             | json                   | result               |
+        | parse_json scientific notation preserves decimal | '1.5e3'                | 1500.0               |
+        | parse_json preserves large number beyond i64     | '99999999999999999999' | 99999999999999999999 |
 
     @sail-bug
     # Spark keeps scientific negative zero as -0.0 (the exponent makes it a DOUBLE);
@@ -178,25 +132,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | result |
         | -0.0   |
 
-    @sail-bug
-    Scenario: parse_json preserves large number beyond i64
-      When query
-        """
-        SELECT to_json(parse_json('99999999999999999999')) AS result
-        """
-      Then query result
-        | result               |
-        | 99999999999999999999 |
-
-    Scenario: parse_json accepts trailing garbage (Spark parses prefix)
-      When query
-        """
-        SELECT to_json(parse_json('42 extra')) AS result
-        """
-      Then query result
-        | result |
-        | 42     |
-
   Rule: Edge cases
 
     Scenario: parse_json unicode escape
@@ -208,50 +143,34 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | result |
         | é      |
 
-    Scenario: parse_json empty object
+    Scenario Outline: Edge case (to_json): <case>
       When query
         """
-        SELECT to_json(parse_json('{}')) AS result
+        SELECT to_json(parse_json(<json>)) AS result
         """
       Then query result
-        | result |
-        | {}     |
+        | result   |
+        | <result> |
 
-    Scenario: parse_json empty array
-      When query
-        """
-        SELECT to_json(parse_json('[]')) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                      | json                              | result                          |
+        | parse_json empty object                   | '{}'                              | {}                              |
+        | parse_json empty array                    | '[]'                              | []                              |
+        | parse_json heterogeneous nested structure | '{"a":[1,"two",null,{"b":true}]}' | {"a":[1,"two",null,{"b":true}]} |
 
-    Scenario: parse_json heterogeneous nested structure
+    Scenario Outline: Edge case (variant_get): <case>
       When query
         """
-        SELECT to_json(parse_json('{"a":[1,"two",null,{"b":true}]}')) AS result
+        SELECT variant_get(parse_json(<json>), <path>, 'int') AS result
         """
       Then query result
-        | result                          |
-        | {"a":[1,"two",null,{"b":true}]} |
+        | result   |
+        | <result> |
 
-    Scenario: parse_json deeply nested
-      When query
-        """
-        SELECT variant_get(parse_json('{"a":{"b":{"c":{"d":42}}}}'), '$.a.b.c.d', 'int') AS result
-        """
-      Then query result
-        | result |
-        | 42     |
-
-    Scenario: parse_json whitespace around value
-      When query
-        """
-        SELECT variant_get(parse_json('   123   '), '$', 'int') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
+      Examples:
+        | case                               | json                         | path        | result |
+        | parse_json deeply nested           | '{"a":{"b":{"c":{"d":42}}}}' | '$.a.b.c.d' | 42     |
+        | parse_json whitespace around value | '   123   '                  | '$'         | 123    |
 
   Rule: All-null input column returns all NULL (fast-path invariant)
 

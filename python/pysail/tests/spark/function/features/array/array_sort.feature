@@ -3,79 +3,39 @@ Feature: array_sort higher-order function
 
   Rule: No-comparator form — natural ascending order, NULLs last
 
-    Scenario: Sort integers ascending
+    Scenario Outline: No-comparator form: <case>
       When query
         """
-        SELECT array_sort(array(3, 1, 2)) AS result
+        SELECT array_sort(<arr>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: Sort integers with a null — null placed last
-      When query
-        """
-        SELECT array_sort(array(3, NULL, 1)) AS result
-        """
-      Then query result
-        | result       |
-        | [1, 3, NULL] |
-
-    Scenario: Sort strings ascending
-      When query
-        """
-        SELECT array_sort(array('b', 'a', 'c')) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
-
-    Scenario: Sort doubles with NaN and Infinity — NaN is greatest
-      When query
-        """
-        SELECT array_sort(array(double('NaN'), 1.0, double('Infinity'), -1.0)) AS result
-        """
-      Then query result
-        | result                     |
-        | [-1.0, 1.0, Infinity, NaN] |
-
-    Scenario: Sort null array returns null
-      When query
-        """
-        SELECT array_sort(CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                                 | arr                                                 | result                     |
+        | Sort integers ascending                              | array(3, 1, 2)                                      | [1, 2, 3]                  |
+        | Sort integers with a null — null placed last         | array(3, NULL, 1)                                   | [1, 3, NULL]               |
+        | Sort strings ascending                               | array('b', 'a', 'c')                                | [a, b, c]                  |
+        | Sort doubles with NaN and Infinity — NaN is greatest | array(double('NaN'), 1.0, double('Infinity'), -1.0) | [-1.0, 1.0, Infinity, NaN] |
+        | Sort null array returns null                         | CAST(NULL AS ARRAY<INT>)                            | NULL                       |
 
   Rule: Comparator form — ascending and descending
 
-    Scenario: Ascending comparator with case expression
+    Scenario Outline: Comparator direction: <case>
       When query
         """
-        SELECT array_sort(array(5, 6, 1), (l, r) -> CASE WHEN l < r THEN -1 WHEN l > r THEN 1 ELSE 0 END) AS result
+        SELECT array_sort(array(5, 6, 1), <cmp>) AS result
         """
       Then query result
-        | result    |
-        | [1, 5, 6] |
+        | result   |
+        | <result> |
 
-    Scenario: Ascending comparator with subtraction
-      When query
-        """
-        SELECT array_sort(array(5, 6, 1), (l, r) -> l - r) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 5, 6] |
-
-    Scenario: Descending comparator with subtraction
-      When query
-        """
-        SELECT array_sort(array(5, 6, 1), (l, r) -> r - l) AS result
-        """
-      Then query result
-        | result    |
-        | [6, 5, 1] |
+      Examples:
+        | case                                      | cmp                                                            | result    |
+        | Ascending comparator with case expression | (l, r) -> CASE WHEN l < r THEN -1 WHEN l > r THEN 1 ELSE 0 END | [1, 5, 6] |
+        | Ascending comparator with subtraction     | (l, r) -> l - r                                                | [1, 5, 6] |
+        | Descending comparator with subtraction    | (l, r) -> r - l                                                | [6, 5, 1] |
 
   Rule: Comparator form — element types
 
@@ -99,41 +59,21 @@ Feature: array_sort higher-order function
 
   Rule: Comparator form — degenerate inputs
 
-    Scenario: Comparator on single-element array
+    Scenario Outline: Degenerate input: <case>
       When query
         """
-        SELECT array_sort(array(5), (l, r) -> l - r) AS result
+        SELECT array_sort(<arr>, (l, r) -> <cmp>) AS result
         """
       Then query result
-        | result |
-        | [5]    |
+        | result   |
+        | <result> |
 
-    Scenario: Comparator on empty array
-      When query
-        """
-        SELECT array_sort(CAST(array() AS ARRAY<INT>), (l, r) -> l - r) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: Comparator on null array returns null
-      When query
-        """
-        SELECT array_sort(CAST(NULL AS ARRAY<INT>), (l, r) -> l - r) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: Constant-zero comparator keeps input order
-      When query
-        """
-        SELECT array_sort(array(3, 1, 2), (l, r) -> 0) AS result
-        """
-      Then query result
-        | result    |
-        | [3, 1, 2] |
+      Examples:
+        | case                                       | arr                         | cmp   | result    |
+        | Comparator on single-element array         | array(5)                    | l - r | [5]       |
+        | Comparator on empty array                  | CAST(array() AS ARRAY<INT>) | l - r | []        |
+        | Comparator on null array returns null      | CAST(NULL AS ARRAY<INT>)    | l - r | NULL      |
+        | Constant-zero comparator keeps input order | array(3, 1, 2)              | 0     | [3, 1, 2] |
 
   Rule: Comparator form — multi-row
 
@@ -151,37 +91,17 @@ Feature: array_sort higher-order function
 
   Rule: Comparator form — errors
 
-    Scenario: Comparator returning null raises an error
+    Scenario Outline: Error case: <case>
       When query
         """
-        SELECT array_sort(array(2, 1), (l, r) -> CAST(NULL AS INT)) AS result
+        SELECT array_sort(<args>) AS result
         """
       Then query error .*
 
-    Scenario: Comparator returning a non-integer type is rejected
-      When query
-        """
-        SELECT array_sort(array(2, 1), (l, r) -> CAST(l - r AS BIGINT)) AS result
-        """
-      Then query error .*
-
-    Scenario: Comparator with one parameter is rejected
-      When query
-        """
-        SELECT array_sort(array(2, 1), x -> x) AS result
-        """
-      Then query error .*
-
-    Scenario: Comparator with three parameters is rejected
-      When query
-        """
-        SELECT array_sort(array(2, 1), (a, b, c) -> 1) AS result
-        """
-      Then query error .*
-
-    Scenario: Non-array first argument is rejected
-      When query
-        """
-        SELECT array_sort(5, (l, r) -> 1) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                                                | args                                         |
+        | Comparator returning null raises an error           | array(2, 1), (l, r) -> CAST(NULL AS INT)     |
+        | Comparator returning a non-integer type is rejected | array(2, 1), (l, r) -> CAST(l - r AS BIGINT) |
+        | Comparator with one parameter is rejected           | array(2, 1), x -> x                          |
+        | Comparator with three parameters is rejected        | array(2, 1), (a, b, c) -> 1                  |
+        | Non-array first argument is rejected                | 5, (l, r) -> 1                               |

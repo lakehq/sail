@@ -3,97 +3,42 @@ Feature: arrays_zip comprehensive tests
 
   Rule: Basic usage
 
-    Scenario: arrays_zip two arrays same length
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT arrays_zip(array(1,2,3), array('a','b','c')) AS result
+        SELECT arrays_zip(<args>) AS result <from>
         """
       Then query result
-        | result                   |
-        | [{1, a}, {2, b}, {3, c}] |
+        | result   |
+        | <result> |
 
-    Scenario: arrays_zip three arrays
-      When query
-        """
-        SELECT arrays_zip(array(1,2), array('a','b'), array(true,false)) AS result
-        """
-      Then query result
-        | result                        |
-        | [{1, a, true}, {2, b, false}] |
-
-    Scenario: arrays_zip single array
-      When query
-        """
-        SELECT arrays_zip(array(1,2,3)) AS result
-        """
-      Then query result
-        | result          |
-        | [{1}, {2}, {3}] |
-
-    Scenario: arrays_zip four args asymmetric
-      When query
-        """
-        SELECT arrays_zip(array(1), array('a','b'), array(true, false, NULL), array(1.0)) AS result
-        """
-      Then query result
-        | result                                                                |
-        | [{1, a, true, 1.0}, {NULL, b, false, NULL}, {NULL, NULL, NULL, NULL}] |
-
-    Scenario: arrays_zip self-zip same column
-      When query
-        """
-        SELECT arrays_zip(a, a) AS result FROM VALUES (array(1,2,3)) AS t(a)
-        """
-      Then query result
-        | result                   |
-        | [{1, 1}, {2, 2}, {3, 3}] |
-
-    Scenario: arrays_zip zero args returns empty array
-      When query
-        """
-        SELECT arrays_zip() AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                     | args                                                           | from                               | result                                                                |
+        | arrays_zip two arrays same length        | array(1,2,3), array('a','b','c')                               |                                    | [{1, a}, {2, b}, {3, c}]                                              |
+        | arrays_zip three arrays                  | array(1,2), array('a','b'), array(true,false)                  |                                    | [{1, a, true}, {2, b, false}]                                         |
+        | arrays_zip single array                  | array(1,2,3)                                                   |                                    | [{1}, {2}, {3}]                                                       |
+        | arrays_zip four args asymmetric          | array(1), array('a','b'), array(true, false, NULL), array(1.0) |                                    | [{1, a, true, 1.0}, {NULL, b, false, NULL}, {NULL, NULL, NULL, NULL}] |
+        | arrays_zip self-zip same column          | a, a                                                           | FROM VALUES (array(1,2,3)) AS t(a) | [{1, 1}, {2, 2}, {3, 3}]                                              |
+        | arrays_zip zero args returns empty array |                                                                |                                    | []                                                                    |
 
   Rule: Different array lengths
 
-    Scenario: arrays_zip first longer pads NULL
+    Scenario Outline: Different lengths: <case>
       When query
         """
-        SELECT arrays_zip(array(1,2,3), array('a','b')) AS result
+        SELECT arrays_zip(<args>) AS result
         """
       Then query result
-        | result                      |
-        | [{1, a}, {2, b}, {3, NULL}] |
+        | result   |
+        | <result> |
 
-    Scenario: arrays_zip second longer pads NULL
-      When query
-        """
-        SELECT arrays_zip(array(1,2), array('a','b','c')) AS result
-        """
-      Then query result
-        | result                      |
-        | [{1, a}, {2, b}, {NULL, c}] |
-
-    Scenario: arrays_zip one empty array
-      When query
-        """
-        SELECT arrays_zip(array(1,2), array()) AS result
-        """
-      Then query result
-        | result                 |
-        | [{1, NULL}, {2, NULL}] |
-
-    Scenario: arrays_zip both empty arrays
-      When query
-        """
-        SELECT arrays_zip(array(), array()) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                               | args                                 | result                                               |
+        | arrays_zip first longer pads NULL  | array(1,2,3), array('a','b')         | [{1, a}, {2, b}, {3, NULL}]                          |
+        | arrays_zip second longer pads NULL | array(1,2), array('a','b','c')       | [{1, a}, {2, b}, {NULL, c}]                          |
+        | arrays_zip one empty array         | array(1,2), array()                  | [{1, NULL}, {2, NULL}]                               |
+        | arrays_zip both empty arrays       | array(), array()                     | []                                                   |
+        | arrays_zip very asymmetric 1 vs 5  | array(1), array('a','b','c','d','e') | [{1, a}, {NULL, b}, {NULL, c}, {NULL, d}, {NULL, e}] |
 
     Scenario: arrays_zip four args all empty returns empty
       When query
@@ -109,61 +54,23 @@ Feature: arrays_zip comprehensive tests
         | result |
         | []     |
 
-    Scenario: arrays_zip very asymmetric 1 vs 5
-      When query
-        """
-        SELECT arrays_zip(array(1), array('a','b','c','d','e')) AS result
-        """
-      Then query result
-        | result                                               |
-        | [{1, a}, {NULL, b}, {NULL, c}, {NULL, d}, {NULL, e}] |
-
   Rule: NULL handling
 
-    Scenario: arrays_zip untyped NULL array returns NULL
+    Scenario Outline: NULL input: <case>
       When query
         """
-        SELECT arrays_zip(NULL, array(1,2)) AS result
+        SELECT arrays_zip(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: arrays_zip typed NULL array returns NULL
-      When query
-        """
-        SELECT arrays_zip(CAST(NULL AS ARRAY<INT>), array(1,2)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: arrays_zip with NULL elements
-      When query
-        """
-        SELECT arrays_zip(array(1,NULL,3), array('a','b','c')) AS result
-        """
-      Then query result
-        | result                      |
-        | [{1, a}, {NULL, b}, {3, c}] |
-
-    Scenario: arrays_zip all NULL elements
-      When query
-        """
-        SELECT arrays_zip(array(NULL,NULL), array(NULL,NULL)) AS result
-        """
-      Then query result
-        | result                       |
-        | [{NULL, NULL}, {NULL, NULL}] |
-
-    Scenario: arrays_zip both args NULL returns NULL
-      When query
-        """
-        SELECT arrays_zip(CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<STRING>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                       | args                                                     |
+        | arrays_zip untyped NULL array returns NULL | NULL, array(1,2)                                         |
+        | arrays_zip typed NULL array returns NULL   | CAST(NULL AS ARRAY<INT>), array(1,2)                     |
+        | arrays_zip both args NULL returns NULL     | CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<STRING>)    |
+        | arrays_zip NULL and empty returns NULL     | CAST(NULL AS ARRAY<INT>), CAST(array() AS ARRAY<STRING>) |
 
     Scenario: arrays_zip four NULL args returns NULL
       When query
@@ -179,14 +86,20 @@ Feature: arrays_zip comprehensive tests
         | result |
         | NULL   |
 
-    Scenario: arrays_zip NULL and empty returns NULL
+    Scenario Outline: NULL elements: <case>
       When query
         """
-        SELECT arrays_zip(CAST(NULL AS ARRAY<INT>), CAST(array() AS ARRAY<STRING>)) AS result
+        SELECT arrays_zip(<args>) AS result
         """
       Then query result
-        | result |
-        | NULL   |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                                | args                                | result                       |
+        | arrays_zip with NULL elements                       | array(1,NULL,3), array('a','b','c') | [{1, a}, {NULL, b}, {3, c}]  |
+        | arrays_zip all NULL elements                        | array(NULL,NULL), array(NULL,NULL)  | [{NULL, NULL}, {NULL, NULL}] |
+        | arrays_zip untyped empty array() pads first as NULL | array(), array(1,2)                 | [{NULL, 1}, {NULL, 2}]       |
 
     # Columnar path: neither column is fully NULL, so the invoke short-circuits do
     # not fire — the combined validity mask makes every row NULL and the result
@@ -220,128 +133,50 @@ Feature: arrays_zip comprehensive tests
         | [{1, x}, {2, y}] |
         | NULL             |
 
-    Scenario: arrays_zip untyped empty array() pads first as NULL
-      When query
-        """
-        SELECT arrays_zip(array(), array(1,2)) AS result
-        """
-      Then query result
-        | result                 |
-        | [{NULL, 1}, {NULL, 2}] |
-
   Rule: Columnar multi-row paths (flatten build)
     # Multi-row FROM VALUES columns exercise the flatten kernel's per-row offset
     # and null-pad logic that single-row literals never reach.
 
-    Scenario: arrays_zip empty rows in a column
+    Scenario Outline: Columnar: <case>
       When query
         """
         SELECT arrays_zip(a, b) AS result
-        FROM VALUES (array(), array()), (array(), array()) AS t(a, b)
+        FROM VALUES <values> AS t(a, b)
         """
       Then query result ordered
         | result |
-        | []     |
-        | []     |
+        | <row1> |
+        | <row2> |
 
-    Scenario: arrays_zip ragged lengths per row in a column
-      When query
-        """
-        SELECT arrays_zip(a, b) AS result
-        FROM VALUES
-          (array(1,2,3), array('a')),
-          (array(4), array('b','c','d'))
-        AS t(a, b)
-        """
-      Then query result ordered
-        | result                         |
-        | [{1, a}, {2, NULL}, {3, NULL}] |
-        | [{4, b}, {NULL, c}, {NULL, d}] |
-
-    Scenario: arrays_zip empty and non-empty rows in a column
-      When query
-        """
-        SELECT arrays_zip(a, b) AS result
-        FROM VALUES (array(), array(1)), (array(2), array()) AS t(a, b)
-        """
-      Then query result ordered
-        | result      |
-        | [{NULL, 1}] |
-        | [{2, NULL}] |
+      Examples:
+        | case                                            | values                                                     | row1                           | row2                           |
+        | arrays_zip empty rows in a column               | (array(), array()), (array(), array())                     | []                             | []                             |
+        | arrays_zip ragged lengths per row in a column   | (array(1,2,3), array('a')), (array(4), array('b','c','d')) | [{1, a}, {2, NULL}, {3, NULL}] | [{4, b}, {NULL, c}, {NULL, d}] |
+        | arrays_zip empty and non-empty rows in a column | (array(), array(1)), (array(2), array())                   | [{NULL, 1}]                    | [{2, NULL}]                    |
 
   Rule: Type variety
 
-    Scenario: arrays_zip int and double
+    Scenario Outline: Type variety: <case>
       When query
         """
-        SELECT arrays_zip(array(1,2), array(1.5,2.5)) AS result
+        SELECT arrays_zip(<args>) AS result
         """
       Then query result
-        | result               |
-        | [{1, 1.5}, {2, 2.5}] |
+        | result   |
+        | <result> |
 
-    Scenario: arrays_zip nested arrays
-      When query
-        """
-        SELECT arrays_zip(array(array(1,2),array(3,4)), array('a','b')) AS result
-        """
-      Then query result
-        | result                     |
-        | [{[1, 2], a}, {[3, 4], b}] |
-
-    Scenario: arrays_zip boolean and int
-      When query
-        """
-        SELECT arrays_zip(array(true,false), array(1,2)) AS result
-        """
-      Then query result
-        | result                  |
-        | [{true, 1}, {false, 2}] |
-
-    Scenario: arrays_zip struct elements
-      When query
-        """
-        SELECT arrays_zip(array(struct(1 AS a)), array(struct('x' AS b))) AS result
-        """
-      Then query result
-        | result       |
-        | [{{1}, {x}}] |
-
-    Scenario: arrays_zip map elements
-      When query
-        """
-        SELECT arrays_zip(array(map(1,'a')), array(map(2,'b'))) AS result
-        """
-      Then query result
-        | result                 |
-        | [{{1 -> a}, {2 -> b}}] |
-
-    Scenario: arrays_zip binary elements
-      When query
-        """
-        SELECT arrays_zip(array(X'01', X'02'), array(X'0A', X'0B')) AS result
-        """
-      Then query result
-        | result                       |
-        | [{[01], [0A]}, {[02], [0B]}] |
-
-    Scenario: arrays_zip date elements
-      When query
-        """
-        SELECT arrays_zip(array(DATE'2024-01-01'), array(DATE'2024-12-31')) AS result
-        """
-      Then query result
-        | result                     |
-        | [{2024-01-01, 2024-12-31}] |
-
-    Scenario: arrays_zip timestamp elements
-      When query
-        """
-        SELECT arrays_zip(array(TIMESTAMP'2024-01-01 00:00:00'), array(TIMESTAMP'2024-12-31 23:59:59')) AS result
-        """
-      Then query result
-        | result                                       |
-        | [{2024-01-01 00:00:00, 2024-12-31 23:59:59}] |
+      Examples:
+        | case                            | args                                                                         | result                                       |
+        | arrays_zip int and double       | array(1,2), array(1.5,2.5)                                                   | [{1, 1.5}, {2, 2.5}]                         |
+        | arrays_zip nested arrays        | array(array(1,2),array(3,4)), array('a','b')                                 | [{[1, 2], a}, {[3, 4], b}]                   |
+        | arrays_zip boolean and int      | array(true,false), array(1,2)                                                | [{true, 1}, {false, 2}]                      |
+        | arrays_zip struct elements      | array(struct(1 AS a)), array(struct('x' AS b))                               | [{{1}, {x}}]                                 |
+        | arrays_zip map elements         | array(map(1,'a')), array(map(2,'b'))                                         | [{{1 -> a}, {2 -> b}}]                       |
+        | arrays_zip binary elements      | array(X'01', X'02'), array(X'0A', X'0B')                                     | [{[01], [0A]}, {[02], [0B]}]                 |
+        | arrays_zip date elements        | array(DATE'2024-01-01'), array(DATE'2024-12-31')                             | [{2024-01-01, 2024-12-31}]                   |
+        | arrays_zip timestamp elements   | array(TIMESTAMP'2024-01-01 00:00:00'), array(TIMESTAMP'2024-12-31 23:59:59') | [{2024-01-01 00:00:00, 2024-12-31 23:59:59}] |
+        | arrays_zip deeply nested arrays | array(array(1,2)), array(array(3,4))                                         | [{[1, 2], [3, 4]}]                           |
+        | arrays_zip sequence results     | sequence(1, 3), sequence(10, 12)                                             | [{1, 10}, {2, 11}, {3, 12}]                  |
 
     Scenario: arrays_zip decimal elements
       When query
@@ -367,24 +202,6 @@ Feature: arrays_zip comprehensive tests
         | result       |
         | [{1.5, 2.5}] |
 
-    Scenario: arrays_zip deeply nested arrays
-      When query
-        """
-        SELECT arrays_zip(array(array(1,2)), array(array(3,4))) AS result
-        """
-      Then query result
-        | result             |
-        | [{[1, 2], [3, 4]}] |
-
-    Scenario: arrays_zip sequence results
-      When query
-        """
-        SELECT arrays_zip(sequence(1, 3), sequence(10, 12)) AS result
-        """
-      Then query result
-        | result                      |
-        | [{1, 10}, {2, 11}, {3, 12}] |
-
   Rule: Composition
 
     Scenario: arrays_zip nested in arrays_zip
@@ -396,23 +213,19 @@ Feature: arrays_zip comprehensive tests
         | result                            |
         | [{{1, a}, true}, {{2, b}, false}] |
 
-    Scenario: arrays_zip element field access by index-name
+    Scenario Outline: arrays_zip element field access position <field>
       When query
         """
-        SELECT arrays_zip(array(1,2,3), array('x','y','z'))[1].`0` AS result
+        SELECT arrays_zip(array(1,2,3), array('x','y','z'))[1].`<field>` AS result
         """
       Then query result
-        | result |
-        | 2      |
+        | result   |
+        | <result> |
 
-    Scenario: arrays_zip element field access second position
-      When query
-        """
-        SELECT arrays_zip(array(1,2,3), array('x','y','z'))[1].`1` AS result
-        """
-      Then query result
-        | result |
-        | y      |
+      Examples:
+        | field | result |
+        | 0     | 2      |
+        | 1     | y      |
 
     Scenario: arrays_zip to_json roundtrip
       When query
@@ -495,19 +308,17 @@ Feature: arrays_zip comprehensive tests
 
   Rule: Error conditions
 
-    Scenario: arrays_zip non-array input errors
+    Scenario Outline: Error: <case>
       When query
         """
-        SELECT arrays_zip(1, 2) AS result
+        SELECT arrays_zip(<args>) AS result
         """
       Then query error .*
 
-    Scenario: arrays_zip mixed array and non-array errors
-      When query
-        """
-        SELECT arrays_zip(array(1,2), 'hello') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                                        | args                |
+        | arrays_zip non-array input errors           | 1, 2                |
+        | arrays_zip mixed array and non-array errors | array(1,2), 'hello' |
 
   @spark_null
   Rule: Output schema
@@ -573,50 +384,22 @@ Feature: arrays_zip comprehensive tests
 
   Rule: Result values (migrated from test_arrays_zip.txt doctests)
 
-    Scenario: arrays_zip doctest #1 (result)
+    Scenario Outline: Result values: <case>
       When query
         """
-        SELECT arrays_zip(vals1, vals2, vals3) AS zipped FROM VALUES (array(1L, 2L, 3L), array(2L, 4L, 6L), array(3L, 6L)) AS t(vals1, vals2, vals3)
+        SELECT arrays_zip(<cols>) AS <alias> FROM VALUES (<values>) AS t(<cols>)
         """
       Then query result
-        | zipped                               |
-        | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
+        | <alias>  |
+        | <result> |
 
-    Scenario: arrays_zip doctest #3 (result)
-      When query
-        """
-        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, 3), array('a', 'b', 'c')) AS t(nums, letters)
-        """
-      Then query result
-        | r                        |
-        | [{1, a}, {2, b}, {3, c}] |
-
-    Scenario: arrays_zip doctest #4 (result)
-      When query
-        """
-        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2), array('a', 'b', 'c')) AS t(nums, letters)
-        """
-      Then query result
-        | r                           |
-        | [{1, a}, {2, b}, {NULL, c}] |
-
-    Scenario: arrays_zip doctest #5 (result)
-      When query
-        """
-        SELECT arrays_zip(nums, letters, bools) AS r FROM VALUES (array(1, 2), array('a', 'b'), array(true, false)) AS t(nums, letters, bools)
-        """
-      Then query result
-        | r                             |
-        | [{1, a, true}, {2, b, false}] |
-
-    Scenario: arrays_zip doctest #6 (result)
-      When query
-        """
-        SELECT arrays_zip(nums, letters) AS r FROM VALUES (array(1, 2, NULL), array('a', NULL, 'c')) AS t(nums, letters)
-        """
-      Then query result
-        | r                              |
-        | [{1, a}, {2, NULL}, {NULL, c}] |
+      Examples:
+        | case                           | cols                 | alias  | values                                              | result                               |
+        | arrays_zip doctest #1 (result) | vals1, vals2, vals3  | zipped | array(1L, 2L, 3L), array(2L, 4L, 6L), array(3L, 6L) | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
+        | arrays_zip doctest #3 (result) | nums, letters        | r      | array(1, 2, 3), array('a', 'b', 'c')                | [{1, a}, {2, b}, {3, c}]             |
+        | arrays_zip doctest #4 (result) | nums, letters        | r      | array(1, 2), array('a', 'b', 'c')                   | [{1, a}, {2, b}, {NULL, c}]          |
+        | arrays_zip doctest #5 (result) | nums, letters, bools | r      | array(1, 2), array('a', 'b'), array(true, false)    | [{1, a, true}, {2, b, false}]        |
+        | arrays_zip doctest #6 (result) | nums, letters        | r      | array(1, 2, NULL), array('a', NULL, 'c')            | [{1, a}, {2, NULL}, {NULL, c}]       |
 
   Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
 

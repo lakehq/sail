@@ -4,23 +4,20 @@ Feature: to_variant_object
 
   Rule: Struct input
 
-    Scenario: to_variant_object simple struct
+    Scenario Outline: Struct input: <case>
       When query
         """
-        SELECT to_json(to_variant_object(named_struct('a', 1, 'b', 'hello'))) AS result
-        """
-      Then query result
-        | result              |
-        | {"a":1,"b":"hello"} |
-
-    Scenario: to_variant_object single field
-      When query
-        """
-        SELECT to_json(to_variant_object(named_struct('x', 42))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
         | result   |
-        | {"x":42} |
+        | <result> |
+
+      Examples:
+        | case                            | input                                  | result                  |
+        | to_variant_object simple struct | named_struct('a', 1, 'b', 'hello')     | {"a":1,"b":"hello"}     |
+        | to_variant_object single field  | named_struct('x', 42)                  | {"x":42}                |
+        | to_variant_object with boolean  | named_struct('flag', true, 'count', 5) | {"count":5,"flag":true} |
 
     # cast_to_variant from parquet-variant-compute omits NULL struct fields
     @sail-bug
@@ -33,15 +30,6 @@ Feature: to_variant_object
         | result           |
         | {"a":1,"b":null} |
 
-    Scenario: to_variant_object with boolean
-      When query
-        """
-        SELECT to_json(to_variant_object(named_struct('flag', true, 'count', 5))) AS result
-        """
-      Then query result
-        | result                  |
-        | {"count":5,"flag":true} |
-
     Scenario: to_variant_object NULL input returns NULL
       When query
         """
@@ -53,81 +41,53 @@ Feature: to_variant_object
 
   Rule: Array and map input
 
-    Scenario: to_variant_object with array input
+    Scenario Outline: Array and map input: <case>
       When query
         """
-        SELECT to_json(to_variant_object(array(1, 2, 3))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
-        | result  |
-        | [1,2,3] |
+        | result   |
+        | <result> |
 
-    Scenario: to_variant_object with map input
-      When query
-        """
-        SELECT to_json(to_variant_object(map('x', 1, 'y', 2))) AS result
-        """
-      Then query result
-        | result        |
-        | {"x":1,"y":2} |
-
-    Scenario: to_variant_object with array of structs
-      When query
-        """
-        SELECT to_json(to_variant_object(array(named_struct('a', 1)))) AS result
-        """
-      Then query result
-        | result    |
-        | [{"a":1}] |
+      Examples:
+        | case                                    | input                       | result        |
+        | to_variant_object with array input      | array(1, 2, 3)              | [1,2,3]       |
+        | to_variant_object with map input        | map('x', 1, 'y', 2)         | {"x":1,"y":2} |
+        | to_variant_object with array of structs | array(named_struct('a', 1)) | [{"a":1}]     |
 
   Rule: Nested structs
 
-    Scenario: to_variant_object nested struct
+    Scenario Outline: Nested struct: <case>
       When query
         """
-        SELECT to_json(to_variant_object(named_struct('a', named_struct('b', 1)))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
-        | result        |
-        | {"a":{"b":1}} |
+        | result   |
+        | <result> |
 
-    Scenario: to_variant_object deeply nested struct
-      When query
-        """
-        SELECT to_json(to_variant_object(named_struct('a', named_struct('b', named_struct('c', 42))))) AS result
-        """
-      Then query result
-        | result               |
-        | {"a":{"b":{"c":42}}} |
+      Examples:
+        | case                                   | input                                                       | result               |
+        | to_variant_object nested struct        | named_struct('a', named_struct('b', 1))                     | {"a":{"b":1}}        |
+        | to_variant_object deeply nested struct | named_struct('a', named_struct('b', named_struct('c', 42))) | {"a":{"b":{"c":42}}} |
 
   Rule: Struct with various types
 
-    Scenario: to_variant_object struct with double
+    Scenario Outline: Struct field type: <case>
       When query
         """
-        SELECT to_json(to_variant_object(named_struct('x', 3.14))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
-        | result     |
-        | {"x":3.14} |
+        | result   |
+        | <result> |
 
-    Scenario: to_variant_object struct with array field
-      When query
-        """
-        SELECT to_json(to_variant_object(named_struct('arr', array(1,2,3)))) AS result
-        """
-      Then query result
-        | result          |
-        | {"arr":[1,2,3]} |
-
-    Scenario: to_variant_object struct with map field
-      When query
-        """
-        SELECT to_json(to_variant_object(named_struct('m', map('k', 'v')))) AS result
-        """
-      Then query result
-        | result          |
-        | {"m":{"k":"v"}} |
+      Examples:
+        | case                                      | input                             | result          |
+        | to_variant_object struct with double      | named_struct('x', 3.14)           | {"x":3.14}      |
+        | to_variant_object struct with array field | named_struct('arr', array(1,2,3)) | {"arr":[1,2,3]} |
+        | to_variant_object struct with map field   | named_struct('m', map('k', 'v'))  | {"m":{"k":"v"}} |
 
     # parquet-variant omits NULL struct fields
     @sail-bug
@@ -142,14 +102,19 @@ Feature: to_variant_object
 
   Rule: Map edge cases
 
-    Scenario: to_variant_object map single entry
+    Scenario Outline: Map edge case: <case>
       When query
         """
-        SELECT to_json(to_variant_object(map('key', 'value'))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
-        | result          |
-        | {"key":"value"} |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                               | input                       | result              |
+        | to_variant_object map single entry | map('key', 'value')         | {"key":"value"}     |
+        | to_variant_object map 3 keys       | map('a', 1, 'b', 2, 'c', 3) | {"a":1,"b":2,"c":3} |
 
     # parquet-variant omits NULL map values
     @sail-bug
@@ -162,34 +127,21 @@ Feature: to_variant_object
         | result           |
         | {"a":null,"b":2} |
 
-    Scenario: to_variant_object map 3 keys
-      When query
-        """
-        SELECT to_json(to_variant_object(map('a', 1, 'b', 2, 'c', 3))) AS result
-        """
-      Then query result
-        | result              |
-        | {"a":1,"b":2,"c":3} |
-
   Rule: Nested arrays and collections
 
-    Scenario: to_variant_object array of arrays
+    Scenario Outline: Nested collection: <case>
       When query
         """
-        SELECT to_json(to_variant_object(array(array(1,2), array(3,4)))) AS result
+        SELECT to_json(to_variant_object(<input>)) AS result
         """
       Then query result
-        | result        |
-        | [[1,2],[3,4]] |
+        | result   |
+        | <result> |
 
-    Scenario: to_variant_object array of maps
-      When query
-        """
-        SELECT to_json(to_variant_object(array(map('a', 1), map('b', 2)))) AS result
-        """
-      Then query result
-        | result            |
-        | [{"a":1},{"b":2}] |
+      Examples:
+        | case                              | input                           | result            |
+        | to_variant_object array of arrays | array(array(1,2), array(3,4))   | [[1,2],[3,4]]     |
+        | to_variant_object array of maps   | array(map('a', 1), map('b', 2)) | [{"a":1},{"b":2}] |
 
   Rule: Multi-row
 
@@ -208,33 +160,29 @@ Feature: to_variant_object
 
   Rule: Error cases
 
-    Scenario: to_variant_object rejects primitive int
+    Scenario Outline: Rejects scalar: <case>
       When query
         """
-        SELECT to_variant_object(42) AS result
+        SELECT to_variant_object(<input>) AS result
         """
       Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT)
 
-    Scenario: to_variant_object rejects string
-      When query
-        """
-        SELECT to_variant_object('hello') AS result
-        """
-      Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT)
+      Examples:
+        | case                                    | input   |
+        | to_variant_object rejects primitive int | 42      |
+        | to_variant_object rejects string        | 'hello' |
 
-    Scenario: to_variant_object rejects empty array
+    Scenario Outline: Rejects empty collection: <case>
       When query
         """
-        SELECT to_variant_object(array()) AS result
+        SELECT to_variant_object(<input>) AS result
         """
       Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT|VOID)
 
-    Scenario: to_variant_object rejects empty map
-      When query
-        """
-        SELECT to_variant_object(map()) AS result
-        """
-      Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT|VOID)
+      Examples:
+        | case                                  | input   |
+        | to_variant_object rejects empty array | array() |
+        | to_variant_object rejects empty map   | map()   |
 
   @spark_null
   Rule: Output schema

@@ -79,23 +79,19 @@ Feature: concat() — simplify hook (single-argument identity)
 
   Rule: Non-string inputs — coerced to string, not simplified away
 
-    Scenario: concat of integer literal coerces to string
+    Scenario Outline: Coercion: <case>
       When query
         """
-        SELECT concat(1) AS result
+        SELECT concat(<input>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: concat of boolean literal coerces to string
-      When query
-        """
-        SELECT concat(true) AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                                        | input | result |
+        | concat of integer literal coerces to string | 1     | 1      |
+        | concat of boolean literal coerces to string | true  | true   |
 
     Scenario: concat of integer column coerces to string and propagates nulls
       When query
@@ -146,41 +142,21 @@ Feature: concat() — simplify hook (single-argument identity)
 
   Rule: Null propagation — any NULL argument makes the whole concat NULL
 
-    Scenario: string concat with a NULL literal is null
+    Scenario Outline: Null propagation: <case>
       When query
         """
-        SELECT concat('a', NULL, 'b') AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: string concat with a typed NULL is null
-      When query
-        """
-        SELECT concat('a', CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: binary concat with a NULL is null
-      When query
-        """
-        SELECT concat(X'4869', CAST(NULL AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: array concat with a typed NULL array is null
-      When query
-        """
-        SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                         | args                                  |
+        | string concat with a NULL literal is null    | 'a', NULL, 'b'                        |
+        | string concat with a typed NULL is null      | 'a', CAST(NULL AS STRING)             |
+        | binary concat with a NULL is null            | X'4869', CAST(NULL AS BINARY)         |
+        | array concat with a typed NULL array is null | array(1, 2), CAST(NULL AS ARRAY<INT>) |
 
     # Folding to NULL must NOT mask the type error: an array concatenated with an
     # untyped NULL is still invalid, exactly as in Spark.

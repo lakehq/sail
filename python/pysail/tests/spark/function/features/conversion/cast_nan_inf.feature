@@ -3,32 +3,25 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
 
   Rule: FLOAT type constructor
 
-    Scenario: FLOAT NaN
+    Scenario Outline: FLOAT constructor: <case>
       When query
         """
-        SELECT FLOAT('NAN') AS result
+        SELECT FLOAT(<arg>) AS result
         """
       Then query result
-        | result |
-        | NaN    |
+        | result   |
+        | <result> |
 
-    Scenario: FLOAT NaN lowercase
-      When query
-        """
-        SELECT FLOAT('nan') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: FLOAT NaN mixed case
-      When query
-        """
-        SELECT FLOAT('Nan') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case                     | arg         | result    |
+        | FLOAT NaN                | 'NAN'       | NaN       |
+        | FLOAT NaN lowercase      | 'nan'       | NaN       |
+        | FLOAT NaN mixed case     | 'Nan'       | NaN       |
+        | FLOAT negative NaN       | '-NaN'      | NaN       |
+        | FLOAT Infinity           | 'Infinity'  | Infinity  |
+        | FLOAT negative Infinity  | '-Infinity' | -Infinity |
+        | FLOAT Infinity lowercase | 'infinity'  | Infinity  |
+        | FLOAT normal value       | '42'        | 42.0      |
 
     @sail-bug
     # Sail does not trim spaces before parsing NaN
@@ -41,79 +34,23 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | result |
         | NaN    |
 
-    Scenario: FLOAT negative NaN
-      When query
-        """
-        SELECT FLOAT('-NaN') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: FLOAT Infinity
-      When query
-        """
-        SELECT FLOAT('Infinity') AS result
-        """
-      Then query result
-        | result   |
-        | Infinity |
-
-    Scenario: FLOAT negative Infinity
-      When query
-        """
-        SELECT FLOAT('-Infinity') AS result
-        """
-      Then query result
-        | result    |
-        | -Infinity |
-
-    Scenario: FLOAT Infinity lowercase
-      When query
-        """
-        SELECT FLOAT('infinity') AS result
-        """
-      Then query result
-        | result   |
-        | Infinity |
-
-    Scenario: FLOAT normal value
-      When query
-        """
-        SELECT FLOAT('42') AS result
-        """
-      Then query result
-        | result |
-        | 42.0   |
-
   Rule: DOUBLE type constructor
 
-    Scenario: DOUBLE NaN
+    Scenario Outline: DOUBLE constructor: <case>
       When query
         """
-        SELECT DOUBLE('NAN') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: DOUBLE Infinity uppercase
-      When query
-        """
-        SELECT DOUBLE('INFINITY') AS result
+        SELECT DOUBLE(<arg>) AS result
         """
       Then query result
         | result   |
-        | Infinity |
+        | <result> |
 
-    Scenario: DOUBLE negative Infinity uppercase
-      When query
-        """
-        SELECT DOUBLE('-INFINITY') AS result
-        """
-      Then query result
-        | result    |
-        | -Infinity |
+      Examples:
+        | case                               | arg         | result    |
+        | DOUBLE NaN                         | 'NAN'       | NaN       |
+        | DOUBLE Infinity uppercase          | 'INFINITY'  | Infinity  |
+        | DOUBLE negative Infinity uppercase | '-INFINITY' | -Infinity |
+        | DOUBLE normal value                | '3.14'      | 3.14      |
 
     @sail-bug
     # Sail does not trim spaces before parsing Infinity
@@ -126,141 +63,74 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | result   |
         | Infinity |
 
-    Scenario: DOUBLE normal value
-      When query
-        """
-        SELECT DOUBLE('3.14') AS result
-        """
-      Then query result
-        | result |
-        | 3.14   |
-
   Rule: CAST to FLOAT/DOUBLE
 
-    Scenario: CAST NaN to FLOAT
+    Scenario Outline: CAST: <case>
       When query
         """
-        SELECT CAST('NaN' AS FLOAT) AS result
+        SELECT CAST('NaN' AS <type>) AS result
         """
       Then query result
         | result |
         | NaN    |
 
-    Scenario: CAST NaN to DOUBLE
-      When query
-        """
-        SELECT CAST('NaN' AS DOUBLE) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case               | type   |
+        | CAST NaN to FLOAT  | FLOAT  |
+        | CAST NaN to DOUBLE | DOUBLE |
 
   Rule: Integer types reject NaN and Infinity
 
-    Scenario: INT NaN errors
+    Scenario Outline: Integer rejects: <case>
       When query
         """
-        SELECT INT('NAN') AS result
+        SELECT <expr> AS result
         """
       Then query error .*
 
-    Scenario: CAST NaN to INT errors
-      When query
-        """
-        SELECT CAST('NaN' AS INT) AS result
-        """
-      Then query error .*
-
-    Scenario: INT Infinity errors
-      When query
-        """
-        SELECT INT('Infinity') AS result
-        """
-      Then query error .*
-
-    Scenario: BIGINT NaN errors
-      When query
-        """
-        SELECT BIGINT('NaN') AS result
-        """
-      Then query error .*
-
-    Scenario: SMALLINT NaN errors
-      When query
-        """
-        SELECT SMALLINT('NaN') AS result
-        """
-      Then query error .*
-
-    Scenario: TINYINT NaN errors
-      When query
-        """
-        SELECT TINYINT('NaN') AS result
-        """
-      Then query error .*
-
-    Scenario: DECIMAL NaN errors
-      When query
-        """
-        SELECT CAST('NaN' AS DECIMAL(10,2)) AS result
-        """
-      Then query error .*
-
-    Scenario: INT invalid string errors
-      When query
-        """
-        SELECT INT('hello') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                      | expr                         |
+        | INT NaN errors            | INT('NAN')                   |
+        | CAST NaN to INT errors    | CAST('NaN' AS INT)           |
+        | INT Infinity errors       | INT('Infinity')              |
+        | BIGINT NaN errors         | BIGINT('NaN')                |
+        | SMALLINT NaN errors       | SMALLINT('NaN')              |
+        | TINYINT NaN errors        | TINYINT('NaN')               |
+        | DECIMAL NaN errors        | CAST('NaN' AS DECIMAL(10,2)) |
+        | INT invalid string errors | INT('hello')                 |
 
   Rule: TRY_CAST with NaN
 
-    Scenario: TRY_CAST NaN to INT returns NULL
+    Scenario Outline: TRY_CAST: <case>
       When query
         """
-        SELECT TRY_CAST('NaN' AS INT) AS result
+        SELECT TRY_CAST('NaN' AS <type>) AS result
         """
       Then query result
-        | result |
-        | NULL   |
+        | result   |
+        | <result> |
 
-    Scenario: TRY_CAST NaN to FLOAT returns NaN
-      When query
-        """
-        SELECT TRY_CAST('NaN' AS FLOAT) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case                              | type  | result |
+        | TRY_CAST NaN to INT returns NULL  | INT   | NULL   |
+        | TRY_CAST NaN to FLOAT returns NaN | FLOAT | NaN    |
 
   Rule: NaN arithmetic
 
-    Scenario: NaN plus number is NaN
+    Scenario Outline: NaN arithmetic: <case>
       When query
         """
-        SELECT FLOAT('NaN') + 1 AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | NaN    |
+        | result   |
+        | <result> |
 
-    Scenario: NaN equals NaN is true in Spark
-      When query
-        """
-        SELECT FLOAT('NaN') = FLOAT('NaN') AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: NaN greater than zero is true in Spark
-      When query
-        """
-        SELECT FLOAT('NaN') > 0 AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                                   | expr                        | result |
+        | NaN plus number is NaN                 | FLOAT('NaN') + 1            | NaN    |
+        | NaN equals NaN is true in Spark        | FLOAT('NaN') = FLOAT('NaN') | true   |
+        | NaN greater than zero is true in Spark | FLOAT('NaN') > 0            | true   |
 
   Rule: Multi-row with NaN and Infinity
 

@@ -3,139 +3,74 @@ Feature: array filter with lambda
 
   Rule: Filter array elements using lambda predicates
 
-    Scenario: Filter integers greater than a value
+    Scenario Outline: Comparison predicate: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x > 2) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result    |
-        | [3, 4, 5] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter integers less than a value
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x < 3) AS result
-        """
-      Then query result
-        | result |
-        | [1, 2] |
-
-    Scenario: Filter integers greater than or equal to a value
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x >= 3) AS result
-        """
-      Then query result
-        | result    |
-        | [3, 4, 5] |
-
-    Scenario: Filter integers less than or equal to a value
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x <= 2) AS result
-        """
-      Then query result
-        | result |
-        | [1, 2] |
-
-    Scenario: Filter where all elements match
-      When query
-        """
-        SELECT filter(array(10, 20, 30), x -> x > 5) AS result
-        """
-      Then query result
-        | result       |
-        | [10, 20, 30] |
-
-    Scenario: Filter where no elements match
-      When query
-        """
-        SELECT filter(array(1, 2, 3), x -> x > 10) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: Filter with reversed comparison
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> 3 < x) AS result
-        """
-      Then query result
-        | result |
-        | [4, 5] |
+      Examples:
+        | case                                             | arr                  | pred   | result       |
+        | Filter integers greater than a value             | array(1, 2, 3, 4, 5) | x > 2  | [3, 4, 5]    |
+        | Filter integers less than a value                | array(1, 2, 3, 4, 5) | x < 3  | [1, 2]       |
+        | Filter integers greater than or equal to a value | array(1, 2, 3, 4, 5) | x >= 3 | [3, 4, 5]    |
+        | Filter integers less than or equal to a value    | array(1, 2, 3, 4, 5) | x <= 2 | [1, 2]       |
+        | Filter where all elements match                  | array(10, 20, 30)    | x > 5  | [10, 20, 30] |
+        | Filter where no elements match                   | array(1, 2, 3)       | x > 10 | []           |
+        | Filter with reversed comparison                  | array(1, 2, 3, 4, 5) | 3 < x  | [4, 5]       |
 
   Rule: Filter with index argument
 
-    Scenario: Filter using element index - keep elements at even indices
+    Scenario Outline: Index argument: <case>
       When query
         """
-        SELECT filter(array(10, 20, 30, 40, 50), (x, i) -> i % 2 = 0) AS result
+        SELECT filter(<arr>, (x, i) -> <pred>) AS result
         """
       Then query result
-        | result       |
-        | [10, 30, 50] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter using element and index - element greater than index
-      When query
-        """
-        SELECT filter(array(0, 5, 1, 10, 2), (x, i) -> x > i) AS result
-        """
-      Then query result
-        | result  |
-        | [5, 10] |
+      Examples:
+        | case                                                        | arr                       | pred      | result       |
+        | Filter using element index - keep elements at even indices  | array(10, 20, 30, 40, 50) | i % 2 = 0 | [10, 30, 50] |
+        | Filter using element and index - element greater than index | array(0, 5, 1, 10, 2)     | x > i     | [5, 10]      |
 
   Rule: Filter with complex expressions
 
-    Scenario: Filter with AND condition
+    Scenario Outline: Complex expression: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x > 1 AND x < 5) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result    |
-        | [2, 3, 4] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with OR condition
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x = 1 OR x = 5) AS result
-        """
-      Then query result
-        | result |
-        | [1, 5] |
-
-    Scenario: Filter with modulo function
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5, 6), x -> x % 2 = 0) AS result
-        """
-      Then query result
-        | result    |
-        | [2, 4, 6] |
+      Examples:
+        | case                        | arr                     | pred            | result    |
+        | Filter with AND condition   | array(1, 2, 3, 4, 5)    | x > 1 AND x < 5 | [2, 3, 4] |
+        | Filter with OR condition    | array(1, 2, 3, 4, 5)    | x = 1 OR x = 5  | [1, 5]    |
+        | Filter with modulo function | array(1, 2, 3, 4, 5, 6) | x % 2 = 0       | [2, 4, 6] |
 
   Rule: Filter with external column references
 
-    Scenario: Filter using external column as threshold
+    Scenario Outline: External column: <case>
       When query
         """
-        SELECT filter(arr, x -> x > threshold) AS result
-        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 2 AS threshold)
+        SELECT filter(arr, x -> <pred>) AS result
+        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, <cols>)
         """
       Then query result
-        | result    |
-        | [3, 4, 5] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter using multiple external columns
-      When query
-        """
-        SELECT filter(arr, x -> x > min_val AND x < max_val) AS result
-        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 1 AS min_val, 5 AS max_val)
-        """
-      Then query result
-        | result    |
-        | [2, 3, 4] |
+      Examples:
+        | case                                      | pred                        | cols                       | result    |
+        | Filter using external column as threshold | x > threshold               | 2 AS threshold             | [3, 4, 5] |
+        | Filter using multiple external columns    | x > min_val AND x < max_val | 1 AS min_val, 5 AS max_val | [2, 3, 4] |
 
     Scenario: Filter with varying thresholds per row
       When query
@@ -153,32 +88,20 @@ Feature: array filter with lambda
 
   Rule: Filter with null handling
 
-    Scenario: Filter array containing nulls - nulls are excluded by predicate
+    Scenario Outline: Null handling: <case>
       When query
         """
-        SELECT filter(array(1, NULL, 3, NULL, 5), x -> x > 2) AS result
+        SELECT filter(array(1, NULL, 3, NULL, 5), x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | [3, 5] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with IS NOT NULL predicate
-      When query
-        """
-        SELECT filter(array(1, NULL, 3, NULL, 5), x -> x IS NOT NULL) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 3, 5] |
-
-    Scenario: Filter with IS NULL predicate
-      When query
-        """
-        SELECT filter(array(1, NULL, 3, NULL, 5), x -> x IS NULL) AS result
-        """
-      Then query result
-        | result       |
-        | [NULL, NULL] |
+      Examples:
+        | case                                                            | pred          | result       |
+        | Filter array containing nulls - nulls are excluded by predicate | x > 2         | [3, 5]       |
+        | Filter with IS NOT NULL predicate                               | x IS NOT NULL | [1, 3, 5]    |
+        | Filter with IS NULL predicate                                   | x IS NULL     | [NULL, NULL] |
 
   Rule: Filter with different data types
 
@@ -193,70 +116,38 @@ Feature: array filter with lambda
         | result |
         | []     |
 
-    Scenario: Filter string array
+    Scenario Outline: Data type: <case>
       When query
         """
-        SELECT filter(array('apple', 'banana', 'cherry'), x -> x > 'b') AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result           |
-        | [banana, cherry] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter string array with length condition
-      When query
-        """
-        SELECT filter(array('a', 'bb', 'ccc', 'dddd'), x -> length(x) > 2) AS result
-        """
-      Then query result
-        | result      |
-        | [ccc, dddd] |
-
-    Scenario: Filter with negative numbers
-      When query
-        """
-        SELECT filter(array(-5, -2, 0, 3, 7), x -> x >= 0) AS result
-        """
-      Then query result
-        | result    |
-        | [0, 3, 7] |
-
-    Scenario: Filter double array
-      When query
-        """
-        SELECT filter(array(1.5, 2.7, 3.2, 4.8), x -> x > 2.5) AS result
-        """
-      Then query result
-        | result          |
-        | [2.7, 3.2, 4.8] |
+      Examples:
+        | case                                      | arr                                | pred          | result           |
+        | Filter string array                       | array('apple', 'banana', 'cherry') | x > 'b'       | [banana, cherry] |
+        | Filter string array with length condition | array('a', 'bb', 'ccc', 'dddd')    | length(x) > 2 | [ccc, dddd]      |
+        | Filter with negative numbers              | array(-5, -2, 0, 3, 7)             | x >= 0        | [0, 3, 7]        |
+        | Filter double array                       | array(1.5, 2.7, 3.2, 4.8)          | x > 2.5       | [2.7, 3.2, 4.8]  |
 
   Rule: Filter with equality and other operators
 
-    Scenario: Filter with equality
+    Scenario Outline: Equality operator: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3, 2, 1), x -> x = 2) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | [2, 2] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with not equal
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 2, 1), x -> x <> 2) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 3, 1] |
-
-    Scenario: Filter with NOT condition
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> NOT (x > 3)) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
+      Examples:
+        | case                      | arr                  | pred        | result    |
+        | Filter with equality      | array(1, 2, 3, 2, 1) | x = 2       | [2, 2]    |
+        | Filter with not equal     | array(1, 2, 3, 2, 1) | x <> 2      | [1, 3, 1] |
+        | Filter with NOT condition | array(1, 2, 3, 4, 5) | NOT (x > 3) | [1, 2, 3] |
 
   Rule: Filter with operators
 
@@ -271,45 +162,36 @@ Feature: array filter with lambda
 
   Rule: Filter with functions in predicate
 
-    Scenario: Filter with function call in predicate
+    Scenario Outline: Function in predicate: <case>
       When query
         """
-        SELECT filter(array('a', 'bb', 'ccc'), x -> length(x) > 1) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result    |
-        | [bb, ccc] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with arithmetic in predicate
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x * 2 > 5) AS result
-        """
-      Then query result
-        | result    |
-        | [3, 4, 5] |
+      Examples:
+        | case                                   | arr                     | pred          | result    |
+        | Filter with function call in predicate | array('a', 'bb', 'ccc') | length(x) > 1 | [bb, ccc] |
+        | Filter with arithmetic in predicate    | array(1, 2, 3, 4, 5)    | x * 2 > 5     | [3, 4, 5] |
 
   Rule: Filter with index and external columns combined
 
-    Scenario: Filter using both index and external column
+    Scenario Outline: Index and external column: <case>
       When query
         """
-        SELECT filter(arr, (x, i) -> x > threshold AND i > 0) AS result
+        SELECT filter(arr, (x, i) -> <pred>) AS result
         FROM (SELECT array(1, 5, 2, 8, 3) AS arr, 2 AS threshold)
         """
       Then query result
-        | result    |
-        | [5, 8, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with index less than value and external threshold
-      When query
-        """
-        SELECT filter(arr, (x, i) -> x > threshold AND i < 3) AS result
-        FROM (SELECT array(1, 5, 2, 8, 3) AS arr, 2 AS threshold)
-        """
-      Then query result
-        | result |
-        | [5]    |
+      Examples:
+        | case                                                     | pred                    | result    |
+        | Filter using both index and external column              | x > threshold AND i > 0 | [5, 8, 3] |
+        | Filter with index less than value and external threshold | x > threshold AND i < 3 | [5]       |
 
   Rule: Filter with multiple rows (batch processing)
 
@@ -347,23 +229,19 @@ Feature: array filter with lambda
 
   Rule: Filter with null array input
 
-    Scenario: Filter a null array returns null
+    Scenario Outline: Null array literal: <case>
       When query
         """
-        SELECT filter(CAST(NULL AS ARRAY<INT>), x -> x > 0) AS result
+        SELECT filter(<arr>, <lambda>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: Filter null array of strings returns null
-      When query
-        """
-        SELECT filter(CAST(NULL AS ARRAY<STRING>), x -> x IS NOT NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                      | arr                         | lambda             |
+        | Filter a null array returns null          | CAST(NULL AS ARRAY<INT>)    | x -> x > 0         |
+        | Filter null array of strings returns null | CAST(NULL AS ARRAY<STRING>) | x -> x IS NOT NULL |
 
     Scenario: Filter multi-row table with null array row
       When query
@@ -393,92 +271,68 @@ Feature: array filter with lambda
 
   Rule: Filter with null elements - predicate returns null treated as false
 
-    Scenario: NULL elements excluded when predicate returns NULL
+    Scenario Outline: Null element: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3, NULL), x -> x > 1) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | [2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: All-null array filtered with IS NOT NULL predicate yields empty array
-      When query
-        """
-        SELECT filter(array(NULL, NULL), x -> x IS NOT NULL) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                                                  | arr                  | pred          | result |
+        | NULL elements excluded when predicate returns NULL                    | array(1, 2, 3, NULL) | x > 1         | [2, 3] |
+        | All-null array filtered with IS NOT NULL predicate yields empty array | array(NULL, NULL)    | x IS NOT NULL | []     |
 
   Rule: Filter with boolean arrays
 
-    Scenario: Filter boolean array keeping true values
+    Scenario Outline: Boolean array: <case>
       When query
         """
-        SELECT filter(array(true, false, true, false), x -> x = true) AS result
+        SELECT filter(array(true, false, true, false), x -> <pred>) AS result
         """
       Then query result
-        | result       |
-        | [true, true] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter boolean array keeping false values
-      When query
-        """
-        SELECT filter(array(true, false, true, false), x -> x = false) AS result
-        """
-      Then query result
-        | result         |
-        | [false, false] |
+      Examples:
+        | case                                      | pred      | result         |
+        | Filter boolean array keeping true values  | x = true  | [true, true]   |
+        | Filter boolean array keeping false values | x = false | [false, false] |
 
   Rule: Filter with nested arrays
 
-    Scenario: Filter nested array by first element of inner array
+    Scenario Outline: Nested array: <case>
       When query
         """
-        SELECT filter(array(array(1, 2), array(3, 4), array(5, 6)), x -> x[0] > 2) AS result
+        SELECT filter(array(array(1, 2), array(3, 4), array(5, 6)), x -> <pred>) AS result
         """
       Then query result
-        | result           |
-        | [[3, 4], [5, 6]] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter nested array - all inner arrays have size greater than 1
-      When query
-        """
-        SELECT filter(array(array(1, 2), array(3, 4), array(5, 6)), x -> size(x) > 1) AS result
-        """
-      Then query result
-        | result                   |
-        | [[1, 2], [3, 4], [5, 6]] |
+      Examples:
+        | case                                                            | pred        | result                   |
+        | Filter nested array by first element of inner array             | x[0] > 2    | [[3, 4], [5, 6]]         |
+        | Filter nested array - all inner arrays have size greater than 1 | size(x) > 1 | [[1, 2], [3, 4], [5, 6]] |
 
   Rule: Filter with constant predicates
 
-    Scenario: Constant true predicate keeps all elements
+    Scenario Outline: Constant predicate: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3), x -> true) AS result
+        SELECT filter(array(1, 2, 3), x -> <pred>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: Constant false predicate empties the array
-      When query
-        """
-        SELECT filter(array(1, 2, 3), x -> false) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: Constant NULL predicate empties the array
-      When query
-        """
-        SELECT filter(array(1, 2, 3), x -> CAST(NULL AS BOOLEAN)) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                       | pred                  | result    |
+        | Constant true predicate keeps all elements | true                  | [1, 2, 3] |
+        | Constant false predicate empties the array | false                 | []        |
+        | Constant NULL predicate empties the array  | CAST(NULL AS BOOLEAN) | []        |
 
     Scenario: Constant true predicate keeps null array row as NULL
       When query
@@ -639,52 +493,36 @@ Feature: array filter with lambda
 
   Rule: Filter with constant predicate preserves null elements
 
-    Scenario: Constant true predicate keeps null elements
+    Scenario Outline: Constant predicate over null elements: <case>
       When query
         """
-        SELECT filter(array(1, NULL, 3), x -> true) AS result
+        SELECT filter(array(1, NULL, 3), x -> <pred>) AS result
         """
       Then query result
-        | result       |
-        | [1, NULL, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: Constant false predicate drops null elements
-      When query
-        """
-        SELECT filter(array(1, NULL, 3), x -> false) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                         | pred  | result       |
+        | Constant true predicate keeps null elements  | true  | [1, NULL, 3] |
+        | Constant false predicate drops null elements | false | []           |
 
   Rule: Filter with additional predicate forms
 
-    Scenario: Filter with IN predicate
+    Scenario Outline: Additional predicate form: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3, 4, 5), x -> x IN (1, 3, 5)) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result    |
-        | [1, 3, 5] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter with CASE WHEN in the predicate
-      When query
-        """
-        SELECT filter(array(1, 2, 3, 4), x -> CASE WHEN x % 2 = 0 THEN true ELSE false END) AS result
-        """
-      Then query result
-        | result |
-        | [2, 4] |
-
-    Scenario: Filter with coalesce in the predicate over null elements
-      When query
-        """
-        SELECT filter(array(1, NULL, 3), x -> coalesce(x, 0) > 1) AS result
-        """
-      Then query result
-        | result |
-        | [3]    |
+      Examples:
+        | case                                                     | arr                  | pred                                         | result    |
+        | Filter with IN predicate                                 | array(1, 2, 3, 4, 5) | x IN (1, 3, 5)                               | [1, 3, 5] |
+        | Filter with CASE WHEN in the predicate                   | array(1, 2, 3, 4)    | CASE WHEN x % 2 = 0 THEN true ELSE false END | [2, 4]    |
+        | Filter with coalesce in the predicate over null elements | array(1, NULL, 3)    | coalesce(x, 0) > 1                           | [3]       |
 
   Rule: Filter with bigint arrays
 
@@ -710,23 +548,19 @@ Feature: array filter with lambda
 
   Rule: Filter with decimal and date arrays
 
-    Scenario: Filter decimal array
+    Scenario Outline: Decimal and date array: <case>
       When query
         """
-        SELECT filter(array(1.5BD, 2.7BD, 3.2BD), x -> x > 2.0BD) AS result
+        SELECT filter(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result     |
-        | [2.7, 3.2] |
+        | result   |
+        | <result> |
 
-    Scenario: Filter date array
-      When query
-        """
-        SELECT filter(array(DATE '2020-01-01', DATE '2021-06-15', DATE '2019-03-03'), x -> x > DATE '2020-01-01') AS result
-        """
-      Then query result
-        | result       |
-        | [2021-06-15] |
+      Examples:
+        | case                 | arr                                                            | pred                  | result       |
+        | Filter decimal array | array(1.5BD, 2.7BD, 3.2BD)                                     | x > 2.0BD             | [2.7, 3.2]   |
+        | Filter date array    | array(DATE '2020-01-01', DATE '2021-06-15', DATE '2019-03-03') | x > DATE '2020-01-01' | [2021-06-15] |
 
   Rule: Filter with index and a nested higher-order function
 
@@ -762,44 +596,18 @@ Feature: array filter with lambda
 
   Rule: Invalid lambda functions
 
-    Scenario: Lambda with three parameters is rejected
+    Scenario Outline: Invalid lambda: <case>
       When query
         """
-        SELECT filter(array(1, 2, 3), (x, i, z) -> true) AS result
+        SELECT filter(<args>) AS result
         """
       Then query error .*
 
-    Scenario: Lambda with non-boolean result is rejected
-      When query
-        """
-        SELECT filter(array(1, 2, 3), x -> x + 1) AS result
-        """
-      Then query error .*
-
-    Scenario: Lambda with duplicate parameter names is rejected
-      When query
-        """
-        SELECT filter(array(1, 2, 3), (x, x) -> x > 1) AS result
-        """
-      Then query error .*
-
-    Scenario: Lambda with case-insensitive duplicate parameter names is rejected
-      When query
-        """
-        SELECT filter(array(1, 2, 3), (x, X) -> x > 1) AS result
-        """
-      Then query error .*
-
-    Scenario: Filter over a non-array first argument is rejected
-      When query
-        """
-        SELECT filter(42, x -> x > 0) AS result
-        """
-      Then query error .*
-
-    Scenario: Filter over a map first argument is rejected
-      When query
-        """
-        SELECT filter(map('a', 1), x -> x > 0) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                                                               | args                              |
+        | Lambda with three parameters is rejected                           | array(1, 2, 3), (x, i, z) -> true |
+        | Lambda with non-boolean result is rejected                         | array(1, 2, 3), x -> x + 1        |
+        | Lambda with duplicate parameter names is rejected                  | array(1, 2, 3), (x, x) -> x > 1   |
+        | Lambda with case-insensitive duplicate parameter names is rejected | array(1, 2, 3), (x, X) -> x > 1   |
+        | Filter over a non-array first argument is rejected                 | 42, x -> x > 0                    |
+        | Filter over a map first argument is rejected                       | map('a', 1), x -> x > 0           |

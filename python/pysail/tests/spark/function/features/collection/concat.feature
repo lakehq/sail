@@ -3,529 +3,245 @@ Feature: concat function
 
   Rule: Basic concatenation
 
-    Scenario: concat two integer arrays
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT concat(array(1, 2, 3), array(4, 5)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result          |
-        | [1, 2, 3, 4, 5] |
+        | result   |
+        | <result> |
 
-    Scenario: concat two string arrays
-      When query
-        """
-        SELECT concat(array('a', 'b'), array('c')) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
+      Examples:
+        | case                      | args                        | result          |
+        | concat two integer arrays | array(1, 2, 3), array(4, 5) | [1, 2, 3, 4, 5] |
+        | concat two string arrays  | array('a', 'b'), array('c') | [a, b, c]       |
 
   Rule: Empty array handling
 
-    Scenario: concat empty array with typed array
+    Scenario Outline: Empty array: <case>
       When query
         """
-        SELECT concat(array(), array(1, 2, 3)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: concat typed array with empty array
-      When query
-        """
-        SELECT concat(array(1, 2), array()) AS result
-        """
-      Then query result
-        | result |
-        | [1, 2] |
+      Examples:
+        | case                                | args                    | result    |
+        | concat empty array with typed array | array(), array(1, 2, 3) | [1, 2, 3] |
+        | concat typed array with empty array | array(1, 2), array()    | [1, 2]    |
 
   Rule: Null propagation
 
-    Scenario: concat array with null returns null
+    Scenario Outline: Array null propagation: <case>
       When query
         """
-        SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: concat null with array returns null
-      When query
-        """
-        SELECT concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                | args                                  |
+        | concat array with null returns null | array(1, 2), CAST(NULL AS ARRAY<INT>) |
+        | concat null with array returns null | CAST(NULL AS ARRAY<INT>), array(1, 2) |
 
   Rule: String concatenation
 
-    Scenario: basic string concatenation
+    Scenario Outline: String: <case>
       When query
         """
-        SELECT concat('Spark', 'SQL') AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result   |
-        | SparkSQL |
+        | <result> |
 
-    Scenario: three string arguments
+      Examples:
+        | case                               | args                                   | result       |
+        | basic string concatenation         | 'Spark', 'SQL'                         | SparkSQL     |
+        | three string arguments             | 'Hello', ', ', 'World'                 | Hello, World |
+        | single string argument             | 'hello'                                | hello        |
+        | empty string with non-empty string | '', 'hello'                            | hello        |
+        | many string arguments              | 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h' | abcdefgh     |
+
+    Scenario Outline: String with empty result: <case>
       When query
         """
-        SELECT concat('Hello', ', ', 'World') AS result
-        """
-      Then query result
-        | result       |
-        | Hello, World |
-
-    Scenario: single string argument
-      When query
-        """
-        SELECT concat('hello') AS result
-        """
-      Then query result
-        | result |
-        | hello  |
-
-    Scenario: zero arguments returns empty string
-      When query
-        """
-        SELECT concat() AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result |
         |        |
 
-    Scenario: empty strings
-      When query
-        """
-        SELECT concat('', '') AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: empty string with non-empty string
-      When query
-        """
-        SELECT concat('', 'hello') AS result
-        """
-      Then query result
-        | result |
-        | hello  |
-
-    Scenario: whitespace strings
-      When query
-        """
-        SELECT concat('  ', '  ') AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: many string arguments
-      When query
-        """
-        SELECT concat('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h') AS result
-        """
-      Then query result
-        | result   |
-        | abcdefgh |
+      Examples:
+        | case                                | args       |
+        | zero arguments returns empty string |            |
+        | empty strings                       | '', ''     |
+        | whitespace strings                  | '  ', '  ' |
 
   Rule: String NULL propagation
 
-    Scenario: NULL only returns NULL
+    Scenario Outline: String NULL propagation: <case>
       When query
         """
-        SELECT concat(NULL) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: NULL with string returns NULL
-      When query
-        """
-        SELECT concat(NULL, 'b') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: string with NULL returns NULL
-      When query
-        """
-        SELECT concat('a', NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: NULL and NULL returns NULL
-      When query
-        """
-        SELECT concat(NULL, NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: string NULL string returns NULL
-      When query
-        """
-        SELECT concat('a', NULL, 'b') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL string returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL with string returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS STRING), 'b') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                | args                      |
+        | NULL only returns NULL              | NULL                      |
+        | NULL with string returns NULL       | NULL, 'b'                 |
+        | string with NULL returns NULL       | 'a', NULL                 |
+        | NULL and NULL returns NULL          | NULL, NULL                |
+        | string NULL string returns NULL     | 'a', NULL, 'b'            |
+        | typed NULL string returns NULL      | CAST(NULL AS STRING)      |
+        | typed NULL with string returns NULL | CAST(NULL AS STRING), 'b' |
 
   Rule: Type coercion to string
 
-    Scenario: TINYINT coerced to string
+    Scenario Outline: Type coercion: <case>
       When query
         """
-        SELECT concat(CAST(1 AS TINYINT)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: INT coerced to string
-      When query
-        """
-        SELECT concat(1) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: INT and INT concatenated as strings
-      When query
-        """
-        SELECT concat(1, 2) AS result
-        """
-      Then query result
-        | result |
-        | 12     |
-
-    Scenario: DOUBLE coerced to string
-      When query
-        """
-        SELECT concat(1.0) AS result
-        """
-      Then query result
-        | result |
-        | 1.0    |
-
-    Scenario: DECIMAL coerced to string
-      When query
-        """
-        SELECT concat(CAST(1.0 AS DECIMAL(10,2))) AS result
-        """
-      Then query result
-        | result |
-        | 1.00   |
-
-    Scenario: BOOLEAN coerced to string
-      When query
-        """
-        SELECT concat(true) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: DATE coerced to string
-      When query
-        """
-        SELECT concat(DATE '2024-01-15') AS result
-        """
-      Then query result
-        | result     |
-        | 2024-01-15 |
-
-    Scenario: TIMESTAMP coerced to string
-      When query
-        """
-        SELECT concat(TIMESTAMP '2024-01-15 12:00:00') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 12:00:00 |
-
-    Scenario: string with INT coercion
-      When query
-        """
-        SELECT concat('hello', 1) AS result
-        """
-      Then query result
-        | result |
-        | hello1 |
+      Examples:
+        | case                                | args                            | result              |
+        | TINYINT coerced to string           | CAST(1 AS TINYINT)              | 1                   |
+        | INT coerced to string               | 1                               | 1                   |
+        | INT and INT concatenated as strings | 1, 2                            | 12                  |
+        | DOUBLE coerced to string            | 1.0                             | 1.0                 |
+        | DECIMAL coerced to string           | CAST(1.0 AS DECIMAL(10,2))      | 1.00                |
+        | BOOLEAN coerced to string           | true                            | true                |
+        | DATE coerced to string              | DATE '2024-01-15'               | 2024-01-15          |
+        | TIMESTAMP coerced to string         | TIMESTAMP '2024-01-15 12:00:00' | 2024-01-15 12:00:00 |
+        | string with INT coercion            | 'hello', 1                      | hello1              |
 
   Rule: Binary concatenation
 
-    Scenario: basic binary concatenation
+    Scenario Outline: Binary: <case>
       When query
         """
-        SELECT concat(X'4865', X'6C6C6F') AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result           |
-        | [48 65 6C 6C 6F] |
+        | result   |
+        | <result> |
 
-    Scenario: single binary argument
-      When query
-        """
-        SELECT concat(X'48656C6C6F') AS result
-        """
-      Then query result
-        | result           |
-        | [48 65 6C 6C 6F] |
-
-    Scenario: three binary arguments
-      When query
-        """
-        SELECT concat(X'48', X'65', X'6C6C6F') AS result
-        """
-      Then query result
-        | result           |
-        | [48 65 6C 6C 6F] |
-
-    Scenario: empty binary with binary
-      When query
-        """
-        SELECT concat(X'', X'4865') AS result
-        """
-      Then query result
-        | result  |
-        | [48 65] |
-
-    Scenario: binary with string coercion
-      When query
-        """
-        SELECT concat(X'48656C6C6F', 'world') AS result
-        """
-      Then query result
-        | result     |
-        | Helloworld |
-
-    Scenario: string with binary coercion
-      When query
-        """
-        SELECT concat('hello', X'48656C6C6F') AS result
-        """
-      Then query result
-        | result     |
-        | helloHello |
+      Examples:
+        | case                        | args                    | result           |
+        | basic binary concatenation  | X'4865', X'6C6C6F'      | [48 65 6C 6C 6F] |
+        | single binary argument      | X'48656C6C6F'           | [48 65 6C 6C 6F] |
+        | three binary arguments      | X'48', X'65', X'6C6C6F' | [48 65 6C 6C 6F] |
+        | empty binary with binary    | X'', X'4865'            | [48 65]          |
+        | binary with string coercion | X'48656C6C6F', 'world'  | Helloworld       |
+        | string with binary coercion | 'hello', X'48656C6C6F'  | helloHello       |
 
   Rule: Binary NULL propagation
 
-    Scenario: NULL typed binary returns NULL
+    Scenario Outline: Binary NULL propagation: <case>
       When query
         """
-        SELECT concat(CAST(NULL AS BINARY)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: NULL binary with binary returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS BINARY), X'48') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: binary with NULL binary returns NULL
-      When query
-        """
-        SELECT concat(X'48', CAST(NULL AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: two NULL binaries returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS BINARY), CAST(NULL AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                 | args                                       |
+        | NULL typed binary returns NULL       | CAST(NULL AS BINARY)                       |
+        | NULL binary with binary returns NULL | CAST(NULL AS BINARY), X'48'                |
+        | binary with NULL binary returns NULL | X'48', CAST(NULL AS BINARY)                |
+        | two NULL binaries returns NULL       | CAST(NULL AS BINARY), CAST(NULL AS BINARY) |
 
   Rule: Array concatenation
 
-    Scenario: concat two boolean arrays
+    Scenario Outline: Array: <case>
       When query
         """
-        SELECT concat(array(true), array(false)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result        |
-        | [true, false] |
+        | result   |
+        | <result> |
 
-    Scenario: concat nested arrays
-      When query
-        """
-        SELECT concat(array(array(1, 2)), array(array(3, 4))) AS result
-        """
-      Then query result
-        | result           |
-        | [[1, 2], [3, 4]] |
-
-    Scenario: concat array with null elements
-      When query
-        """
-        SELECT concat(array(1, NULL, 3), array(4)) AS result
-        """
-      Then query result
-        | result          |
-        | [1, NULL, 3, 4] |
-
-    Scenario: concat three arrays
-      When query
-        """
-        SELECT concat(array(1, 2, 3), array(4, 5), array(6)) AS result
-        """
-      Then query result
-        | result             |
-        | [1, 2, 3, 4, 5, 6] |
-
-    Scenario: concat two empty arrays
-      When query
-        """
-        SELECT concat(array(), array()) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: NULL typed array returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL array with typed NULL array returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                                | args                                               | result             |
+        | concat two boolean arrays                           | array(true), array(false)                          | [true, false]      |
+        | concat nested arrays                                | array(array(1, 2)), array(array(3, 4))             | [[1, 2], [3, 4]]   |
+        | concat array with null elements                     | array(1, NULL, 3), array(4)                        | [1, NULL, 3, 4]    |
+        | concat three arrays                                 | array(1, 2, 3), array(4, 5), array(6)              | [1, 2, 3, 4, 5, 6] |
+        | concat two empty arrays                             | array(), array()                                   | []                 |
+        | NULL typed array returns NULL                       | CAST(NULL AS ARRAY<INT>)                           | NULL               |
+        | typed NULL array with typed NULL array returns NULL | CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>) | NULL               |
 
   Rule: Multi-row behavior
 
-    Scenario: string concat from table with NULLs
+    Scenario Outline: Multi-row: <case>
       When query
         """
         SELECT concat(a, b) AS result
-        FROM VALUES ('hello', ' world'), (NULL, 'x'), ('a', NULL) AS t(a, b)
+        FROM VALUES <values> AS t(a, b)
         """
       Then query result
-        | result      |
-        | hello world |
-        | NULL        |
-        | NULL        |
+        | result  |
+        | <first> |
+        | NULL    |
+        | NULL    |
 
-    Scenario: array concat from table with NULLs
-      When query
-        """
-        SELECT concat(a, b) AS result
-        FROM VALUES (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL) AS t(a, b)
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
-        | NULL      |
-        | NULL      |
+      Examples:
+        | case                                | values                                                      | first       |
+        | string concat from table with NULLs | ('hello', ' world'), (NULL, 'x'), ('a', NULL)               | hello world |
+        | array concat from table with NULLs  | (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL) | [1, 2, 3]   |
 
   Rule: Error cases
 
-    Scenario: MAP type is rejected
+    Scenario Outline: Error: <case>
       When query
         """
-        SELECT concat(map('a', 1)) AS result
+        SELECT concat(<args>) AS result
         """
       Then query error .*
 
-    Scenario: STRUCT type is rejected
-      When query
-        """
-        SELECT concat(named_struct('a', 1)) AS result
-        """
-      Then query error .*
-
-    Scenario: untyped NULL mixed with typed array is rejected
-      When query
-        """
-        SELECT concat(NULL, array(1, 2)) AS result
-        """
-      Then query error .*
-
-    Scenario: typed array mixed with untyped NULL is rejected
-      When query
-        """
-        SELECT concat(array(1, 2), NULL) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                                            | args                 |
+        | MAP type is rejected                            | map('a', 1)          |
+        | STRUCT type is rejected                         | named_struct('a', 1) |
+        | untyped NULL mixed with typed array is rejected | NULL, array(1, 2)    |
+        | typed array mixed with untyped NULL is rejected | array(1, 2), NULL    |
 
   Rule: Timestamp coercion to string
 
-    Scenario: TIMESTAMP coerced to string with microseconds
+    Scenario Outline: Timestamp: <case>
       When query
         """
-        SELECT concat(TIMESTAMP '2024-01-15 12:00:00.123456') AS result
+        SELECT concat(<args>) AS result
         """
       Then query result
-        | result                     |
-        | 2024-01-15 12:00:00.123456 |
+        | result   |
+        | <result> |
 
-    Scenario: TIMESTAMP concatenated with string suffix
-      When query
-        """
-        SELECT concat(TIMESTAMP '2024-01-15 12:00:00', '_suffix') AS result
-        """
-      Then query result
-        | result                     |
-        | 2024-01-15 12:00:00_suffix |
-
-    Scenario: string prefix concatenated with TIMESTAMP
-      When query
-        """
-        SELECT concat('prefix_', TIMESTAMP '2024-01-15 12:00:00') AS result
-        """
-      Then query result
-        | result                     |
-        | prefix_2024-01-15 12:00:00 |
+      Examples:
+        | case                                              | args                                        | result                     |
+        | TIMESTAMP coerced to string with microseconds     | TIMESTAMP '2024-01-15 12:00:00.123456'      | 2024-01-15 12:00:00.123456 |
+        | TIMESTAMP concatenated with string suffix         | TIMESTAMP '2024-01-15 12:00:00', '_suffix'  | 2024-01-15 12:00:00_suffix |
+        | string prefix concatenated with TIMESTAMP         | 'prefix_', TIMESTAMP '2024-01-15 12:00:00'  | prefix_2024-01-15 12:00:00 |
+        | TIMESTAMP NULL with string returns NULL           | CAST(NULL AS TIMESTAMP), 'x'                | NULL                       |
+        | TIMESTAMP_NTZ coerced to string                   | TIMESTAMP_NTZ '2024-01-15 12:00:00'         | 2024-01-15 12:00:00        |
+        | TIMESTAMP_NTZ coerced to string with microseconds | TIMESTAMP_NTZ '2024-01-15 12:00:00.123456'  | 2024-01-15 12:00:00.123456 |
+        | TIMESTAMP_NTZ concatenated with string suffix     | TIMESTAMP_NTZ '2024-01-15 12:00:00', '_end' | 2024-01-15 12:00:00_end    |
+        | TIMESTAMP_NTZ NULL with string returns NULL       | CAST(NULL AS TIMESTAMP_NTZ), 'x'            | NULL                       |
 
     Scenario: two TIMESTAMPs cast to string concatenated with separator
       When query
@@ -539,51 +255,6 @@ Feature: concat function
       Then query result
         | result                                  |
         | 2024-01-15 12:00:00_2024-01-16 13:14:15 |
-
-    Scenario: TIMESTAMP NULL with string returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS TIMESTAMP), 'x') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: TIMESTAMP_NTZ coerced to string
-      When query
-        """
-        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 12:00:00 |
-
-    Scenario: TIMESTAMP_NTZ coerced to string with microseconds
-      When query
-        """
-        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00.123456') AS result
-        """
-      Then query result
-        | result                     |
-        | 2024-01-15 12:00:00.123456 |
-
-    Scenario: TIMESTAMP_NTZ concatenated with string suffix
-      When query
-        """
-        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00', '_end') AS result
-        """
-      Then query result
-        | result                  |
-        | 2024-01-15 12:00:00_end |
-
-    Scenario: TIMESTAMP_NTZ NULL with string returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS TIMESTAMP_NTZ), 'x') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
 
   Rule: Nested concat
 
@@ -608,85 +279,26 @@ Feature: concat function
 
   Rule: Single-argument simplify edge cases
 
-    Scenario: single timestamp column coerced to string
+    Scenario Outline: Single argument: <case>
       When query
         """
-        SELECT concat(ts) AS result
-        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00') AS t(ts)
+        SELECT concat(<expr>) AS result
+        FROM VALUES (<value>) AS t(<col>)
         """
       Then query result
-        | result              |
-        | 2024-01-15 12:00:00 |
+        | result   |
+        | <result> |
 
-    Scenario: single timestamp column with microseconds
-      When query
-        """
-        SELECT concat(ts) AS result
-        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00.123456') AS t(ts)
-        """
-      Then query result
-        | result                     |
-        | 2024-01-15 12:00:00.123456 |
-
-    Scenario: single timestamp column explicit cast matches bare column
-      When query
-        """
-        SELECT concat(CAST(ts AS STRING)) AS result
-        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00') AS t(ts)
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 12:00:00 |
-
-    Scenario: single INT column coerced to string
-      When query
-        """
-        SELECT concat(n) AS result
-        FROM VALUES (42) AS t(n)
-        """
-      Then query result
-        | result |
-        | 42     |
-
-    Scenario: single DOUBLE column coerced to string
-      When query
-        """
-        SELECT concat(d) AS result
-        FROM VALUES (3.14) AS t(d)
-        """
-      Then query result
-        | result |
-        | 3.14   |
-
-    Scenario: single BOOLEAN column coerced to string
-      When query
-        """
-        SELECT concat(b) AS result
-        FROM VALUES (true) AS t(b)
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: single NULL timestamp column returns NULL
-      When query
-        """
-        SELECT concat(ts) AS result
-        FROM VALUES (CAST(NULL AS TIMESTAMP)) AS t(ts)
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: single TIMESTAMP_NTZ column coerced to string
-      When query
-        """
-        SELECT concat(ts) AS result
-        FROM VALUES (TIMESTAMP_NTZ '2024-01-15 12:00:00') AS t(ts)
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 12:00:00 |
+      Examples:
+        | case                                                      | expr               | value                                  | col | result                     |
+        | single timestamp column coerced to string                 | ts                 | TIMESTAMP '2024-01-15 12:00:00'        | ts  | 2024-01-15 12:00:00        |
+        | single timestamp column with microseconds                 | ts                 | TIMESTAMP '2024-01-15 12:00:00.123456' | ts  | 2024-01-15 12:00:00.123456 |
+        | single timestamp column explicit cast matches bare column | CAST(ts AS STRING) | TIMESTAMP '2024-01-15 12:00:00'        | ts  | 2024-01-15 12:00:00        |
+        | single INT column coerced to string                       | n                  | 42                                     | n   | 42                         |
+        | single DOUBLE column coerced to string                    | d                  | 3.14                                   | d   | 3.14                       |
+        | single BOOLEAN column coerced to string                   | b                  | true                                   | b   | true                       |
+        | single NULL timestamp column returns NULL                 | ts                 | CAST(NULL AS TIMESTAMP)                | ts  | NULL                       |
+        | single TIMESTAMP_NTZ column coerced to string             | ts                 | TIMESTAMP_NTZ '2024-01-15 12:00:00'    | ts  | 2024-01-15 12:00:00        |
 
   @spark_null
   Rule: Output schema

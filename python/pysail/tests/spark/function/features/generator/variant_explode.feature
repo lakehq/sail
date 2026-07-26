@@ -140,82 +140,26 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode with empty or non-container input
 
-    Scenario: Explode empty array returns no rows
+    Scenario Outline: Non-container: <case>
       When query
         """
         SELECT count(*) AS cnt
-        FROM (SELECT parse_json('[]') AS v) t
+        FROM (SELECT <src> AS v) t
         LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
         | 0   |
 
-    Scenario: Explode empty object returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('{}') AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Explode variant null returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('null') AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Explode SQL NULL returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT CAST(NULL AS VARIANT) AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Explode scalar variant returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('42') AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Explode string scalar variant returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('"hello"') AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Explode boolean scalar variant returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('true') AS v) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
+      Examples:
+        | case                                           | src                   |
+        | Explode empty array returns no rows            | parse_json('[]')      |
+        | Explode empty object returns no rows           | parse_json('{}')      |
+        | Explode variant null returns no rows           | parse_json('null')    |
+        | Explode SQL NULL returns no rows               | CAST(NULL AS VARIANT) |
+        | Explode scalar variant returns no rows         | parse_json('42')      |
+        | Explode string scalar variant returns no rows  | parse_json('"hello"') |
+        | Explode boolean scalar variant returns no rows | parse_json('true')    |
 
   Rule: variant_explode with nested values
 
@@ -272,84 +216,42 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode_outer ignores null or non-container input
 
-    Scenario: Outer explode variant null returns no rows
+    Scenario Outline: Outer non-container: <case>
       When query
         """
         SELECT count(*) AS cnt
-        FROM (SELECT parse_json('null') AS v) t
+        FROM (SELECT <src> AS v) t
         LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
         | 0   |
 
-    Scenario: Outer explode SQL NULL returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT CAST(NULL AS VARIANT) AS v) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Outer explode scalar returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('42') AS v) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Outer explode string scalar returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('"text"') AS v) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
-
-    Scenario: Outer explode boolean scalar returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('false') AS v) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
+      Examples:
+        | case                                         | src                   |
+        | Outer explode variant null returns no rows   | parse_json('null')    |
+        | Outer explode SQL NULL returns no rows       | CAST(NULL AS VARIANT) |
+        | Outer explode scalar returns no rows         | parse_json('42')      |
+        | Outer explode string scalar returns no rows  | parse_json('"text"')  |
+        | Outer explode boolean scalar returns no rows | parse_json('false')   |
 
   Rule: variant_explode_outer with empty containers returns no rows
 
-    Scenario: Outer explode empty array returns no rows
+    Scenario Outline: Outer empty container: <case>
       When query
         """
         SELECT count(*) AS cnt
-        FROM (SELECT parse_json('[]') AS v) t
+        FROM (SELECT <src> AS v) t
         LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
         | 0   |
 
-    Scenario: Outer explode empty object returns no rows
-      When query
-        """
-        SELECT count(*) AS cnt
-        FROM (SELECT parse_json('{}') AS v) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | cnt |
-        | 0   |
+      Examples:
+        | case                                       | src              |
+        | Outer explode empty array returns no rows  | parse_json('[]') |
+        | Outer explode empty object returns no rows | parse_json('{}') |
 
   Rule: variant_explode with table column
 
@@ -370,7 +272,7 @@ Feature: variant_explode and variant_explode_outer
         | 1  | 1   | NULL | 20    |
         | 2  | 0   | k    | "v"   |
 
-    Scenario: Explode variant column skips null, empty, and non-container rows
+    Scenario Outline: Variant_explode with table column: <case>
       When query
         """
         SELECT id, pos, key, variant_to_json(value) AS value
@@ -389,35 +291,14 @@ Feature: variant_explode and variant_explode_outer
           UNION ALL
           SELECT 7 AS id, parse_json('{}') AS v
         ) t
-        LATERAL VIEW variant_explode(v) ve AS pos, key, value
+        LATERAL VIEW <fn>(v) ve AS pos, key, value
         """
       Then query result
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
 
-    Scenario: Outer explode variant column skips null, empty, and non-container rows
-      When query
-        """
-        SELECT id, pos, key, variant_to_json(value) AS value
-        FROM (
-          SELECT 1 AS id, parse_json('[1]') AS v
-          UNION ALL
-          SELECT 2 AS id, parse_json('42') AS v
-          UNION ALL
-          SELECT 3 AS id, parse_json('{"a": 1}') AS v
-          UNION ALL
-          SELECT 4 AS id, parse_json('null') AS v
-          UNION ALL
-          SELECT 5 AS id, CAST(NULL AS VARIANT) AS v
-          UNION ALL
-          SELECT 6 AS id, parse_json('[]') AS v
-          UNION ALL
-          SELECT 7 AS id, parse_json('{}') AS v
-        ) t
-        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
-        """
-      Then query result
-        | id | pos | key  | value |
-        | 1  | 0   | NULL | 1     |
-        | 3  | 0   | a    | 1     |
+      Examples:
+        | case                                                                   | fn                    |
+        | Explode variant column skips null, empty, and non-container rows       | variant_explode       |
+        | Outer explode variant column skips null, empty, and non-container rows | variant_explode_outer |

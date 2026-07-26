@@ -3,95 +3,27 @@ Feature: try_sum
 
   Rule: Result values (migrated from test_try_sum.txt doctests)
 
-    Scenario: try_sum doctest #1 (result)
+    Scenario Outline: try_sum doctest <case> (result)
       When query
         """
-        SELECT try_sum(x) AS sum_x FROM VALUES (1), (2), (3) AS t(x)
+        SELECT try_sum(x) AS sum_x FROM VALUES <values> AS t(x)
         """
       Then query result
-        | sum_x |
-        | 6     |
+        | sum_x   |
+        | <sum_x> |
 
-    Scenario: try_sum doctest #2 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(NULL AS INT)), (2), (CAST(NULL AS INT)) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | 2     |
-
-    Scenario: try_sum doctest #3 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(9223372036854775807 AS BIGINT)), (CAST(1 AS BIGINT)) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | NULL  |
-
-    Scenario: try_sum doctest #4 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | 7.0   |
-
-    Scenario: try_sum doctest #5 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | sum_x    |
-        | Infinity |
-
-    Scenario: try_sum doctest #6 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | NaN   |
-
-    Scenario: try_sum doctest #7 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST('Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | sum_x    |
-        | Infinity |
-
-    Scenario: try_sum doctest #8 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2))) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | 6.00  |
-
-    Scenario: try_sum doctest #10 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))), (CAST(2.50 AS DECIMAL(10,2))) AS t(x)
-        """
-      Then query result
-        | sum_x |
-        | 3.50  |
-
-    Scenario: try_sum doctest #11 (result)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0))) AS t(x)
-        """
-      Then query result
-        | sum_x  |
-        | 110000 |
+      Examples:
+        | case | values                                                                                      | sum_x    |
+        | #1   | (1), (2), (3)                                                                               | 6        |
+        | #2   | (CAST(NULL AS INT)), (2), (CAST(NULL AS INT))                                               | 2        |
+        | #3   | (CAST(9223372036854775807 AS BIGINT)), (CAST(1 AS BIGINT))                                  | NULL     |
+        | #4   | (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.0 AS DOUBLE))                         | 7.0      |
+        | #5   | (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE))                                            | Infinity |
+        | #6   | (CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                                              | NaN      |
+        | #7   | (CAST('Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                                         | Infinity |
+        | #8   | (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2)))                                | 6.00     |
+        | #10  | (CAST(1.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))), (CAST(2.50 AS DECIMAL(10,2))) | 3.50     |
+        | #11  | (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0)))                                | 110000   |
 
     Scenario: try_sum doctest #13 (result)
       When query
@@ -114,27 +46,21 @@ Feature: try_sum
 
   Rule: Output schema (migrated from test_try_sum.txt printSchema doctests)
 
-    Scenario: try_sum doctest #9 (schema)
+    Scenario Outline: try_sum doctest <case> (schema)
       When query
         """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2))) AS t(x)
+        SELECT try_sum(x) AS sum_x FROM VALUES <values> AS t(x)
         """
       Then query schema
         """
         root
-         |-- sum_x: decimal(20,2) (nullable = true)
+         |-- sum_x: <type> (nullable = true)
         """
 
-    Scenario: try_sum doctest #12 (schema)
-      When query
-        """
-        SELECT try_sum(x) AS sum_x FROM VALUES (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0))) AS t(x)
-        """
-      Then query schema
-        """
-        root
-         |-- sum_x: decimal(15,0) (nullable = true)
-        """
+      Examples:
+        | case | values                                                       | type          |
+        | #9   | (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2))) | decimal(20,2) |
+        | #12  | (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0))) | decimal(15,0) |
 
     Scenario: try_sum doctest #14 (schema)
       When query

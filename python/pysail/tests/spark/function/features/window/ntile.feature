@@ -276,37 +276,20 @@ Feature: ntile window function comprehensive tests
         """
       Then query error .*
 
-    Scenario: ntile NULL arg errors
+    Scenario Outline: Bad argument: <case>
       When query
         """
-        SELECT id, ntile(NULL) OVER (ORDER BY id) AS bucket
-        FROM VALUES (1), (2) AS t(id)
+        SELECT id, ntile(<arg>) OVER (ORDER BY id) AS bucket
+        FROM VALUES <values> AS t(id)
         """
       Then query error .*
 
-    Scenario: ntile FLOAT arg errors
-      When query
-        """
-        SELECT id, ntile(3.5) OVER (ORDER BY id) AS bucket
-        FROM VALUES (1), (2), (3) AS t(id)
-        """
-      Then query error .*
-
-    Scenario: ntile STRING arg errors
-      When query
-        """
-        SELECT id, ntile('3') OVER (ORDER BY id) AS bucket
-        FROM VALUES (1), (2), (3) AS t(id)
-        """
-      Then query error .*
-
-    Scenario: ntile column reference errors (must be foldable)
-      When query
-        """
-        SELECT id, ntile(id) OVER (ORDER BY id) AS bucket
-        FROM VALUES (1), (2), (3) AS t(id)
-        """
-      Then query error .*
+      Examples:
+        | case                                             | arg  | values        |
+        | ntile NULL arg errors                            | NULL | (1), (2)      |
+        | ntile FLOAT arg errors                           | 3.5  | (1), (2), (3) |
+        | ntile STRING arg errors                          | '3'  | (1), (2), (3) |
+        | ntile column reference errors (must be foldable) | id   | (1), (2), (3) |
 
     Scenario: ntile MAX_INT
       When query

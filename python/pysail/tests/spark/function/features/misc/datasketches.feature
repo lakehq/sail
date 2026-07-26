@@ -190,19 +190,17 @@ Feature: DataSketches functions
         | lo | hi |
         | 1  | 1  |
 
-    Scenario: hll_sketch_agg rejects lgConfigK below the valid range
+    Scenario Outline: lgConfigK bound: <case>
       When query
         """
-        SELECT hll_sketch_agg(col, 3) FROM VALUES (1) AS tab(col)
+        SELECT hll_sketch_agg(col, <k>) FROM VALUES (1) AS tab(col)
         """
       Then query error (HLL_INVALID_LG_K|lgConfigK between 4 and 21)
 
-    Scenario: hll_sketch_agg rejects lgConfigK above the valid range
-      When query
-        """
-        SELECT hll_sketch_agg(col, 22) FROM VALUES (1) AS tab(col)
-        """
-      Then query error (HLL_INVALID_LG_K|lgConfigK between 4 and 21)
+      Examples:
+        | case                                                   | k  |
+        | hll_sketch_agg rejects lgConfigK below the valid range | 3  |
+        | hll_sketch_agg rejects lgConfigK above the valid range | 22 |
 
     Scenario: hll_sketch_agg rejects double input
       When query
@@ -232,19 +230,17 @@ Feature: DataSketches functions
         """
       Then query error (UNEXPECTED_NULL|integer seed argument)
 
-    Scenario: count_min_sketch rejects decimal eps and confidence like Spark
+    Scenario Outline: eps type: <case>
       When query
         """
-        SELECT count_min_sketch(col, 0.5, 0.5, 1) FROM VALUES (1) AS tab(col)
+        SELECT count_min_sketch(col, <args>) FROM VALUES (1) AS tab(col)
         """
       Then query error (UNEXPECTED_INPUT_TYPE|double eps argument)
 
-    Scenario: count_min_sketch rejects float eps like Spark
-      When query
-        """
-        SELECT count_min_sketch(col, CAST(0.5 AS FLOAT), 0.9d, 1) FROM VALUES (1) AS tab(col)
-        """
-      Then query error (UNEXPECTED_INPUT_TYPE|double eps argument)
+      Examples:
+        | case                                                           | args                        |
+        | count_min_sketch rejects decimal eps and confidence like Spark | 0.5, 0.5, 1                 |
+        | count_min_sketch rejects float eps like Spark                  | CAST(0.5 AS FLOAT), 0.9d, 1 |
 
     Scenario: count_min_sketch rejects integer confidence like Spark
       When query

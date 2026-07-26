@@ -3,86 +3,26 @@ Feature: try_avg
 
   Rule: Result values (migrated from test_try_avg.txt doctests)
 
-    Scenario: try_avg doctest #1 (result)
+    Scenario Outline: try_avg doctest <case> (result)
       When query
         """
-        SELECT try_avg(x) AS avg_x FROM VALUES (1), (2), (3) AS t(x)
+        SELECT try_avg(x) AS avg_x FROM VALUES <values> AS t(x)
         """
       Then query result
-        | avg_x |
-        | 2.0   |
+        | avg_x   |
+        | <avg_x> |
 
-    Scenario: try_avg doctest #3 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(NULL AS INT)), (2), (CAST(NULL AS INT)) AS t(x)
-        """
-      Then query result
-        | avg_x |
-        | 2.0   |
-
-    Scenario: try_avg doctest #4 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(9223372036854775807 AS BIGINT)), (CAST(1 AS BIGINT)) AS t(x)
-        """
-      Then query result
-        | avg_x                |
-        | 4.611686018427388e18 |
-
-    Scenario: try_avg doctest #5 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | avg_x              |
-        | 2.3333333333333335 |
-
-    Scenario: try_avg doctest #6 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | avg_x    |
-        | Infinity |
-
-    Scenario: try_avg doctest #7 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) AS t(x)
-        """
-      Then query result
-        | avg_x |
-        | NaN   |
-
-    Scenario: try_avg doctest #8 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2))) AS t(x)
-        """
-      Then query result
-        | avg_x |
-        | 3.00  |
-
-    Scenario: try_avg doctest #9 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(1.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))), (CAST(2.50 AS DECIMAL(10,2))) AS t(x)
-        """
-      Then query result
-        | avg_x |
-        | 1.75  |
-
-    Scenario: try_avg doctest #10 (result)
-      When query
-        """
-        SELECT try_avg(x) AS avg_x FROM VALUES (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0))) AS t(x)
-        """
-      Then query result
-        | avg_x |
-        | 55000 |
+      Examples:
+        | case | values                                                                                      | avg_x                |
+        | #1   | (1), (2), (3)                                                                               | 2.0                  |
+        | #3   | (CAST(NULL AS INT)), (2), (CAST(NULL AS INT))                                               | 2.0                  |
+        | #4   | (CAST(9223372036854775807 AS BIGINT)), (CAST(1 AS BIGINT))                                  | 4.611686018427388e18 |
+        | #5   | (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.0 AS DOUBLE))                         | 2.3333333333333335   |
+        | #6   | (CAST(1e308 AS DOUBLE)), (CAST(1e308 AS DOUBLE))                                            | Infinity             |
+        | #7   | (CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                                              | NaN                  |
+        | #8   | (CAST(1.23 AS DECIMAL(10,2))), (CAST(4.77 AS DECIMAL(10,2)))                                | 3.00                 |
+        | #9   | (CAST(1.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))), (CAST(2.50 AS DECIMAL(10,2))) | 1.75                 |
+        | #10  | (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0)))                                | 55000                |
 
     Scenario: try_avg doctest #11 (result)
       When query
@@ -103,32 +43,20 @@ Feature: try_avg
         | bad | 4.611686018427388e18 |
         | ok  | 7.5                  |
 
-    Scenario: try_avg doctest #14 (result)
+    Scenario Outline: try_avg doctest <case> over year-month intervals (result)
       When query
         """
-        SELECT try_avg(col) AS r FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col)
+        SELECT try_avg(col) AS r FROM VALUES <values> AS tab(col)
         """
       Then query result
-        | r    |
-        | NULL |
+        | r   |
+        | <r> |
 
-    Scenario: try_avg doctest #15 (result)
-      When query
-        """
-        SELECT try_avg(col) AS r FROM VALUES (interval '7 months'), (interval '1 months') AS tab(col)
-        """
-      Then query result
-        | r                            |
-        | INTERVAL '0-4' YEAR TO MONTH |
-
-    Scenario: try_avg doctest #16 (result)
-      When query
-        """
-        SELECT try_avg(col) AS r FROM VALUES (interval '10 months'), null, (interval '5 months') AS tab(col)
-        """
-      Then query result
-        | r                            |
-        | INTERVAL '0-8' YEAR TO MONTH |
+      Examples:
+        | case | values                                                | r                            |
+        | #14  | (interval '2147483647 months'), (interval '1 months') | NULL                         |
+        | #15  | (interval '7 months'), (interval '1 months')          | INTERVAL '0-4' YEAR TO MONTH |
+        | #16  | (interval '10 months'), null, (interval '5 months')   | INTERVAL '0-8' YEAR TO MONTH |
 
   Rule: Output schema (migrated from test_try_avg.txt printSchema doctests)
 

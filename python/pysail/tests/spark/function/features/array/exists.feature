@@ -4,59 +4,23 @@ Feature: exists higher-order function
 
   Rule: Basic boolean predicate evaluation
 
-    Scenario: predicate matches at least one element returns true
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT exists(array(1, 2, 3), x -> x > 2) AS result
+        SELECT exists(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: predicate matches no elements returns false
-      When query
-        """
-        SELECT exists(array(1, 2, 3), x -> x > 10) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: predicate matches all elements returns true
-      When query
-        """
-        SELECT exists(array(1, 2, 3), x -> x > 0) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: single element array predicate true
-      When query
-        """
-        SELECT exists(array(5), x -> x > 0) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: single element array predicate false
-      When query
-        """
-        SELECT exists(array(5), x -> x > 10) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: empty array always returns false
-      When query
-        """
-        SELECT exists(array(), x -> x > 0) AS result
-        """
-      Then query result
-        | result |
-        | false  |
+      Examples:
+        | case                                                | arr            | pred   | result |
+        | predicate matches at least one element returns true | array(1, 2, 3) | x > 2  | true   |
+        | predicate matches no elements returns false         | array(1, 2, 3) | x > 10 | false  |
+        | predicate matches all elements returns true         | array(1, 2, 3) | x > 0  | true   |
+        | single element array predicate true                 | array(5)       | x > 0  | true   |
+        | single element array predicate false                | array(5)       | x > 10 | false  |
+        | empty array always returns false                    | array()        | x > 0  | false  |
 
   Rule: NULL array input
 
@@ -78,106 +42,42 @@ Feature: exists higher-order function
 
   Rule: NULL elements in array — three-valued logic
 
-    Scenario: null in array when predicate returns false for null and true exists
+    Scenario Outline: Three-valued logic: <case>
       When query
         """
-        SELECT exists(array(1, null, 3), x -> x > 2) AS result
+        SELECT exists(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: null in array when predicate returns true for some non-null element
-      When query
-        """
-        SELECT exists(array(1, null, 3), x -> x > 0) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: null in array when no non-null element matches and null makes predicate null
-      When query
-        """
-        SELECT exists(array(1, null, 3), x -> x > 5) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: null element matched by IS NULL predicate
-      When query
-        """
-        SELECT exists(array(1, null, 3), x -> x IS NULL) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: IS NOT NULL predicate still true when non-null elements exist
-      When query
-        """
-        SELECT exists(array(1, null, 3), x -> x IS NOT NULL) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: all null array with numeric predicate returns NULL
-      When query
-        """
-        SELECT exists(array(null, null), x -> x > 0) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: all null array with IS NULL predicate returns true
-      When query
-        """
-        SELECT exists(array(null, null), x -> x IS NULL) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: single typed null element matched by IS NULL
-      When query
-        """
-        SELECT exists(array(CAST(NULL AS INT)), x -> x IS NULL) AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                                                                         | arr                      | pred          | result |
+        | null in array when predicate returns false for null and true exists          | array(1, null, 3)        | x > 2         | true   |
+        | null in array when predicate returns true for some non-null element          | array(1, null, 3)        | x > 0         | true   |
+        | null in array when no non-null element matches and null makes predicate null | array(1, null, 3)        | x > 5         | NULL   |
+        | null element matched by IS NULL predicate                                    | array(1, null, 3)        | x IS NULL     | true   |
+        | IS NOT NULL predicate still true when non-null elements exist                | array(1, null, 3)        | x IS NOT NULL | true   |
+        | all null array with numeric predicate returns NULL                           | array(null, null)        | x > 0         | NULL   |
+        | all null array with IS NULL predicate returns true                           | array(null, null)        | x IS NULL     | true   |
+        | single typed null element matched by IS NULL                                 | array(CAST(NULL AS INT)) | x IS NULL     | true   |
 
   Rule: Predicate returning NULL
 
-    Scenario: predicate always returns NULL results in NULL
+    Scenario Outline: Predicate returning NULL: <case>
       When query
         """
-        SELECT exists(array(1, 2, 3), x -> CAST(NULL AS BOOLEAN)) AS result
+        SELECT exists(array(1, 2, 3), x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | NULL   |
+        | result   |
+        | <result> |
 
-    Scenario: predicate returns true for some elements and NULL for others returns true
-      When query
-        """
-        SELECT exists(array(1, 2, 3), x -> CASE WHEN x = 2 THEN true ELSE CAST(NULL AS BOOLEAN) END) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: predicate returns false for some elements and NULL for others returns NULL
-      When query
-        """
-        SELECT exists(array(1, 2, 3), x -> CASE WHEN x = 2 THEN false ELSE CAST(NULL AS BOOLEAN) END) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                                                       | pred                                                      | result |
+        | predicate always returns NULL results in NULL                              | CAST(NULL AS BOOLEAN)                                     | NULL   |
+        | predicate returns true for some elements and NULL for others returns true  | CASE WHEN x = 2 THEN true ELSE CAST(NULL AS BOOLEAN) END  | true   |
+        | predicate returns false for some elements and NULL for others returns NULL | CASE WHEN x = 2 THEN false ELSE CAST(NULL AS BOOLEAN) END | NULL   |
 
   Rule: Lambda only accepts one parameter
 
@@ -190,115 +90,43 @@ Feature: exists higher-order function
 
   Rule: Element type coverage
 
-    Scenario: long array
+    Scenario Outline: Element type: <case>
       When query
         """
-        SELECT exists(array(1L, 2L, 3L), x -> x > 2L) AS result
+        SELECT exists(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: double array
-      When query
-        """
-        SELECT exists(array(1.0, 2.0, 3.0), x -> x > 2.5) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: decimal array
-      When query
-        """
-        SELECT exists(array(1.5BD, 2.5BD, 3.5BD), x -> x > 3.0BD) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: string array match found
-      When query
-        """
-        SELECT exists(array('a', 'b', 'c'), x -> x = 'b') AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: string array no match
-      When query
-        """
-        SELECT exists(array('a', 'b', 'c'), x -> x = 'z') AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: boolean array with true element
-      When query
-        """
-        SELECT exists(array(false, false, true), x -> x) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: boolean array all false
-      When query
-        """
-        SELECT exists(array(false, false, false), x -> x) AS result
-        """
-      Then query result
-        | result |
-        | false  |
+      Examples:
+        | case                            | arr                        | pred      | result |
+        | long array                      | array(1L, 2L, 3L)          | x > 2L    | true   |
+        | double array                    | array(1.0, 2.0, 3.0)       | x > 2.5   | true   |
+        | decimal array                   | array(1.5BD, 2.5BD, 3.5BD) | x > 3.0BD | true   |
+        | string array match found        | array('a', 'b', 'c')       | x = 'b'   | true   |
+        | string array no match           | array('a', 'b', 'c')       | x = 'z'   | false  |
+        | boolean array with true element | array(false, false, true)  | x         | true   |
+        | boolean array all false         | array(false, false, false) | x         | false  |
 
   Rule: Complex predicates
 
-    Scenario: AND predicate
+    Scenario Outline: Complex predicate: <case>
       When query
         """
-        SELECT exists(array(1, 2, 3, 4, 5), x -> x > 2 AND x < 5) AS result
+        SELECT exists(<arr>, <lambda>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: OR predicate
-      When query
-        """
-        SELECT exists(array(1, 2, 3), x -> x < 0 OR x > 2) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: struct array field access
-      When query
-        """
-        SELECT exists(array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)), s -> s.a > 2) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: struct array field access no match
-      When query
-        """
-        SELECT exists(array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)), s -> s.a > 10) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: nested array with inner exists
-      When query
-        """
-        SELECT exists(array(array(1,2), array(3,4)), x -> exists(x, y -> y > 3)) AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                               | arr                                                               | lambda                     | result |
+        | AND predicate                      | array(1, 2, 3, 4, 5)                                              | x -> x > 2 AND x < 5       | true   |
+        | OR predicate                       | array(1, 2, 3)                                                    | x -> x < 0 OR x > 2        | true   |
+        | struct array field access          | array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)) | s -> s.a > 2               | true   |
+        | struct array field access no match | array(named_struct('a', 1, 'b', 2), named_struct('a', 3, 'b', 4)) | s -> s.a > 10              | false  |
+        | nested array with inner exists     | array(array(1,2), array(3,4))                                     | x -> exists(x, y -> y > 3) | true   |
 
   Rule: Outer column capture
 
@@ -313,8 +141,8 @@ Feature: exists higher-order function
 
   Rule: ANSI mode inside the predicate
 
-    Scenario: short-circuit avoids division by zero under ANSI on
-      Given config spark.sql.ansi.enabled = true
+    Scenario Outline: short-circuit avoids division by zero under ANSI <mode>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT exists(array(1, 0, 2), x -> 10 / x > 4) AS result
@@ -323,15 +151,10 @@ Feature: exists higher-order function
         | result |
         | true   |
 
-    Scenario: short-circuit avoids division by zero under ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT exists(array(1, 0, 2), x -> 10 / x > 4) AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | mode | ansi  |
+        | on   | true  |
+        | off  | false |
 
   Rule: Predicate must return boolean
 
@@ -391,27 +214,21 @@ Feature: exists higher-order function
         | true   |
         | NULL   |
 
-    Scenario: every row is a NULL array
+    Scenario Outline: every row is <case>
       When query
         """
         SELECT exists(c, x -> x > 2) AS result
-        FROM VALUES (CAST(NULL AS ARRAY<INT>)), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        FROM VALUES <values> AS t(c)
         """
       Then query result ordered
-        | result |
-        | NULL   |
-        | NULL   |
+        | result   |
+        | <result> |
+        | <result> |
 
-    Scenario: every row is an empty array
-      When query
-        """
-        SELECT exists(c, x -> x > 2) AS result
-        FROM VALUES (array()), (array()) AS t(c)
-        """
-      Then query result ordered
-        | result |
-        | false  |
-        | false  |
+      Examples:
+        | case           | values                                                 | result |
+        | a NULL array   | (CAST(NULL AS ARRAY<INT>)), (CAST(NULL AS ARRAY<INT>)) | NULL   |
+        | an empty array | (array()), (array())                                   | false  |
 
     Scenario: the captured column changes the predicate per row
       When query
@@ -426,62 +243,38 @@ Feature: exists higher-order function
 
   Rule: Short-circuit order under ANSI
 
-    Scenario: an element before the first true is still evaluated under ANSI on
+    Scenario Outline: <case> under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT exists(array(0, 1, 2), x -> 10 / x > 4) AS result
+        SELECT exists(<arr>, x -> <pred>) AS result
         """
       Then query error Division by zero
 
-    Scenario: an element before the first true is still evaluated under ANSI off
+      Examples:
+        | case                                                | arr            | pred         |
+        | an element before the first true is still evaluated | array(0, 1, 2) | 10 / x > 4   |
+        | no element is true so every element is evaluated    | array(1, 0, 2) | 10 / x > 100 |
+        | a true after the failing element does not save it   | array(5, 0, 1) | 10 / x > 4   |
+
+    Scenario Outline: <case> under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT exists(array(0, 1, 2), x -> 10 / x > 4) AS result
+        SELECT exists(<arr>, x -> <pred>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: no element is true so every element is evaluated under ANSI on
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT exists(array(1, 0, 2), x -> 10 / x > 100) AS result
-        """
-      Then query error Division by zero
+      Examples:
+        | case                                                | arr            | pred         | result |
+        | an element before the first true is still evaluated | array(0, 1, 2) | 10 / x > 4   | true   |
+        | no element is true so every element is evaluated    | array(1, 0, 2) | 10 / x > 100 | NULL   |
+        | a true after the failing element does not save it   | array(5, 0, 1) | 10 / x > 4   | true   |
 
-    Scenario: no element is true so every element is evaluated under ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT exists(array(1, 0, 2), x -> 10 / x > 100) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: a true after the failing element does not save it under ANSI on
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT exists(array(5, 0, 1), x -> 10 / x > 4) AS result
-        """
-      Then query error Division by zero
-
-    Scenario: a true after the failing element does not save it under ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT exists(array(5, 0, 1), x -> 10 / x > 4) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: one row short-circuits while another does not under ANSI on
-      Given config spark.sql.ansi.enabled = true
+    Scenario Outline: one row short-circuits while another does not under ANSI <mode>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT exists(c, x -> 10 / x > 4) AS result
@@ -492,17 +285,10 @@ Feature: exists higher-order function
         | true   |
         | false  |
 
-    Scenario: one row short-circuits while another does not under ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT exists(c, x -> 10 / x > 4) AS result
-        FROM VALUES (array(1, 0)), (array(5, 5)) AS t(c)
-        """
-      Then query result ordered
-        | result |
-        | true   |
-        | false  |
+      Examples:
+        | mode | ansi  |
+        | on   | true  |
+        | off  | false |
 
   @spark_null
   Rule: Output schema

@@ -9,119 +9,71 @@ Feature: get_json_object extracts values via a Spark JSONPath
 
   Rule: Dot notation walks object keys
 
-    Scenario: top-level key
+    Scenario Outline: Dot: <case>
       When query
         """
-        SELECT get_json_object('{"a":1}', '$.a') AS result
+        SELECT get_json_object(<json>, <path>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: nested keys
-      When query
-        """
-        SELECT get_json_object('{"a":{"b":1}}', '$.a.b') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: object value is returned as compact JSON text
-      When query
-        """
-        SELECT get_json_object('{"a":{"b":1}}', '$.a') AS result
-        """
-      Then query result
-        | result  |
-        | {"b":1} |
-
-    Scenario: string value is returned unquoted
-      When query
-        """
-        SELECT get_json_object('{"a":"hi"}', '$.a') AS result
-        """
-      Then query result
-        | result |
-        | hi     |
-
-    Scenario: boolean value
-      When query
-        """
-        SELECT get_json_object('{"a":true}', '$.a') AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                                          | json            | path    | result  |
+        | top-level key                                 | '{"a":1}'       | '$.a'   | 1       |
+        | nested keys                                   | '{"a":{"b":1}}' | '$.a.b' | 1       |
+        | object value is returned as compact JSON text | '{"a":{"b":1}}' | '$.a'   | {"b":1} |
+        | string value is returned unquoted             | '{"a":"hi"}'    | '$.a'   | hi      |
+        | boolean value                                 | '{"a":true}'    | '$.a'   | true    |
 
   Rule: A bare $ returns the whole document
 
-    Scenario: whole object
+    Scenario Outline: Bare dollar: <case>
       When query
         """
-        SELECT get_json_object('{"a":1}', '$') AS result
+        SELECT get_json_object(<json>, '$') AS result
         """
       Then query result
-        | result  |
-        | {"a":1} |
+        | result   |
+        | <result> |
 
-    Scenario: whole array
-      When query
-        """
-        SELECT get_json_object('[1,2,3]', '$') AS result
-        """
-      Then query result
-        | result  |
-        | [1,2,3] |
+      Examples:
+        | case         | json      | result  |
+        | whole object | '{"a":1}' | {"a":1} |
+        | whole array  | '[1,2,3]' | [1,2,3] |
 
   Rule: Array indexing selects array elements
 
-    Scenario: index after a key
+    Scenario Outline: Array index: <case>
       When query
         """
-        SELECT get_json_object('{"a":[10,20,30]}', '$.a[1]') AS result
+        SELECT get_json_object(<json>, <path>) AS result
         """
       Then query result
-        | result |
-        | 20     |
+        | result   |
+        | <result> |
 
-    Scenario: index at the root
-      When query
-        """
-        SELECT get_json_object('[1,2,3]', '$[0]') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: nested array element is returned as compact JSON text
-      When query
-        """
-        SELECT get_json_object('{"a":[[1,2],[3,4]]}', '$.a[1]') AS result
-        """
-      Then query result
-        | result |
-        | [3,4]  |
+      Examples:
+        | case                                                  | json                  | path     | result |
+        | index after a key                                     | '{"a":[10,20,30]}'    | '$.a[1]' | 20     |
+        | index at the root                                     | '[1,2,3]'             | '$[0]'   | 1      |
+        | nested array element is returned as compact JSON text | '{"a":[[1,2],[3,4]]}' | '$.a[1]' | [3,4]  |
 
   Rule: Mixed key and index paths
 
-    Scenario: key then index then key
+    Scenario Outline: Mixed path: <case>
       When query
         """
-        SELECT get_json_object('{"a":[{"b":7}]}', '$.a[0].b') AS result
+        SELECT get_json_object(<json>, <path>) AS result
         """
       Then query result
-        | result |
-        | 7      |
+        | result   |
+        | <result> |
 
-    Scenario: index then key
-      When query
-        """
-        SELECT get_json_object('{"a":[{"c":1},{"c":9}]}', '$.a[1].c') AS result
-        """
-      Then query result
-        | result |
-        | 9      |
+      Examples:
+        | case                    | json                      | path       | result |
+        | key then index then key | '{"a":[{"b":7}]}'         | '$.a[0].b' | 7      |
+        | index then key          | '{"a":[{"c":1},{"c":9}]}' | '$.a[1].c' | 9      |
 
   Rule: Single-quoted bracket notation
 
@@ -130,80 +82,39 @@ Feature: get_json_object extracts values via a Spark JSONPath
     # They pass on Spark JVM. Remove the tag once the SQL `''` escaping is fixed.
 
     @sail-bug
-    Scenario: single-quoted bracket key
+    Scenario Outline: Bracket: <case>
       When query
         """
-        SELECT get_json_object('{"a":1}', '$[''a'']') AS result
+        SELECT get_json_object(<json>, <path>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    @sail-bug
-    Scenario: single-quoted bracket key containing dots
-      When query
-        """
-        SELECT get_json_object('{"a.b":5}', '$[''a.b'']') AS result
-        """
-      Then query result
-        | result |
-        | 5      |
+      Examples:
+        | case                                      | json        | path         | result |
+        | single-quoted bracket key                 | '{"a":1}'   | '$[''a'']'   | 1      |
+        | single-quoted bracket key containing dots | '{"a.b":5}' | '$[''a.b'']' | 5      |
 
   Rule: Non-matching and invalid paths return NULL
 
-    Scenario: missing key
+    Scenario Outline: No match: <case>
       When query
         """
-        SELECT get_json_object('{"a":1}', '$.x') AS result
+        SELECT get_json_object(<json>, <path>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: descending into a scalar
-      When query
-        """
-        SELECT get_json_object('{"a":1}', '$.a.b') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: array index out of bounds
-      When query
-        """
-        SELECT get_json_object('{"a":[1,2]}', '$.a[5]') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: path not anchored at dollar returns NULL
-      When query
-        """
-        SELECT get_json_object('{"a":1}', 'a') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: empty path returns NULL
-      When query
-        """
-        SELECT get_json_object('{"a":1}', '') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: dollar followed by empty key returns NULL
-      When query
-        """
-        SELECT get_json_object('{"a":1}', '$.') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                      | json          | path     |
+        | missing key                               | '{"a":1}'     | '$.x'    |
+        | descending into a scalar                  | '{"a":1}'     | '$.a.b'  |
+        | array index out of bounds                 | '{"a":[1,2]}' | '$.a[5]' |
+        | path not anchored at dollar returns NULL  | '{"a":1}'     | 'a'      |
+        | empty path returns NULL                   | '{"a":1}'     | ''       |
+        | dollar followed by empty key returns NULL | '{"a":1}'     | '$.'     |
 
   Rule: get_json_object — the argument is resolved per row, not taken from the first row
 
@@ -219,39 +130,21 @@ Feature: get_json_object extracts values via a Spark JSONPath
 
     # Sail returns the wrong value on the column path: Sail returns NULL for every row.
     @column_args @sail-bug
-    Scenario: get_json_object takes argument 2 from a column holding two different values
+    Scenario Outline: Get_json_object: <case>
       When query
         """
-        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, '$.a') AS t(i, c) ORDER BY i
+        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query result ordered
         | result |
         | b      |
-        | NULL   |
+        | <r2>   |
 
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
-    Scenario: get_json_object takes argument 2 from a column containing NULL
-      When query
-        """
-        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, NULL) AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result |
-        | b      |
-        | NULL   |
-
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
-    Scenario: get_json_object takes argument 2 from a column
-      When query
-        """
-        SELECT get_json_object('[{"a":"b"},{"a":"c"}]', c) AS result FROM VALUES (1, '$[0].a'), (2, '$[0].a') AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result |
-        | b      |
-        | b      |
+      Examples:
+        | case                                                                        | v2       | r2   |
+        | get_json_object takes argument 2 from a column holding two different values | '$.a'    | NULL |
+        | get_json_object takes argument 2 from a column containing NULL              | NULL     | NULL |
+        | get_json_object takes argument 2 from a column                              | '$[0].a' | b    |
 
   @spark_null
   Rule: Output schema

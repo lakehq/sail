@@ -3,95 +3,53 @@ Feature: last_day comprehensive tests
 
   Rule: Argument count validation
 
-    Scenario: last_day zero arguments errors
+    Scenario Outline: Arity: <case>
       When query
         """
-        SELECT last_day() AS result
+        SELECT last_day(<args>) AS result
         """
       Then query error .*
 
-    Scenario: last_day two arguments errors
-      When query
-        """
-        SELECT last_day(DATE'2024-01-01', 'extra') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                           | args                      |
+        | last_day zero arguments errors |                           |
+        | last_day two arguments errors  | DATE'2024-01-01', 'extra' |
 
   Rule: NULL handling
 
-    Scenario: last_day NULL date
+    Scenario Outline: NULL input: <case>
       When query
         """
-        SELECT last_day(CAST(NULL AS DATE)) AS result
+        SELECT last_day(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: last_day NULL string
-      When query
-        """
-        SELECT last_day(CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                 | input                |
+        | last_day NULL date   | CAST(NULL AS DATE)   |
+        | last_day NULL string | CAST(NULL AS STRING) |
 
   Rule: Basic usage per month
 
-    Scenario: last_day January
+    Scenario Outline: Month: <case>
       When query
         """
-        SELECT last_day(DATE'2024-01-15') AS result
+        SELECT last_day(DATE<date>) AS result
         """
       Then query result
-        | result     |
-        | 2024-01-31 |
+        | result   |
+        | <result> |
 
-    Scenario: last_day February leap year
-      When query
-        """
-        SELECT last_day(DATE'2024-02-01') AS result
-        """
-      Then query result
-        | result     |
-        | 2024-02-29 |
-
-    Scenario: last_day February non-leap year
-      When query
-        """
-        SELECT last_day(DATE'2023-02-01') AS result
-        """
-      Then query result
-        | result     |
-        | 2023-02-28 |
-
-    Scenario: last_day March
-      When query
-        """
-        SELECT last_day(DATE'2024-03-01') AS result
-        """
-      Then query result
-        | result     |
-        | 2024-03-31 |
-
-    Scenario: last_day April
-      When query
-        """
-        SELECT last_day(DATE'2024-04-15') AS result
-        """
-      Then query result
-        | result     |
-        | 2024-04-30 |
-
-    Scenario: last_day December
-      When query
-        """
-        SELECT last_day(DATE'2024-12-05') AS result
-        """
-      Then query result
-        | result     |
-        | 2024-12-31 |
+      Examples:
+        | case                            | date         | result     |
+        | last_day January                | '2024-01-15' | 2024-01-31 |
+        | last_day February leap year     | '2024-02-01' | 2024-02-29 |
+        | last_day February non-leap year | '2023-02-01' | 2023-02-28 |
+        | last_day March                  | '2024-03-01' | 2024-03-31 |
+        | last_day April                  | '2024-04-15' | 2024-04-30 |
+        | last_day December               | '2024-12-05' | 2024-12-31 |
 
   Rule: String input coercion
 
@@ -113,32 +71,20 @@ Feature: last_day comprehensive tests
 
   Rule: Boundary dates
 
-    Scenario: last_day epoch
+    Scenario Outline: Boundary: <case>
       When query
         """
-        SELECT last_day(DATE'1970-01-01') AS result
+        SELECT last_day(DATE<date>) AS result
         """
       Then query result
-        | result     |
-        | 1970-01-31 |
+        | result   |
+        | <result> |
 
-    Scenario: last_day minimum date
-      When query
-        """
-        SELECT last_day(DATE'0001-01-01') AS result
-        """
-      Then query result
-        | result     |
-        | 0001-01-31 |
-
-    Scenario: last_day maximum date
-      When query
-        """
-        SELECT last_day(DATE'9999-12-01') AS result
-        """
-      Then query result
-        | result     |
-        | 9999-12-31 |
+      Examples:
+        | case                  | date         | result     |
+        | last_day epoch        | '1970-01-01' | 1970-01-31 |
+        | last_day minimum date | '0001-01-01' | 0001-01-31 |
+        | last_day maximum date | '9999-12-01' | 9999-12-31 |
 
   Rule: Multi-row
 
@@ -159,32 +105,20 @@ Feature: last_day comprehensive tests
     # last_day. Regression test for issue #1735 — Sail previously rejected
     # these types at plan time.
 
-    Scenario: last_day accepts TIMESTAMP input (Spark casts to Date)
+    Scenario Outline: Timestamp coercion: <case>
       When query
         """
-        SELECT last_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP)) AS result
+        SELECT last_day(CAST(<input> AS <type>)) AS result
         """
       Then query result
-        | result     |
-        | 2024-01-31 |
+        | result   |
+        | <result> |
 
-    Scenario: last_day accepts TIMESTAMP_NTZ input (Spark casts to Date)
-      When query
-        """
-        SELECT last_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP_NTZ)) AS result
-        """
-      Then query result
-        | result     |
-        | 2024-01-31 |
-
-    Scenario: last_day on TIMESTAMP with non-midnight time still truncates
-      When query
-        """
-        SELECT last_day(CAST('2024-02-29 23:59:59' AS TIMESTAMP)) AS result
-        """
-      Then query result
-        | result     |
-        | 2024-02-29 |
+      Examples:
+        | case                                                         | input                 | type          | result     |
+        | last_day accepts TIMESTAMP input (Spark casts to Date)       | '2024-01-15 10:30:00' | TIMESTAMP     | 2024-01-31 |
+        | last_day accepts TIMESTAMP_NTZ input (Spark casts to Date)   | '2024-01-15 10:30:00' | TIMESTAMP_NTZ | 2024-01-31 |
+        | last_day on TIMESTAMP with non-midnight time still truncates | '2024-02-29 23:59:59' | TIMESTAMP     | 2024-02-29 |
 
     Scenario: last_day on TIMESTAMP column from VALUES
       When query
@@ -205,32 +139,20 @@ Feature: last_day comprehensive tests
     # 1900 → non-leap (Feb=28 days). 2000 → leap (Feb=29 days).
     # Exercises the leap-year algorithm correctness, not just the generic path.
 
-    Scenario: last_day February 1900 (century non-leap, rule of 100)
+    Scenario Outline: Gregorian: <case>
       When query
         """
-        SELECT last_day(DATE '1900-02-15') AS result
+        SELECT last_day(DATE <date>) AS result
         """
       Then query result
-        | result     |
-        | 1900-02-28 |
+        | result   |
+        | <result> |
 
-    Scenario: last_day February 2000 (century leap, rule of 400)
-      When query
-        """
-        SELECT last_day(DATE '2000-02-15') AS result
-        """
-      Then query result
-        | result     |
-        | 2000-02-29 |
-
-    Scenario: last_day year 1 AD (min date boundary)
-      When query
-        """
-        SELECT last_day(DATE '0001-01-15') AS result
-        """
-      Then query result
-        | result     |
-        | 0001-01-31 |
+      Examples:
+        | case                                                   | date         | result     |
+        | last_day February 1900 (century non-leap, rule of 100) | '1900-02-15' | 1900-02-28 |
+        | last_day February 2000 (century leap, rule of 400)     | '2000-02-15' | 2000-02-29 |
+        | last_day year 1 AD (min date boundary)                 | '0001-01-15' | 0001-01-31 |
 
   Rule: Filter pushdown — preimage rewrite preserves semantics for all 5 operators
 

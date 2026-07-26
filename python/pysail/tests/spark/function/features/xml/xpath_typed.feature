@@ -3,132 +3,100 @@ Feature: xpath_boolean/double/float/int/long/number/short/string extract typed v
 
   Rule: xpath_boolean evaluates XPath to a boolean
 
-    Scenario: xpath_boolean returns true when node exists
+    Scenario Outline: Boolean: <case>
       When query
         """
-        SELECT xpath_boolean('<a><b>1</b></a>', 'a/b') AS result
+        SELECT xpath_boolean('<a><b>1</b></a>', '<path>') AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_boolean returns false when node does not exist
-      When query
-        """
-        SELECT xpath_boolean('<a><b>1</b></a>', 'a/c') AS result
-        """
-      Then query result
-        | result |
-        | false  |
+      Examples:
+        | case                                                 | path | result |
+        | xpath_boolean returns true when node exists          | a/b  | true   |
+        | xpath_boolean returns false when node does not exist | a/c  | false  |
 
   Rule: xpath_double and xpath_number evaluate XPath to a double
 
-    Scenario: xpath_double returns a sum as double
+    Scenario Outline: Double: <case>
       When query
         """
-        SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        SELECT <fn>('<xml>', '<path>') AS result
         """
       Then query result
-        | result |
-        | 3.0    |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_number returns a sum as double
-      When query
-        """
-        SELECT xpath_number('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
-        """
-      Then query result
-        | result |
-        | 3.0    |
-
-    Scenario: xpath_double returns NaN for non-numeric value
-      When query
-        """
-        SELECT xpath_double('<a><b>text</b></a>', 'a/b') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case                                           | fn           | xml                     | path     | result |
+        | xpath_double returns a sum as double           | xpath_double | <a><b>1</b><b>2</b></a> | sum(a/b) | 3.0    |
+        | xpath_number returns a sum as double           | xpath_number | <a><b>1</b><b>2</b></a> | sum(a/b) | 3.0    |
+        | xpath_double returns NaN for non-numeric value | xpath_double | <a><b>text</b></a>      | a/b      | NaN    |
 
   Rule: xpath_float evaluates XPath to a float
 
-    Scenario: xpath_float returns a sum as float
+    Scenario Outline: Float: <case>
       When query
         """
-        SELECT xpath_float('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        SELECT xpath_float('<xml>', '<path>') AS result
         """
       Then query result
-        | result |
-        | 3.0    |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_float returns NaN for non-numeric value
-      When query
-        """
-        SELECT xpath_float('<a><b>text</b></a>', 'a/b') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case                                          | xml                     | path     | result |
+        | xpath_float returns a sum as float            | <a><b>1</b><b>2</b></a> | sum(a/b) | 3.0    |
+        | xpath_float returns NaN for non-numeric value | <a><b>text</b></a>      | a/b      | NaN    |
 
   Rule: xpath_int evaluates XPath to an integer
 
-    Scenario: xpath_int returns a sum as integer
+    Scenario Outline: Int: <case>
       When query
         """
-        SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        SELECT xpath_int('<xml>', '<path>') AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_int returns zero for non-numeric value
-      When query
-        """
-        SELECT xpath_int('<a><b>text</b></a>', 'a/b') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                         | xml                     | path     | result |
+        | xpath_int returns a sum as integer           | <a><b>1</b><b>2</b></a> | sum(a/b) | 3      |
+        | xpath_int returns zero for non-numeric value | <a><b>text</b></a>      | a/b      | 0      |
 
   Rule: xpath_long evaluates XPath to a long integer
 
-    Scenario: xpath_long returns a sum as long
+    Scenario Outline: Long: <case>
       When query
         """
-        SELECT xpath_long('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        SELECT xpath_long('<xml>', '<path>') AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_long returns zero for non-numeric value
-      When query
-        """
-        SELECT xpath_long('<a><b>text</b></a>', 'a/b') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                          | xml                     | path     | result |
+        | xpath_long returns a sum as long              | <a><b>1</b><b>2</b></a> | sum(a/b) | 3      |
+        | xpath_long returns zero for non-numeric value | <a><b>text</b></a>      | a/b      | 0      |
 
   Rule: xpath_short evaluates XPath to a short integer
 
-    Scenario: xpath_short returns a sum as short
+    Scenario Outline: Short: <case>
       When query
         """
-        SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)') AS result
+        SELECT xpath_short('<xml>', '<path>') AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: xpath_short returns zero for non-numeric value
-      When query
-        """
-        SELECT xpath_short('<a><b>text</b></a>', 'a/b') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                           | xml                     | path     | result |
+        | xpath_short returns a sum as short             | <a><b>1</b><b>2</b></a> | sum(a/b) | 3      |
+        | xpath_short returns zero for non-numeric value | <a><b>text</b></a>      | a/b      | 0      |
 
   Rule: xpath_string evaluates XPath to a string
 

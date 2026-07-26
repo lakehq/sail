@@ -3,172 +3,105 @@ Feature: soundex() returns the Soundex code of a string
 
   Rule: Basic usage
 
-    Scenario: standard word
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT soundex('Robert') AS result
+        SELECT soundex(<input>) AS result
         """
       Then query result
-        | result |
-        | R163   |
+        | result   |
+        | <result> |
 
-    Scenario: similar sounding names produce same code
-      When query
-        """
-        SELECT soundex('Robert') = soundex('Rupert') AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                  | input    | result |
+        | standard word         | 'Robert' | R163   |
+        | single character      | 'A'      | A000   |
+        | all same code letters | 'BFPV'   | B000   |
 
-    Scenario: different sounding names produce different codes
+    Scenario Outline: Comparison: <case>
       When query
         """
-        SELECT soundex('Robert') = soundex('Smith') AS result
+        SELECT soundex('Robert') = soundex(<other>) AS result
         """
       Then query result
-        | result |
-        | false  |
+        | result   |
+        | <result> |
 
-    Scenario: single character
-      When query
-        """
-        SELECT soundex('A') AS result
-        """
-      Then query result
-        | result |
-        | A000   |
-
-    Scenario: all same code letters
-      When query
-        """
-        SELECT soundex('BFPV') AS result
-        """
-      Then query result
-        | result |
-        | B000   |
+      Examples:
+        | case                                             | other    | result |
+        | similar sounding names produce same code         | 'Rupert' | true   |
+        | different sounding names produce different codes | 'Smith'  | false  |
 
   Rule: Edge cases
 
-    Scenario: empty string
+    Scenario Outline: Edge case: <case>
       When query
         """
-        SELECT soundex('') AS result
+        SELECT soundex(<input>) AS result
         """
       Then query result
-        | result |
-        |        |
+        | result   |
+        | <result> |
 
-    Scenario: numeric string returns input unchanged
-      When query
-        """
-        SELECT soundex('123') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: non-alpha first character returns input unchanged
-      When query
-        """
-        SELECT soundex('123abc') AS result
-        """
-      Then query result
-        | result |
-        | 123abc |
-
-    Scenario: space first character returns input unchanged
-      When query
-        """
-        SELECT soundex(' abc') AS result
-        """
-      Then query result
-        | result |
-        | abc    |
-
-    Scenario: null input returns null
-      When query
-        """
-        SELECT soundex(CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                              | input                | result |
+        | empty string                                      | ''                   |        |
+        | numeric string returns input unchanged            | '123'                | 123    |
+        | non-alpha first character returns input unchanged | '123abc'             | 123abc |
+        | space first character returns input unchanged     | ' abc'               | abc    |
+        | null input returns null                           | CAST(NULL AS STRING) | NULL   |
 
   Rule: Non-alpha characters after first letter act as separators
 
-    Scenario: digit separates same-code letters
+    Scenario Outline: Separator: <case>
       When query
         """
-        SELECT soundex('B1F') AS result
+        SELECT soundex(<input>) AS result
         """
       Then query result
-        | result |
-        | B100   |
+        | result   |
+        | <result> |
 
-    Scenario: space separates same-code letters
-      When query
-        """
-        SELECT soundex('B F') AS result
-        """
-      Then query result
-        | result |
-        | B100   |
-
-    Scenario: letters with embedded digits
-      When query
-        """
-        SELECT soundex('a1bc') AS result
-        """
-      Then query result
-        | result |
-        | A120   |
+      Examples:
+        | case                              | input  | result |
+        | digit separates same-code letters | 'B1F'  | B100   |
+        | space separates same-code letters | 'B F'  | B100   |
+        | letters with embedded digits      | 'a1bc' | A120   |
 
   Rule: H and W handling (ignored separators)
 
-    Scenario: H and W do not separate identical codes
+    Scenario Outline: H and W: <case>
       When query
         """
-        SELECT soundex('Ashcraft') AS result
+        SELECT soundex(<input>) AS result
         """
       Then query result
-        | result |
-        | A261   |
+        | result   |
+        | <result> |
 
-    Scenario: vowel separates identical codes
-      When query
-        """
-        SELECT soundex('Tymczak') AS result
-        """
-      Then query result
-        | result |
-        | T522   |
+      Examples:
+        | case                                    | input      | result |
+        | H and W do not separate identical codes | 'Ashcraft' | A261   |
+        | vowel separates identical codes         | 'Tymczak'  | T522   |
 
   Rule: Column expressions
 
-    Scenario: soundex on column values
+    Scenario Outline: Column expressions: <case>
       When query
         """
         SELECT soundex(name) AS result
-        FROM VALUES ('Robert'), ('Rupert'), ('Smith') AS t(name)
+        FROM VALUES <values> AS t(name)
         """
       Then query result
         | result |
-        | R163   |
-        | R163   |
-        | S530   |
+        | <r1>   |
+        | <r2>   |
+        | <r3>   |
 
-    Scenario: soundex with null in column
-      When query
-        """
-        SELECT soundex(name) AS result
-        FROM VALUES ('Hello'), (CAST(NULL AS STRING)), ('World') AS t(name)
-        """
-      Then query result
-        | result |
-        | H400   |
-        | NULL   |
-        | W643   |
+      Examples:
+        | case                        | values                                       | r1   | r2   | r3   |
+        | soundex on column values    | ('Robert'), ('Rupert'), ('Smith')            | R163 | R163 | S530 |
+        | soundex with null in column | ('Hello'), (CAST(NULL AS STRING)), ('World') | H400 | NULL | W643 |
 
   @spark_null
   Rule: Output schema

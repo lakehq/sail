@@ -11,79 +11,25 @@ Feature: collect_list / collect_set
 
   Rule: collect_list collects values of any type, preserving order and duplicates
 
-    Scenario: integers keep input order and duplicates
+    Scenario Outline: collect_list over <case>
       When query
         """
-        SELECT collect_list(v) AS r FROM VALUES (1), (2), (1) AS t(v)
+        SELECT collect_list(v) AS r FROM VALUES <values> AS t(v)
         """
       Then query result
-        | r         |
-        | [1, 2, 1] |
+        | r   |
+        | <r> |
 
-    Scenario: strings
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES ('a'), ('b'), ('a') AS t(v)
-        """
-      Then query result
-        | r         |
-        | [a, b, a] |
-
-    Scenario: doubles
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES (1.5D), (2.5D) AS t(v)
-        """
-      Then query result
-        | r          |
-        | [1.5, 2.5] |
-
-    Scenario: decimals keep their scale
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES
-          (CAST(1.50 AS DECIMAL(5, 2))), (CAST(2.00 AS DECIMAL(5, 2)))
-        AS t(v)
-        """
-      Then query result
-        | r            |
-        | [1.50, 2.00] |
-
-    Scenario: booleans
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES (true), (false), (true) AS t(v)
-        """
-      Then query result
-        | r                   |
-        | [true, false, true] |
-
-    Scenario: dates
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES (DATE'2024-01-01'), (DATE'2024-02-02') AS t(v)
-        """
-      Then query result
-        | r                        |
-        | [2024-01-01, 2024-02-02] |
-
-    Scenario: array elements
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES (array(1, 2)), (array(3)) AS t(v)
-        """
-      Then query result
-        | r             |
-        | [[1, 2], [3]] |
-
-    Scenario: struct elements
-      When query
-        """
-        SELECT collect_list(v) AS r FROM VALUES (named_struct('a', 1)), (named_struct('a', 2)) AS t(v)
-        """
-      Then query result
-        | r          |
-        | [{1}, {2}] |
+      Examples:
+        | case                                     | values                                                       | r                        |
+        | integers keep input order and duplicates | (1), (2), (1)                                                | [1, 2, 1]                |
+        | strings                                  | ('a'), ('b'), ('a')                                          | [a, b, a]                |
+        | doubles                                  | (1.5D), (2.5D)                                               | [1.5, 2.5]               |
+        | decimals keep their scale                | (CAST(1.50 AS DECIMAL(5, 2))), (CAST(2.00 AS DECIMAL(5, 2))) | [1.50, 2.00]             |
+        | booleans                                 | (true), (false), (true)                                      | [true, false, true]      |
+        | dates                                    | (DATE'2024-01-01'), (DATE'2024-02-02')                       | [2024-01-01, 2024-02-02] |
+        | array elements                           | (array(1, 2)), (array(3))                                    | [[1, 2], [3]]            |
+        | struct elements                          | (named_struct('a', 1)), (named_struct('a', 2))               | [{1}, {2}]               |
 
     # collect_list accepts map elements (unlike collect_set, which requires orderable elements).
     Scenario: map elements
@@ -110,10 +56,10 @@ Feature: collect_list / collect_set
 
   Rule: An empty or all-NULL group collects to an empty array, not NULL
 
-    Scenario: collect_list over an all-NULL group
+    Scenario Outline: <fn> over an all-NULL group
       When query
         """
-        SELECT collect_list(v) AS r FROM VALUES
+        SELECT <fn>(v) AS r FROM VALUES
           (CAST(NULL AS INT)), (CAST(NULL AS INT))
         AS t(v)
         """
@@ -121,16 +67,10 @@ Feature: collect_list / collect_set
         | r  |
         | [] |
 
-    Scenario: collect_set over an all-NULL group
-      When query
-        """
-        SELECT collect_set(v) AS r FROM VALUES
-          (CAST(NULL AS INT)), (CAST(NULL AS INT))
-        AS t(v)
-        """
-      Then query result
-        | r  |
-        | [] |
+      Examples:
+        | fn           |
+        | collect_list |
+        | collect_set  |
 
     Scenario: collect_list whose FILTER removes every row
       When query
@@ -177,32 +117,20 @@ Feature: collect_list / collect_set
 
   Rule: collect_set returns the distinct values, ignoring NULLs
 
-    Scenario: collect_set removes duplicates
+    Scenario Outline: Collect_set returns the distinct values, ignoring NULLs: <case>
       When query
         """
-        SELECT sort_array(collect_set(v)) AS r FROM VALUES (1), (2), (1), (3) AS t(v)
-        """
-      Then query result
-        | r         |
-        | [1, 2, 3] |
-
-    Scenario: collect_set drops NULLs
-      When query
-        """
-        SELECT sort_array(collect_set(v)) AS r FROM VALUES (1), (CAST(NULL AS INT)), (1) AS t(v)
+        SELECT sort_array(<expr>) AS r FROM VALUES <values> AS t(v)
         """
       Then query result
         | r   |
-        | [1] |
+        | <r> |
 
-    Scenario: collect_list with DISTINCT also removes duplicates
-      When query
-        """
-        SELECT sort_array(collect_list(DISTINCT v)) AS r FROM VALUES (1), (2), (1) AS t(v)
-        """
-      Then query result
-        | r      |
-        | [1, 2] |
+      Examples:
+        | case                                          | expr                     | values                        | r         |
+        | collect_set removes duplicates                | collect_set(v)           | (1), (2), (1), (3)            | [1, 2, 3] |
+        | collect_set drops NULLs                       | collect_set(v)           | (1), (CAST(NULL AS INT)), (1) | [1]       |
+        | collect_list with DISTINCT removes duplicates | collect_list(DISTINCT v) | (1), (2), (1)                 | [1, 2]    |
 
   Rule: collect_set float equality diverges from Spark
 

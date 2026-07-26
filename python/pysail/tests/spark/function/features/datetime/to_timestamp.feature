@@ -5,142 +5,88 @@ Feature: to_timestamp (strict variant)
 
   Rule: Valid input parses
 
-    Scenario: ISO timestamp
+    Scenario Outline: Valid input: <case>
       When query
         """
-        SELECT to_timestamp('2024-01-15 10:30:45') AS result
+        SELECT to_timestamp(<args>) AS result
         """
       Then query result
-        | result              |
-        | 2024-01-15 10:30:45 |
+        | result   |
+        | <result> |
 
-    Scenario: Date-only parses with midnight
-      When query
-        """
-        SELECT to_timestamp('2024-01-15') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 00:00:00 |
-
-    Scenario: With format
-      When query
-        """
-        SELECT to_timestamp('2024-01-15 10:30:45', 'yyyy-MM-dd HH:mm:ss') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 10:30:45 |
-
-    Scenario: Cast from date
-      When query
-        """
-        SELECT to_timestamp(DATE '2024-01-15') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 00:00:00 |
-
-    Scenario: Cast from timestamp
-      When query
-        """
-        SELECT to_timestamp(TIMESTAMP '2024-01-15 10:30:45') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 10:30:45 |
+      Examples:
+        | case                           | args                                         | result              |
+        | ISO timestamp                  | '2024-01-15 10:30:45'                        | 2024-01-15 10:30:45 |
+        | Date-only parses with midnight | '2024-01-15'                                 | 2024-01-15 00:00:00 |
+        | With format                    | '2024-01-15 10:30:45', 'yyyy-MM-dd HH:mm:ss' | 2024-01-15 10:30:45 |
+        | Cast from date                 | DATE '2024-01-15'                            | 2024-01-15 00:00:00 |
+        | Cast from timestamp            | TIMESTAMP '2024-01-15 10:30:45'              | 2024-01-15 10:30:45 |
 
   Rule: Invalid input honors ANSI mode
     # to_timestamp errors on invalid input under ANSI and returns NULL otherwise.
 
-    Scenario: Garbage string under ANSI on errors
+    Scenario Outline: ANSI on: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('not-a-timestamp') AS result
+        SELECT to_timestamp(<args>) AS result
         """
       Then query error .*
 
-    Scenario: Garbage string under ANSI off returns NULL
+      Examples:
+        | case                                 | args                       |
+        | Garbage string under ANSI on errors  | 'not-a-timestamp'          |
+        | Format mismatch under ANSI on errors | '2024-01-15', 'dd/MM/yyyy' |
+
+    Scenario Outline: ANSI off: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT to_timestamp('not-a-timestamp') AS result
+        SELECT to_timestamp(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: Format mismatch under ANSI on errors
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT to_timestamp('2024-01-15', 'dd/MM/yyyy') AS result
-        """
-      Then query error .*
-
-    Scenario: Format mismatch under ANSI off returns NULL
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT to_timestamp('2024-01-15', 'dd/MM/yyyy') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                        | args                       |
+        | Garbage string under ANSI off returns NULL  | 'not-a-timestamp'          |
+        | Format mismatch under ANSI off returns NULL | '2024-01-15', 'dd/MM/yyyy' |
 
   Rule: NULL input propagates
 
-    Scenario: NULL input returns NULL
+    Scenario Outline: NULL propagation: <case>
       When query
         """
-        SELECT to_timestamp(CAST(NULL AS STRING)) AS result
+        SELECT to_timestamp(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: NULL format returns NULL
-      When query
-        """
-        SELECT to_timestamp('2024-01-15 10:30:45', NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                     | args                        |
+        | NULL input returns NULL  | CAST(NULL AS STRING)        |
+        | NULL format returns NULL | '2024-01-15 10:30:45', NULL |
 
   Rule: Timezone handling — LTZ applies offset, NTZ ignores it
     # Validated against Spark JVM with session tz America/New_York.
 
-    Scenario: LTZ applies trailing Z (UTC) and renders in session tz
+    Scenario Outline: Session time zone: <case>
       Given config spark.sql.session.timeZone = America/New_York
       When query
         """
-        SELECT to_timestamp('2024-01-15 10:30:45Z') AS result
+        SELECT <fn>(<input>) AS result
         """
       Then query result
-        | result              |
-        | 2024-01-15 05:30:45 |
+        | result   |
+        | <result> |
 
-    Scenario: LTZ applies explicit offset
-      Given config spark.sql.session.timeZone = America/New_York
-      When query
-        """
-        SELECT to_timestamp('2024-06-15 10:30:45-08:00') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-06-15 14:30:45 |
-
-    Scenario: NTZ ignores trailing Z (keeps wall clock)
-      Given config spark.sql.session.timeZone = America/New_York
-      When query
-        """
-        SELECT to_timestamp_ntz('2024-01-15 10:30:45Z') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-01-15 10:30:45 |
+      Examples:
+        | case                                                   | fn               | input                       | result              |
+        | LTZ applies trailing Z (UTC) and renders in session tz | to_timestamp     | '2024-01-15 10:30:45Z'      | 2024-01-15 05:30:45 |
+        | LTZ applies explicit offset                            | to_timestamp     | '2024-06-15 10:30:45-08:00' | 2024-06-15 14:30:45 |
+        | NTZ ignores trailing Z (keeps wall clock)              | to_timestamp_ntz | '2024-01-15 10:30:45Z'      | 2024-01-15 10:30:45 |
 
     Scenario: NTZ ignores explicit offset
       When query
@@ -153,50 +99,22 @@ Feature: to_timestamp (strict variant)
 
   Rule: Fractional seconds, separators, boundaries
 
-    Scenario: T separator parses
+    Scenario Outline: Fractions and boundaries: <case>
       When query
         """
-        SELECT to_timestamp('2024-01-15T10:30:45') AS result
+        SELECT <fn>(<input>) AS result
         """
       Then query result
-        | result              |
-        | 2024-01-15 10:30:45 |
+        | result   |
+        | <result> |
 
-    Scenario: Fractional seconds truncate to microseconds
-      When query
-        """
-        SELECT to_timestamp('2024-01-15 10:30:45.123456789') AS result
-        """
-      Then query result
-        | result                     |
-        | 2024-01-15 10:30:45.123456 |
-
-    Scenario: Single-digit fractional second
-      When query
-        """
-        SELECT to_timestamp('2024-01-15 10:30:45.1') AS result
-        """
-      Then query result
-        | result                |
-        | 2024-01-15 10:30:45.1 |
-
-    Scenario: Leap day
-      When query
-        """
-        SELECT to_timestamp_ntz('2024-02-29 12:00:00') AS result
-        """
-      Then query result
-        | result              |
-        | 2024-02-29 12:00:00 |
-
-    Scenario: Upper boundary
-      When query
-        """
-        SELECT to_timestamp_ntz('9999-12-31 23:59:59') AS result
-        """
-      Then query result
-        | result              |
-        | 9999-12-31 23:59:59 |
+      Examples:
+        | case                                        | fn               | input                           | result                     |
+        | T separator parses                          | to_timestamp     | '2024-01-15T10:30:45'           | 2024-01-15 10:30:45        |
+        | Fractional seconds truncate to microseconds | to_timestamp     | '2024-01-15 10:30:45.123456789' | 2024-01-15 10:30:45.123456 |
+        | Single-digit fractional second              | to_timestamp     | '2024-01-15 10:30:45.1'         | 2024-01-15 10:30:45.1      |
+        | Leap day                                    | to_timestamp_ntz | '2024-02-29 12:00:00'           | 2024-02-29 12:00:00        |
+        | Upper boundary                              | to_timestamp_ntz | '9999-12-31 23:59:59'           | 9999-12-31 23:59:59        |
 
   Rule: Per-row format (column-expression format)
 

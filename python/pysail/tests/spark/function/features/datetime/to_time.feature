@@ -11,34 +11,20 @@ Feature: to_time (strict variant)
   Rule: Valid input parses
 
     @sail-only
-    Scenario: HH:MM:SS basic
+    Scenario Outline: Valid input: <case>
       When query
         """
-        SELECT to_time('10:30:45') AS result
+        SELECT to_time(<args>) AS result
         """
       Then query result
         | result   |
-        | 10:30:45 |
+        | <result> |
 
-    @sail-only
-    Scenario: With microseconds
-      When query
-        """
-        SELECT to_time('10:30:45.123456') AS result
-        """
-      Then query result
-        | result          |
-        | 10:30:45.123456 |
-
-    @sail-only
-    Scenario: With format
-      When query
-        """
-        SELECT to_time('10-30-45', 'HH-mm-ss') AS result
-        """
-      Then query result
-        | result   |
-        | 10:30:45 |
+      Examples:
+        | case              | args                   | result          |
+        | HH:MM:SS basic    | '10:30:45'             | 10:30:45        |
+        | With microseconds | '10:30:45.123456'      | 10:30:45.123456 |
+        | With format       | '10-30-45', 'HH-mm-ss' | 10:30:45        |
 
   Rule: Two-argument form is type-consistent with the one-argument form
 
@@ -48,24 +34,19 @@ Feature: to_time (strict variant)
     # (which would fail). See `time_with_try` in datetime.rs.
 
     @sail-only
-    Scenario: TIMESTAMP first argument ignores the format and extracts the time
+    Scenario Outline: Two-arg: <case>
       When query
         """
-        SELECT to_time(TIMESTAMP '2024-01-15 10:30:45', 'HH:mm:ss') AS result
+        SELECT to_time(<arg>, <fmt>) AS result
         """
       Then query result
         | result   |
         | 10:30:45 |
 
-    @sail-only
-    Scenario: TIME first argument ignores the format
-      When query
-        """
-        SELECT to_time(TIME '10:30:45', 'HH-mm-ss') AS result
-        """
-      Then query result
-        | result   |
-        | 10:30:45 |
+      Examples:
+        | case                                                              | arg                             | fmt        |
+        | TIMESTAMP first argument ignores the format and extracts the time | TIMESTAMP '2024-01-15 10:30:45' | 'HH:mm:ss' |
+        | TIME first argument ignores the format                            | TIME '10:30:45'                 | 'HH-mm-ss' |
 
     @sail-only
     Scenario: Unsupported first-argument type is rejected with a format too
@@ -88,20 +69,17 @@ Feature: to_time (strict variant)
   Rule: Invalid input throws
 
     @sail-only
-    Scenario: Garbage string raises error
+    Scenario Outline: Invalid input: <case>
       When query
         """
-        SELECT to_time('not-a-time')
+        SELECT to_time(<arg>)
         """
       Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
 
-    @sail-only
-    Scenario: Out-of-range hour raises error
-      When query
-        """
-        SELECT to_time('25:00:00')
-        """
-      Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
+      Examples:
+        | case                           | arg          |
+        | Garbage string raises error    | 'not-a-time' |
+        | Out-of-range hour raises error | '25:00:00'   |
 
   Rule: NULL input propagates
 

@@ -18,51 +18,22 @@ Feature: try_aes_decrypt with an argument coming from a column
 
     # Sail returns the wrong value on the column path: Sail returns NULL for every row.
     @column_args @sail-bug
-    Scenario: try_aes_decrypt takes argument 2 from a column containing NULL
+    Scenario Outline: Try_aes_decrypt: <case>
       When query
         """
-        SELECT hex(try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), c, 'GCM')) AS result FROM VALUES (1, '0000111122223333'), (2, NULL) AS t(i, c) ORDER BY i
+        SELECT hex(try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), <args>)) AS result FROM VALUES (1, <v1>), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query result ordered
         | result             |
         | 537061726B2053514C |
-        | NULL               |
+        | <r2>               |
 
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
-    Scenario: try_aes_decrypt takes argument 2 from a column
-      When query
-        """
-        SELECT hex(try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), c, 'GCM')) AS result FROM VALUES (1, '0000111122223333'), (2, '0000111122223333') AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result             |
-        | 537061726B2053514C |
-        | 537061726B2053514C |
-
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
-    Scenario: try_aes_decrypt takes argument 3 from a column containing NULL
-      When query
-        """
-        SELECT hex(try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', c)) AS result FROM VALUES (1, 'GCM'), (2, NULL) AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result             |
-        | 537061726B2053514C |
-        | NULL               |
-
-    # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
-    Scenario: try_aes_decrypt takes argument 3 from a column
-      When query
-        """
-        SELECT hex(try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', c)) AS result FROM VALUES (1, 'GCM'), (2, 'GCM') AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result             |
-        | 537061726B2053514C |
-        | 537061726B2053514C |
+      Examples:
+        | case                                                           | args                  | v1                 | v2                 | r2                 |
+        | try_aes_decrypt takes argument 2 from a column containing NULL | c, 'GCM'              | '0000111122223333' | NULL               | NULL               |
+        | try_aes_decrypt takes argument 2 from a column                 | c, 'GCM'              | '0000111122223333' | '0000111122223333' | 537061726B2053514C |
+        | try_aes_decrypt takes argument 3 from a column containing NULL | '0000111122223333', c | 'GCM'              | NULL               | NULL               |
+        | try_aes_decrypt takes argument 3 from a column                 | '0000111122223333', c | 'GCM'              | 'GCM'              | 537061726B2053514C |
 
   @spark_null
   Rule: Output schema

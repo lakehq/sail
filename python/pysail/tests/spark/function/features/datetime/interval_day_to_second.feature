@@ -3,14 +3,19 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Basic literals
 
-    Scenario: negative interval
+    Scenario Outline: Literal: <case>
       When query
         """
-        SELECT INTERVAL '-3 04:05:06' DAY TO SECOND AS result
+        SELECT INTERVAL <lit> DAY TO SECOND AS result
         """
       Then query result
-        | result                               |
-        | INTERVAL '-3 04:05:06' DAY TO SECOND |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                   | lit           | result                               |
+        | negative interval      | '-3 04:05:06' | INTERVAL '-3 04:05:06' DAY TO SECOND |
+        | negative zero interval | '-0 00:00:00' | INTERVAL '0 00:00:00' DAY TO SECOND  |
 
     Scenario: negative hours in interval is invalid
       When query
@@ -18,15 +23,6 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         SELECT INTERVAL '3 -04:00:00' DAY TO SECOND AS result
         """
       Then query error (?i)invalid.*interval
-
-    Scenario: negative zero interval
-      When query
-        """
-        SELECT INTERVAL '-0 00:00:00' DAY TO SECOND AS result
-        """
-      Then query result
-        | result                              |
-        | INTERVAL '0 00:00:00' DAY TO SECOND |
 
   Rule: Overflow and large values
 
@@ -41,43 +37,35 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Cast operations
 
-    Scenario: roundtrip cast to string and back
+    Scenario Outline: Cast: <case>
       When query
         """
-        SELECT CAST(CAST(INTERVAL '2 10:20:30' DAY TO SECOND AS STRING) AS INTERVAL DAY TO SECOND) AS result
+        SELECT CAST(<expr> AS INTERVAL DAY TO SECOND) AS result
         """
       Then query result
-        | result                              |
-        | INTERVAL '2 10:20:30' DAY TO SECOND |
+        | result   |
+        | <result> |
 
-    Scenario: cast HOUR TO SECOND to DAY TO SECOND
-      When query
-        """
-        SELECT CAST(INTERVAL '12:30:45' HOUR TO SECOND AS INTERVAL DAY TO SECOND) AS result
-        """
-      Then query result
-        | result                              |
-        | INTERVAL '0 12:30:45' DAY TO SECOND |
+      Examples:
+        | case                                 | expr                                                | result                              |
+        | roundtrip cast to string and back    | CAST(INTERVAL '2 10:20:30' DAY TO SECOND AS STRING) | INTERVAL '2 10:20:30' DAY TO SECOND |
+        | cast HOUR TO SECOND to DAY TO SECOND | INTERVAL '12:30:45' HOUR TO SECOND                  | INTERVAL '0 12:30:45' DAY TO SECOND |
 
   Rule: Arithmetic and comparison
 
-    Scenario: equality with normalized form
+    Scenario Outline: Arithmetic: <case>
       When query
         """
-        SELECT INTERVAL '1 24:00:00' DAY TO SECOND = INTERVAL '2 00:00:00' DAY TO SECOND AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: addition of intervals
-      When query
-        """
-        SELECT INTERVAL '0 23:00:00' DAY TO SECOND + INTERVAL '0 02:00:00' DAY TO SECOND AS result
-        """
-      Then query result
-        | result                              |
-        | INTERVAL '1 01:00:00' DAY TO SECOND |
+      Examples:
+        | case                          | expr                                                                      | result                              |
+        | equality with normalized form | INTERVAL '1 24:00:00' DAY TO SECOND = INTERVAL '2 00:00:00' DAY TO SECOND | true                                |
+        | addition of intervals         | INTERVAL '0 23:00:00' DAY TO SECOND + INTERVAL '0 02:00:00' DAY TO SECOND | INTERVAL '1 01:00:00' DAY TO SECOND |
 
     Scenario: comparison in WHERE clause
       When query

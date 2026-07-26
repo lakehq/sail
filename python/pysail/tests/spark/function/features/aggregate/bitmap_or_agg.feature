@@ -49,25 +49,20 @@ Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
 
   Rule: bitmap_or_agg handles null values
 
-    Scenario: bitmap_or_agg ignores null input values
+    Scenario Outline: bitmap_or_agg <case>
       When query
         """
         SELECT substring(hex(bitmap_or_agg(col)), 0, 6) AS result
-        FROM VALUES (X'10'), (CAST(NULL AS BINARY)), (X'40') AS tab(col)
+        FROM VALUES <values> AS tab(col)
         """
       Then query result
-        | result |
-        | 500000 |
+        | result   |
+        | <result> |
 
-    Scenario: bitmap_or_agg with all null inputs
-      When query
-        """
-        SELECT substring(hex(bitmap_or_agg(col)), 0, 6) AS result
-        FROM VALUES (CAST(NULL AS BINARY)), (CAST(NULL AS BINARY)) AS tab(col)
-        """
-      Then query result
-        | result |
-        | 000000 |
+      Examples:
+        | case                      | values                                         | result |
+        | ignores null input values | (X'10'), (CAST(NULL AS BINARY)), (X'40')       | 500000 |
+        | with all null inputs      | (CAST(NULL AS BINARY)), (CAST(NULL AS BINARY)) | 000000 |
 
     Scenario: bitmap_or_agg on empty input returns an empty bitmap
       When query

@@ -12,107 +12,43 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   Rule: DECIMAL(p, s) inputs are accepted and return DOUBLE (Spark-compat)
 
-    Scenario: percentile_disc 0.5 on DECIMAL(10,2)
+    Scenario Outline: percentile_disc <pct> <case>
       When query
         """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (1.50), (2.50), (3.50), (4.50), (5.50)) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY CAST(x AS <type>)) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
         | p   |
-        | 3.5 |
+        | <p> |
 
-    Scenario: percentile_disc 0.5 on high-precision DECIMAL(38,10)
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(38,10))) AS p
-        FROM (VALUES (1.0), (2.0), (3.0), (4.0), (5.0)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 3.0 |
-
-    Scenario: percentile_disc 0.0 on DECIMAL returns minimum
-      When query
-        """
-        SELECT percentile_disc(0.0) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (5), (10), (15)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 5.0 |
-
-    Scenario: percentile_disc 1.0 on DECIMAL returns maximum
-      When query
-        """
-        SELECT percentile_disc(1.0) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (5), (10), (15)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | 15.0 |
-
-    Scenario: percentile_disc 0.25 (first quartile) on DECIMAL
-      When query
-        """
-        SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (10), (20), (30), (40)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | 10.0 |
-
-    Scenario: percentile_disc 0.75 (third quartile) on DECIMAL
-      When query
-        """
-        SELECT percentile_disc(0.75) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (10), (20), (30), (40)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | 30.0 |
+      Examples:
+        | pct  | case                             | type           | values                                 | p    |
+        | 0.5  | on DECIMAL(10,2)                 | DECIMAL(10,2)  | (1.50), (2.50), (3.50), (4.50), (5.50) | 3.5  |
+        | 0.5  | on high-precision DECIMAL(38,10) | DECIMAL(38,10) | (1.0), (2.0), (3.0), (4.0), (5.0)      | 3.0  |
+        | 0.0  | on DECIMAL returns minimum       | DECIMAL(10,2)  | (5), (10), (15)                        | 5.0  |
+        | 1.0  | on DECIMAL returns maximum       | DECIMAL(10,2)  | (5), (10), (15)                        | 15.0 |
+        | 0.25 | (first quartile) on DECIMAL      | DECIMAL(10,2)  | (10), (20), (30), (40)                 | 10.0 |
+        | 0.75 | (third quartile) on DECIMAL      | DECIMAL(10,2)  | (10), (20), (30), (40)                 | 30.0 |
 
   Rule: NULL handling matches Spark (NULLs ignored, all-NULL/empty → NULL)
 
-    Scenario: percentile_disc ignores NULL DECIMAL values
+    Scenario Outline: percentile_disc <case>
       When query
         """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (NULL), (1.0), (2.0), (3.0), (NULL)) AS t(x)
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY <order>) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
         | p   |
-        | 2.0 |
+        | <p> |
 
-    Scenario: percentile_disc with all-NULL DECIMAL column returns NULL
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(NULL AS DECIMAL(10,2))) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | NULL |
-
-    Scenario: percentile_disc ignores NULL ORDER BY values (INT)
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (CAST(NULL AS INT)), (3)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 1.0 |
-
-    Scenario: percentile_disc on all-NULL INT column returns NULL
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (CAST(NULL AS INT)), (NULL), (NULL)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | NULL |
+      Examples:
+        | case                                      | order                       | values                              | p    |
+        | ignores NULL DECIMAL values               | CAST(x AS DECIMAL(10,2))    | (NULL), (1.0), (2.0), (3.0), (NULL) | 2.0  |
+        | with all-NULL DECIMAL column returns NULL | CAST(NULL AS DECIMAL(10,2)) | (1), (2), (3)                       | NULL |
+        | ignores NULL ORDER BY values (INT)        | x                           | (1), (CAST(NULL AS INT)), (3)       | 1.0  |
+        | on all-NULL INT column returns NULL       | x                           | (CAST(NULL AS INT)), (NULL), (NULL) | NULL |
 
     Scenario: percentile_disc on empty input returns NULL
       When query
@@ -131,97 +67,42 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
     # value here. With DESC sorted `[4,3,2,1]`, `percentile_disc(0.25)` is
     # position 0 = the max value (4), not position 2 = 3.
 
-    Scenario: percentile_disc 0.5 with DESC on DECIMAL
+    Scenario Outline: percentile_disc <pct> DESC <case>
       When query
         """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2)) DESC) AS p
-        FROM (VALUES (1.0), (2.0), (3.0), (4.0), (5.0)) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY <order> DESC) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
         | p   |
-        | 3.0 |
+        | <p> |
 
-    Scenario: percentile_disc 0.25 DESC selects from the high end
-      When query
-        """
-        SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY x DESC) AS p
-        FROM (VALUES (1), (2), (3), (4)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 4.0 |
-
-    Scenario: percentile_disc 0.75 DESC selects from the low end
-      When query
-        """
-        SELECT percentile_disc(0.75) WITHIN GROUP (ORDER BY x DESC) AS p
-        FROM (VALUES (1), (2), (3), (4)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 2.0 |
-
-    Scenario: percentile_disc 0.0 DESC returns the maximum
-      When query
-        """
-        SELECT percentile_disc(0.0) WITHIN GROUP (ORDER BY x DESC) AS p
-        FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 5.0 |
-
-    Scenario: percentile_disc 1.0 DESC returns the minimum
-      When query
-        """
-        SELECT percentile_disc(1.0) WITHIN GROUP (ORDER BY x DESC) AS p
-        FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 1.0 |
+      Examples:
+        | pct  | case                      | order                    | values                            | p   |
+        | 0.5  | on DECIMAL                | CAST(x AS DECIMAL(10,2)) | (1.0), (2.0), (3.0), (4.0), (5.0) | 3.0 |
+        | 0.25 | selects from the high end | x                        | (1), (2), (3), (4)                | 4.0 |
+        | 0.75 | selects from the low end  | x                        | (1), (2), (3), (4)                | 2.0 |
+        | 0.0  | returns the maximum       | x                        | (1), (2), (3), (4), (5)           | 5.0 |
+        | 1.0  | returns the minimum       | x                        | (1), (2), (3), (4), (5)           | 1.0 |
 
   Rule: Single value, duplicates and even-count populations
 
-    Scenario: percentile_disc on a single value
+    Scenario Outline: Population: <case>
       When query
         """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (42)) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY <orderby>) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
-        | p    |
-        | 42.0 |
+        | p        |
+        | <result> |
 
-    Scenario: percentile_disc on all-duplicate input
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (5), (5), (5), (5)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 5.0 |
-
-    Scenario: percentile_disc with even row count picks lower middle
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3), (4)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 2.0 |
-
-    Scenario: percentile_disc 0.5 with negative DECIMAL values
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (-10.0), (-5.0), (0.0), (5.0), (10.0)) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 0.0 |
+      Examples:
+        | case                                                   | pct | orderby                  | values                                | result |
+        | percentile_disc on a single value                      | 0.5 | x                        | (42)                                  | 42.0   |
+        | percentile_disc on all-duplicate input                 | 0.5 | x                        | (5), (5), (5), (5)                    | 5.0    |
+        | percentile_disc with even row count picks lower middle | 0.5 | x                        | (1), (2), (3), (4)                    | 2.0    |
+        | percentile_disc 0.5 with negative DECIMAL values       | 0.5 | CAST(x AS DECIMAL(10,2)) | (-10.0), (-5.0), (0.0), (5.0), (10.0) | 0.0    |
 
   Rule: STRING inputs are implicitly cast to DOUBLE (Spark-compat)
 
@@ -262,36 +143,23 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   Rule: Array-of-percentiles form returns ARRAY<DOUBLE>
 
-    Scenario: percentile_disc with array of percentiles on DECIMAL
+    Scenario Outline: Array of percentiles: <case>
       When query
         """
-        SELECT percentile_disc(array(0.25, 0.5, 0.75)) WITHIN GROUP (ORDER BY CAST(x AS DECIMAL(10,2))) AS p
-        FROM (VALUES (10), (20), (30), (40)) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY <orderby>) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
-        | p                  |
-        | [10.0, 20.0, 30.0] |
+        | p        |
+        | <result> |
 
-    Scenario: percentile_disc with array of percentiles on INT
-      When query
-        """
-        SELECT percentile_disc(array(0.25, 0.5, 0.75)) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
-        """
-      Then query result
-        | p               |
-        | [2.0, 3.0, 4.0] |
-
-    Scenario: percentile_disc with array on DOUBLE
-      When query
-        """
-        SELECT percentile_disc(array(0.0, 0.5, 1.0)) WITHIN GROUP (ORDER BY CAST(x AS DOUBLE)) AS p
-        FROM (VALUES (1.0), (2.0), (3.0), (4.0), (5.0)) AS t(x)
-        """
-      Then query result
-        | p               |
-        | [1.0, 3.0, 5.0] |
-
+      Examples:
+        | case                                                 | pct                         | orderby                  | values                            | result             |
+        | percentile_disc with array of percentiles on DECIMAL | array(0.25, 0.5, 0.75)      | CAST(x AS DECIMAL(10,2)) | (10), (20), (30), (40)            | [10.0, 20.0, 30.0] |
+        | percentile_disc with array of percentiles on INT     | array(0.25, 0.5, 0.75)      | x                        | (1), (2), (3), (4), (5)           | [2.0, 3.0, 4.0]    |
+        | percentile_disc with array on DOUBLE                 | array(0.0, 0.5, 1.0)        | CAST(x AS DOUBLE)        | (1.0), (2.0), (3.0), (4.0), (5.0) | [1.0, 3.0, 5.0]    |
+        | Empty percentile array returns NULL                  | array()                     | x                        | (1), (2), (3), (4), (5)           | NULL               |
+        | NULL element in percentile array is treated as 0.0   | array(CAST(NULL AS DOUBLE)) | x                        | (1), (2), (3), (4), (5)           | [1.0]              |
     Scenario: percentile_disc with array under GROUP BY
       When query
         """
@@ -305,26 +173,6 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         | A | [10.0, 20.0, 30.0]    |
         | B | [100.0, 200.0, 300.0] |
 
-    Scenario: Empty percentile array returns NULL
-      When query
-        """
-        SELECT percentile_disc(array()) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
-        """
-      Then query result
-        | p    |
-        | NULL |
-
-    Scenario: NULL element in percentile array is treated as 0.0
-      When query
-        """
-        SELECT percentile_disc(array(CAST(NULL AS DOUBLE))) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)
-        """
-      Then query result
-        | p     |
-        | [1.0] |
-
   Rule: Invalid arguments raise an error
 
     # Error scenarios pin a keyword from the expected validation message
@@ -332,29 +180,19 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
     # FAILURE PATH is the one we intend (out-of-range vs. type mismatch),
     # not just that "some error" happened.
 
-    Scenario: Negative percentile is rejected
+    Scenario Outline: <case> is rejected as out of range
       When query
         """
-        SELECT percentile_disc(-0.1) WITHIN GROUP (ORDER BY x) AS p
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3)) AS t(x)
         """
       Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
 
-    Scenario: Percentile greater than 1 is rejected
-      When query
-        """
-        SELECT percentile_disc(1.1) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
-
-    Scenario: Out-of-range value inside percentile array is rejected
-      When query
-        """
-        SELECT percentile_disc(array(0.5, 1.5)) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
+      Examples:
+        | case                                | pct             |
+        | Negative percentile                 | -0.1            |
+        | Percentile greater than 1           | 1.1             |
+        | Out-of-range value inside the array | array(0.5, 1.5) |
 
     Scenario: DISTINCT with WITHIN GROUP is rejected
       When query
@@ -364,53 +202,22 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         """
       Then query error .*(DISTINCT|distinct).*
 
-    Scenario: BOOLEAN ORDER BY is rejected
+    Scenario Outline: <case> is rejected as non-numeric
       When query
         """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (true), (false)) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
 
-    Scenario: DATE ORDER BY is rejected
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (DATE '2024-01-01'), (DATE '2024-01-02')) AS t(x)
-        """
-      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
-
-    Scenario: ARRAY ORDER BY is rejected
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (array(1)), (array(2))) AS t(x)
-        """
-      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
-
-    Scenario: BOOLEAN percentile arg is rejected
-      When query
-        """
-        SELECT percentile_disc(true) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
-
-    Scenario: DATE percentile arg is rejected
-      When query
-        """
-        SELECT percentile_disc(DATE '2024-01-01') WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
-
-    Scenario: Array of strings as percentile arg is rejected
-      When query
-        """
-        SELECT percentile_disc(array('0.5')) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (1), (2), (3)) AS t(x)
-        """
-      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
+      Examples:
+        | case                               | pct               | values                                   |
+        | BOOLEAN ORDER BY                   | 0.5               | (true), (false)                          |
+        | DATE ORDER BY                      | 0.5               | (DATE '2024-01-01'), (DATE '2024-01-02') |
+        | ARRAY ORDER BY                     | 0.5               | (array(1)), (array(2))                   |
+        | BOOLEAN percentile arg             | true              | (1), (2), (3)                            |
+        | DATE percentile arg                | DATE '2024-01-01' | (1), (2), (3)                            |
+        | Array of strings as percentile arg | array('0.5')      | (1), (2), (3)                            |
 
   Rule: FLOAT inputs are accepted and return DOUBLE
 
@@ -426,45 +233,22 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   Rule: NaN and Infinity order as the extremes (DOUBLE)
 
-    Scenario: NaN orders as the maximum
+    Scenario Outline: NaN and Infinity: <case>
       When query
         """
-        SELECT percentile_disc(1.0) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (double('1.0')), (double('2.0')), (double('NaN'))) AS t(x)
-        """
-      Then query result
-        | p   |
-        | NaN |
-
-    Scenario: NaN is not selected below the top
-      When query
-        """
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (double('1.0')), (double('2.0')), (double('NaN'))) AS t(x)
-        """
-      Then query result
-        | p   |
-        | 2.0 |
-
-    Scenario: positive Infinity is the maximum
-      When query
-        """
-        SELECT percentile_disc(1.0) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (double('1.0')), (double('Infinity'))) AS t(x)
+        SELECT percentile_disc(<pct>) WITHIN GROUP (ORDER BY <orderby>) AS p
+        FROM (VALUES <values>) AS t(x)
         """
       Then query result
         | p        |
-        | Infinity |
+        | <result> |
 
-    Scenario: negative Infinity is the minimum
-      When query
-        """
-        SELECT percentile_disc(0.0) WITHIN GROUP (ORDER BY x) AS p
-        FROM (VALUES (double('1.0')), (double('-Infinity'))) AS t(x)
-        """
-      Then query result
-        | p         |
-        | -Infinity |
+      Examples:
+        | case                              | pct | orderby | values                                            | result    |
+        | NaN orders as the maximum         | 1.0 | x       | (double('1.0')), (double('2.0')), (double('NaN')) | NaN       |
+        | NaN is not selected below the top | 0.5 | x       | (double('1.0')), (double('2.0')), (double('NaN')) | 2.0       |
+        | positive Infinity is the maximum  | 1.0 | x       | (double('1.0')), (double('Infinity'))             | Infinity  |
+        | negative Infinity is the minimum  | 0.0 | x       | (double('1.0')), (double('-Infinity'))            | -Infinity |
 
   Rule: FILTER restricts the aggregated population
 

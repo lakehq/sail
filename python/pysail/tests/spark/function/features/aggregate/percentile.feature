@@ -3,70 +3,40 @@ Feature: percentile() aggregate function computes percentiles
 
   Rule: Basic percentile calculation
 
-    Scenario: percentile 0.3 with two values
+    # The column alias varies per case, so it drives both the query and the
+    # expected header and the auto-derived name stays asserted.
+    Scenario Outline: percentile <p> <case>
       When query
         """
-        SELECT percentile(x, 0.3) AS p30 FROM (VALUES (0), (10)) AS t(x)
+        SELECT percentile(x, <p>) AS <alias> FROM (VALUES <values>) AS t(x)
         """
       Then query result
-        | p30 |
-        | 3.0 |
+        | <alias>  |
+        | <result> |
 
-    Scenario: percentile 0.5 (median) with even number of values
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (0), (1), (2), (3)) AS t(x)
-        """
-      Then query result
-        | median |
-        | 1.5    |
-
-    Scenario: percentile 0.5 with odd number of values
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (0), (1), (2), (3), (4)) AS t(x)
-        """
-      Then query result
-        | median |
-        | 2.0    |
-
-    Scenario: percentile 0.0 returns minimum
-      When query
-        """
-        SELECT percentile(x, 0.0) AS min_val FROM (VALUES (5), (10), (15)) AS t(x)
-        """
-      Then query result
-        | min_val |
-        | 5.0     |
-
-    Scenario: percentile 1.0 returns maximum
-      When query
-        """
-        SELECT percentile(x, 1.0) AS max_val FROM (VALUES (5), (10), (15)) AS t(x)
-        """
-      Then query result
-        | max_val |
-        | 15.0    |
+      Examples:
+        | p   | case                       | alias   | values                  | result |
+        | 0.3 | with two values            | p30     | (0), (10)               | 3.0    |
+        | 0.5 | with even number of values | median  | (0), (1), (2), (3)      | 1.5    |
+        | 0.5 | with odd number of values  | median  | (0), (1), (2), (3), (4) | 2.0    |
+        | 0.0 | returns minimum            | min_val | (5), (10), (15)         | 5.0    |
+        | 1.0 | returns maximum            | max_val | (5), (10), (15)         | 15.0   |
 
   Rule: Quartile calculations
 
-    Scenario: percentile 0.25 (first quartile)
+    Scenario Outline: percentile <p> (<case> quartile)
       When query
         """
-        SELECT percentile(x, 0.25) AS q1 FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7)) AS t(x)
+        SELECT percentile(x, <p>) AS <alias> FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7)) AS t(x)
         """
       Then query result
-        | q1   |
-        | 1.75 |
+        | <alias>  |
+        | <result> |
 
-    Scenario: percentile 0.75 (third quartile)
-      When query
-        """
-        SELECT percentile(x, 0.75) AS q3 FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7)) AS t(x)
-        """
-      Then query result
-        | q3   |
-        | 5.25 |
+      Examples:
+        | p    | case  | alias | result |
+        | 0.25 | first | q1    | 1.75   |
+        | 0.75 | third | q3    | 5.25   |
 
     Scenario: multiple percentiles
       When query
@@ -83,23 +53,19 @@ Feature: percentile() aggregate function computes percentiles
 
   Rule: NULL handling
 
-    Scenario: percentile ignores NULLs
+    Scenario Outline: percentile <case>
       When query
         """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (NULL), (1), (2), (3), (NULL)) AS t(x)
+        SELECT percentile(x, 0.5) AS median FROM (VALUES <values>) AS t(x)
         """
       Then query result
-        | median |
-        | 2.0    |
+        | median   |
+        | <median> |
 
-    Scenario: percentile with all NULLs returns NULL
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (CAST(NULL AS INT)), (NULL), (NULL)) AS t(x)
-        """
-      Then query result
-        | median |
-        | NULL   |
+      Examples:
+        | case                        | values                              | median |
+        | ignores NULLs               | (NULL), (1), (2), (3), (NULL)       | 2.0    |
+        | with all NULLs returns NULL | (CAST(NULL AS INT)), (NULL), (NULL) | NULL   |
 
     Scenario: percentile on empty dataset returns NULL
       When query
@@ -112,41 +78,21 @@ Feature: percentile() aggregate function computes percentiles
 
   Rule: Different numeric types
 
-    Scenario: percentile with negative values
+    Scenario Outline: percentile with <case>
       When query
         """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (-10), (-5), (0), (5), (10)) AS t(x)
+        SELECT percentile(x, 0.5) AS median FROM (VALUES <values>) AS t(x)
         """
       Then query result
-        | median |
-        | 0.0    |
+        | median   |
+        | <median> |
 
-    Scenario: percentile with single value
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (42)) AS t(x)
-        """
-      Then query result
-        | median |
-        | 42.0   |
-
-    Scenario: percentile with float values
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (0.0), (1.0), (2.5), (3.5), (5.0), (6.0), (7.5), (8.5)) AS t(x)
-        """
-      Then query result
-        | median |
-        | 4.25   |
-
-    Scenario: percentile with duplicates
-      When query
-        """
-        SELECT percentile(x, 0.5) AS median FROM (VALUES (1), (2), (2), (2), (3)) AS t(x)
-        """
-      Then query result
-        | median |
-        | 2.0    |
+      Examples:
+        | case            | values                                                 | median |
+        | negative values | (-10), (-5), (0), (5), (10)                            | 0.0    |
+        | single value    | (42)                                                   | 42.0   |
+        | float values    | (0.0), (1.0), (2.5), (3.5), (5.0), (6.0), (7.5), (8.5) | 4.25   |
+        | duplicates      | (1), (2), (2), (2), (3)                                | 2.0    |
 
   Rule: Group by support
 

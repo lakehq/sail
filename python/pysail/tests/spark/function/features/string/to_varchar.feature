@@ -46,6 +46,7 @@ Feature: to_varchar with an argument coming from a column
   # With a DATE or TIMESTAMP input, Spark resolves `to_varchar` to `DateFormatClass`, which accepts a
   # non-foldable format and applies it row by row. So the foldable rule above is specific to the
   # numeric format; here the column is legal and each row must use its own format.
+
   Rule: to_varchar — a date format is resolved per row
 
     # Sail applies the first row's value to every row: Sail returns ['2026', '2026'].
@@ -99,32 +100,20 @@ Feature: to_varchar with an argument coming from a column
 
   Rule: Result values (migrated from test_to_varchar.txt doctests)
 
-    Scenario: to_varchar doctest #1 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT to_varchar(454, '999') AS r
+        SELECT to_varchar(<args>) AS r
         """
       Then query result
-        | r   |
-        | 454 |
+        | r        |
+        | <result> |
 
-    Scenario: to_varchar doctest #2 (result)
-      When query
-        """
-        SELECT to_varchar(78.12, '$99.99') AS r
-        """
-      Then query result
-        | r      |
-        | $78.12 |
-
-    Scenario: to_varchar doctest #3 (result)
-      When query
-        """
-        SELECT to_varchar(-12454.8, '99G999D9S') AS r
-        """
-      Then query result
-        | r         |
-        | 12,454.8- |
+      Examples:
+        | case                           | args                  | result    |
+        | to_varchar doctest #1 (result) | 454, '999'            | 454       |
+        | to_varchar doctest #2 (result) | 78.12, '$99.99'       | $78.12    |
+        | to_varchar doctest #3 (result) | -12454.8, '99G999D9S' | 12,454.8- |
 
     @sail-only
     Scenario: to_varchar doctest #5 (result)

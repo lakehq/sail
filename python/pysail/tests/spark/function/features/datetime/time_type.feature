@@ -3,41 +3,21 @@ Feature: TIME data type support
 
   Rule: TIME literal syntax
 
-    Scenario: basic time literal
+    Scenario Outline: Literal: <case>
       When query
         """
-        SELECT TIME '10:30:45' AS result
+        SELECT TIME <lit> AS result
         """
       Then query result
         | result   |
-        | 10:30:45 |
+        | <result> |
 
-    Scenario: time with microseconds
-      When query
-        """
-        SELECT TIME '14:25:36.123456' AS result
-        """
-      Then query result
-        | result          |
-        | 14:25:36.123456 |
-
-    Scenario: midnight
-      When query
-        """
-        SELECT TIME '00:00:00' AS result
-        """
-      Then query result
-        | result   |
-        | 00:00:00 |
-
-    Scenario: one microsecond before midnight
-      When query
-        """
-        SELECT TIME '23:59:59.999999' AS result
-        """
-      Then query result
-        | result          |
-        | 23:59:59.999999 |
+      Examples:
+        | case                            | lit               | result          |
+        | basic time literal              | '10:30:45'        | 10:30:45        |
+        | time with microseconds          | '14:25:36.123456' | 14:25:36.123456 |
+        | midnight                        | '00:00:00'        | 00:00:00        |
+        | one microsecond before midnight | '23:59:59.999999' | 23:59:59.999999 |
 
   Rule: TIME in table operations
 
@@ -93,29 +73,17 @@ Feature: TIME data type support
 
   Rule: Precision levels
 
-    Scenario: second precision
+    Scenario Outline: Precision: <case>
       When query
         """
-        SELECT TIME '12:34:56' AS result
+        SELECT TIME <lit> AS result
         """
       Then query result
         | result   |
-        | 12:34:56 |
+        | <result> |
 
-    Scenario: millisecond precision
-      When query
-        """
-        SELECT TIME '12:34:56.123' AS result
-        """
-      Then query result
-        | result       |
-        | 12:34:56.123 |
-
-    Scenario: microsecond precision
-      When query
-        """
-        SELECT TIME '12:34:56.123456' AS result
-        """
-      Then query result
-        | result          |
-        | 12:34:56.123456 |
+      Examples:
+        | case                  | lit               | result          |
+        | second precision      | '12:34:56'        | 12:34:56        |
+        | millisecond precision | '12:34:56.123'    | 12:34:56.123    |
+        | microsecond precision | '12:34:56.123456' | 12:34:56.123456 |

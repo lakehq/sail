@@ -12,50 +12,22 @@ Feature: from_xml parses an XML string into a struct value
         | r        |
         | {1, 0.4} |
 
-    Scenario: Parse STRING field
+    Scenario Outline: Primitive: <case>
       When query
         """
-        SELECT from_xml('<p><s>sunset</s></p>', 's STRING').s AS result
+        SELECT from_xml(<xml>, <schema>).<field> AS result
         """
       Then query result
-        | result |
-        | sunset |
+        | result   |
+        | <result> |
 
-    Scenario: Parse BOOLEAN true
-      When query
-        """
-        SELECT from_xml('<p><flag>true</flag></p>', 'flag BOOLEAN').flag AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: Parse BOOLEAN false
-      When query
-        """
-        SELECT from_xml('<p><flag>false</flag></p>', 'flag BOOLEAN').flag AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: Parse LONG field
-      When query
-        """
-        SELECT from_xml('<p><x>43</x></p>', 'x LONG').x AS result
-        """
-      Then query result
-        | result |
-        | 43     |
-
-    Scenario: Parse FLOAT field
-      When query
-        """
-        SELECT from_xml('<p><x>3.5</x></p>', 'x FLOAT').x AS result
-        """
-      Then query result
-        | result |
-        | 3.5    |
+      Examples:
+        | case                | xml                         | schema         | field | result |
+        | Parse STRING field  | '<p><s>sunset</s></p>'      | 's STRING'     | s     | sunset |
+        | Parse BOOLEAN true  | '<p><flag>true</flag></p>'  | 'flag BOOLEAN' | flag  | true   |
+        | Parse BOOLEAN false | '<p><flag>false</flag></p>' | 'flag BOOLEAN' | flag  | false  |
+        | Parse LONG field    | '<p><x>43</x></p>'          | 'x LONG'       | x     | 43     |
+        | Parse FLOAT field   | '<p><x>3.5</x></p>'         | 'x FLOAT'      | x     | 3.5    |
 
   Rule: Root tag is ignored
 
@@ -204,23 +176,20 @@ Feature: from_xml parses an XML string into a struct value
 
   Rule: Date and timestamp types
 
-    Scenario: Parse DATE with default format
+    Scenario Outline: Default format: <case>
       When query
         """
-        SELECT from_xml('<p><d>2026-06-17</d></p>', 'd DATE').d AS result
+        SELECT from_xml(<xml>, <schema>).<field> AS result
         """
       Then query result
-        | result     |
-        | 2026-06-17 |
+        | result   |
+        | <result> |
 
-    Scenario: Parse TIMESTAMP with default format
-      When query
-        """
-        SELECT from_xml('<p><ts>2026-06-17T18:00:00.000</ts></p>', 'ts TIMESTAMP').ts AS result
-        """
-      Then query result
-        | result              |
-        | 2026-06-17 18:00:00 |
+      Examples:
+        | case                                    | xml                                       | schema             | field | result              |
+        | Parse DATE with default format          | '<p><d>2026-06-17</d></p>'                | 'd DATE'           | d     | 2026-06-17          |
+        | Parse TIMESTAMP with default format     | '<p><ts>2026-06-17T18:00:00.000</ts></p>' | 'ts TIMESTAMP'     | ts    | 2026-06-17 18:00:00 |
+        | Parse TIMESTAMP_NTZ with default format | '<p><ts>2026-06-17T18:00:00.000</ts></p>' | 'ts TIMESTAMP_NTZ' | ts    | 2026-06-17 18:00:00 |
 
     Scenario: Custom timestampFormat option
       When query
@@ -234,15 +203,6 @@ Feature: from_xml parses an XML string into a struct value
       Then query result
         | result              |
         | 2026-06-17 00:00:00 |
-
-    Scenario: Parse TIMESTAMP_NTZ with default format
-      When query
-        """
-        SELECT from_xml('<p><ts>2026-06-17T18:00:00.000</ts></p>', 'ts TIMESTAMP_NTZ').ts AS result
-        """
-      Then query result
-        | result              |
-        | 2026-06-17 18:00:00 |
 
     Scenario: Custom timestampNTZFormat option
       When query
@@ -259,41 +219,21 @@ Feature: from_xml parses an XML string into a struct value
 
   Rule: XML entity unescaping
 
-    Scenario: Less-than entity is unescaped
+    Scenario Outline: Entity: <case>
       When query
         """
-        SELECT from_xml('<p><s>a &lt; b</s></p>', 's STRING').s AS result
-        """
-      Then query result
-        | result |
-        | a < b  |
-
-    Scenario: Ampersand entity is unescaped
-      When query
-        """
-        SELECT from_xml('<p><s>a &amp; b</s></p>', 's STRING').s AS result
-        """
-      Then query result
-        | result |
-        | a & b  |
-
-    Scenario: Greater-than entity is unescaped
-      When query
-        """
-        SELECT from_xml('<p><s>a &gt; b</s></p>', 's STRING').s AS result
-        """
-      Then query result
-        | result |
-        | a > b  |
-
-    Scenario: Quote entity is unescaped
-      When query
-        """
-        SELECT from_xml('<p><s>say &quot;hi&quot;</s></p>', 's STRING').s AS result
+        SELECT from_xml(<xml>, 's STRING').s AS result
         """
       Then query result
         | result   |
-        | say "hi" |
+        | <result> |
+
+      Examples:
+        | case                             | xml                                | result   |
+        | Less-than entity is unescaped    | '<p><s>a &lt; b</s></p>'           | a < b    |
+        | Ampersand entity is unescaped    | '<p><s>a &amp; b</s></p>'          | a & b    |
+        | Greater-than entity is unescaped | '<p><s>a &gt; b</s></p>'           | a > b    |
+        | Quote entity is unescaped        | '<p><s>say &quot;hi&quot;</s></p>' | say "hi" |
 
   Rule: Attributes
 
@@ -348,50 +288,22 @@ Feature: from_xml parses an XML string into a struct value
 
   Rule: Decimal type
 
-    Scenario: Parse DECIMAL field
+    Scenario Outline: Decimal: <case>
       When query
         """
-        SELECT from_xml('<p><a>2.12</a></p>', 'a DECIMAL(10,2)').a AS result
+        SELECT from_xml(<xml>, <schema>).a AS result
         """
       Then query result
-        | result |
-        | 2.12   |
+        | result   |
+        | <result> |
 
-    Scenario: DECIMAL truncates to scale
-      When query
-        """
-        SELECT from_xml('<p><a>2.12159</a></p>', 'a DECIMAL(10,2)').a AS result
-        """
-      Then query result
-        | result |
-        | 2.12   |
-
-    Scenario: DECIMAL overflow returns NULL
-      When query
-        """
-        SELECT from_xml('<p><a>99999999999.99</a></p>', 'a DECIMAL(10,2)').a AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: DECIMAL bad value returns NULL
-      When query
-        """
-        SELECT from_xml('<p><a>bad</a></p>', 'a DECIMAL(10,2)').a AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: DECIMAL in array
-      When query
-        """
-        SELECT from_xml('<p><a>1.10</a><a>2.20</a></p>', 'a ARRAY<DECIMAL(10,2)>').a AS result
-        """
-      Then query result
-        | result       |
-        | [1.10, 2.20] |
+      Examples:
+        | case                           | xml                             | schema                   | result       |
+        | Parse DECIMAL field            | '<p><a>2.12</a></p>'            | 'a DECIMAL(10,2)'        | 2.12         |
+        | DECIMAL truncates to scale     | '<p><a>2.12159</a></p>'         | 'a DECIMAL(10,2)'        | 2.12         |
+        | DECIMAL overflow returns NULL  | '<p><a>99999999999.99</a></p>'  | 'a DECIMAL(10,2)'        | NULL         |
+        | DECIMAL bad value returns NULL | '<p><a>bad</a></p>'             | 'a DECIMAL(10,2)'        | NULL         |
+        | DECIMAL in array               | '<p><a>1.10</a><a>2.20</a></p>' | 'a ARRAY<DECIMAL(10,2)>' | [1.10, 2.20] |
 
   @spark_null
   Rule: Output schema

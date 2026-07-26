@@ -3,19 +3,17 @@ Feature: abs comprehensive tests
 
   Rule: Argument count validation
 
-    Scenario: abs zero args errors
+    Scenario Outline: Arity: <case>
       When query
         """
-        SELECT abs() AS result
+        SELECT abs(<args>) AS result
         """
       Then query error .*
 
-    Scenario: abs two args errors
-      When query
-        """
-        SELECT abs(1, 2) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                 | args |
+        | abs zero args errors |      |
+        | abs two args errors  | 1, 2 |
 
   Rule: NULL propagation
 
@@ -212,37 +210,21 @@ Feature: abs comprehensive tests
         | 'NaN' | NaN    |
 
     @sail-bug
-    Scenario: abs whitespace-padded numeric string
+    Scenario Outline: String coercion under ANSI=false: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT abs('  -5  ') AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result |
-        | 5.0    |
+        | result   |
+        | <result> |
 
-    @sail-bug
-    Scenario: abs non-numeric string returns NULL under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs('hello') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    @sail-bug
-    Scenario: abs empty string returns NULL under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT abs('') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                                 | input    | result |
+        | abs whitespace-padded numeric string                 | '  -5  ' | 5.0    |
+        | abs non-numeric string returns NULL under ANSI false | 'hello'  | NULL   |
+        | abs empty string returns NULL under ANSI false       | ''       | NULL   |
 
     Scenario: abs Infinity string
       Given config spark.sql.ansi.enabled = false
@@ -266,34 +248,21 @@ Feature: abs comprehensive tests
     # `sail-sql-analyzer`. Affects every expression returning intervals.
 
     @sail-bug
-    Scenario: abs negative INTERVAL DAY
+    Scenario Outline: Interval subrange: <case>
       When query
         """
-        SELECT abs(INTERVAL '-5' DAY) AS result
+        SELECT abs(<input>) AS result
         """
       Then query result
-        | result           |
-        | INTERVAL '5' DAY |
+        | result   |
+        | <result> |
 
-    @sail-bug
-    Scenario: abs positive INTERVAL DAY
-      When query
-        """
-        SELECT abs(INTERVAL '5' DAY) AS result
-        """
-      Then query result
-        | result           |
-        | INTERVAL '5' DAY |
-
-    @sail-bug
-    Scenario: abs zero INTERVAL DAY
-      When query
-        """
-        SELECT abs(INTERVAL '0' DAY) AS result
-        """
-      Then query result
-        | result           |
-        | INTERVAL '0' DAY |
+      Examples:
+        | case                                 | input                           | result                          |
+        | abs negative INTERVAL DAY            | INTERVAL '-5' DAY               | INTERVAL '5' DAY                |
+        | abs positive INTERVAL DAY            | INTERVAL '5' DAY                | INTERVAL '5' DAY                |
+        | abs zero INTERVAL DAY                | INTERVAL '0' DAY                | INTERVAL '0' DAY                |
+        | abs negative INTERVAL HOUR TO MINUTE | INTERVAL '-1:30' HOUR TO MINUTE | INTERVAL '01:30' HOUR TO MINUTE |
 
     Scenario: abs negative INTERVAL DAY TO SECOND
       When query
@@ -303,16 +272,6 @@ Feature: abs comprehensive tests
       Then query result
         | result                              |
         | INTERVAL '1 02:03:04' DAY TO SECOND |
-
-    @sail-bug
-    Scenario: abs negative INTERVAL HOUR TO MINUTE
-      When query
-        """
-        SELECT abs(INTERVAL '-1:30' HOUR TO MINUTE) AS result
-        """
-      Then query result
-        | result                          |
-        | INTERVAL '01:30' HOUR TO MINUTE |
 
   Rule: Interval overflow always errors (regardless of ANSI mode)
     # Spark errors with ARITHMETIC_OVERFLOW on abs(interval_MIN) UNCONDITIONALLY
@@ -462,20 +421,6 @@ Feature: abs comprehensive tests
 
   Rule: Type rejection
 
-    Scenario: abs on BOOLEAN errors
-      When query
-        """
-        SELECT abs(true) AS result
-        """
-      Then query error .*
-
-    Scenario: abs on DATE errors
-      When query
-        """
-        SELECT abs(DATE '2024-01-15') AS result
-        """
-      Then query error .*
-
     Scenario Outline: abs on an unsupported type errors
       When query
         """
@@ -485,6 +430,8 @@ Feature: abs comprehensive tests
 
       Examples:
         | input                           |
+        | true                            |
+        | DATE '2024-01-15'               |
         | TIMESTAMP '2024-01-15 12:00:00' |
         | X'48656C6C6F'                   |
         | array(1,2,3)                    |

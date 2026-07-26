@@ -1,15 +1,21 @@
 @schema_of_csv
 Feature: schema_of_csv infers a CSV schema from a literal row
 
-    Scenario: schema_of_csv infers integer and string columns
+    Scenario Outline: schema_of_csv infers <case>
       When query
         """
-        SELECT schema_of_csv('1,abc') AS schema
+        SELECT schema_of_csv(<arg>) AS schema
         """
       Then query result
-        | schema                        |
-        | STRUCT<_c0: INT, _c1: STRING> |
+        | schema   |
+        | <schema> |
 
+      Examples:
+        | case                       | arg               | schema                          |
+        | integer and string columns | '1,abc'           | STRUCT<_c0: INT, _c1: STRING>   |
+        | boolean and date columns   | 'true,2024-01-02' | STRUCT<_c0: BOOLEAN, _c1: DATE> |
+
+    # Kept separate: the SQL contains `|`, which a data-table cell would re-escape.
     Scenario: schema_of_csv honors a custom separator
       When query
         """
@@ -18,15 +24,6 @@ Feature: schema_of_csv infers a CSV schema from a literal row
       Then query result
         | schema                        |
         | STRUCT<_c0: INT, _c1: STRING> |
-
-    Scenario: schema_of_csv infers boolean and date columns
-      When query
-        """
-        SELECT schema_of_csv('true,2024-01-02') AS schema
-        """
-      Then query result
-        | schema                          |
-        | STRUCT<_c0: BOOLEAN, _c1: DATE> |
 
   @spark_null
   Rule: Output schema

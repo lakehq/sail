@@ -18,27 +18,20 @@ Feature: slice with an argument coming from a column
 
     # Sail rejects the column: Sail errors: Invalid argument error: Non-nullable field of ListArray "item" cannot contain nulls
     @column_args @sail-bug
-    Scenario: slice takes argument 2 from a column containing NULL
+    Scenario Outline: slice takes argument <n> from a column containing NULL
       When query
         """
-        SELECT slice(array(1, 2, 3, 4), c, 2) AS result FROM VALUES (1, 2), (2, NULL) AS t(i, c) ORDER BY i
+        SELECT slice(array(1, 2, 3, 4), <args>) AS result FROM VALUES (1, 2), (2, NULL) AS t(i, c) ORDER BY i
         """
       Then query result ordered
         | result |
         | [2, 3] |
         | NULL   |
 
-    # Sail rejects the column: Sail errors: Invalid argument error: Non-nullable field of ListArray "item" cannot contain nulls
-    @column_args @sail-bug
-    Scenario: slice takes argument 3 from a column containing NULL
-      When query
-        """
-        SELECT slice(array(1, 2, 3, 4), 2, c) AS result FROM VALUES (1, 2), (2, NULL) AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result |
-        | [2, 3] |
-        | NULL   |
+      Examples:
+        | n | args |
+        | 2 | c, 2 |
+        | 3 | 2, c |
 
     @column_args
     Scenario: slice takes argument 2 from a column holding two different values

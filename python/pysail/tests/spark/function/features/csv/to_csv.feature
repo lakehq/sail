@@ -3,23 +3,19 @@ Feature: to_csv converts a struct value to a CSV string
 
   Rule: Basic serialization
 
-    Scenario: Convert a struct with two integer fields
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT to_csv(named_struct('a', 1, 'b', 2))
+        SELECT to_csv(named_struct(<args>))
         """
       Then query result
-        | to_csv(named_struct(a, 1, b, 2)) |
-        | 1,2                              |
+        | to_csv(named_struct(<name>)) |
+        | <result>                     |
 
-    Scenario: Convert a struct with mixed types
-      When query
-        """
-        SELECT to_csv(named_struct('a', 1, 'b', 2.5, 'c', true))
-        """
-      Then query result
-        | to_csv(named_struct(a, 1, b, 2.5, c, true)) |
-        | 1,2.5,true                                  |
+      Examples:
+        | case                                     | args                        | name                  | result     |
+        | Convert a struct with two integer fields | 'a', 1, 'b', 2              | a, 1, b, 2            | 1,2        |
+        | Convert a struct with mixed types        | 'a', 1, 'b', 2.5, 'c', true | a, 1, b, 2.5, c, true | 1,2.5,true |
 
     Scenario: Convert a struct from a table column
       When query
@@ -56,6 +52,8 @@ Feature: to_csv converts a struct value to a CSV string
 
   Rule: Separator options
 
+    # Kept separate: both the SQL and the expected value contain `|`, which a
+    # data-table cell would re-escape.
     Scenario: Custom separator via sep option
       When query
         """
@@ -92,193 +90,95 @@ Feature: to_csv converts a struct value to a CSV string
         | result                        |
         | "hello,world","line<LF>break" |
 
-    Scenario: Custom escape character is used for quote escaping
+    Scenario Outline: Writer option: <case>
       When query
         """
-        SELECT to_csv(named_struct('a', 'say "hi"'), map('escape', '#')) AS result
-        """
-      Then query result
-        | result       |
-        | "say #"hi#"" |
-
-    Scenario: escapeQuotes false does not quote a field only because it contains quotes
-      When query
-        """
-        SELECT to_csv(named_struct('a', 'say "hi"'), map('escapeQuotes', 'false')) AS result
+        SELECT to_csv(named_struct(<fields>), map(<opts>)) AS result
         """
       Then query result
         | result   |
-        | say "hi" |
+        | <result> |
 
-    Scenario: quoteAll quotes every non-null field
-      When query
-        """
-        SELECT to_csv(named_struct('a', 'x', 'b', 'y'), map('quoteAll', 'true')) AS result
-        """
-      Then query result
-        | result  |
-        | "x","y" |
-
-    Scenario: nullValue and emptyValue options customize null and empty string output
-      When query
-        """
-        SELECT to_csv(named_struct('a', CAST(NULL AS STRING), 'b', ''), map('nullValue', '-', 'emptyValue', '_')) AS result
-        """
-      Then query result
-        | result |
-        | -,_    |
-
-    Scenario: quoteAll quotes null replacement fields
-      When query
-        """
-        SELECT to_csv(named_struct('a', CAST(NULL AS STRING), 'b', 'x'), map('quoteAll', 'true')) AS result
-        """
-      Then query result
-        | result |
-        | "","x" |
-
-    Scenario: nullValue containing separator is quoted
-      When query
-        """
-        SELECT to_csv(named_struct('a', CAST(NULL AS STRING), 'b', 'x'), map('nullValue', ',')) AS result
-        """
-      Then query result
-        | result |
-        | ",",x  |
-
-    Scenario: quoteAll quotes custom emptyValue fields
-      When query
-        """
-        SELECT to_csv(named_struct('a', '', 'b', 'x'), map('emptyValue', '_', 'quoteAll', 'true')) AS result
-        """
-      Then query result
-        | result  |
-        | "_","x" |
-
-    Scenario: emptyValue containing separator is quoted
-      When query
-        """
-        SELECT to_csv(named_struct('a', '', 'b', 'x'), map('emptyValue', ',')) AS result
-        """
-      Then query result
-        | result |
-        | ",",x  |
-
-    Scenario: Literal escape characters are escaped in quoted fields
-      When query
-        """
-        SELECT to_csv(named_struct('a', 'a#b,c'), map('escape', '#')) AS result
-        """
-      Then query result
-        | result   |
-        | "a##b,c" |
+      Examples:
+        | case                                                                      | fields                              | opts                                  | result       |
+        | Custom escape character is used for quote escaping                        | 'a', 'say "hi"'                     | 'escape', '#'                         | "say #"hi#"" |
+        | escapeQuotes false does not quote a field only because it contains quotes | 'a', 'say "hi"'                     | 'escapeQuotes', 'false'               | say "hi"     |
+        | quoteAll quotes every non-null field                                      | 'a', 'x', 'b', 'y'                  | 'quoteAll', 'true'                    | "x","y"      |
+        | nullValue and emptyValue options customize null and empty string output   | 'a', CAST(NULL AS STRING), 'b', ''  | 'nullValue', '-', 'emptyValue', '_'   | -,_          |
+        | quoteAll quotes null replacement fields                                   | 'a', CAST(NULL AS STRING), 'b', 'x' | 'quoteAll', 'true'                    | "","x"       |
+        | nullValue containing separator is quoted                                  | 'a', CAST(NULL AS STRING), 'b', 'x' | 'nullValue', ','                      | ",",x        |
+        | quoteAll quotes custom emptyValue fields                                  | 'a', '', 'b', 'x'                   | 'emptyValue', '_', 'quoteAll', 'true' | "_","x"      |
+        | emptyValue containing separator is quoted                                 | 'a', '', 'b', 'x'                   | 'emptyValue', ','                     | ",",x        |
+        | Literal escape characters are escaped in quoted fields                    | 'a', 'a#b,c'                        | 'escape', '#'                         | "a##b,c"     |
 
   Rule: Timestamp formatting
 
-    Scenario: Timestamp field uses default ISO 8601 UTC format
+    Scenario Outline: Timestamp: <case>
       When query
         """
-        SELECT to_csv(named_struct('ts', to_timestamp('2015-08-26', 'yyyy-MM-dd')))
+        SELECT to_csv(named_struct(<args>)<opts>)
         """
       Then query result
-        | to_csv(named_struct(ts, to_timestamp(2015-08-26, yyyy-MM-dd))) |
-        | 2015-08-26T00:00:00.000Z                                       |
+        | to_csv(named_struct(<name>)) |
+        | <result>                     |
 
-    Scenario: Pre-epoch timestamp is formatted correctly
-      When query
-        """
-        SELECT to_csv(named_struct('ts', to_timestamp('1969-12-31', 'yyyy-MM-dd')))
-        """
-      Then query result
-        | to_csv(named_struct(ts, to_timestamp(1969-12-31, yyyy-MM-dd))) |
-        | 1969-12-31T00:00:00.000Z                                       |
-
-    Scenario: Custom timestampFormat option changes the output format
-      When query
-        """
-        SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'))
-        """
-      Then query result
-        | to_csv(named_struct(time, to_timestamp(2015-08-26, yyyy-MM-dd))) |
-        | 26/08/2015                                                       |
+      Examples:
+        | case                                                    | args                                             | opts                                   | name                                       | result                   |
+        | Timestamp field uses default ISO 8601 UTC format        | 'ts', to_timestamp('2015-08-26', 'yyyy-MM-dd')   |                                        | ts, to_timestamp(2015-08-26, yyyy-MM-dd)   | 2015-08-26T00:00:00.000Z |
+        | Pre-epoch timestamp is formatted correctly              | 'ts', to_timestamp('1969-12-31', 'yyyy-MM-dd')   |                                        | ts, to_timestamp(1969-12-31, yyyy-MM-dd)   | 1969-12-31T00:00:00.000Z |
+        | Custom timestampFormat option changes the output format | 'time', to_timestamp('2015-08-26', 'yyyy-MM-dd') | , map('timestampFormat', 'dd/MM/yyyy') | time, to_timestamp(2015-08-26, yyyy-MM-dd) | 26/08/2015               |
 
   Rule: Date formatting
 
-    Scenario: Date field uses default yyyy-MM-dd format
+    Scenario Outline: Date: <case>
       When query
         """
-        SELECT to_csv(named_struct('d', DATE '2015-08-26'))
+        SELECT to_csv(named_struct(<args>)<opts>)
         """
       Then query result
-        | to_csv(named_struct(d, DATE '2015-08-26')) |
-        | 2015-08-26                                 |
+        | to_csv(named_struct(<name>)) |
+        | <result>                     |
 
-    Scenario: Pre-epoch date is formatted correctly
-      When query
-        """
-        SELECT to_csv(named_struct('d', DATE '1969-12-31'))
-        """
-      Then query result
-        | to_csv(named_struct(d, DATE '1969-12-31')) |
-        | 1969-12-31                                 |
-
-    Scenario: Custom dateFormat option changes the output format
-      When query
-        """
-        SELECT to_csv(named_struct('d', DATE '2015-08-26'), map('dateFormat', 'dd/MM/yyyy'))
-        """
-      Then query result
-        | to_csv(named_struct(d, DATE '2015-08-26')) |
-        | 26/08/2015                                 |
+      Examples:
+        | case                                               | args                   | opts                              | name                 | result     |
+        | Date field uses default yyyy-MM-dd format          | 'd', DATE '2015-08-26' |                                   | d, DATE '2015-08-26' | 2015-08-26 |
+        | Pre-epoch date is formatted correctly              | 'd', DATE '1969-12-31' |                                   | d, DATE '1969-12-31' | 1969-12-31 |
+        | Custom dateFormat option changes the output format | 'd', DATE '2015-08-26' | , map('dateFormat', 'dd/MM/yyyy') | d, DATE '2015-08-26' | 26/08/2015 |
 
   Rule: Decimal formatting
 
-    Scenario: Decimal field is formatted as fixed-point string
+    # The negative case needs a separate `name` slot: Spark derives the column
+    # name as `CAST((- 0.99) AS DECIMAL(5,2))`, not `CAST(-0.99 AS DECIMAL(5,2))`.
+    Scenario Outline: Decimal: <case>
       When query
         """
-        SELECT to_csv(named_struct('price', CAST(9.99 AS DECIMAL(5,2))))
+        SELECT to_csv(named_struct(<args>))
         """
       Then query result
-        | to_csv(named_struct(price, CAST(9.99 AS DECIMAL(5,2)))) |
-        | 9.99                                                    |
+        | to_csv(named_struct(<name>)) |
+        | <result>                     |
 
-    Scenario: Negative decimal preserves sign including fractional-only values
-      When query
-        """
-        SELECT to_csv(named_struct('price', CAST(-0.99 AS DECIMAL(5,2))))
-        """
-      Then query result
-        | to_csv(named_struct(price, CAST((- 0.99) AS DECIMAL(5,2)))) |
-        | -0.99                                                       |
+      Examples:
+        | case                                                             | args                                 | name                                  | result |
+        | Decimal field is formatted as fixed-point string                 | 'price', CAST(9.99 AS DECIMAL(5,2))  | price, CAST(9.99 AS DECIMAL(5,2))     | 9.99   |
+        | Negative decimal preserves sign including fractional-only values | 'price', CAST(-0.99 AS DECIMAL(5,2)) | price, CAST((- 0.99) AS DECIMAL(5,2)) | -0.99  |
 
   Rule: Complex and special values
 
-    Scenario: Non-null complex values are formatted as Spark pretty strings
+    Scenario Outline: Complex value: <case>
       When query
         """
-        SELECT to_csv(named_struct('a', array(1, 2, CAST(NULL AS INT)), 'm', map('x', 1), 's', named_struct('b', 2))) AS result
+        SELECT to_csv(named_struct(<args>)) AS result
         """
       Then query result
-        | result                 |
-        | "[1, 2,]",{x -> 1},{2} |
+        | result   |
+        | <result> |
 
-    Scenario: Floating-point special values use Spark display strings
-      When query
-        """
-        SELECT to_csv(named_struct('nan', CAST('NaN' AS DOUBLE), 'pos', CAST('Infinity' AS DOUBLE), 'neg', CAST('-Infinity' AS DOUBLE))) AS result
-        """
-      Then query result
-        | result                 |
-        | NaN,Infinity,-Infinity |
-
-    Scenario: Binary values use Spark hex pretty strings
-      When query
-        """
-        SELECT to_csv(named_struct('b', CAST('abc' AS BINARY))) AS result
-        """
-      Then query result
-        | result     |
-        | [61 62 63] |
+      Examples:
+        | case                                                          | args                                                                                                | result                 |
+        | Non-null complex values are formatted as Spark pretty strings | 'a', array(1, 2, CAST(NULL AS INT)), 'm', map('x', 1), 's', named_struct('b', 2)                    | "[1, 2,]",{x -> 1},{2} |
+        | Floating-point special values use Spark display strings       | 'nan', CAST('NaN' AS DOUBLE), 'pos', CAST('Infinity' AS DOUBLE), 'neg', CAST('-Infinity' AS DOUBLE) | NaN,Infinity,-Infinity |
+        | Binary values use Spark hex pretty strings                    | 'b', CAST('abc' AS BINARY)                                                                          | [61 62 63]             |
 
   @spark_null
   Rule: Output schema

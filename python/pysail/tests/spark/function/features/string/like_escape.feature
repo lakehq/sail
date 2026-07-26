@@ -3,32 +3,22 @@ Feature: LIKE and ILIKE with ESCAPE clause
 
   Rule: Custom ESCAPE character
 
-    Scenario: ilike with '/' as escape character
+    Scenario Outline: Custom ESCAPE: <case>
       When query
         """
-        SELECT '%SystemDrive%/Users/John' ilike '/%SYSTEMDrive/%//Users%' ESCAPE '/' AS result
+        SELECT <value> <op> <pattern> ESCAPE <escape> AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: like with '/' as escape character
-      When query
-        """
-        SELECT '%SystemDrive%/Users/John' like '/%SystemDrive/%//Users%' ESCAPE '/' AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: ilike with '/' as escape character and lowercase pattern
-      When query
-        """
-        SELECT '%SystemDrive%/Users/John' ilike '/%SystemDrive/%//users%' ESCAPE '/' AS result
-        """
-      Then query result
-        | result |
-        | true   |
+      Examples:
+        | case                                                                  | value                      | op    | pattern                   | escape | result |
+        | ilike with '/' as escape character                                    | '%SystemDrive%/Users/John' | ilike | '/%SYSTEMDrive/%//Users%' | '/'    | true   |
+        | like with '/' as escape character                                     | '%SystemDrive%/Users/John' | like  | '/%SystemDrive/%//Users%' | '/'    | true   |
+        | ilike with '/' as escape character and lowercase pattern              | '%SystemDrive%/Users/John' | ilike | '/%SystemDrive/%//users%' | '/'    | true   |
+        | like with '!' escape before a non-special char (lenient pass-through) | 'a!b'                      | LIKE  | 'a!b'                     | '!'    | true   |
+        | like with '!' escape and literal '!' in value but not pattern         | 'a!b'                      | LIKE  | 'ab'                      | '!'    | false  |
 
     Scenario: like with '!' escape leaves backslash as a literal
       When query
@@ -47,24 +37,6 @@ Feature: LIKE and ILIKE with ESCAPE clause
       Then query result
         | result |
         | true   |
-
-    Scenario: like with '!' escape before a non-special char (lenient pass-through)
-      When query
-        """
-        SELECT 'a!b' LIKE 'a!b' ESCAPE '!' AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: like with '!' escape and literal '!' in value but not pattern
-      When query
-        """
-        SELECT 'a!b' LIKE 'ab' ESCAPE '!' AS result
-        """
-      Then query result
-        | result |
-        | false  |
 
   Rule: Default backslash escape
 
@@ -124,38 +96,18 @@ Feature: LIKE and ILIKE with ESCAPE clause
 
   Rule: Case sensitivity
 
-    Scenario: ilike as function is case-insensitive with uppercase pattern
+    Scenario Outline: Case sensitivity: <case>
       When query
         """
-        SELECT ilike('Spark', '_PARK') AS result
+        SELECT <fn>(<value>, <pattern>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: like as function matches same-case pattern
-      When query
-        """
-        SELECT like('Spark', '_park') AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: like as function returns false on value mismatch
-      When query
-        """
-        SELECT like('Spock', '_park') AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: like as function is case-sensitive on pattern
-      When query
-        """
-        SELECT like('Spock', '_pArk') AS result
-        """
-      Then query result
-        | result |
-        | false  |
+      Examples:
+        | case                                                         | fn    | value   | pattern | result |
+        | ilike as function is case-insensitive with uppercase pattern | ilike | 'Spark' | '_PARK' | true   |
+        | like as function matches same-case pattern                   | like  | 'Spark' | '_park' | true   |
+        | like as function returns false on value mismatch             | like  | 'Spock' | '_park' | false  |
+        | like as function is case-sensitive on pattern                | like  | 'Spock' | '_pArk' | false  |

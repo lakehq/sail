@@ -3,181 +3,94 @@ Feature: levenshtein() returns edit distance between two strings
 
   Rule: Basic usage
 
-    Scenario: basic distance
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT levenshtein('kitten', 'sitting') AS result
+        SELECT levenshtein(<s1>, <s2>) AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: identical strings
-      When query
-        """
-        SELECT levenshtein('hello', 'hello') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: empty string vs non-empty
-      When query
-        """
-        SELECT levenshtein('', 'abc') AS result
-        """
-      Then query result
-        | result |
-        | 3      |
-
-    Scenario: both empty strings
-      When query
-        """
-        SELECT levenshtein('', '') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: single character difference
-      When query
-        """
-        SELECT levenshtein('abc', 'adc') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
+      Examples:
+        | case                        | s1       | s2        | result |
+        | basic distance              | 'kitten' | 'sitting' | 3      |
+        | identical strings           | 'hello'  | 'hello'   | 0      |
+        | empty string vs non-empty   | ''       | 'abc'     | 3      |
+        | both empty strings          | ''       | ''        | 0      |
+        | single character difference | 'abc'    | 'adc'     | 1      |
 
   Rule: Threshold (3-argument form)
 
-    Scenario: distance within threshold
+    Scenario Outline: Threshold: <case>
       When query
         """
-        SELECT levenshtein('kitten', 'sitting', 4) AS result
+        SELECT levenshtein(<s1>, <s2>, <threshold>) AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: distance exceeds threshold
-      When query
-        """
-        SELECT levenshtein('kitten', 'sitting', 2) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
-    Scenario: distance equals threshold (boundary)
-      When query
-        """
-        SELECT levenshtein('kitten', 'sitting', 3) AS result
-        """
-      Then query result
-        | result |
-        | 3      |
-
-    Scenario: threshold zero with different strings
-      When query
-        """
-        SELECT levenshtein('abc', 'def', 0) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
-    Scenario: threshold zero with identical strings
-      When query
-        """
-        SELECT levenshtein('abc', 'abc', 0) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                  | s1       | s2        | threshold | result |
+        | distance within threshold             | 'kitten' | 'sitting' | 4         | 3      |
+        | distance exceeds threshold            | 'kitten' | 'sitting' | 2         | -1     |
+        | distance equals threshold (boundary)  | 'kitten' | 'sitting' | 3         | 3      |
+        | threshold zero with different strings | 'abc'    | 'def'     | 0         | -1     |
+        | threshold zero with identical strings | 'abc'    | 'abc'     | 0         | 0      |
 
   Rule: Null handling
 
-    Scenario: first argument null
+    Scenario Outline: Null handling: <case>
       When query
         """
-        SELECT levenshtein(CAST(NULL AS STRING), 'hello') AS result
+        SELECT levenshtein(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: second argument null
-      When query
-        """
-        SELECT levenshtein('hello', CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: both arguments null
-      When query
-        """
-        SELECT levenshtein(CAST(NULL AS STRING), CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: null threshold
-      When query
-        """
-        SELECT levenshtein('kitten', 'sitting', CAST(NULL AS INT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                 | args                                       |
+        | first argument null  | CAST(NULL AS STRING), 'hello'              |
+        | second argument null | 'hello', CAST(NULL AS STRING)              |
+        | both arguments null  | CAST(NULL AS STRING), CAST(NULL AS STRING) |
+        | null threshold       | 'kitten', 'sitting', CAST(NULL AS INT)     |
 
   Rule: Unicode and special characters
 
-    Scenario: unicode strings
+    Scenario Outline: Unicode and special characters: <case>
       When query
         """
-        SELECT levenshtein('café', 'cafe') AS result
+        SELECT levenshtein(<s1>, <s2>) AS result
         """
       Then query result
         | result |
         | 1      |
 
-    Scenario: strings with spaces
-      When query
-        """
-        SELECT levenshtein('hello world', 'hello world!') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
+      Examples:
+        | case                | s1            | s2             |
+        | unicode strings     | 'café'        | 'cafe'         |
+        | strings with spaces | 'hello world' | 'hello world!' |
 
   Rule: Column expressions
 
-    Scenario: levenshtein on columns from inline table
+    Scenario Outline: Column expressions: <case>
       When query
         """
-        SELECT levenshtein(s1, s2) AS result
+        SELECT levenshtein(s1, s2<threshold>) AS result
         FROM VALUES ('abc', 'abc'), ('abc', 'def'), ('kitten', 'sitting') AS t(s1, s2)
         """
       Then query result
         | result |
-        | 0      |
-        | 3      |
-        | 3      |
+        | <r1>   |
+        | <r2>   |
+        | <r3>   |
 
-    Scenario: threshold on columns from inline table
-      When query
-        """
-        SELECT levenshtein(s1, s2, 2) AS result
-        FROM VALUES ('abc', 'abc'), ('abc', 'def'), ('kitten', 'sitting') AS t(s1, s2)
-        """
-      Then query result
-        | result |
-        | 0      |
-        | -1     |
-        | -1     |
+      Examples:
+        | case                                     | threshold | r1 | r2 | r3 |
+        | levenshtein on columns from inline table |           | 0  | 3  | 3  |
+        | threshold on columns from inline table   | , 2       | 0  | -1 | -1 |
 
   Rule: Per-row threshold (threshold varies per row)
 
@@ -238,61 +151,37 @@ Feature: levenshtein() returns edit distance between two strings
 
   Rule: Threshold edge cases
 
-    Scenario: negative threshold returns minus one
+    Scenario Outline: Threshold edge case: <case>
       When query
         """
-        SELECT levenshtein('kitten', 'sitting', -1) AS result
+        SELECT levenshtein(<s1>, <s2>, <threshold>) AS result
         """
       Then query result
-        | result |
-        | -1     |
+        | result   |
+        | <result> |
 
-    Scenario: negative threshold with identical strings returns minus one
-      When query
-        """
-        SELECT levenshtein('abc', 'abc', -1) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
-    Scenario: very large threshold returns actual distance
-      When query
-        """
-        SELECT levenshtein('abc', 'def', 1000) AS result
-        """
-      Then query result
-        | result |
-        | 3      |
-
-    Scenario: threshold equals one at boundary
-      When query
-        """
-        SELECT levenshtein('abc', 'adc', 1) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
+      Examples:
+        | case                                                        | s1       | s2        | threshold | result |
+        | negative threshold returns minus one                        | 'kitten' | 'sitting' | -1        | -1     |
+        | negative threshold with identical strings returns minus one | 'abc'    | 'abc'     | -1        | -1     |
+        | very large threshold returns actual distance                | 'abc'    | 'def'     | 1000      | 3      |
+        | threshold equals one at boundary                            | 'abc'    | 'adc'     | 1         | 1      |
 
   Rule: Case sensitivity and long strings
 
-    Scenario: case sensitive comparison
+    Scenario Outline: Case sensitivity and long strings: <case>
       When query
         """
-        SELECT levenshtein('ABC', 'abc') AS result
+        SELECT levenshtein(<s1>, <s2>) AS result
         """
       Then query result
-        | result |
-        | 3      |
+        | result   |
+        | <result> |
 
-    Scenario: long strings
-      When query
-        """
-        SELECT levenshtein(REPEAT('a', 100), REPEAT('b', 100)) AS result
-        """
-      Then query result
-        | result |
-        | 100    |
+      Examples:
+        | case                      | s1               | s2               | result |
+        | case sensitive comparison | 'ABC'            | 'abc'            | 3      |
+        | long strings              | REPEAT('a', 100) | REPEAT('b', 100) | 100    |
 
   @spark_null
   Rule: Output schema

@@ -3,214 +3,94 @@ Feature: to_number comprehensive tests
 
   Rule: Argument count validation
 
-    Scenario: to_number zero arguments errors
+    Scenario Outline: Argument count: <case>
       When query
         """
-        SELECT to_number() AS result
+        SELECT to_number(<args>) AS result
         """
       Then query error .*
 
-    Scenario: to_number one argument errors
-      When query
-        """
-        SELECT to_number('123') AS result
-        """
-      Then query error .*
-
-    Scenario: to_number three arguments errors
-      When query
-        """
-        SELECT to_number('123', '999', 'extra') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                             | args                  |
+        | to_number zero arguments errors  |                       |
+        | to_number one argument errors    | '123'                 |
+        | to_number three arguments errors | '123', '999', 'extra' |
 
   Rule: NULL combinatorial
 
-    Scenario: to_number NULL value
+    Scenario Outline: NULL: <case>
       When query
         """
-        SELECT to_number(CAST(NULL AS STRING), '999') AS result
+        SELECT to_number(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: to_number NULL format returns NULL
-      When query
-        """
-        SELECT to_number('123', CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: to_number both NULL returns NULL
-      When query
-        """
-        SELECT to_number(CAST(NULL AS STRING), CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                               | args                                       |
+        | to_number NULL value               | CAST(NULL AS STRING), '999'                |
+        | to_number NULL format returns NULL | '123', CAST(NULL AS STRING)                |
+        | to_number both NULL returns NULL   | CAST(NULL AS STRING), CAST(NULL AS STRING) |
 
   Rule: Basic parsing
 
-    Scenario: to_number basic integer
+    Scenario Outline: Basic parsing: <case>
       When query
         """
-        SELECT to_number('123', '999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | 123    |
+        | result   |
+        | <result> |
 
-    Scenario: to_number zero-padded
-      When query
-        """
-        SELECT to_number('00042', '00000') AS result
-        """
-      Then query result
-        | result |
-        | 42     |
-
-    Scenario: to_number with comma separator
-      When query
-        """
-        SELECT to_number('12,345', '99,999') AS result
-        """
-      Then query result
-        | result |
-        | 12345  |
-
-    Scenario: to_number with decimal
-      When query
-        """
-        SELECT to_number('1.23', '9.99') AS result
-        """
-      Then query result
-        | result |
-        | 1.23   |
-
-    Scenario: to_number with dollar sign
-      When query
-        """
-        SELECT to_number('$1,234', '$9,999') AS result
-        """
-      Then query result
-        | result |
-        | 1234   |
-
-    Scenario: to_number zero
-      When query
-        """
-        SELECT to_number('0', '9') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: to_number leading spaces
-      When query
-        """
-        SELECT to_number('  42', '999') AS result
-        """
-      Then query result
-        | result |
-        | 42     |
+      Examples:
+        | case                           | value    | format   | result |
+        | to_number basic integer        | '123'    | '999'    | 123    |
+        | to_number zero-padded          | '00042'  | '00000'  | 42     |
+        | to_number with comma separator | '12,345' | '99,999' | 12345  |
+        | to_number with decimal         | '1.23'   | '9.99'   | 1.23   |
+        | to_number with dollar sign     | '$1,234' | '$9,999' | 1234   |
+        | to_number zero                 | '0'      | '9'      | 0      |
+        | to_number leading spaces       | '  42'   | '999'    | 42     |
 
   Rule: G and D separators
 
-    Scenario: to_number G separator
+    Scenario Outline: Separator: <case>
       When query
         """
-        SELECT to_number('12,345', '99G999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | 12345  |
+        | result   |
+        | <result> |
 
-    Scenario: to_number D separator
-      When query
-        """
-        SELECT to_number('123.45', '999D99') AS result
-        """
-      Then query result
-        | result |
-        | 123.45 |
+      Examples:
+        | case                  | value    | format   | result |
+        | to_number G separator | '12,345' | '99G999' | 12345  |
+        | to_number D separator | '123.45' | '999D99' | 123.45 |
 
   Rule: Sign handling
 
-    Scenario: to_number S prefix negative
+    Scenario Outline: Sign: <case>
       When query
         """
-        SELECT to_number('-123', 'S999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | -123   |
+        | result   |
+        | <result> |
 
-    Scenario: to_number S prefix positive
-      When query
-        """
-        SELECT to_number('+123', 'S999') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: to_number S suffix negative
-      When query
-        """
-        SELECT to_number('123-', '999S') AS result
-        """
-      Then query result
-        | result |
-        | -123   |
-
-    Scenario: to_number S suffix positive
-      When query
-        """
-        SELECT to_number('123+', '999S') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: to_number MI prefix negative
-      When query
-        """
-        SELECT to_number('-123', 'MI999') AS result
-        """
-      Then query result
-        | result |
-        | -123   |
-
-    Scenario: to_number MI prefix space
-      When query
-        """
-        SELECT to_number(' 123', 'MI999') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: to_number PR negative
-      When query
-        """
-        SELECT to_number('<123>', '999PR') AS result
-        """
-      Then query result
-        | result |
-        | -123   |
-
-    Scenario: to_number PR positive
-      When query
-        """
-        SELECT to_number(' 123 ', '999PR') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
+      Examples:
+        | case                         | value   | format  | result |
+        | to_number S prefix negative  | '-123'  | 'S999'  | -123   |
+        | to_number S prefix positive  | '+123'  | 'S999'  | 123    |
+        | to_number S suffix negative  | '123-'  | '999S'  | -123   |
+        | to_number S suffix positive  | '123+'  | '999S'  | 123    |
+        | to_number MI prefix negative | '-123'  | 'MI999' | -123   |
+        | to_number MI prefix space    | ' 123'  | 'MI999' | 123    |
+        | to_number PR negative        | '<123>' | '999PR' | -123   |
+        | to_number PR positive        | ' 123 ' | '999PR' | 123    |
 
   Rule: L format rejected
 
@@ -236,26 +116,18 @@ Feature: to_number comprehensive tests
 
   Rule: Error conditions
 
-    Scenario: to_number mismatched input errors
+    Scenario Outline: Error: <case>
       When query
         """
-        SELECT to_number('abc', '999') AS result
+        SELECT to_number(<value>, '999') AS result
         """
       Then query error .*
 
-    Scenario: to_number all spaces errors
-      When query
-        """
-        SELECT to_number('   ', '999') AS result
-        """
-      Then query error .*
-
-    Scenario: to_number empty value errors
-      When query
-        """
-        SELECT to_number('', '999') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                              | value |
+        | to_number mismatched input errors | 'abc' |
+        | to_number all spaces errors       | '   ' |
+        | to_number empty value errors      | ''    |
 
     Scenario: to_number empty format errors
       When query
@@ -264,100 +136,58 @@ Feature: to_number comprehensive tests
         """
       Then query error .*
 
-
   Rule: Basic usage
 
-    Scenario: integer with extra format slots
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT to_number('12', '999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | 12     |
+        | result   |
+        | <result> |
 
-    Scenario: zero-padded input
-      When query
-        """
-        SELECT to_number('007', '009') AS result
-        """
-      Then query result
-        | result |
-        | 7      |
+      Examples:
+        | case                               | value      | format     | result  |
+        | integer with extra format slots    | '12'       | '999'      | 12      |
+        | zero-padded input                  | '007'      | '009'      | 7       |
+        | trailing zero preserved in decimal | '1.50'     | '9.99'     | 1.50    |
+        | full combo thousands plus decimals | '1,234.56' | '9,999.99' | 1234.56 |
+        | no integer part                    | '.5'       | '.9'       | 0.5     |
 
-    Scenario: trailing zero preserved in decimal
-      When query
-        """
-        SELECT to_number('1.50', '9.99') AS result
-        """
-      Then query result
-        | result |
-        | 1.50   |
-
-    Scenario: full combo thousands plus decimals
-      When query
-        """
-        SELECT to_number('1,234.56', '9,999.99') AS result
-        """
-      Then query result
-        | result  |
-        | 1234.56 |
-
-    Scenario: no integer part
-      When query
-        """
-        SELECT to_number('.5', '.9') AS result
-        """
-      Then query result
-        | result |
-        | 0.5    |
   Rule: Sign handling - S
 
-    Scenario: S prefix with positive leading blank
+    Scenario Outline: S sign: <case>
       When query
         """
-        SELECT to_number(' 123', 'S999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | 123    |
+        | result   |
+        | <result> |
 
-    Scenario: trailing S negative
-      When query
-        """
-        SELECT to_number(' 5-', '9S') AS result
-        """
-      Then query result
-        | result |
-        | -5     |
+      Examples:
+        | case                                 | value  | format | result |
+        | S prefix with positive leading blank | ' 123' | 'S999' | 123    |
+        | trailing S negative                  | ' 5-'  | '9S'   | -5     |
+        | trailing S positive                  | ' 5+'  | '9S'   | 5      |
 
-    Scenario: trailing S positive
-      When query
-        """
-        SELECT to_number(' 5+', '9S') AS result
-        """
-      Then query result
-        | result |
-        | 5      |
   Rule: Sign handling - MI
 
-    Scenario: MI suffix with negative
+    Scenario Outline: MI sign: <case>
       When query
         """
-        SELECT to_number('123-', '999MI') AS result
+        SELECT to_number(<value>, '999MI') AS result
         """
       Then query result
-        | result |
-        | -123   |
+        | result   |
+        | <result> |
 
-    Scenario: MI suffix with positive
-      When query
-        """
-        SELECT to_number('123', '999MI') AS result
-        """
-      Then query result
-        | result |
-        | 123    |
+      Examples:
+        | case                    | value  | result |
+        | MI suffix with negative | '123-' | -123   |
+        | MI suffix with positive | '123'  | 123    |
+
   Rule: Currency
 
     Scenario: dollar prefix
@@ -368,43 +198,25 @@ Feature: to_number comprehensive tests
       Then query result
         | result |
         | 123    |
+
   Rule: Grouping and decimal markers (case-insensitive)
 
-    Scenario: uppercase G grouping
+    Scenario Outline: Marker: <case>
       When query
         """
-        SELECT to_number('123', '9G999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query result
-        | result |
-        | 123    |
+        | result   |
+        | <result> |
 
-    Scenario: uppercase D decimal
-      When query
-        """
-        SELECT to_number('1.5', '9D9') AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
+      Examples:
+        | case                 | value   | format  | result |
+        | uppercase G grouping | '123'   | '9G999' | 123    |
+        | uppercase D decimal  | '1.5'   | '9D9'   | 1.5    |
+        | lowercase g grouping | '1,234' | '9g999' | 1234   |
+        | lowercase d decimal  | '1.5'   | '9d9'   | 1.5    |
 
-    Scenario: lowercase g grouping
-      When query
-        """
-        SELECT to_number('1,234', '9g999') AS result
-        """
-      Then query result
-        | result |
-        | 1234   |
-
-    Scenario: lowercase d decimal
-      When query
-        """
-        SELECT to_number('1.5', '9d9') AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
   Rule: Multi-row
 
     Scenario: multi-row with NULL
@@ -422,6 +234,7 @@ Feature: to_number comprehensive tests
         | 50     |
         | 100    |
         | NULL   |
+
   Rule: Large magnitudes
 
     Scenario: 20-digit integer
@@ -432,6 +245,7 @@ Feature: to_number comprehensive tests
       Then query result
         | result               |
         | 99999999999999999999 |
+
   Rule: Whitespace handling
 
     Scenario: surrounding spaces in input
@@ -451,64 +265,39 @@ Feature: to_number comprehensive tests
       Then query result
         | result |
         | 1      |
+
   Rule: Input errors (valid format, wrong input)
 
-    Scenario: input larger than format
+    Scenario Outline: Input error: <case>
       When query
         """
-        SELECT to_number('1234', '999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query error .*
 
-    Scenario: negative input without sign spec
-      When query
-        """
-        SELECT to_number('-123', '999') AS result
-        """
-      Then query error .*
+      Examples:
+        | case                             | value  | format |
+        | input larger than format         | '1234' | '999'  |
+        | negative input without sign spec | '-123' | '999'  |
+        | decimal in integer format        | '12.3' | '999'  |
+        | dollar suffix not allowed        | '123$' | '999$' |
 
-    Scenario: decimal in integer format
-      When query
-        """
-        SELECT to_number('12.3', '999') AS result
-        """
-      Then query error .*
-
-    Scenario: dollar suffix not allowed
-      When query
-        """
-        SELECT to_number('123$', '999$') AS result
-        """
-      Then query error .*
   Rule: Format errors
 
-    Scenario: double S in format
+    Scenario Outline: Format error: <case>
       When query
         """
-        SELECT to_number('123', 'SS999') AS result
+        SELECT to_number(<value>, <format>) AS result
         """
       Then query error .*
 
-    Scenario: comma at start
-      When query
-        """
-        SELECT to_number('123', ',999') AS result
-        """
-      Then query error .*
+      Examples:
+        | case               | value | format  |
+        | double S in format | '123' | 'SS999' |
+        | comma at start     | '123' | ',999'  |
+        | comma at end       | '123' | '999,'  |
+        | dot only           | '1.5' | '.'     |
 
-    Scenario: comma at end
-      When query
-        """
-        SELECT to_number('123', '999,') AS result
-        """
-      Then query error .*
-
-    Scenario: dot only
-      When query
-        """
-        SELECT to_number('1.5', '.') AS result
-        """
-      Then query error .*
   Rule: All-null short-circuit must NOT bypass format validation
 
     Scenario: to_number all-null column with invalid double-S format still errors
@@ -551,6 +340,7 @@ Feature: to_number comprehensive tests
         | result |
         | NULL   |
         | NULL   |
+
   Rule: Format must be a constant literal
 
     Scenario: non-literal format column reference errors at planning time
@@ -600,110 +390,26 @@ Feature: to_number comprehensive tests
 
   Rule: Result values (migrated from test_to_number.txt doctests)
 
-    Scenario: to_number doctest #1 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT to_number('<-$12,345.67>', 'S$999,099.99PR') AS result, typeof(to_number('<-$12,345.67>', 'S$999,099.99PR')) AS type
+        SELECT to_number(<args>) AS result, typeof(to_number(<args>)) AS type
         """
       Then query result
-        | result   | type         |
-        | 12345.67 | decimal(8,2) |
+        | result   | type   |
+        | <result> | <type> |
 
-    Scenario: to_number doctest #2 (result)
-      When query
-        """
-        SELECT to_number('<$1,212,345.67>', 'S$0,000,000.99PR') AS result, typeof(to_number('<$1,212,345.67>', 'S$0,000,000.99PR')) AS type
-        """
-      Then query result
-        | result      | type         |
-        | -1212345.67 | decimal(9,2) |
-
-    Scenario: to_number doctest #3 (result)
-      When query
-        """
-        SELECT to_number('$345', 'S$999,099.99') AS result, typeof(to_number('$345', 'S$999,099.99')) AS type
-        """
-      Then query result
-        | result | type         |
-        | 345.00 | decimal(8,2) |
-
-    Scenario: to_number doctest #4 (result)
-      When query
-        """
-        SELECT to_number('$045', 'S$999,099.99') AS result, typeof(to_number('$045', 'S$999,099.99')) AS type
-        """
-      Then query result
-        | result | type         |
-        | 45.00  | decimal(8,2) |
-
-    Scenario: to_number doctest #5 (result)
-      When query
-        """
-        SELECT to_number('<1234>', '999999PR') AS result, typeof(to_number('<1234>', '999999PR')) AS type
-        """
-      Then query result
-        | result | type         |
-        | -1234  | decimal(6,0) |
-
-    Scenario: to_number doctest #6 (result)
-      When query
-        """
-        SELECT to_number('12,454.8-', '99,999.9S') AS result, typeof(to_number('12,454.8-', '99,999.9S')) AS type
-        """
-      Then query result
-        | result   | type         |
-        | -12454.8 | decimal(6,1) |
-
-    Scenario: to_number doctest #7 (result)
-      When query
-        """
-        SELECT to_number('<-$123,456.32>', 'S$999,999.999999PR') AS result, typeof(to_number('<-$123,456.32>', 'S$999,999.999999PR')) AS type
-        """
-      Then query result
-        | result        | type          |
-        | 123456.320000 | decimal(12,6) |
-
-    Scenario: to_number doctest #8 (result)
-      When query
-        """
-        SELECT to_number('$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32', 'MI$999,999.99S')) AS type
-        """
-      Then query result
-        | result    | type         |
-        | 123456.32 | decimal(8,2) |
-
-    Scenario: to_number doctest #9 (result)
-      When query
-        """
-        SELECT to_number('$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32-', 'MI$999,999.99S')) AS type
-        """
-      Then query result
-        | result     | type         |
-        | -123456.32 | decimal(8,2) |
-
-    Scenario: to_number doctest #10 (result)
-      When query
-        """
-        SELECT to_number('-$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32-', 'MI$999,999.99S')) AS type
-        """
-      Then query result
-        | result    | type         |
-        | 123456.32 | decimal(8,2) |
-
-    Scenario: to_number doctest #11 (result)
-      When query
-        """
-        SELECT to_number('-$123,456.32+', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32+', 'MI$999,999.99S')) AS type
-        """
-      Then query result
-        | result     | type         |
-        | -123456.32 | decimal(8,2) |
-
-    Scenario: to_number doctest #12 (result)
-      When query
-        """
-        SELECT to_number('-$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32', 'MI$999,999.99S')) AS type
-        """
-      Then query result
-        | result     | type         |
-        | -123456.32 | decimal(8,2) |
+      Examples:
+        | case                           | args                                   | result        | type          |
+        | to_number doctest #1 (result)  | '<-$12,345.67>', 'S$999,099.99PR'      | 12345.67      | decimal(8,2)  |
+        | to_number doctest #2 (result)  | '<$1,212,345.67>', 'S$0,000,000.99PR'  | -1212345.67   | decimal(9,2)  |
+        | to_number doctest #3 (result)  | '$345', 'S$999,099.99'                 | 345.00        | decimal(8,2)  |
+        | to_number doctest #4 (result)  | '$045', 'S$999,099.99'                 | 45.00         | decimal(8,2)  |
+        | to_number doctest #5 (result)  | '<1234>', '999999PR'                   | -1234         | decimal(6,0)  |
+        | to_number doctest #6 (result)  | '12,454.8-', '99,999.9S'               | -12454.8      | decimal(6,1)  |
+        | to_number doctest #7 (result)  | '<-$123,456.32>', 'S$999,999.999999PR' | 123456.320000 | decimal(12,6) |
+        | to_number doctest #8 (result)  | '$123,456.32', 'MI$999,999.99S'        | 123456.32     | decimal(8,2)  |
+        | to_number doctest #9 (result)  | '$123,456.32-', 'MI$999,999.99S'       | -123456.32    | decimal(8,2)  |
+        | to_number doctest #10 (result) | '-$123,456.32-', 'MI$999,999.99S'      | 123456.32     | decimal(8,2)  |
+        | to_number doctest #11 (result) | '-$123,456.32+', 'MI$999,999.99S'      | -123456.32    | decimal(8,2)  |
+        | to_number doctest #12 (result) | '-$123,456.32', 'MI$999,999.99S'       | -123456.32    | decimal(8,2)  |

@@ -3,115 +3,43 @@ Feature: concat_ws function
 
   Rule: concat_ws with scalar arguments
 
-    Scenario: concat_ws with multiple string arguments
+    Scenario Outline: Scalar arguments: <case>
       When query
         """
-        SELECT concat_ws(',', 'a', 'b', 'c') AS result
+        SELECT concat_ws(<args>) AS result
         """
       Then query result
-        | result |
-        | a,b,c  |
+        | result   |
+        | <result> |
 
-    Scenario: concat_ws with null arguments
-      When query
-        """
-        SELECT concat_ws(',', 'a', NULL, 'c') AS result
-        """
-      Then query result
-        | result |
-        | a,c    |
-
-    Scenario: concat_ws with single argument
-      When query
-        """
-        SELECT concat_ws(',', 'a') AS result
-        """
-      Then query result
-        | result |
-        | a      |
-
-    Scenario: concat_ws with no arguments after separator
-      When query
-        """
-        SELECT concat_ws(',') AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: concat_ws with null separator returns null
-      When query
-        """
-        SELECT concat_ws(NULL, 'a', 'b', 'c') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: concat_ws coerces integer arguments to string
-      When query
-        """
-        SELECT concat_ws('-', 'a', 1, 2) AS result
-        """
-      Then query result
-        | result |
-        | a-1-2  |
-
-    Scenario: concat_ws coerces double arguments to string
-      When query
-        """
-        SELECT concat_ws('-', 'a', 1.5) AS result
-        """
-      Then query result
-        | result |
-        | a-1.5  |
-
-    Scenario: concat_ws coerces boolean arguments to string
-      When query
-        """
-        SELECT concat_ws('-', 'a', true, false) AS result
-        """
-      Then query result
-        | result       |
-        | a-true-false |
+      Examples:
+        | case                                          | args                  | result       |
+        | concat_ws with multiple string arguments      | ',', 'a', 'b', 'c'    | a,b,c        |
+        | concat_ws with null arguments                 | ',', 'a', NULL, 'c'   | a,c          |
+        | concat_ws with single argument                | ',', 'a'              | a            |
+        | concat_ws with no arguments after separator   | ','                   |              |
+        | concat_ws with null separator returns null    | NULL, 'a', 'b', 'c'   | NULL         |
+        | concat_ws coerces integer arguments to string | '-', 'a', 1, 2        | a-1-2        |
+        | concat_ws coerces double arguments to string  | '-', 'a', 1.5         | a-1.5        |
+        | concat_ws coerces boolean arguments to string | '-', 'a', true, false | a-true-false |
 
   Rule: concat_ws with array arguments
 
-    Scenario: concat_ws with array argument
+    Scenario Outline: Array arguments: <case>
       When query
         """
-        SELECT concat_ws(',', array('a', 'b', 'c')) AS result
+        SELECT concat_ws(',', <args>) AS result
         """
       Then query result
-        | result |
-        | a,b,c  |
+        | result   |
+        | <result> |
 
-    Scenario: concat_ws with array containing nulls
-      When query
-        """
-        SELECT concat_ws(',', array('a', NULL, 'c')) AS result
-        """
-      Then query result
-        | result |
-        | a,c    |
-
-    Scenario: concat_ws with multiple arrays
-      When query
-        """
-        SELECT concat_ws(',', array('a', 'b'), array('c', 'd')) AS result
-        """
-      Then query result
-        | result  |
-        | a,b,c,d |
-
-    Scenario: concat_ws with mixed scalar and array arguments
-      When query
-        """
-        SELECT concat_ws(',', 'x', array('a', 'b'), 'y') AS result
-        """
-      Then query result
-        | result  |
-        | x,a,b,y |
+      Examples:
+        | case                                            | args                             | result  |
+        | concat_ws with array argument                   | array('a', 'b', 'c')             | a,b,c   |
+        | concat_ws with array containing nulls           | array('a', NULL, 'c')            | a,c     |
+        | concat_ws with multiple arrays                  | array('a', 'b'), array('c', 'd') | a,b,c,d |
+        | concat_ws with mixed scalar and array arguments | 'x', array('a', 'b'), 'y'        | x,a,b,y |
 
   Rule: concat_ws over multiple rows (column inputs)
 
@@ -170,82 +98,37 @@ Feature: concat_ws function
 
   Rule: concat_ws argument coercion and validation
 
-    Scenario: concat_ws skips a whole-NULL array argument
+    Scenario Outline: Coercion: <case>
       When query
         """
-        SELECT concat_ws(',', CAST(NULL AS ARRAY<STRING>), 'z') AS result
+        SELECT concat_ws(<args>) AS result
         """
       Then query result
-        | result |
-        | z      |
+        | result   |
+        | <result> |
 
-    Scenario: concat_ws coerces binary to string
+      Examples:
+        | case                                                             | args                                                   | result |
+        | concat_ws skips a whole-NULL array argument                      | ',', CAST(NULL AS ARRAY<STRING>), 'z'                  | z      |
+        | concat_ws coerces binary to string                               | ',', X'4869'                                           | Hi     |
+        | concat_ws does not skip empty-string arguments (only NULLs)      | ',', '', 'a', '', 'b'                                  | ,a,,b  |
+        | concat_ws with all-NULL arguments returns empty string           | ',', CAST(NULL AS STRING), CAST(NULL AS STRING)        |        |
+        | concat_ws with empty separator concatenates with nothing between | '', 'a', 'b', 'c'                                      | abc    |
+        | concat_ws with an all-NULL array returns empty string            | ',', array(CAST(NULL AS STRING), CAST(NULL AS STRING)) |        |
+        | concat_ws coerces a numeric separator to string                  | 1, 'a', 'b'                                            | a1b    |
+        | concat_ws with an empty array returns empty string               | ',', array()                                           |        |
+
+    Scenario Outline: Validation: <case>
       When query
         """
-        SELECT concat_ws(',', X'4869') AS result
-        """
-      Then query result
-        | result |
-        | Hi     |
-
-    Scenario: concat_ws rejects struct arguments
-      When query
-        """
-        SELECT concat_ws(',', named_struct('a', 1)) AS result
+        SELECT concat_ws(<args>) AS result
         """
       Then query error .*
 
-    Scenario: concat_ws with zero arguments errors
-      When query
-        """
-        SELECT concat_ws() AS result
-        """
-      Then query error .*
-
-    Scenario: concat_ws does not skip empty-string arguments (only NULLs)
-      When query
-        """
-        SELECT concat_ws(',', '', 'a', '', 'b') AS result
-        """
-      Then query result
-        | result |
-        | ,a,,b  |
-
-    Scenario: concat_ws with all-NULL arguments returns empty string
-      When query
-        """
-        SELECT concat_ws(',', CAST(NULL AS STRING), CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: concat_ws with empty separator concatenates with nothing between
-      When query
-        """
-        SELECT concat_ws('', 'a', 'b', 'c') AS result
-        """
-      Then query result
-        | result |
-        | abc    |
-
-    Scenario: concat_ws with an all-NULL array returns empty string
-      When query
-        """
-        SELECT concat_ws(',', array(CAST(NULL AS STRING), CAST(NULL AS STRING))) AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: concat_ws coerces a numeric separator to string
-      When query
-        """
-        SELECT concat_ws(1, 'a', 'b') AS result
-        """
-      Then query result
-        | result |
-        | a1b    |
+      Examples:
+        | case                                 | args                      |
+        | concat_ws rejects struct arguments   | ',', named_struct('a', 1) |
+        | concat_ws with zero arguments errors |                           |
 
     Scenario: concat_ws nested inside concat_ws
       When query
@@ -255,15 +138,6 @@ Feature: concat_ws function
       Then query result
         | result   |
         | a,b\|c,d |
-
-    Scenario: concat_ws with an empty array returns empty string
-      When query
-        """
-        SELECT concat_ws(',', array()) AS result
-        """
-      Then query result
-        | result |
-        |        |
 
   @spark_null
   Rule: Output schema

@@ -39,41 +39,21 @@ Feature: elt output schema
 
   Rule: Result values (migrated from test_elt.txt doctests)
 
-    Scenario: elt doctest #2 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT elt(1, 10, 20)
+        SELECT elt(<args>)
         """
       Then query result
-        | elt(1, 10, 20) |
-        | 10             |
+        | <name>   |
+        | <result> |
 
-    Scenario: elt doctest #3 (result)
-      When query
-        """
-        SELECT elt(1, 'scala', 'java')
-        """
-      Then query result
-        | elt(1, scala, java) |
-        | scala               |
-
-    Scenario: elt doctest #4 (result)
-      When query
-        """
-        SELECT elt(11, 10, 20)
-        """
-      Then query result
-        | elt(11, 10, 20) |
-        | NULL            |
-
-    Scenario: elt doctest #5 (result)
-      When query
-        """
-        SELECT elt(6, 'scala', 'java', 'c', 'c++', 'python', 'rust')
-        """
-      Then query result
-        | elt(6, scala, java, c, c++, python, rust) |
-        | rust                                      |
+      Examples:
+        | case                    | args                                             | name                                      | result |
+        | elt doctest #2 (result) | 1, 10, 20                                        | elt(1, 10, 20)                            | 10     |
+        | elt doctest #3 (result) | 1, 'scala', 'java'                               | elt(1, scala, java)                       | scala  |
+        | elt doctest #4 (result) | 11, 10, 20                                       | elt(11, 10, 20)                           | NULL   |
+        | elt doctest #5 (result) | 6, 'scala', 'java', 'c', 'c++', 'python', 'rust' | elt(6, scala, java, c, c++, python, rust) | rust   |
 
   Rule: Output schema (migrated from test_elt.txt printSchema doctests)
 

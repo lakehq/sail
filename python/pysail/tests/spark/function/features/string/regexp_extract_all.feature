@@ -3,32 +3,20 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
 
   Rule: Basic extraction with group index
 
-    Scenario: regexp_extract_all with group index 0 returns entire matches
+    Scenario Outline: Group index: <case>
       When query
         """
-        SELECT regexp_extract_all('100-200,300-400,500-600', r'(\d+)-(\d+)', 0) AS result
+        SELECT regexp_extract_all('100-200,300-400,500-600', r'(\d+)-(\d+)', <idx>) AS result
         """
       Then query result
-        | result                      |
-        | [100-200, 300-400, 500-600] |
+        | result   |
+        | <result> |
 
-    Scenario: regexp_extract_all with group index 1 returns first capture group
-      When query
-        """
-        SELECT regexp_extract_all('100-200,300-400,500-600', r'(\d+)-(\d+)', 1) AS result
-        """
-      Then query result
-        | result          |
-        | [100, 300, 500] |
-
-    Scenario: regexp_extract_all with group index 2 returns second capture group
-      When query
-        """
-        SELECT regexp_extract_all('100-200,300-400,500-600', r'(\d+)-(\d+)', 2) AS result
-        """
-      Then query result
-        | result          |
-        | [200, 400, 600] |
+      Examples:
+        | case                                                               | idx | result                      |
+        | regexp_extract_all with group index 0 returns entire matches       | 0   | [100-200, 300-400, 500-600] |
+        | regexp_extract_all with group index 1 returns first capture group  | 1   | [100, 300, 500]             |
+        | regexp_extract_all with group index 2 returns second capture group | 2   | [200, 400, 600]             |
 
   Rule: Default group index
 
@@ -72,23 +60,19 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
 
   Rule: NULL handling
 
-    Scenario: regexp_extract_all returns NULL when input is NULL
+    Scenario Outline: NULL handling: <case>
       When query
         """
-        SELECT regexp_extract_all(NULL, r'(\d+)', 1) AS result
+        SELECT regexp_extract_all(<args>, 1) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: regexp_extract_all returns NULL when pattern is NULL
-      When query
-        """
-        SELECT regexp_extract_all('abc', NULL, 1) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                                 | args           |
+        | regexp_extract_all returns NULL when input is NULL   | NULL, r'(\d+)' |
+        | regexp_extract_all returns NULL when pattern is NULL | 'abc', NULL    |
 
   @spark_null
   Rule: Output schema

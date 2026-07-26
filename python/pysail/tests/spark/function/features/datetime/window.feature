@@ -231,54 +231,26 @@ Feature: window() time-based windowing function
 
   Rule: Argument validation
 
-    Scenario: window rejects a single argument
+    Scenario Outline: Argument validation: <case>
       When query
         """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY window(b)
+        SELECT count(*) FROM VALUES (<values>) AS t(<cols>)
+        GROUP BY window(<args>)
         """
-      Then query error .*window requires 2 to 4 arguments.*
+      Then query error <error>
 
-    Scenario: window rejects a non-literal duration
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', '5 minutes') AS t(b, d)
-        GROUP BY window(b, d)
-        """
-      Then query error .*must be literal strings, intervals, or integers.*
+      Examples:
+        | case                                                             | values                                       | cols | args                         | error                                                                |
+        | window rejects a single argument                                 | TIMESTAMP '2021-01-01 00:00:00'              | b    | b                            | .*window requires 2 to 4 arguments.*                                 |
+        | window rejects a non-literal duration                            | TIMESTAMP '2021-01-01 00:00:00', '5 minutes' | b, d | b, d                         | .*must be literal strings, intervals, or integers.*                  |
+        | window rejects a zero window duration                            | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '0 seconds'               | .*the window duration must be greater than 0.*                       |
+        | window rejects a zero slide duration                             | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '10 minutes', '0 seconds' | .*the slide duration must be greater than 0.*                        |
+        | window rejects a slide duration greater than the window duration | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '5 minutes', '10 minutes' | .*slide duration must be less than or equal to the window duration.* |
+        | window rejects a non-timestamp time column                       | true                                         | b    | b, '5 minutes'               | .*window requires a timestamp time column.*                          |
+        | window rejects a month-based duration (non-constant length)      | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '1 month'                 | .*must not contain months or years.*                                 |
 
-    Scenario: window rejects a zero window duration
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY window(b, '0 seconds')
-        """
-      Then query error .*the window duration must be greater than 0.*
-
-    Scenario: window rejects a zero slide duration
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY window(b, '10 minutes', '0 seconds')
-        """
-      Then query error .*the slide duration must be greater than 0.*
-
-    Scenario: window rejects a slide duration greater than the window duration
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY window(b, '5 minutes', '10 minutes')
-        """
-      Then query error .*slide duration must be less than or equal to the window duration.*
-
-    Scenario: window rejects a non-timestamp time column
-      When query
-        """
-        SELECT count(*) FROM VALUES (true) AS t(b)
-        GROUP BY window(b, '5 minutes')
-        """
-      Then query error .*window requires a timestamp time column.*
-
+    # The expected error regex contains `\(` escape sequences, and pytest-bdd doubles a
+    # backslash inside an Examples cell, so this scenario cannot be parameterised.
     Scenario: window rejects a start time whose absolute value is not less than the slide duration
       When query
         """
@@ -286,14 +258,6 @@ Feature: window() time-based windowing function
         GROUP BY window(b, '10 minutes', '5 minutes', '5 minutes')
         """
       Then query error .*abs\(start_time\).*must be < the .*slide_duration.*
-
-    Scenario: window rejects a month-based duration (non-constant length)
-      When query
-        """
-        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY window(b, '1 month')
-        """
-      Then query error .*must not contain months or years.*
 
   Rule: Bounded plan size
 

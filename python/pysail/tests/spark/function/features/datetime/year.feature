@@ -3,86 +3,26 @@ Feature: year
 
   Rule: Basic year extraction
 
-    Scenario: year of a DATE
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT year(DATE '2024-03-15') AS result
+        SELECT year(<input>) AS result
         """
       Then query result
-        | result |
-        | 2024   |
+        | result   |
+        | <result> |
 
-    Scenario: year of DATE '2024-01-01' (first day)
-      When query
-        """
-        SELECT year(DATE '2024-01-01') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of DATE '2024-12-31' (last day)
-      When query
-        """
-        SELECT year(DATE '2024-12-31') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of TIMESTAMP
-      When query
-        """
-        SELECT year(TIMESTAMP '2024-03-15 12:30:00') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of TIMESTAMP_NTZ
-      When query
-        """
-        SELECT year(TIMESTAMP_NTZ '2024-03-15 12:30:00') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of NULL
-      When query
-        """
-        SELECT year(CAST(NULL AS DATE)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: year of DATE '0001-01-01' (minimum date)
-      When query
-        """
-        SELECT year(DATE '0001-01-01') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: year of DATE '9999-12-31' (maximum date)
-      When query
-        """
-        SELECT year(DATE '9999-12-31') AS result
-        """
-      Then query result
-        | result |
-        | 9999   |
-
-    Scenario: year of leap day
-      When query
-        """
-        SELECT year(DATE '2024-02-29') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
+      Examples:
+        | case                                     | input                               | result |
+        | year of a DATE                           | DATE '2024-03-15'                   | 2024   |
+        | year of DATE '2024-01-01' (first day)    | DATE '2024-01-01'                   | 2024   |
+        | year of DATE '2024-12-31' (last day)     | DATE '2024-12-31'                   | 2024   |
+        | year of TIMESTAMP                        | TIMESTAMP '2024-03-15 12:30:00'     | 2024   |
+        | year of TIMESTAMP_NTZ                    | TIMESTAMP_NTZ '2024-03-15 12:30:00' | 2024   |
+        | year of NULL                             | CAST(NULL AS DATE)                  | NULL   |
+        | year of DATE '0001-01-01' (minimum date) | DATE '0001-01-01'                   | 1      |
+        | year of DATE '9999-12-31' (maximum date) | DATE '9999-12-31'                   | 9999   |
+        | year of leap day                         | DATE '2024-02-29'                   | 2024   |
 
     Scenario: multi-row with different years
       When query
@@ -204,126 +144,58 @@ Feature: year
 
   Rule: NULL handling
 
-    Scenario: year of untyped NULL returns NULL
+    Scenario Outline: NULL input: <case>
       When query
         """
-        SELECT year(NULL) AS result
+        SELECT year(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: year of NULL TIMESTAMP returns NULL
-      When query
-        """
-        SELECT year(CAST(NULL AS TIMESTAMP)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: year of NULL TIMESTAMP_NTZ returns NULL
-      When query
-        """
-        SELECT year(CAST(NULL AS TIMESTAMP_NTZ)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: year of NULL STRING returns NULL
-      When query
-        """
-        SELECT year(CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                    | input                       |
+        | year of untyped NULL returns NULL       | NULL                        |
+        | year of NULL TIMESTAMP returns NULL     | CAST(NULL AS TIMESTAMP)     |
+        | year of NULL TIMESTAMP_NTZ returns NULL | CAST(NULL AS TIMESTAMP_NTZ) |
+        | year of NULL STRING returns NULL        | CAST(NULL AS STRING)        |
 
   Rule: TIMESTAMP and TIMESTAMP_NTZ boundary values
 
-    Scenario: year of TIMESTAMP at minimum date
+    Scenario Outline: Boundary: <case>
       When query
         """
-        SELECT year(TIMESTAMP '0001-01-01 00:00:00') AS result
+        SELECT year(<type> <value>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: year of TIMESTAMP at maximum date
-      When query
-        """
-        SELECT year(TIMESTAMP '9999-12-31 23:59:59') AS result
-        """
-      Then query result
-        | result |
-        | 9999   |
-
-    Scenario: year of TIMESTAMP at Unix epoch
-      When query
-        """
-        SELECT year(TIMESTAMP '1970-01-01 00:00:00') AS result
-        """
-      Then query result
-        | result |
-        | 1970   |
-
-    Scenario: year of TIMESTAMP with sub-second precision stays in same year
-      When query
-        """
-        SELECT year(TIMESTAMP '2024-12-31 23:59:59.999999') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of TIMESTAMP_NTZ at minimum date
-      When query
-        """
-        SELECT year(TIMESTAMP_NTZ '0001-01-01 00:00:00') AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: year of TIMESTAMP_NTZ at maximum date
-      When query
-        """
-        SELECT year(TIMESTAMP_NTZ '9999-12-31 23:59:59.999999') AS result
-        """
-      Then query result
-        | result |
-        | 9999   |
+      Examples:
+        | case                                                           | type          | value                        | result |
+        | year of TIMESTAMP at minimum date                              | TIMESTAMP     | '0001-01-01 00:00:00'        | 1      |
+        | year of TIMESTAMP at maximum date                              | TIMESTAMP     | '9999-12-31 23:59:59'        | 9999   |
+        | year of TIMESTAMP at Unix epoch                                | TIMESTAMP     | '1970-01-01 00:00:00'        | 1970   |
+        | year of TIMESTAMP with sub-second precision stays in same year | TIMESTAMP     | '2024-12-31 23:59:59.999999' | 2024   |
+        | year of TIMESTAMP_NTZ at minimum date                          | TIMESTAMP_NTZ | '0001-01-01 00:00:00'        | 1      |
+        | year of TIMESTAMP_NTZ at maximum date                          | TIMESTAMP_NTZ | '9999-12-31 23:59:59.999999' | 9999   |
 
   Rule: String input coercion
 
-    Scenario: year of string date literal
+    Scenario Outline: String coercion: <case>
       When query
         """
-        SELECT year('2024-03-15') AS result
+        SELECT year(<input>) AS result
         """
       Then query result
         | result |
         | 2024   |
 
-    Scenario: year of string datetime literal
-      When query
-        """
-        SELECT year('2024-03-15 10:30:00') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
-
-    Scenario: year of string with timezone offset
-      When query
-        """
-        SELECT year('2024-03-15 10:30:00+05:30') AS result
-        """
-      Then query result
-        | result |
-        | 2024   |
+      Examples:
+        | case                                | input                       |
+        | year of string date literal         | '2024-03-15'                |
+        | year of string datetime literal     | '2024-03-15 10:30:00'       |
+        | year of string with timezone offset | '2024-03-15 10:30:00+05:30' |
 
     @sail-bug
     Scenario: year of year-only string

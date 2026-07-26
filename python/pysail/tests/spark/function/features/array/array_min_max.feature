@@ -3,218 +3,82 @@ Feature: array_min and array_max functions
 
   Rule: Basic usage
 
-    Scenario: array_min and array_max with integers
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT array_min(array(3, 1, 2)) AS min_val, array_max(array(3, 1, 2)) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | 1       | 3       |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with strings
-      When query
-        """
-        SELECT array_min(array('banana', 'apple', 'cherry')) AS min_val, array_max(array('banana', 'apple', 'cherry')) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | apple   | cherry  |
-
-    Scenario: array_min and array_max with doubles
-      When query
-        """
-        SELECT array_min(array(3.14, 1.5, 2.7)) AS min_val, array_max(array(3.14, 1.5, 2.7)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 1.50    | 3.14    |
-
-    Scenario: array_min and array_max with single element
-      When query
-        """
-        SELECT array_min(array(42)) AS min_val, array_max(array(42)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 42      | 42      |
-
-    Scenario: array_min and array_max with repeated elements
-      When query
-        """
-        SELECT array_min(array(5, 5, 5)) AS min_val, array_max(array(5, 5, 5)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 5       | 5       |
+      Examples:
+        | case                                           | arr                                | min   | max    |
+        | array_min and array_max with integers          | array(3, 1, 2)                     | 1     | 3      |
+        | array_min and array_max with strings           | array('banana', 'apple', 'cherry') | apple | cherry |
+        | array_min and array_max with doubles           | array(3.14, 1.5, 2.7)              | 1.50  | 3.14   |
+        | array_min and array_max with single element    | array(42)                          | 42    | 42     |
+        | array_min and array_max with repeated elements | array(5, 5, 5)                     | 5     | 5      |
 
   Rule: Empty and NULL inputs
 
-    Scenario: array_min and array_max with empty array
+    Scenario Outline: Empty and NULL: <case>
       When query
         """
-        SELECT array_min(array()) AS min_val, array_max(array()) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | NULL    | NULL    |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with NULL input
-      When query
-        """
-        SELECT array_min(NULL) AS min_val, array_max(NULL) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | NULL    | NULL    |
-
-    Scenario: array_min and array_max with all NULLs
-      When query
-        """
-        SELECT array_min(array(CAST(NULL AS INT), CAST(NULL AS INT))) AS min_val, array_max(array(CAST(NULL AS INT), CAST(NULL AS INT))) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | NULL    | NULL    |
-
-    Scenario: array_min and array_max with some NULLs mixed
-      When query
-        """
-        SELECT array_min(array(3, NULL, 1, NULL, 2)) AS min_val, array_max(array(3, NULL, 1, NULL, 2)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 1       | 3       |
-
-    Scenario: array_min and array_max with NULL at first position
-      When query
-        """
-        SELECT array_min(array(NULL, 2, 3)) AS min_val, array_max(array(NULL, 2, 3)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 2       | 3       |
-
-    Scenario: array_min and array_max with NULL at last position
-      When query
-        """
-        SELECT array_min(array(1, 2, NULL)) AS min_val, array_max(array(1, 2, NULL)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 1       | 2       |
+      Examples:
+        | case                                                | arr                                         | min  | max  |
+        | array_min and array_max with empty array            | array()                                     | NULL | NULL |
+        | array_min and array_max with NULL input             | NULL                                        | NULL | NULL |
+        | array_min and array_max with all NULLs              | array(CAST(NULL AS INT), CAST(NULL AS INT)) | NULL | NULL |
+        | array_min and array_max with some NULLs mixed       | array(3, NULL, 1, NULL, 2)                  | 1    | 3    |
+        | array_min and array_max with NULL at first position | array(NULL, 2, 3)                           | 2    | 3    |
+        | array_min and array_max with NULL at last position  | array(1, 2, NULL)                           | 1    | 2    |
 
   Rule: Negative numbers
 
-    Scenario: array_min and array_max with negative numbers
+    Scenario Outline: Negative: <case>
       When query
         """
-        SELECT array_min(array(-5, -1, -10)) AS min_val, array_max(array(-5, -1, -10)) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | -10     | -1      |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with mixed positive negative and zero
-      When query
-        """
-        SELECT array_min(array(-3, 0, 3)) AS min_val, array_max(array(-3, 0, 3)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | -3      | 3       |
+      Examples:
+        | case                                                          | arr                | min | max |
+        | array_min and array_max with negative numbers                 | array(-5, -1, -10) | -10 | -1  |
+        | array_min and array_max with mixed positive negative and zero | array(-3, 0, 3)    | -3  | 3   |
 
   Rule: Float special values
 
-    Scenario: array_min and array_max with NaN
+    Scenario Outline: Float special: <case>
       When query
         """
-        SELECT array_min(array(1.0, CAST('NaN' AS DOUBLE), 2.0)) AS min_val, array_max(array(1.0, CAST('NaN' AS DOUBLE), 2.0)) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | 1.0     | NaN     |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with NaN only
-      When query
-        """
-        SELECT array_min(array(CAST('NaN' AS DOUBLE))) AS min_val, array_max(array(CAST('NaN' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | NaN     | NaN     |
-
-    Scenario: array_min and array_max with NaN and NULL
-      When query
-        """
-        SELECT array_min(array(CAST('NaN' AS DOUBLE), NULL, 1.0)) AS min_val, array_max(array(CAST('NaN' AS DOUBLE), NULL, 1.0)) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 1.0     | NaN     |
-
-    Scenario: array_min and array_max with NaN vs Infinity
-      When query
-        """
-        SELECT array_min(array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE))) AS min_val, array_max(array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val  | max_val |
-        | Infinity | NaN     |
-
-    Scenario: array_min and array_max with NaN vs negative Infinity
-      When query
-        """
-        SELECT array_min(array(CAST('-Infinity' AS DOUBLE), CAST('NaN' AS DOUBLE))) AS min_val, array_max(array(CAST('-Infinity' AS DOUBLE), CAST('NaN' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val   | max_val |
-        | -Infinity | NaN     |
-
-    Scenario: array_min and array_max with positive Infinity
-      When query
-        """
-        SELECT array_min(array(1.0, CAST('Infinity' AS DOUBLE))) AS min_val, array_max(array(1.0, CAST('Infinity' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val | max_val  |
-        | 1.0     | Infinity |
-
-    Scenario: array_min and array_max with negative Infinity
-      When query
-        """
-        SELECT array_min(array(1.0, CAST('-Infinity' AS DOUBLE))) AS min_val, array_max(array(1.0, CAST('-Infinity' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val   | max_val |
-        | -Infinity | 1.0     |
-
-    Scenario: array_min and array_max with both Infinities
-      When query
-        """
-        SELECT array_min(array(CAST('-Infinity' AS DOUBLE), CAST('Infinity' AS DOUBLE))) AS min_val, array_max(array(CAST('-Infinity' AS DOUBLE), CAST('Infinity' AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val   | max_val  |
-        | -Infinity | Infinity |
-
-    Scenario: array_min and array_max with float NaN
-      When query
-        """
-        SELECT array_min(array(CAST('NaN' AS FLOAT), CAST(1.0 AS FLOAT))) AS min_val, array_max(array(CAST('NaN' AS FLOAT), CAST(1.0 AS FLOAT))) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 1.0     | NaN     |
-
-    Scenario: array_min and array_max with positive and negative zero
-      When query
-        """
-        SELECT array_min(array(CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE))) AS min_val, array_max(array(CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE))) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 0.0     | 0.0     |
+      Examples:
+        | case                                                    | arr                                                            | min       | max      |
+        | array_min and array_max with NaN                        | array(1.0, CAST('NaN' AS DOUBLE), 2.0)                         | 1.0       | NaN      |
+        | array_min and array_max with NaN only                   | array(CAST('NaN' AS DOUBLE))                                   | NaN       | NaN      |
+        | array_min and array_max with NaN and NULL               | array(CAST('NaN' AS DOUBLE), NULL, 1.0)                        | 1.0       | NaN      |
+        | array_min and array_max with NaN vs Infinity            | array(CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE))       | Infinity  | NaN      |
+        | array_min and array_max with NaN vs negative Infinity   | array(CAST('-Infinity' AS DOUBLE), CAST('NaN' AS DOUBLE))      | -Infinity | NaN      |
+        | array_min and array_max with positive Infinity          | array(1.0, CAST('Infinity' AS DOUBLE))                         | 1.0       | Infinity |
+        | array_min and array_max with negative Infinity          | array(1.0, CAST('-Infinity' AS DOUBLE))                        | -Infinity | 1.0      |
+        | array_min and array_max with both Infinities            | array(CAST('-Infinity' AS DOUBLE), CAST('Infinity' AS DOUBLE)) | -Infinity | Infinity |
+        | array_min and array_max with float NaN                  | array(CAST('NaN' AS FLOAT), CAST(1.0 AS FLOAT))                | 1.0       | NaN      |
+        | array_min and array_max with positive and negative zero | array(CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE))               | 0.0       | 0.0      |
 
     @sail-only
     Scenario: array_min and array_max with extreme double values (display format differs from Spark)
@@ -248,52 +112,36 @@ Feature: array_min and array_max functions
         | min_val | max_val |
         |         | b       |
 
-    Scenario: array_min and array_max with case sensitive strings
+    Scenario Outline: String: <case>
       When query
         """
-        SELECT array_min(array('Z', 'a', 'A')) AS min_val, array_max(array('Z', 'a', 'A')) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | A       | a       |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with mixed case and numeric strings
-      When query
-        """
-        SELECT array_min(array('abc', 'ABc', '123')) AS min_val, array_max(array('abc', 'ABc', '123')) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | 123     | abc     |
+      Examples:
+        | case                                                        | arr                        | min | max |
+        | array_min and array_max with case sensitive strings         | array('Z', 'a', 'A')       | A   | a   |
+        | array_min and array_max with mixed case and numeric strings | array('abc', 'ABc', '123') | 123 | abc |
 
   Rule: Date and timestamp arrays
 
-    Scenario: array_min and array_max with dates
+    Scenario Outline: Date/timestamp: <case>
       When query
         """
-        SELECT array_min(array(DATE '2023-01-01', DATE '2023-12-31', DATE '2023-06-15')) AS min_val, array_max(array(DATE '2023-01-01', DATE '2023-12-31', DATE '2023-06-15')) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
-        | min_val    | max_val    |
-        | 2023-01-01 | 2023-12-31 |
+        | min_val | max_val |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with timestamps
-      When query
-        """
-        SELECT array_min(array(TIMESTAMP '2023-01-01 00:00:00', TIMESTAMP '2023-12-31 23:59:59', TIMESTAMP '2023-06-15 12:00:00')) AS min_val, array_max(array(TIMESTAMP '2023-01-01 00:00:00', TIMESTAMP '2023-12-31 23:59:59', TIMESTAMP '2023-06-15 12:00:00')) AS max_val
-        """
-      Then query result
-        | min_val             | max_val             |
-        | 2023-01-01 00:00:00 | 2023-12-31 23:59:59 |
-
-    Scenario: array_min and array_max with dates and NULL
-      When query
-        """
-        SELECT array_min(array(DATE '2023-01-01', NULL, DATE '2023-12-31')) AS min_val, array_max(array(DATE '2023-01-01', NULL, DATE '2023-12-31')) AS max_val
-        """
-      Then query result
-        | min_val    | max_val    |
-        | 2023-01-01 | 2023-12-31 |
+      Examples:
+        | case                                        | arr                                                                                                      | min                 | max                 |
+        | array_min and array_max with dates          | array(DATE '2023-01-01', DATE '2023-12-31', DATE '2023-06-15')                                           | 2023-01-01          | 2023-12-31          |
+        | array_min and array_max with timestamps     | array(TIMESTAMP '2023-01-01 00:00:00', TIMESTAMP '2023-12-31 23:59:59', TIMESTAMP '2023-06-15 12:00:00') | 2023-01-01 00:00:00 | 2023-12-31 23:59:59 |
+        | array_min and array_max with dates and NULL | array(DATE '2023-01-01', NULL, DATE '2023-12-31')                                                        | 2023-01-01          | 2023-12-31          |
 
   Rule: Decimal arrays
 
@@ -317,32 +165,20 @@ Feature: array_min and array_max functions
 
   Rule: BIGINT boundary values
 
-    Scenario: array_min and array_max with BIGINT extremes
+    Scenario Outline: Integer extremes: <case>
       When query
         """
-        SELECT array_min(array(CAST(9223372036854775807 AS BIGINT), CAST(-9223372036854775808 AS BIGINT), CAST(0 AS BIGINT))) AS min_val, array_max(array(CAST(9223372036854775807 AS BIGINT), CAST(-9223372036854775808 AS BIGINT), CAST(0 AS BIGINT))) AS max_val
-        """
-      Then query result
-        | min_val              | max_val             |
-        | -9223372036854775808 | 9223372036854775807 |
-
-    Scenario: array_min and array_max with SMALLINT extremes
-      When query
-        """
-        SELECT array_min(array(CAST(1 AS SMALLINT), CAST(-32768 AS SMALLINT), CAST(32767 AS SMALLINT))) AS min_val, array_max(array(CAST(1 AS SMALLINT), CAST(-32768 AS SMALLINT), CAST(32767 AS SMALLINT))) AS max_val
+        SELECT array_min(<arr>) AS min_val, array_max(<arr>) AS max_val
         """
       Then query result
         | min_val | max_val |
-        | -32768  | 32767   |
+        | <min>   | <max>   |
 
-    Scenario: array_min and array_max with TINYINT extremes
-      When query
-        """
-        SELECT array_min(array(CAST(1 AS TINYINT), CAST(-128 AS TINYINT), CAST(127 AS TINYINT))) AS min_val, array_max(array(CAST(1 AS TINYINT), CAST(-128 AS TINYINT), CAST(127 AS TINYINT))) AS max_val
-        """
-      Then query result
-        | min_val | max_val |
-        | -128    | 127     |
+      Examples:
+        | case                                           | arr                                                                                                 | min                  | max                 |
+        | array_min and array_max with BIGINT extremes   | array(CAST(9223372036854775807 AS BIGINT), CAST(-9223372036854775808 AS BIGINT), CAST(0 AS BIGINT)) | -9223372036854775808 | 9223372036854775807 |
+        | array_min and array_max with SMALLINT extremes | array(CAST(1 AS SMALLINT), CAST(-32768 AS SMALLINT), CAST(32767 AS SMALLINT))                       | -32768               | 32767               |
+        | array_min and array_max with TINYINT extremes  | array(CAST(1 AS TINYINT), CAST(-128 AS TINYINT), CAST(127 AS TINYINT))                              | -128                 | 127                 |
 
   Rule: Large arrays
 
@@ -357,23 +193,19 @@ Feature: array_min and array_max functions
 
   Rule: Nested arrays
 
-    Scenario: array_min with nested arrays
+    Scenario Outline: <fn> with nested arrays
       When query
         """
-        SELECT array_min(array(array(1,2), array(3,4))) AS min_val
+        SELECT <fn>(array(array(1,2), array(3,4))) AS <alias>
         """
       Then query result
-        | min_val |
-        | [1, 2]  |
+        | <alias>  |
+        | <result> |
 
-    Scenario: array_max with nested arrays
-      When query
-        """
-        SELECT array_max(array(array(1,2), array(3,4))) AS max_val
-        """
-      Then query result
-        | max_val |
-        | [3, 4]  |
+      Examples:
+        | fn        | alias   | result |
+        | array_min | min_val | [1, 2] |
+        | array_max | max_val | [3, 4] |
 
   Rule: Multi-row results
 

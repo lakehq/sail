@@ -3,162 +3,65 @@ Feature: parse_url() extracts URL component
 
   Rule: Basic usage
 
-    Scenario: parse_url host
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT parse_url('https://example.com:8080/path?q=1', 'HOST') AS result
+        SELECT parse_url(<args>) AS result
         """
       Then query result
-        | result      |
-        | example.com |
+        | result   |
+        | <result> |
 
-    Scenario: parse_url path
-      When query
-        """
-        SELECT parse_url('https://example.com/path', 'PATH') AS result
-        """
-      Then query result
-        | result |
-        | /path  |
-
-    Scenario: parse_url query
-      When query
-        """
-        SELECT parse_url('https://example.com?a=1&b=2', 'QUERY') AS result
-        """
-      Then query result
-        | result  |
-        | a=1&b=2 |
-
-    Scenario: parse_url query param
-      When query
-        """
-        SELECT parse_url('https://example.com?a=1&b=2', 'QUERY', 'b') AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: parse_url protocol
-      When query
-        """
-        SELECT parse_url('https://example.com/path', 'PROTOCOL') AS result
-        """
-      Then query result
-        | result |
-        | https  |
+      Examples:
+        | case                  | args                                        | result      |
+        | parse_url host        | 'https://example.com:8080/path?q=1', 'HOST' | example.com |
+        | parse_url path        | 'https://example.com/path', 'PATH'          | /path       |
+        | parse_url query       | 'https://example.com?a=1&b=2', 'QUERY'      | a=1&b=2     |
+        | parse_url query param | 'https://example.com?a=1&b=2', 'QUERY', 'b' | 2           |
+        | parse_url protocol    | 'https://example.com/path', 'PROTOCOL'      | https       |
 
   Rule: Additional parts
 
-    Scenario: parse_url file
+    Scenario Outline: Additional part: <case>
       When query
         """
-        SELECT parse_url('https://example.com/path?q=1', 'FILE') AS result
+        SELECT parse_url(<args>) AS result
         """
       Then query result
-        | result    |
-        | /path?q=1 |
+        | result   |
+        | <result> |
 
-    Scenario: parse_url authority
-      When query
-        """
-        SELECT parse_url('https://user:pass@example.com:8080/path', 'AUTHORITY') AS result
-        """
-      Then query result
-        | result                     |
-        | user:pass@example.com:8080 |
-
-    Scenario: parse_url userinfo
-      When query
-        """
-        SELECT parse_url('https://user:pass@example.com/path', 'USERINFO') AS result
-        """
-      Then query result
-        | result    |
-        | user:pass |
-
-    Scenario: parse_url ref
-      When query
-        """
-        SELECT parse_url('https://example.com/path#frag', 'REF') AS result
-        """
-      Then query result
-        | result |
-        | frag   |
+      Examples:
+        | case                | args                                                   | result                     |
+        | parse_url file      | 'https://example.com/path?q=1', 'FILE'                 | /path?q=1                  |
+        | parse_url authority | 'https://user:pass@example.com:8080/path', 'AUTHORITY' | user:pass@example.com:8080 |
+        | parse_url userinfo  | 'https://user:pass@example.com/path', 'USERINFO'       | user:pass                  |
+        | parse_url ref       | 'https://example.com/path#frag', 'REF'                 | frag                       |
 
   Rule: Malformed URLs
 
-    Scenario: parse_url with URL without scheme returns NULL
+    Scenario Outline: Schemeless: <case>
       When query
         """
-        SELECT parse_url('notaurl', 'HOST') AS result
+        SELECT parse_url(<args>) AS result
         """
       Then query result
-        | result |
-        | NULL   |
+        | result   |
+        | <result> |
 
-    Scenario: parse_url with URL without scheme PATH returns the string
-      When query
-        """
-        SELECT parse_url('notaurl', 'PATH') AS result
-        """
-      Then query result
-        | result  |
-        | notaurl |
-
-    Scenario: parse_url with URL without scheme FILE returns the string
-      When query
-        """
-        SELECT parse_url('notaurl', 'FILE') AS result
-        """
-      Then query result
-        | result  |
-        | notaurl |
-
-    Scenario: parse_url schemeless URL with query extracts PATH without query
-      When query
-        """
-        SELECT parse_url('notaurl?key=value', 'PATH') AS result
-        """
-      Then query result
-        | result  |
-        | notaurl |
-
-    Scenario: parse_url schemeless URL with query extracts FILE with query
-      When query
-        """
-        SELECT parse_url('notaurl?key=value', 'FILE') AS result
-        """
-      Then query result
-        | result            |
-        | notaurl?key=value |
-
-    Scenario: parse_url schemeless URL extracts QUERY
-      When query
-        """
-        SELECT parse_url('notaurl?key=value', 'QUERY') AS result
-        """
-      Then query result
-        | result    |
-        | key=value |
-
-    Scenario: parse_url schemeless URL extracts QUERY with key
-      When query
-        """
-        SELECT parse_url('notaurl?a=1&b=2', 'QUERY', 'b') AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: parse_url schemeless URL extracts REF
-      When query
-        """
-        SELECT parse_url('notaurl#reference', 'REF') AS result
-        """
-      Then query result
-        | result    |
-        | reference |
+      Examples:
+        | case                                                            | args                             | result            |
+        | parse_url with URL without scheme returns NULL                  | 'notaurl', 'HOST'                | NULL              |
+        | parse_url with URL without scheme PATH returns the string       | 'notaurl', 'PATH'                | notaurl           |
+        | parse_url with URL without scheme FILE returns the string       | 'notaurl', 'FILE'                | notaurl           |
+        | parse_url schemeless URL with query extracts PATH without query | 'notaurl?key=value', 'PATH'      | notaurl           |
+        | parse_url schemeless URL with query extracts FILE with query    | 'notaurl?key=value', 'FILE'      | notaurl?key=value |
+        | parse_url schemeless URL extracts QUERY                         | 'notaurl?key=value', 'QUERY'     | key=value         |
+        | parse_url schemeless URL extracts QUERY with key                | 'notaurl?a=1&b=2', 'QUERY', 'b'  | 2                 |
+        | parse_url schemeless URL extracts REF                           | 'notaurl#reference', 'REF'       | reference         |
+        | parse_url with URL without scheme PROTOCOL returns NULL         | 'notaurl', 'PROTOCOL'            | NULL              |
+        | parse_url with empty string returns NULL                        | '', 'HOST'                       | NULL              |
+        | parse_url with invalid part returns NULL                        | 'https://example.com', 'INVALID' | NULL              |
 
     Scenario: parse_url schemeless URL with query and fragment
       When query
@@ -228,52 +131,21 @@ Feature: parse_url() extracts URL component
         | r1          | r2 | r3 | r4   |
         | a=1&b=2&c=3 | 1  | 3  | NULL |
 
-    Scenario: parse_url with URL without scheme PROTOCOL returns NULL
-      When query
-        """
-        SELECT parse_url('notaurl', 'PROTOCOL') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: parse_url with empty string returns NULL
-      When query
-        """
-        SELECT parse_url('', 'HOST') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: parse_url with invalid part returns NULL
-      When query
-        """
-        SELECT parse_url('https://example.com', 'INVALID') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
   Rule: Null handling
 
-    Scenario: parse_url null url
+    Scenario Outline: NULL argument: <case>
       When query
         """
-        SELECT parse_url(CAST(NULL AS STRING), 'HOST') AS result
+        SELECT parse_url(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: parse_url null part
-      When query
-        """
-        SELECT parse_url('https://example.com', CAST(NULL AS STRING)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                | args                                        |
+        | parse_url null url  | CAST(NULL AS STRING), 'HOST'                |
+        | parse_url null part | 'https://example.com', CAST(NULL AS STRING) |
 
   @spark_null
   Rule: Output schema
@@ -313,128 +185,40 @@ Feature: parse_url() extracts URL component
 
   Rule: Result values (migrated from test_parse_url.txt doctests)
 
-    Scenario: parse_url doctest #1 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT parse_url('https://example.com/a?x=1', 'QUERY', 'x') AS result, typeof(parse_url('https://example.com/a?x=1', 'QUERY', 'x')) AS type
-        """
-      Then query result
-        | result | type   |
-        | 1      | string |
-
-    Scenario: parse_url doctest #2 (result)
-      When query
-        """
-        SELECT parse_url('https://example.com/path#frag', 'REF') AS result, typeof(parse_url('https://example.com/path#frag', 'REF')) AS type
-        """
-      Then query result
-        | result | type   |
-        | frag   | string |
-
-    Scenario: parse_url doctest #3 (result)
-      When query
-        """
-        SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO') AS result, typeof(parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO')) AS type
+        SELECT parse_url(<args>) AS result, typeof(parse_url(<args>)) AS type
         """
       Then query result
         | result   | type   |
-        | user:pwd | string |
+        | <result> | string |
 
-    Scenario: parse_url doctest #4 (result)
+      Examples:
+        | case                          | args                                                  | result        |
+        | parse_url doctest #1 (result) | 'https://example.com/a?x=1', 'QUERY', 'x'             | 1             |
+        | parse_url doctest #2 (result) | 'https://example.com/path#frag', 'REF'                | frag          |
+        | parse_url doctest #3 (result) | 'ftp://user:pwd@ftp.example.com:21/files', 'USERINFO' | user:pwd      |
+        | parse_url doctest #4 (result) | 'http://[2001:db8::2]:8080/index.html?ok=1', 'HOST'   | [2001:db8::2] |
+        | parse_url doctest #5 (result) | 'https://example.com', 'PATH'                         |               |
+        | parse_url doctest #6 (result) | 'https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL'    | https         |
+
+    Scenario Outline: Doctest (derived column name): <case>
       When query
         """
-        SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST') AS result, typeof(parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST')) AS type
+        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', <part>)
         """
       Then query result
-        | result        | type   |
-        | [2001:db8::2] | string |
+        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, <name>) |
+        | <result>                                                             |
 
-    Scenario: parse_url doctest #5 (result)
-      When query
-        """
-        SELECT parse_url('https://example.com', 'PATH') AS result, typeof(parse_url('https://example.com', 'PATH')) AS type
-        """
-      Then query result
-        | result | type   |
-        |        | string |
-
-    Scenario: parse_url doctest #6 (result)
-      When query
-        """
-        SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL') AS result, typeof(parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL')) AS type
-        """
-      Then query result
-        | result | type   |
-        | https  | string |
-
-    Scenario: parse_url doctest #7 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'HOST')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, HOST) |
-        | spark.apache.org                                                   |
-
-    Scenario: parse_url doctest #8 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'PATH')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PATH) |
-        | /path                                                              |
-
-    Scenario: parse_url doctest #9 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'QUERY')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, QUERY) |
-        | query=1                                                             |
-
-    Scenario: parse_url doctest #10 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'REF')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, REF) |
-        | Ref                                                               |
-
-    Scenario: parse_url doctest #11 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'PROTOCOL')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PROTOCOL) |
-        | http                                                                   |
-
-    Scenario: parse_url doctest #12 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'FILE')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, FILE) |
-        | /path?query=1                                                      |
-
-    Scenario: parse_url doctest #13 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'AUTHORITY')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, AUTHORITY) |
-        | userinfo@spark.apache.org                                               |
-
-    Scenario: parse_url doctest #14 (result)
-      When query
-        """
-        select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'USERINFO')
-        """
-      Then query result
-        | parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, USERINFO) |
-        | userinfo                                                               |
+      Examples:
+        | case                           | part        | name      | result                    |
+        | parse_url doctest #7 (result)  | 'HOST'      | HOST      | spark.apache.org          |
+        | parse_url doctest #8 (result)  | 'PATH'      | PATH      | /path                     |
+        | parse_url doctest #9 (result)  | 'QUERY'     | QUERY     | query=1                   |
+        | parse_url doctest #10 (result) | 'REF'       | REF       | Ref                       |
+        | parse_url doctest #11 (result) | 'PROTOCOL'  | PROTOCOL  | http                      |
+        | parse_url doctest #12 (result) | 'FILE'      | FILE      | /path?query=1             |
+        | parse_url doctest #13 (result) | 'AUTHORITY' | AUTHORITY | userinfo@spark.apache.org |
+        | parse_url doctest #14 (result) | 'USERINFO'  | USERINFO  | userinfo                  |

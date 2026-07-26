@@ -3,41 +3,24 @@ Feature: COUNT(DISTINCT *) function
 
   Rule: COUNT(DISTINCT *) counts distinct rows
 
-    Scenario: count distinct star with duplicates
+    # The expected header is the column name Spark derives for `COUNT(DISTINCT *)`,
+    # so it is spelled out from the same <cols> slot and stays asserted.
+    Scenario Outline: count distinct star counts distinct rows <case>
       When query
         """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 1.0, 'a'), (2, 2.0, 'b'), (1, 1.0, 'a') AS t(a, b, c)
+        SELECT COUNT(DISTINCT *) FROM VALUES <values> AS t(<cols>)
         """
       Then query result
-        | count(DISTINCT a, b, c) |
-        | 2                       |
+        | count(DISTINCT <cols>) |
+        | <n>                    |
 
-    Scenario: count distinct star all same
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 1), (1, 1), (1, 1) AS t(a, b)
-        """
-      Then query result
-        | count(DISTINCT a, b) |
-        | 1                    |
-
-    Scenario: count distinct star all different
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 1), (2, 2), (3, 3) AS t(a, b)
-        """
-      Then query result
-        | count(DISTINCT a, b) |
-        | 3                    |
-
-    Scenario: count distinct star single column
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1), (2), (1) AS t(a)
-        """
-      Then query result
-        | count(DISTINCT a) |
-        | 2                 |
+      Examples:
+        | case                    | values                                      | cols             | n |
+        | with duplicates         | (1, 1.0, 'a'), (2, 2.0, 'b'), (1, 1.0, 'a') | a, b, c          | 2 |
+        | all same                | (1, 1), (1, 1), (1, 1)                      | a, b             | 1 |
+        | all different           | (1, 1), (2, 2), (3, 3)                      | a, b             | 3 |
+        | single column           | (1), (2), (1)                               | a                | 2 |
+        | mixed case column names | (1, 2), (1, 2), (3, 4)                      | MyCol, UPPER_COL | 2 |
 
     Scenario: count distinct star with group by
       When query
@@ -49,49 +32,20 @@ Feature: COUNT(DISTINCT *) function
         | x | 2                    |
         | y | 1                    |
 
-    Scenario: count distinct star with mixed case column names
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 2), (1, 2), (3, 4) AS t(MyCol, UPPER_COL)
-        """
-      Then query result
-        | count(DISTINCT MyCol, UPPER_COL) |
-        | 2                                |
-
   Rule: COUNT(DISTINCT *) with NULLs
 
-    Scenario: count distinct star skips rows where any column is null
+    Scenario Outline: count distinct star with NULLs <case>
       When query
         """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 'a'), (NULL, 'b'), (1, 'a') AS t(a, b)
+        SELECT COUNT(DISTINCT *) FROM VALUES <values> AS t(a, b)
         """
       Then query result
         | count(DISTINCT a, b) |
-        | 1                    |
+        | <n>                  |
 
-    Scenario: count distinct star all nulls returns zero
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (NULL, NULL), (NULL, NULL) AS t(a, b)
-        """
-      Then query result
-        | count(DISTINCT a, b) |
-        | 0                    |
-
-    Scenario: count distinct star with some null columns
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, NULL), (2, NULL), (1, NULL) AS t(a, b)
-        """
-      Then query result
-        | count(DISTINCT a, b) |
-        | 0                    |
-
-    Scenario: count distinct star mixed nulls and values
-      When query
-        """
-        SELECT COUNT(DISTINCT *) FROM VALUES (1, 'a'), (1, NULL), (2, 'b'), (2, 'b'), (NULL, NULL) AS t(a, b)
-        """
-      Then query result
-        | count(DISTINCT a, b) |
-        | 2                    |
+      Examples:
+        | case                                | values                                                | n |
+        | skips rows where any column is null | (1, 'a'), (NULL, 'b'), (1, 'a')                       | 1 |
+        | all nulls returns zero              | (NULL, NULL), (NULL, NULL)                            | 0 |
+        | with some null columns              | (1, NULL), (2, NULL), (1, NULL)                       | 0 |
+        | mixed nulls and values              | (1, 'a'), (1, NULL), (2, 'b'), (2, 'b'), (NULL, NULL) | 2 |

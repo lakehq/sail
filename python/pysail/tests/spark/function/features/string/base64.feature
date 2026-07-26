@@ -3,23 +3,19 @@ Feature: base64 functions encode and decode binary strings
 
   Rule: Null propagation
 
-    Scenario: base64 returns null for a null string
+    Scenario Outline: Null propagation: <case>
       When query
         """
-        SELECT base64(CAST(NULL AS STRING)) AS result
+        SELECT base64(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: base64 returns null for an untyped null literal
-      When query
-        """
-        SELECT base64(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                            | input                |
+        | base64 returns null for a null string           | CAST(NULL AS STRING) |
+        | base64 returns null for an untyped null literal | NULL                 |
 
     Scenario: base64 preserves nulls in column values
       When query
@@ -35,61 +31,38 @@ Feature: base64 functions encode and decode binary strings
 
   Rule: Null-tolerant decoding
 
-    Scenario: unbase64 returns null for a null string
+    Scenario Outline: Null-tolerant decoding: <case>
       When query
         """
-        SELECT unbase64(CAST(NULL AS STRING)) AS result
+        SELECT unbase64(<input>) AS result
         """
       Then query result
-        | result |
-        | NULL   |
+        | result   |
+        | <result> |
 
-    Scenario: unbase64 returns null for an untyped null literal
-      When query
-        """
-        SELECT unbase64(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: unbase64 ignores whitespace and decodes unpadded input
-      When query
-        """
-        SELECT unbase64('   ab   ') AS result
-        """
-      Then query result
-        | result |
-        | [69]   |
-
-    Scenario: unbase64 ignores non-base64 characters
-      When query
-        """
-        SELECT unbase64('%') AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                                   | input                | result |
+        | unbase64 returns null for a null string                | CAST(NULL AS STRING) | NULL   |
+        | unbase64 returns null for an untyped null literal      | NULL                 | NULL   |
+        | unbase64 ignores whitespace and decodes unpadded input | '   ab   '           | [69]   |
+        | unbase64 ignores non-base64 characters                 | '%'                  | []     |
 
   Rule: Empty and multi-value handling
 
-    Scenario: base64 encodes an empty string to an empty string
+    Scenario Outline: Empty and multi-byte: <case>
       When query
         """
-        SELECT base64('') AS result
+        SELECT <fn>(<input>) AS result
         """
       Then query result
-        | result |
-        |        |
+        | result   |
+        | <result> |
 
-    Scenario: unbase64 decodes an empty string to empty bytes
-      When query
-        """
-        SELECT unbase64('') AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                              | fn       | input  | result     |
+        | base64 encodes an empty string to an empty string | base64   | ''     |            |
+        | unbase64 decodes an empty string to empty bytes   | unbase64 | ''     | []         |
+        | unbase64 decodes a multi-byte value               | unbase64 | 'Zm9v' | [66 6F 6F] |
 
     Scenario: base64 preserves nulls and empty strings across a column
       When query
@@ -117,15 +90,6 @@ Feature: base64 functions encode and decode binary strings
         |        |
         | aGk=   |
         | NULL   |
-
-    Scenario: unbase64 decodes a multi-byte value
-      When query
-        """
-        SELECT unbase64('Zm9v') AS result
-        """
-      Then query result
-        | result     |
-        | [66 6F 6F] |
 
     Scenario: unbase64 reverses base64 for a column round-trip
       When query

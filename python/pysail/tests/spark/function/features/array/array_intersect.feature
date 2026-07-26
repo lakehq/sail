@@ -3,74 +3,52 @@ Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Source-of-truth examples
 
-    Scenario: array_intersect basic usage
+    Scenario Outline: array_intersect <case>
       When query
         """
-        SELECT sort_array(array_intersect(array('b', 'a', 'c'), array('c', 'd', 'a', 'f'))) AS result
+        SELECT sort_array(array_intersect(<left>, <right>)) AS result
         """
       Then query result
-        | result |
-        | [a, c] |
+        | result   |
+        | <result> |
 
-    Scenario: array_intersect on array columns preserves first-array order
+      Examples:
+        | case                     | left                  | right                     | result    |
+        | basic usage              | array('b', 'a', 'c')  | array('c', 'd', 'a', 'f') | [a, c]    |
+        | with all common elements | array('a', 'b', 'c')  | array('a', 'b', 'c')      | [a, b, c] |
+        | with null values         | array('a', 'b', NULL) | array('a', NULL, 'c')     | [NULL, a] |
+
+    # These two keep the raw (unsorted) result because it is already empty.
+    Scenario Outline: array_intersect <case> returns an empty array
       When query
         """
-        SELECT array_intersect(c1, c2) AS result
-        FROM VALUES
-          (array('b', 'a', 'c'), array('c', 'd', 'a', 'f'))
-        AS t(c1, c2)
-        """
-      Then query result
-        | result |
-        | [a, c] |
-
-    Scenario: array_intersect preserves left-array order when left is shorter
-      When query
-        """
-        SELECT array_intersect(c1, c2) AS result
-        FROM VALUES
-          (array(1, 2), array(2, 1, 3))
-        AS t(c1, c2)
-        """
-      Then query result
-        | result |
-        | [1, 2] |
-
-    Scenario: array_intersect with no common elements
-      When query
-        """
-        SELECT array_intersect(array('b', 'a', 'c'), array('d', 'e', 'f')) AS result
+        SELECT array_intersect(<left>, <right>) AS result
         """
       Then query result
         | result |
         | []     |
 
-    Scenario: array_intersect with all common elements
-      When query
-        """
-        SELECT sort_array(array_intersect(array('a', 'b', 'c'), array('a', 'b', 'c'))) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
+      Examples:
+        | case                    | left                           | right                |
+        | with no common elements | array('b', 'a', 'c')           | array('d', 'e', 'f') |
+        | with empty arrays       | CAST(array() AS ARRAY<STRING>) | array('a', 'b', 'c') |
 
-    Scenario: array_intersect with null values
+    Scenario Outline: array_intersect on array columns <case>
       When query
         """
-        SELECT sort_array(array_intersect(array('a', 'b', NULL), array('a', NULL, 'c'))) AS result
+        SELECT array_intersect(c1, c2) AS result
+        FROM VALUES
+          (<pair>)
+        AS t(c1, c2)
         """
       Then query result
-        | result    |
-        | [NULL, a] |
+        | result   |
+        | <result> |
 
-    Scenario: array_intersect with empty arrays
-      When query
-        """
-        SELECT array_intersect(CAST(array() AS ARRAY<STRING>), array('a', 'b', 'c')) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                      | pair                                            | result |
+        | preserves first-array order               | array('b', 'a', 'c'), array('c', 'd', 'a', 'f') | [a, c] |
+        | preserves left order when left is shorter | array(1, 2), array(2, 1, 3)                     | [1, 2] |
 
   Rule: Duplicates and multiple rows
 
@@ -116,23 +94,19 @@ Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Type-specific behavior
 
-    Scenario: array_intersect with boolean arrays
+    Scenario Outline: array_intersect with <case> arrays
       When query
         """
-        SELECT sort_array(array_intersect(array(true, false, true), array(false, false))) AS result
+        SELECT sort_array(array_intersect(<left>, <right>)) AS result
         """
       Then query result
-        | result  |
-        | [false] |
+        | result   |
+        | <result> |
 
-    Scenario: array_intersect with double arrays
-      When query
-        """
-        SELECT sort_array(array_intersect(array(1.5D, 2.5D, 3.5D), array(3.5D, 4.5D, 1.5D))) AS result
-        """
-      Then query result
-        | result     |
-        | [1.5, 3.5] |
+      Examples:
+        | case    | left                     | right                   | result     |
+        | boolean | array(true, false, true) | array(false, false)     | [false]    |
+        | double  | array(1.5D, 2.5D, 3.5D)  | array(3.5D, 4.5D, 1.5D) | [1.5, 3.5] |
 
     Scenario: array_intersect with arrays of structs
       When query
@@ -182,19 +156,17 @@ Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Invalid inputs
 
-    Scenario: array_intersect rejects non-array inputs
+    Scenario Outline: array_intersect rejects <case>
       When query
         """
-        SELECT array_intersect(1, array(1)) AS result
+        SELECT array_intersect(<args>) AS result
         """
       Then query error .*
 
-    Scenario: array_intersect rejects incompatible element types
-      When query
-        """
-        SELECT array_intersect(array(1), array('1')) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                       | args                 |
+        | non-array inputs           | 1, array(1)          |
+        | incompatible element types | array(1), array('1') |
 
   @spark_null
   Rule: Output schema

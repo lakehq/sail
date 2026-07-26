@@ -18,27 +18,20 @@ Feature: trunc with an argument coming from a column
 
     # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
     @column_args @sail-bug
-    Scenario: trunc takes argument 2 from a column holding two different values
+    Scenario Outline: Trunc: <case>
       When query
         """
-        SELECT trunc('2009-02-12', c) AS result FROM VALUES (1, 'MM'), (2, 'week') AS t(i, c) ORDER BY i
+        SELECT trunc(<date>, c) AS result FROM VALUES (1, <v1>), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query result ordered
-        | result     |
-        | 2009-02-01 |
-        | 2009-02-09 |
+        | result |
+        | <r1>   |
+        | <r2>   |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
-    Scenario: trunc takes argument 2 from a column
-      When query
-        """
-        SELECT trunc('2019-08-04', c) AS result FROM VALUES (1, 'week'), (2, 'week') AS t(i, c) ORDER BY i
-        """
-      Then query result ordered
-        | result     |
-        | 2019-07-29 |
-        | 2019-07-29 |
+      Examples:
+        | case                                                              | date         | v1     | v2     | r1         | r2         |
+        | trunc takes argument 2 from a column holding two different values | '2009-02-12' | 'MM'   | 'week' | 2009-02-01 | 2009-02-09 |
+        | trunc takes argument 2 from a column                              | '2019-08-04' | 'week' | 'week' | 2019-07-29 | 2019-07-29 |
 
   @spark_null
   Rule: Output schema

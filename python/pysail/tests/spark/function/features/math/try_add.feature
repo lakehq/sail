@@ -79,20 +79,16 @@ Feature: try_add output schema
         | d1         | d2         |
         | 2000-06-30 | 2020-12-31 |
 
-    Scenario: try_add doctest #5 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR) as result
+        SELECT try_add(<args>) as result
         """
       Then query result
-        | result                       |
-        | INTERVAL '3-0' YEAR TO MONTH |
+        | result   |
+        | <result> |
 
-    Scenario: try_add doctest #6 (result)
-      When query
-        """
-        SELECT try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY) as result
-        """
-      Then query result
-        | result              |
-        | 2021-01-02 00:00:00 |
+      Examples:
+        | case                        | args                                            | result                       |
+        | try_add doctest #5 (result) | INTERVAL '1' YEAR, INTERVAL '2' YEAR            | INTERVAL '3-0' YEAR TO MONTH |
+        | try_add doctest #6 (result) | TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY | 2021-01-02 00:00:00          |

@@ -3,294 +3,118 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: ceil basic
 
-    Scenario: ceil positive integer
+    Scenario Outline: ceil basic: <case>
       When query
         """
-        SELECT ceil(1) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: ceil zero
-      When query
-        """
-        SELECT ceil(0) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: positive double rounds up
-      When query
-        """
-        SELECT ceil(1.1) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: negative double rounds toward zero
-      When query
-        """
-        SELECT ceil(-1.9) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
-    Scenario: ceil negative small value
-      When query
-        """
-        SELECT ceil(-0.1) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: float input
-      When query
-        """
-        SELECT ceil(CAST(1.5 AS FLOAT)) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: decimal input
-      When query
-        """
-        SELECT ceil(CAST(1.5 AS DECIMAL(2,1))) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: ceiling alias
-      When query
-        """
-        SELECT ceiling(1.5) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
+      Examples:
+        | case                               | expr                            | result |
+        | ceil positive integer              | ceil(1)                         | 1      |
+        | ceil zero                          | ceil(0)                         | 0      |
+        | positive double rounds up          | ceil(1.1)                       | 2      |
+        | negative double rounds toward zero | ceil(-1.9)                      | -1     |
+        | ceil negative small value          | ceil(-0.1)                      | 0      |
+        | float input                        | ceil(CAST(1.5 AS FLOAT))        | 2      |
+        | decimal input                      | ceil(CAST(1.5 AS DECIMAL(2,1))) | 2      |
+        | ceiling alias                      | ceiling(1.5)                    | 2      |
 
   Rule: floor basic
 
-    Scenario: floor positive integer
+    Scenario Outline: floor basic: <case>
       When query
         """
-        SELECT floor(1) AS result
+        SELECT floor(<arg>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: floor zero
-      When query
-        """
-        SELECT floor(0) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: positive double rounds down
-      When query
-        """
-        SELECT floor(1.9) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: negative double rounds away from zero
-      When query
-        """
-        SELECT floor(-1.1) AS result
-        """
-      Then query result
-        | result |
-        | -2     |
-
-    Scenario: floor negative small value
-      When query
-        """
-        SELECT floor(-0.1) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
+      Examples:
+        | case                                  | arg  | result |
+        | floor positive integer                | 1    | 1      |
+        | floor zero                            | 0    | 0      |
+        | positive double rounds down           | 1.9  | 1      |
+        | negative double rounds away from zero | -1.1 | -2     |
+        | floor negative small value            | -0.1 | -1     |
 
   Rule: NULL handling (1-arg)
 
-    Scenario: untyped NULL ceil
+    Scenario Outline: NULL input: <case>
       When query
         """
-        SELECT ceil(NULL) AS result
+        SELECT <fn>(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: untyped NULL floor
-      When query
-        """
-        SELECT floor(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL double
-      When query
-        """
-        SELECT ceil(CAST(NULL AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL integer
-      When query
-        """
-        SELECT ceil(CAST(NULL AS INT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL decimal
-      When query
-        """
-        SELECT ceil(CAST(NULL AS DECIMAL(10,2))) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case               | fn    | input                       |
+        | untyped NULL ceil  | ceil  | NULL                        |
+        | untyped NULL floor | floor | NULL                        |
+        | typed NULL double  | ceil  | CAST(NULL AS DOUBLE)        |
+        | typed NULL integer | ceil  | CAST(NULL AS INT)           |
+        | typed NULL decimal | ceil  | CAST(NULL AS DECIMAL(10,2)) |
 
   Rule: NULL handling (2-arg)
 
-    Scenario: untyped NULL with positive scale
+    Scenario Outline: NULL 2-arg: <case>
       When query
         """
-        SELECT ceil(NULL, 2) AS result
+        SELECT <expr> AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: untyped NULL with negative scale
-      When query
-        """
-        SELECT ceil(NULL, -1) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL double with positive scale
-      When query
-        """
-        SELECT ceil(CAST(NULL AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL double with negative scale
-      When query
-        """
-        SELECT floor(CAST(NULL AS DOUBLE), -1) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                  | expr                            |
+        | untyped NULL with positive scale      | ceil(NULL, 2)                   |
+        | untyped NULL with negative scale      | ceil(NULL, -1)                  |
+        | typed NULL double with positive scale | ceil(CAST(NULL AS DOUBLE), 2)   |
+        | typed NULL double with negative scale | floor(CAST(NULL AS DOUBLE), -1) |
 
   Rule: Two-arg with scale equal to input scale (no change)
 
-    Scenario: ceil(1.5, 1)
+    Scenario Outline: Scale equal: <case>
       When query
         """
-        SELECT ceil(1.5, 1) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 1.5    |
+        | result   |
+        | <result> |
 
-    Scenario: floor(1.5, 1)
-      When query
-        """
-        SELECT floor(1.5, 1) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: ceil(1.23, 2)
-      When query
-        """
-        SELECT ceil(1.23, 2) AS result
-        """
-      Then query result
-        | result |
-        | 1.23   |
+      Examples:
+        | case          | expr          | result |
+        | ceil(1.5, 1)  | ceil(1.5, 1)  | 1.5    |
+        | floor(1.5, 1) | floor(1.5, 1) | 1.5    |
+        | ceil(1.23, 2) | ceil(1.23, 2) | 1.23   |
 
   Rule: Two-arg with scale greater than input (value unchanged)
 
-    Scenario: scale 2 on decimal(2,1) — ceil
+    Scenario Outline: Scale greater: <case>
       When query
         """
-        SELECT ceil(1.5, 2) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 1.5    |
+        | result   |
+        | <result> |
 
-    Scenario: scale 2 on decimal(2,1) — floor
-      When query
-        """
-        SELECT floor(1.5, 2) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: scale 10 on decimal(2,1)
-      When query
-        """
-        SELECT ceil(1.5, 10) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: scale 38 is still valid
-      When query
-        """
-        SELECT ceil(1.5, 38) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: scale 100 beyond decimal128 max, value unchanged
-      When query
-        """
-        SELECT ceil(1.5, 100) AS result
-        """
-      Then query result
-        | result |
-        | 1.5    |
-
-    Scenario: zero decimal with large scale
-      When query
-        """
-        SELECT ceil(CAST(0 AS DECIMAL(5,2)), 5) AS result
-        """
-      Then query result
-        | result |
-        | 0.00   |
+      Examples:
+        | case                                             | expr                             | result |
+        | scale 2 on decimal(2,1) — ceil                   | ceil(1.5, 2)                     | 1.5    |
+        | scale 2 on decimal(2,1) — floor                  | floor(1.5, 2)                    | 1.5    |
+        | scale 10 on decimal(2,1)                         | ceil(1.5, 10)                    | 1.5    |
+        | scale 38 is still valid                          | ceil(1.5, 38)                    | 1.5    |
+        | scale 100 beyond decimal128 max, value unchanged | ceil(1.5, 100)                   | 1.5    |
+        | zero decimal with large scale                    | ceil(CAST(0 AS DECIMAL(5,2)), 5) | 0.00   |
 
   Rule: Two-arg with scale less than input (rounds)
 
@@ -303,162 +127,62 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 1.24   |
 
-    Scenario: floor(1.234, 2) truncates
+    Scenario Outline: Scale less: <case>
       When query
         """
-        SELECT floor(1.234, 2) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 1.23   |
+        | result   |
+        | <result> |
 
-    Scenario: ceil(1.234, 0)
-      When query
-        """
-        SELECT ceil(1.234, 0) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: negative value ceil moves toward zero
-      When query
-        """
-        SELECT ceil(-1.25, 1) AS result
-        """
-      Then query result
-        | result |
-        | -1.2   |
-
-    Scenario: negative value floor moves away from zero
-      When query
-        """
-        SELECT floor(-1.25, 1) AS result
-        """
-      Then query result
-        | result |
-        | -1.3   |
+      Examples:
+        | case                                      | expr            | result |
+        | floor(1.234, 2) truncates                 | floor(1.234, 2) | 1.23   |
+        | ceil(1.234, 0)                            | ceil(1.234, 0)  | 2      |
+        | negative value ceil moves toward zero     | ceil(-1.25, 1)  | -1.2   |
+        | negative value floor moves away from zero | floor(-1.25, 1) | -1.3   |
 
   Rule: Two-arg with negative scale (rounds left of decimal)
 
-    Scenario: ceil(123.456, -1)
+    Scenario Outline: Negative scale: <case>
       When query
         """
-        SELECT ceil(123.456, -1) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 130    |
+        | result   |
+        | <result> |
 
-    Scenario: floor(123.456, -1)
-      When query
-        """
-        SELECT floor(123.456, -1) AS result
-        """
-      Then query result
-        | result |
-        | 120    |
-
-    Scenario: ceil(123.456, -2)
-      When query
-        """
-        SELECT ceil(123.456, -2) AS result
-        """
-      Then query result
-        | result |
-        | 200    |
-
-    Scenario: ceil(999.99, -1) crosses boundary
-      When query
-        """
-        SELECT ceil(999.99, -1) AS result
-        """
-      Then query result
-        | result |
-        | 1000   |
-
-    Scenario: scale -37 is the max negative scale that fits Decimal128
-      When query
-        """
-        SELECT ceil(123.456, -37) AS result
-        """
-      Then query result
-        | result                                 |
-        | 10000000000000000000000000000000000000 |
-
-    Scenario: ceil negative with negative scale
-      When query
-        """
-        SELECT ceil(-999.99, -1) AS result
-        """
-      Then query result
-        | result |
-        | -990   |
-
-    Scenario: floor negative with negative scale
-      When query
-        """
-        SELECT floor(-999.99, -1) AS result
-        """
-      Then query result
-        | result |
-        | -1000  |
+      Examples:
+        | case                                                     | expr               | result                                 |
+        | ceil(123.456, -1)                                        | ceil(123.456, -1)  | 130                                    |
+        | floor(123.456, -1)                                       | floor(123.456, -1) | 120                                    |
+        | ceil(123.456, -2)                                        | ceil(123.456, -2)  | 200                                    |
+        | ceil(999.99, -1) crosses boundary                        | ceil(999.99, -1)   | 1000                                   |
+        | scale -37 is the max negative scale that fits Decimal128 | ceil(123.456, -37) | 10000000000000000000000000000000000000 |
+        | ceil negative with negative scale                        | ceil(-999.99, -1)  | -990                                   |
+        | floor negative with negative scale                       | floor(-999.99, -1) | -1000                                  |
 
   Rule: Integer input with scale
 
-    Scenario: int with zero scale
+    Scenario Outline: Integer with scale: <case>
       When query
         """
-        SELECT ceil(CAST(5 AS INT), 0) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 5      |
+        | result   |
+        | <result> |
 
-    Scenario: int with positive scale (no effect)
-      When query
-        """
-        SELECT ceil(CAST(5 AS INT), 2) AS result
-        """
-      Then query result
-        | result |
-        | 5      |
-
-    Scenario: int with negative scale
-      When query
-        """
-        SELECT ceil(CAST(5 AS INT), -1) AS result
-        """
-      Then query result
-        | result |
-        | 10     |
-
-    Scenario: floor int with negative scale
-      When query
-        """
-        SELECT floor(CAST(5 AS INT), -1) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: tinyint with negative scale
-      When query
-        """
-        SELECT ceil(CAST(125 AS TINYINT), -1) AS result
-        """
-      Then query result
-        | result |
-        | 130    |
-
-    Scenario: bigint zero with negative scale
-      When query
-        """
-        SELECT ceil(CAST(0 AS BIGINT), -5) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                | expr                           | result |
+        | int with zero scale                 | ceil(CAST(5 AS INT), 0)        | 5      |
+        | int with positive scale (no effect) | ceil(CAST(5 AS INT), 2)        | 5      |
+        | int with negative scale             | ceil(CAST(5 AS INT), -1)       | 10     |
+        | floor int with negative scale       | floor(CAST(5 AS INT), -1)      | 0      |
+        | tinyint with negative scale         | ceil(CAST(125 AS TINYINT), -1) | 130    |
+        | bigint zero with negative scale     | ceil(CAST(0 AS BIGINT), -5)    | 0      |
 
   Rule: Float and Double with scale
 
@@ -491,117 +215,57 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: Special float values (1-arg) — NaN/Infinity clamp to integer bounds
 
-    Scenario: Infinity to LONG_MAX
+    Scenario Outline: Special float: <case>
       When query
         """
-        SELECT ceil(CAST('Infinity' AS DOUBLE)) AS result
+        SELECT <fn>(CAST(<value> AS DOUBLE)) AS result
         """
       Then query result
-        | result              |
-        | 9223372036854775807 |
+        | result   |
+        | <result> |
 
-    Scenario: -Infinity to LONG_MIN
-      When query
-        """
-        SELECT ceil(CAST('-Infinity' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result               |
-        | -9223372036854775808 |
-
-    Scenario: NaN to zero
-      When query
-        """
-        SELECT ceil(CAST('NaN' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: floor Infinity
-      When query
-        """
-        SELECT floor(CAST('Infinity' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result              |
-        | 9223372036854775807 |
+      Examples:
+        | case                  | fn    | value       | result               |
+        | Infinity to LONG_MAX  | ceil  | 'Infinity'  | 9223372036854775807  |
+        | -Infinity to LONG_MIN | ceil  | '-Infinity' | -9223372036854775808 |
+        | NaN to zero           | ceil  | 'NaN'       | 0                    |
+        | floor Infinity        | floor | 'Infinity'  | 9223372036854775807  |
 
   Rule: Special float values with scale (2-arg) — Spark returns NULL
 
-    Scenario: NaN with positive scale returns NULL
+    Scenario Outline: Special float with scale: <case>
       When query
         """
-        SELECT ceil(CAST('NaN' AS DOUBLE), 2) AS result
+        SELECT <expr> AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: NaN with negative scale returns NULL
-      When query
-        """
-        SELECT ceil(CAST('NaN' AS DOUBLE), -1) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: Infinity with positive scale returns NULL
-      When query
-        """
-        SELECT ceil(CAST('Infinity' AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: -Infinity with positive scale returns NULL
-      When query
-        """
-        SELECT ceil(CAST('-Infinity' AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: floor NaN with scale returns NULL
-      When query
-        """
-        SELECT floor(CAST('NaN' AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                       | expr                                 |
+        | NaN with positive scale returns NULL       | ceil(CAST('NaN' AS DOUBLE), 2)       |
+        | NaN with negative scale returns NULL       | ceil(CAST('NaN' AS DOUBLE), -1)      |
+        | Infinity with positive scale returns NULL  | ceil(CAST('Infinity' AS DOUBLE), 2)  |
+        | -Infinity with positive scale returns NULL | ceil(CAST('-Infinity' AS DOUBLE), 2) |
+        | floor NaN with scale returns NULL          | floor(CAST('NaN' AS DOUBLE), 2)      |
 
   Rule: Negative zero
 
-    Scenario: ceil -0.0 returns 0
+    Scenario Outline: Negative zero: <case>
       When query
         """
-        SELECT ceil(CAST(-0.0 AS DOUBLE)) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 0      |
+        | result   |
+        | <result> |
 
-    Scenario: floor -0.0 returns 0
-      When query
-        """
-        SELECT floor(CAST(-0.0 AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: ceil -0.0 with scale returns 0.00
-      When query
-        """
-        SELECT ceil(CAST(-0.0 AS DOUBLE), 2) AS result
-        """
-      Then query result
-        | result |
-        | 0.00   |
+      Examples:
+        | case                              | expr                          | result |
+        | ceil -0.0 returns 0               | ceil(CAST(-0.0 AS DOUBLE))    | 0      |
+        | floor -0.0 returns 0              | floor(CAST(-0.0 AS DOUBLE))   | 0      |
+        | ceil -0.0 with scale returns 0.00 | ceil(CAST(-0.0 AS DOUBLE), 2) | 0.00   |
 
   Rule: Multi-row propagation
 
@@ -653,68 +317,24 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: Algebraic simplification (idempotent)
 
-    Scenario: ceil of ceil is ceil
+    Scenario Outline: Simplification: <case>
       When query
         """
-        SELECT ceil(ceil(1.9)) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        | 2      |
+        | result   |
+        | <result> |
 
-    Scenario: floor of floor is floor
-      When query
-        """
-        SELECT floor(floor(1.9)) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: triple nested ceil collapses
-      When query
-        """
-        SELECT ceil(ceil(ceil(1.9))) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: ceil of floor cascades (floor returns integer, ceil identity)
-      When query
-        """
-        SELECT ceil(floor(1.9)) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: floor of ceil cascades
-      When query
-        """
-        SELECT floor(ceil(1.1)) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    Scenario: ceil of integer is integer (no rounding)
-      When query
-        """
-        SELECT ceil(CAST(7 AS INT)) AS result
-        """
-      Then query result
-        | result |
-        | 7      |
-
-    Scenario: floor of integer is integer (no rounding)
-      When query
-        """
-        SELECT floor(CAST(-42 AS BIGINT)) AS result
-        """
-      Then query result
-        | result |
-        | -42    |
+      Examples:
+        | case                                                          | expr                       | result |
+        | ceil of ceil is ceil                                          | ceil(ceil(1.9))            | 2      |
+        | floor of floor is floor                                       | floor(floor(1.9))          | 1      |
+        | triple nested ceil collapses                                  | ceil(ceil(ceil(1.9)))      | 2      |
+        | ceil of floor cascades (floor returns integer, ceil identity) | ceil(floor(1.9))           | 1      |
+        | floor of ceil cascades                                        | floor(ceil(1.1))           | 2      |
+        | ceil of integer is integer (no rounding)                      | ceil(CAST(7 AS INT))       | 7      |
+        | floor of integer is integer (no rounding)                     | floor(CAST(-42 AS BIGINT)) | -42    |
 
   Rule: Filter pushdown — WHERE ceil/floor(col) OP constant
 
@@ -865,40 +485,20 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: Error conditions
 
-    Scenario: non-foldable scale errors
+    Scenario Outline: Error: <case>
       When query
         """
-        SELECT ceil(1.5, CAST(NULL AS INT)) AS result
+        SELECT ceil(<args>) AS result
         """
       Then query error .*
 
-    Scenario: too-negative scale errors
-      When query
-        """
-        SELECT ceil(1.5, -100) AS result
-        """
-      Then query error .*
-
-    Scenario: non-INT scale type errors
-      When query
-        """
-        SELECT ceil(1.5, CAST(2 AS BIGINT)) AS result
-        """
-      Then query error .*
-
-    Scenario: scale -38 overflows decimal128 precision
-      When query
-        """
-        SELECT ceil(123.456, -38) AS result
-        """
-      Then query error .*
-
-    Scenario: ceil very large double with scale overflows decimal
-      When query
-        """
-        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
-        """
-      Then query error .*
+      Examples:
+        | case                                                | args                     |
+        | non-foldable scale errors                           | 1.5, CAST(NULL AS INT)   |
+        | too-negative scale errors                           | 1.5, -100                |
+        | non-INT scale type errors                           | 1.5, CAST(2 AS BIGINT)   |
+        | scale -38 overflows decimal128 precision            | 123.456, -38             |
+        | ceil very large double with scale overflows decimal | CAST(1e300 AS DOUBLE), 2 |
 
   Rule: Scale -37 boundary (max negative scale that fits Decimal128)
 
@@ -1001,7 +601,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | -2     |
 
-
   Rule: Adversarial — identity-on-subtype at type boundaries
     # ceil(BIGINT) and floor(BIGINT) are identity by simplify rewrite.
     # Exercise at BIGINT boundary to confirm no overflow in the identity path.
@@ -1023,7 +622,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query result
         | result               |
         | -9223372036854775808 |
-
 
   Rule: Adversarial — preimage edge cases (floor-only filter pushdown)
     # `preimage` on SparkFloor must handle: non-integer RHS (return None),

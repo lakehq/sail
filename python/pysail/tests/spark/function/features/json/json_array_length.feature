@@ -39,23 +39,19 @@ Feature: json_array_length output schema
 
   Rule: Result values (migrated from test_json_array_length.txt doctests)
 
-    Scenario: json_array_length doctest #1 (result)
+    Scenario Outline: Result values: <case>
       When query
         """
-        SELECT json_array_length('[1,2,3]') AS arr_len, typeof(json_array_length('[1,2,3]')) AS type
+        SELECT json_array_length(<arg>) AS arr_len, typeof(json_array_length(<arg>)) AS type
         """
       Then query result
-        | arr_len | type |
-        | 3       | int  |
+        | arr_len   | type |
+        | <arr_len> | int  |
 
-    Scenario: json_array_length doctest #2 (result)
-      When query
-        """
-        SELECT json_array_length('[]') AS arr_len, typeof(json_array_length('[]')) AS type
-        """
-      Then query result
-        | arr_len | type |
-        | 0       | int  |
+      Examples:
+        | case                                  | arg       | arr_len |
+        | json_array_length doctest #1 (result) | '[1,2,3]' | 3       |
+        | json_array_length doctest #2 (result) | '[]'      | 0       |
 
     Scenario: json_array_length doctest #3 (result)
       When query

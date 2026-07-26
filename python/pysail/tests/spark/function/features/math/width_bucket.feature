@@ -43,29 +43,17 @@ Feature: width_bucket output schema
         | 6      |
         | 0      |
 
-    Scenario: width_bucket doctest #2 (result)
+    Scenario Outline: Doctest: <case>
       When query
         """
-        SELECT width_bucket(0.0, 10.0, 0.0, 5)
+        SELECT width_bucket(<args>)
         """
       Then query result
-        | width_bucket(0.0, 10.0, 0.0, 5) |
-        | 6                               |
+        | width_bucket(<args>) |
+        | <result>             |
 
-    Scenario: width_bucket doctest #3 (result)
-      When query
-        """
-        SELECT width_bucket(10.0, 0.0, 10.0, 5)
-        """
-      Then query result
-        | width_bucket(10.0, 0.0, 10.0, 5) |
-        | 6                                |
-
-    Scenario: width_bucket doctest #4 (result)
-      When query
-        """
-        SELECT width_bucket(10.0, 0.0, 0.0, 5)
-        """
-      Then query result
-        | width_bucket(10.0, 0.0, 0.0, 5) |
-        | NULL                            |
+      Examples:
+        | case                             | args               | result |
+        | width_bucket doctest #2 (result) | 0.0, 10.0, 0.0, 5  | 6      |
+        | width_bucket doctest #3 (result) | 10.0, 0.0, 10.0, 5 | 6      |
+        | width_bucket doctest #4 (result) | 10.0, 0.0, 0.0, 5  | NULL   |

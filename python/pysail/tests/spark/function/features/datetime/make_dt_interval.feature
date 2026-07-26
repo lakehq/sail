@@ -39,122 +39,54 @@ Feature: make_dt_interval output schema
 
   Rule: Result values (migrated from test_make_dt_interval.txt doctests)
 
-    Scenario: make_dt_interval doctest #1 (result)
+    Scenario Outline: Doctest (derived column name): <case>
       When query
         """
-        SELECT (make_dt_interval(null, 0, 0, 0))
+        SELECT (make_dt_interval(<args>))
         """
       Then query result
-        | make_dt_interval(NULL, 0, 0, 0) |
-        | NULL                            |
+        | <name>   |
+        | <result> |
 
-    Scenario: make_dt_interval doctest #2 (result)
-      When query
-        """
-        SELECT (make_dt_interval(0, null, 0, 0))
-        """
-      Then query result
-        | make_dt_interval(0, NULL, 0, 0) |
-        | NULL                            |
+      Examples:
+        | case                                  | args          | name                            | result                                |
+        | make_dt_interval doctest #1 (result)  | null, 0, 0, 0 | make_dt_interval(NULL, 0, 0, 0) | NULL                                  |
+        | make_dt_interval doctest #2 (result)  | 0, null, 0, 0 | make_dt_interval(0, NULL, 0, 0) | NULL                                  |
+        | make_dt_interval doctest #3 (result)  | 0, 0, null, 0 | make_dt_interval(0, 0, NULL, 0) | NULL                                  |
+        | make_dt_interval doctest #4 (result)  | 0, 0, 0, null | make_dt_interval(0, 0, 0, NULL) | NULL                                  |
+        | make_dt_interval doctest #10 (result) | 0, 0, 0, 0    | make_dt_interval(0, 0, 0, 0)    | INTERVAL '0 00:00:00' DAY TO SECOND   |
+        | make_dt_interval doctest #13 (result) | 0, 0, 0, 0.1  | make_dt_interval(0, 0, 0, 0.1)  | INTERVAL '0 00:00:00.1' DAY TO SECOND |
 
-    Scenario: make_dt_interval doctest #3 (result)
+    Scenario Outline: Doctest (aliased): <case>
       When query
         """
-        SELECT (make_dt_interval(0, 0, null, 0))
+        SELECT (make_dt_interval(<args>)) AS make_dt_interval
         """
       Then query result
-        | make_dt_interval(0, 0, NULL, 0) |
-        | NULL                            |
+        | make_dt_interval |
+        | <result>         |
 
-    Scenario: make_dt_interval doctest #4 (result)
-      When query
-        """
-        SELECT (make_dt_interval(0, 0, 0, null))
-        """
-      Then query result
-        | make_dt_interval(0, 0, 0, NULL) |
-        | NULL                            |
+      Examples:
+        | case                                 | args       | result                              |
+        | make_dt_interval doctest #5 (result) |            | INTERVAL '0 00:00:00' DAY TO SECOND |
+        | make_dt_interval doctest #6 (result) | 1          | INTERVAL '1 00:00:00' DAY TO SECOND |
+        | make_dt_interval doctest #7 (result) | 1, 1       | INTERVAL '1 01:00:00' DAY TO SECOND |
+        | make_dt_interval doctest #8 (result) | 1, 1, 1    | INTERVAL '1 01:01:00' DAY TO SECOND |
+        | make_dt_interval doctest #9 (result) | 1, 1, 1, 1 | INTERVAL '1 01:01:01' DAY TO SECOND |
 
-    Scenario: make_dt_interval doctest #5 (result)
+    Scenario Outline: Doctest (bare alias): <case>
       When query
         """
-        SELECT (make_dt_interval()) AS make_dt_interval
+        SELECT (make_dt_interval(<args>)) <alias>
         """
       Then query result
-        | make_dt_interval                    |
-        | INTERVAL '0 00:00:00' DAY TO SECOND |
+        | <alias>  |
+        | <result> |
 
-    Scenario: make_dt_interval doctest #6 (result)
-      When query
-        """
-        SELECT (make_dt_interval(1)) AS make_dt_interval
-        """
-      Then query result
-        | make_dt_interval                    |
-        | INTERVAL '1 00:00:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #7 (result)
-      When query
-        """
-        SELECT (make_dt_interval(1, 1)) AS make_dt_interval
-        """
-      Then query result
-        | make_dt_interval                    |
-        | INTERVAL '1 01:00:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #8 (result)
-      When query
-        """
-        SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
-        """
-      Then query result
-        | make_dt_interval                    |
-        | INTERVAL '1 01:01:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #9 (result)
-      When query
-        """
-        SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
-        """
-      Then query result
-        | make_dt_interval                    |
-        | INTERVAL '1 01:01:01' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #10 (result)
-      When query
-        """
-        SELECT (make_dt_interval(0, 0, 0, 0))
-        """
-      Then query result
-        | make_dt_interval(0, 0, 0, 0)        |
-        | INTERVAL '0 00:00:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #11 (result)
-      When query
-        """
-        SELECT (make_dt_interval(-1, 24, 0, 0)) df
-        """
-      Then query result
-        | df                                  |
-        | INTERVAL '0 00:00:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #12 (result)
-      When query
-        """
-        SELECT (make_dt_interval(1, -24, 0, 0)) dt
-        """
-      Then query result
-        | dt                                  |
-        | INTERVAL '0 00:00:00' DAY TO SECOND |
-
-    Scenario: make_dt_interval doctest #13 (result)
-      When query
-        """
-        SELECT (make_dt_interval(0, 0, 0, 0.1))
-        """
-      Then query result
-        | make_dt_interval(0, 0, 0, 0.1)        |
-        | INTERVAL '0 00:00:00.1' DAY TO SECOND |
+      Examples:
+        | case                                  | args         | alias | result                              |
+        | make_dt_interval doctest #11 (result) | -1, 24, 0, 0 | df    | INTERVAL '0 00:00:00' DAY TO SECOND |
+        | make_dt_interval doctest #12 (result) | 1, -24, 0, 0 | dt    | INTERVAL '0 00:00:00' DAY TO SECOND |
 
     Scenario: make_dt_interval doctest #14 (result)
       When query

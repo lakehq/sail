@@ -1,4 +1,5 @@
 @spark-4
+@schema_of_variant_agg
 Feature: schema_of_variant_agg
 
   Rule: Uniform types
@@ -39,254 +40,129 @@ Feature: schema_of_variant_agg
 
   Rule: More uniform types
 
-    Scenario: schema_of_variant_agg all strings
+    Scenario Outline: Uniform: <case>
       When query
         """
         SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('"a"'), ('"b"'), ('"c"') AS t(v)
-        """
-      Then query result
-        | result |
-        | STRING |
-
-    Scenario: schema_of_variant_agg all booleans
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('true'), ('false'), ('true') AS t(v)
-        """
-      Then query result
-        | result  |
-        | BOOLEAN |
-
-    Scenario: schema_of_variant_agg all arrays same type
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('[1,2]'), ('[3,4,5]') AS t(v)
-        """
-      Then query result
-        | result        |
-        | ARRAY<BIGINT> |
-
-    Scenario: schema_of_variant_agg all objects same fields
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1}'), ('{"a":2}') AS t(v)
-        """
-      Then query result
-        | result            |
-        | OBJECT<a: BIGINT> |
-
-  Rule: More mixed types
-
-    Scenario: schema_of_variant_agg int and string
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('1'), ('"hello"') AS t(v)
-        """
-      Then query result
-        | result  |
-        | VARIANT |
-
-    Scenario: schema_of_variant_agg int and array
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('1'), ('[1,2]') AS t(v)
-        """
-      Then query result
-        | result  |
-        | VARIANT |
-
-    Scenario: schema_of_variant_agg object and array
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1}'), ('[1,2]') AS t(v)
-        """
-      Then query result
-        | result  |
-        | VARIANT |
-
-    Scenario: schema_of_variant_agg int and bool
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('1'), ('true') AS t(v)
-        """
-      Then query result
-        | result  |
-        | VARIANT |
-
-  Rule: NULL and VOID handling
-
-    Scenario: schema_of_variant_agg with json nulls absorbed
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('42'), ('null'), ('99') AS t(v)
-        """
-      Then query result
-        | result |
-        | BIGINT |
-
-    Scenario: schema_of_variant_agg all json nulls
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('null'), ('null') AS t(v)
-        """
-      Then query result
-        | result |
-        | VOID   |
-
-    Scenario: schema_of_variant_agg null and object
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('null'), ('{"a":1}') AS t(v)
-        """
-      Then query result
-        | result            |
-        | OBJECT<a: BIGINT> |
-
-    Scenario: schema_of_variant_agg SQL NULL rows skipped
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('1'), (CAST(NULL AS STRING)), ('2') AS t(v)
-        """
-      Then query result
-        | result |
-        | BIGINT |
-
-    Scenario: schema_of_variant_agg all SQL NULL
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES (CAST(NULL AS STRING)), (CAST(NULL AS STRING)) AS t(v)
-        """
-      Then query result
-        | result |
-        | VOID   |
-
-  Rule: Object merging advanced
-
-    Scenario: schema_of_variant_agg objects different fields
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1}'), ('{"b":"x"}') AS t(v)
-        """
-      Then query result
-        | result                       |
-        | OBJECT<a: BIGINT, b: STRING> |
-
-    Scenario: schema_of_variant_agg objects overlapping fields different types
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1}'), ('{"a":"x"}') AS t(v)
-        """
-      Then query result
-        | result             |
-        | OBJECT<a: VARIANT> |
-
-    Scenario: schema_of_variant_agg objects 3 rows merge
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1}'), ('{"b":2}'), ('{"c":3}') AS t(v)
-        """
-      Then query result
-        | result                                  |
-        | OBJECT<a: BIGINT, b: BIGINT, c: BIGINT> |
-
-    Scenario: schema_of_variant_agg objects nested merge
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":{"x":1}}'), ('{"a":{"y":2}}') AS t(v)
-        """
-      Then query result
-        | result                                  |
-        | OBJECT<a: OBJECT<x: BIGINT, y: BIGINT>> |
-
-    Scenario: schema_of_variant_agg deeply nested objects
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":{"b":1}}'), ('{"a":{"c":2}}') AS t(v)
-        """
-      Then query result
-        | result                                  |
-        | OBJECT<a: OBJECT<b: BIGINT, c: BIGINT>> |
-
-  Rule: Array merging
-
-    Scenario: schema_of_variant_agg arrays different element types
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('[1,2]'), ('["a"]') AS t(v)
-        """
-      Then query result
-        | result         |
-        | ARRAY<VARIANT> |
-
-    Scenario: schema_of_variant_agg array and empty array
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('[1,2]'), ('[]') AS t(v)
-        """
-      Then query result
-        | result        |
-        | ARRAY<BIGINT> |
-
-  Rule: Empty objects
-
-    Scenario: schema_of_variant_agg empty objects
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{}'), ('{}') AS t(v)
+        FROM VALUES <values> AS t(v)
         """
       Then query result
         | result   |
-        | OBJECT<> |
+        | <result> |
 
-    Scenario: schema_of_variant_agg empty and non-empty object
+      Examples:
+        | case                                          | values                        | result            |
+        | schema_of_variant_agg all strings             | ('"a"'), ('"b"'), ('"c"')     | STRING            |
+        | schema_of_variant_agg all booleans            | ('true'), ('false'), ('true') | BOOLEAN           |
+        | schema_of_variant_agg all arrays same type    | ('[1,2]'), ('[3,4,5]')        | ARRAY<BIGINT>     |
+        | schema_of_variant_agg all objects same fields | ('{"a":1}'), ('{"a":2}')      | OBJECT<a: BIGINT> |
+
+  Rule: More mixed types
+
+    Scenario Outline: Mixed: <case>
       When query
         """
         SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{}'), ('{"a":1}') AS t(v)
+        FROM VALUES <values> AS t(v)
         """
       Then query result
-        | result            |
-        | OBJECT<a: BIGINT> |
+        | result  |
+        | VARIANT |
+
+      Examples:
+        | case                                   | values                 |
+        | schema_of_variant_agg int and string   | ('1'), ('"hello"')     |
+        | schema_of_variant_agg int and array    | ('1'), ('[1,2]')       |
+        | schema_of_variant_agg object and array | ('{"a":1}'), ('[1,2]') |
+        | schema_of_variant_agg int and bool     | ('1'), ('true')        |
+
+  Rule: NULL and VOID handling
+
+    Scenario Outline: NULL and VOID: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM VALUES <values> AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                           | values                                         | result            |
+        | schema_of_variant_agg with json nulls absorbed | ('42'), ('null'), ('99')                       | BIGINT            |
+        | schema_of_variant_agg all json nulls           | ('null'), ('null')                             | VOID              |
+        | schema_of_variant_agg null and object          | ('null'), ('{"a":1}')                          | OBJECT<a: BIGINT> |
+        | schema_of_variant_agg SQL NULL rows skipped    | ('1'), (CAST(NULL AS STRING)), ('2')           | BIGINT            |
+        | schema_of_variant_agg all SQL NULL             | (CAST(NULL AS STRING)), (CAST(NULL AS STRING)) | VOID              |
+
+  Rule: Object merging advanced
+
+    Scenario Outline: Object merging: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM VALUES <values> AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                                             | values                                | result                                  |
+        | schema_of_variant_agg objects different fields                   | ('{"a":1}'), ('{"b":"x"}')            | OBJECT<a: BIGINT, b: STRING>            |
+        | schema_of_variant_agg objects overlapping fields different types | ('{"a":1}'), ('{"a":"x"}')            | OBJECT<a: VARIANT>                      |
+        | schema_of_variant_agg objects 3 rows merge                       | ('{"a":1}'), ('{"b":2}'), ('{"c":3}') | OBJECT<a: BIGINT, b: BIGINT, c: BIGINT> |
+        | schema_of_variant_agg objects nested merge                       | ('{"a":{"x":1}}'), ('{"a":{"y":2}}')  | OBJECT<a: OBJECT<x: BIGINT, y: BIGINT>> |
+        | schema_of_variant_agg deeply nested objects                      | ('{"a":{"b":1}}'), ('{"a":{"c":2}}')  | OBJECT<a: OBJECT<b: BIGINT, c: BIGINT>> |
+
+  Rule: Array merging
+
+    Scenario Outline: Array merging: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM VALUES <values> AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                                 | values               | result         |
+        | schema_of_variant_agg arrays different element types | ('[1,2]'), ('["a"]') | ARRAY<VARIANT> |
+        | schema_of_variant_agg array and empty array          | ('[1,2]'), ('[]')    | ARRAY<BIGINT>  |
+
+  Rule: Empty objects
+
+    Scenario Outline: Empty objects: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM VALUES <values> AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                             | values              | result            |
+        | schema_of_variant_agg empty objects              | ('{}'), ('{}')      | OBJECT<>          |
+        | schema_of_variant_agg empty and non-empty object | ('{}'), ('{"a":1}') | OBJECT<a: BIGINT> |
 
   Rule: Single row
 
-    Scenario: schema_of_variant_agg single row
+    Scenario Outline: Single row: <case>
       When query
         """
         SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('42') AS t(v)
+        FROM VALUES <values> AS t(v)
         """
       Then query result
-        | result |
-        | BIGINT |
+        | result   |
+        | <result> |
 
-    Scenario: schema_of_variant_agg single row object
-      When query
-        """
-        SELECT schema_of_variant_agg(parse_json(v)) AS result
-        FROM VALUES ('{"a":1,"b":"x"}') AS t(v)
-        """
-      Then query result
-        | result                       |
-        | OBJECT<a: BIGINT, b: STRING> |
+      Examples:
+        | case                                    | values              | result                       |
+        | schema_of_variant_agg single row        | ('42')              | BIGINT                       |
+        | schema_of_variant_agg single row object | ('{"a":1,"b":"x"}') | OBJECT<a: BIGINT, b: STRING> |

@@ -194,23 +194,19 @@ Feature: input_order
         | Alice | 2    | 2  | NULL | 2 |
         | Bob   | 5    | 5  | 5    | 5 |
 
-    Scenario: input_order doctest #20 — first/last DISTINCT
+    Scenario Outline: input_order doctest <case> — first/last DISTINCT <variant>
       When query
         """
-        SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v,k) ORDER BY k)
+        SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES <values> AS t(v,k) ORDER BY k)
         """
       Then query result
-        | f  | l  |
-        | 10 | 30 |
+        | f   | l   |
+        | <f> | <l> |
 
-    Scenario: input_order doctest #21 — first/last DISTINCT with dup
-      When query
-        """
-        SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(20,'b'),(10,'a'),(20,'d') AS t(v,k) ORDER BY k)
-        """
-      Then query result
-        | f  | l  |
-        | 10 | 20 |
+      Examples:
+        | case | variant  | values                              | f  | l  |
+        | #20  |          | (30,'c'),(10,'a'),(20,'b')          | 10 | 30 |
+        | #21  | with dup | (30,'c'),(20,'b'),(10,'a'),(20,'d') | 10 | 20 |
 
     Scenario: input_order doctest #22 — count/first/last
       When query

@@ -3,23 +3,19 @@ Feature: length() returns character length for strings and byte length for binar
 
   Rule: Character length for string data
 
-    Scenario: length counts characters including trailing spaces
+    Scenario Outline: Character length: <case>
       When query
         """
-        SELECT length('Spark SQL ') AS result
+        SELECT length(<input>) AS result
         """
       Then query result
-        | result |
-        | 10     |
+        | result   |
+        | <result> |
 
-    Scenario: length of the empty string is zero
-      When query
-        """
-        SELECT length('') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
+      Examples:
+        | case                                               | input        | result |
+        | length counts characters including trailing spaces | 'Spark SQL ' | 10     |
+        | length of the empty string is zero                 | ''           | 0      |
 
     Scenario: length counts characters not bytes for multi-byte text
       When query
@@ -32,41 +28,25 @@ Feature: length() returns character length for strings and byte length for binar
 
   Rule: Byte length for binary data
 
-    Scenario: length of binary counts bytes not characters
+    Scenario Outline: Byte length: <case>
       When query
         """
-        SELECT length(CAST('josé' AS BINARY)) AS result
+        SELECT length(<input>) AS result
         """
       Then query result
-        | result |
-        | 5      |
+        | result   |
+        | <result> |
 
-    Scenario: length of binary that is not valid UTF-8
-      When query
-        """
-        SELECT length(X'DEADBEEF') AS result
-        """
-      Then query result
-        | result |
-        | 4      |
-
-    Scenario: length of empty binary is zero
-      When query
-        """
-        SELECT length(X'') AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
-    Scenario: length of binary counts every UTF-8 byte of an emoji
-      When query
-        """
-        SELECT length(CAST('😀' AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | 4      |
+      Examples:
+        | case                                                             | input                              | result |
+        | length of binary counts bytes not characters                     | CAST('josé' AS BINARY)             | 5      |
+        | length of binary that is not valid UTF-8                         | X'DEADBEEF'                        | 4      |
+        | length of empty binary is zero                                   | X''                                | 0      |
+        | length of binary counts every UTF-8 byte of an emoji             | CAST('😀' AS BINARY)                | 4      |
+        | length of binary includes binary zeros                           | X'00010203'                        | 4      |
+        | length of a single byte that is not valid UTF-8 on its own       | unhex('FF')                        | 1      |
+        | length of UTF-16 encoded binary counts the BOM and the NUL bytes | encode('ab', 'UTF-16')             | 6      |
+        | length of large binary counts every byte                         | CAST(repeat('é', 10000) AS BINARY) | 20000  |
 
     Scenario: aliases len, char_length and character_length also count binary bytes
       When query
@@ -76,33 +56,6 @@ Feature: length() returns character length for strings and byte length for binar
       Then query result
         | a | b | c |
         | 4 | 4 | 4 |
-
-    Scenario: length of binary includes binary zeros
-      When query
-        """
-        SELECT length(X'00010203') AS result
-        """
-      Then query result
-        | result |
-        | 4      |
-
-    Scenario: length of a single byte that is not valid UTF-8 on its own
-      When query
-        """
-        SELECT length(unhex('FF')) AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-
-    Scenario: length of UTF-16 encoded binary counts the BOM and the NUL bytes
-      When query
-        """
-        SELECT length(encode('ab', 'UTF-16')) AS result
-        """
-      Then query result
-        | result |
-        | 6      |
 
     Scenario: length of a binary column mixes valid UTF-8, NULL and raw bytes
       When query
@@ -124,52 +77,24 @@ Feature: length() returns character length for strings and byte length for binar
         | result |
         | 3      |
 
-    Scenario: length of large binary counts every byte
-      When query
-        """
-        SELECT length(CAST(repeat('é', 10000) AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | 20000  |
-
   Rule: octet_length and bit_length measure bytes and bits
 
-    Scenario: octet_length and bit_length of binary that is not valid UTF-8
+    Scenario Outline: octet_length and bit_length: <case>
       When query
         """
-        SELECT octet_length(X'DEADBEEF') AS octets, bit_length(X'DEADBEEF') AS bits
+        SELECT octet_length(<input>) AS octets, bit_length(<input>) AS bits
         """
       Then query result
-        | octets | bits |
-        | 4      | 32   |
+        | octets   | bits   |
+        | <octets> | <bits> |
 
-    Scenario: octet_length and bit_length of binary count bytes not characters
-      When query
-        """
-        SELECT octet_length(CAST('josé' AS BINARY)) AS octets, bit_length(CAST('josé' AS BINARY)) AS bits
-        """
-      Then query result
-        | octets | bits |
-        | 5      | 40   |
-
-    Scenario: octet_length and bit_length of UTF-16 encoded binary
-      When query
-        """
-        SELECT octet_length(encode('ab', 'UTF-16')) AS octets, bit_length(encode('ab', 'UTF-16')) AS bits
-        """
-      Then query result
-        | octets | bits |
-        | 6      | 48   |
-
-    Scenario: octet_length and bit_length of empty binary are zero
-      When query
-        """
-        SELECT octet_length(X'') AS octets, bit_length(X'') AS bits
-        """
-      Then query result
-        | octets | bits |
-        | 0      | 0    |
+      Examples:
+        | case                                                             | input                  | octets | bits |
+        | octet_length and bit_length of binary that is not valid UTF-8    | X'DEADBEEF'            | 4      | 32   |
+        | octet_length and bit_length of binary count bytes not characters | CAST('josé' AS BINARY) | 5      | 40   |
+        | octet_length and bit_length of UTF-16 encoded binary             | encode('ab', 'UTF-16') | 6      | 48   |
+        | octet_length and bit_length of empty binary are zero             | X''                    | 0      | 0    |
+        | octet_length and bit_length of NULL binary are NULL              | CAST(NULL AS BINARY)   | NULL   | NULL |
 
     Scenario: octet_length and bit_length of strings measure UTF-8 bytes not characters
       When query
@@ -180,43 +105,22 @@ Feature: length() returns character length for strings and byte length for binar
         | accented_octets | accented_bits | emoji_octets | emoji_bits |
         | 5               | 40            | 4            | 32         |
 
-    Scenario: octet_length and bit_length of NULL binary are NULL
-      When query
-        """
-        SELECT octet_length(CAST(NULL AS BINARY)) AS octets, bit_length(CAST(NULL AS BINARY)) AS bits
-        """
-      Then query result
-        | octets | bits |
-        | NULL   | NULL |
-
   Rule: NULL propagation
 
-    Scenario: length of a NULL string is NULL
+    Scenario Outline: NULL propagation: <case>
       When query
         """
-        SELECT length(CAST(NULL AS STRING)) AS result
+        SELECT length(<input>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: length of a NULL binary is NULL
-      When query
-        """
-        SELECT length(CAST(NULL AS BINARY)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: length of an untyped NULL is NULL
-      When query
-        """
-        SELECT length(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                              | input                |
+        | length of a NULL string is NULL   | CAST(NULL AS STRING) |
+        | length of a NULL binary is NULL   | CAST(NULL AS BINARY) |
+        | length of an untyped NULL is NULL | NULL                 |
 
   Rule: Implicit coercion of non-string input to its string form
 

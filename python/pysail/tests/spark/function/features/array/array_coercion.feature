@@ -7,32 +7,20 @@ Feature: array() type coercion with mixed element types
 
   Rule: Homogeneous arrays preserve their element type
 
-    Scenario: array of integers
+    Scenario Outline: array of <case>
       When query
         """
-        SELECT array(1, 2, 3) AS result
+        SELECT array(<args>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: array of strings
-      When query
-        """
-        SELECT array('a', 'b', 'c') AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
-
-    Scenario: array of doubles
-      When query
-        """
-        SELECT array(1.0, 2.5, 3.5) AS result
-        """
-      Then query result
-        | result          |
-        | [1.0, 2.5, 3.5] |
+      Examples:
+        | case     | args          | result          |
+        | integers | 1, 2, 3       | [1, 2, 3]       |
+        | strings  | 'a', 'b', 'c' | [a, b, c]       |
+        | doubles  | 1.0, 2.5, 3.5 | [1.0, 2.5, 3.5] |
 
   Rule: Mixed numeric types coerce to the widest numeric type
 
@@ -47,32 +35,20 @@ Feature: array() type coercion with mixed element types
 
   Rule: Mixed string and numeric types coerce to string (Spark non-ANSI)
 
-    Scenario: string and integer coerce to string
+    Scenario Outline: <case> coerce to string
       When query
         """
-        SELECT array('a', 1) AS result
-        """
-      Then query result
-        | result |
-        | [a, 1] |
-
-    Scenario: string and double coerce to string
-      When query
-        """
-        SELECT array('a', 1.5) AS result
+        SELECT array(<args>) AS result
         """
       Then query result
         | result   |
-        | [a, 1.5] |
+        | <result> |
 
-    Scenario: multiple strings and numerics coerce to string
-      When query
-        """
-        SELECT array('a', 1, 2.5, 'b') AS result
-        """
-      Then query result
-        | result         |
-        | [a, 1, 2.5, b] |
+      Examples:
+        | case                          | args             | result         |
+        | string and integer            | 'a', 1           | [a, 1]         |
+        | string and double             | 'a', 1.5         | [a, 1.5]       |
+        | multiple strings and numerics | 'a', 1, 2.5, 'b' | [a, 1, 2.5, b] |
 
   Rule: NULL elements are preserved during coercion
 

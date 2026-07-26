@@ -3,59 +3,23 @@ Feature: array_compact() removes null values from an array
 
   Rule: Basic usage
 
-    Scenario: array_compact removes null values from integer array
+    Scenario Outline: array_compact <case>
       When query
         """
-        SELECT array_compact(array(1, NULL, 2, NULL, 3)) AS result
+        SELECT array_compact(<arr>) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result   |
+        | <result> |
 
-    Scenario: array_compact removes null values from string array
-      When query
-        """
-        SELECT array_compact(array('a', NULL, 'b', NULL, 'c')) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
-
-    Scenario: array_compact with no null values returns same array
-      When query
-        """
-        SELECT array_compact(array(1, 2, 3)) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
-
-    Scenario: array_compact with all null values returns empty array
-      When query
-        """
-        SELECT array_compact(array(CAST(NULL AS INT), CAST(NULL AS INT))) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: array_compact with null at beginning
-      When query
-        """
-        SELECT array_compact(array(NULL, 1, 2, 3)) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
-
-    Scenario: array_compact with null at end
-      When query
-        """
-        SELECT array_compact(array(1, 2, 3, NULL)) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
+      Examples:
+        | case                                     | arr                                         | result    |
+        | removes null values from integer array   | array(1, NULL, 2, NULL, 3)                  | [1, 2, 3] |
+        | removes null values from string array    | array('a', NULL, 'b', NULL, 'c')            | [a, b, c] |
+        | with no null values returns same array   | array(1, 2, 3)                              | [1, 2, 3] |
+        | with all null values returns empty array | array(CAST(NULL AS INT), CAST(NULL AS INT)) | []        |
+        | with null at beginning                   | array(NULL, 1, 2, 3)                        | [1, 2, 3] |
+        | with null at end                         | array(1, 2, 3, NULL)                        | [1, 2, 3] |
 
   Rule: Empty array handling
 
@@ -70,23 +34,19 @@ Feature: array_compact() removes null values from an array
 
   Rule: Null input propagation
 
-    Scenario: array_compact with null input returns null
+    Scenario Outline: array_compact with <case> null input returns null
       When query
         """
-        SELECT array_compact(NULL) AS result
+        SELECT array_compact(<arg>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: array_compact with typed null input returns null
-      When query
-        """
-        SELECT array_compact(CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case  | arg                      |
+        | an    | NULL                     |
+        | typed | CAST(NULL AS ARRAY<INT>) |
 
   Rule: Multiple rows
 
@@ -111,23 +71,19 @@ Feature: array_compact() removes null values from an array
 
   Rule: Various data types
 
-    Scenario: array_compact with double values
+    Scenario Outline: array_compact with <case> values
       When query
         """
-        SELECT array_compact(array(1.1, NULL, 2.2, NULL)) AS result
+        SELECT array_compact(<arr>) AS result
         """
       Then query result
-        | result     |
-        | [1.1, 2.2] |
+        | result   |
+        | <result> |
 
-    Scenario: array_compact with boolean values
-      When query
-        """
-        SELECT array_compact(array(true, NULL, false)) AS result
-        """
-      Then query result
-        | result        |
-        | [true, false] |
+      Examples:
+        | case    | arr                         | result        |
+        | double  | array(1.1, NULL, 2.2, NULL) | [1.1, 2.2]    |
+        | boolean | array(true, NULL, false)    | [true, false] |
 
   @spark_null
   Rule: Output schema

@@ -3,117 +3,57 @@ Feature: regexp_extract() extracts regex capture groups from strings
 
   Rule: Basic extraction
 
-    Scenario: regexp_extract with group index 1 (default)
+    Scenario Outline: Basic extraction: <case>
       When query
         """
-        SELECT regexp_extract('100-200', '(\\d+)-(\\d+)', 1) AS result
+        SELECT regexp_extract(<args>) AS result
         """
       Then query result
-        | result |
-        | 100    |
+        | result   |
+        | <result> |
 
-    Scenario: regexp_extract with group index 2
-      When query
-        """
-        SELECT regexp_extract('100-200', '(\\d+)-(\\d+)', 2) AS result
-        """
-      Then query result
-        | result |
-        | 200    |
-
-    Scenario: regexp_extract with group index 0 returns entire match
-      When query
-        """
-        SELECT regexp_extract('hello 123 world', '(\\d+)', 0) AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: regexp_extract defaults to group index 1
-      When query
-        """
-        SELECT regexp_extract('abc-def', '([a-z]+)-([a-z]+)') AS result
-        """
-      Then query result
-        | result |
-        | abc    |
+      Examples:
+        | case                                                   | args                           | result |
+        | regexp_extract with group index 1 (default)            | '100-200', '(\\d+)-(\\d+)', 1  | 100    |
+        | regexp_extract with group index 2                      | '100-200', '(\\d+)-(\\d+)', 2  | 200    |
+        | regexp_extract with group index 0 returns entire match | 'hello 123 world', '(\\d+)', 0 | 123    |
+        | regexp_extract defaults to group index 1               | 'abc-def', '([a-z]+)-([a-z]+)' | abc    |
 
   Rule: Multiple groups
 
-    Scenario: regexp_extract on date-like string group 1
+    Scenario Outline: Multiple groups: <case>
       When query
         """
-        SELECT regexp_extract('2024-01-15', '(\\d+)-(\\d+)-(\\d+)', 1) AS result
+        SELECT regexp_extract(<value>, <pattern>, <group>) AS result
         """
       Then query result
-        | result |
-        | 2024   |
+        | result   |
+        | <result> |
 
-    Scenario: regexp_extract on date-like string group 2
-      When query
-        """
-        SELECT regexp_extract('2024-01-15', '(\\d+)-(\\d+)-(\\d+)', 2) AS result
-        """
-      Then query result
-        | result |
-        | 01     |
-
-    Scenario: regexp_extract on date-like string group 3
-      When query
-        """
-        SELECT regexp_extract('2024-01-15', '(\\d+)-(\\d+)-(\\d+)', 3) AS result
-        """
-      Then query result
-        | result |
-        | 15     |
-
-    Scenario: regexp_extract returns empty string for unmatched optional group
-      When query
-        """
-        SELECT regexp_extract('aaaac', '(a+)(b)?(c)', 2) AS result
-        """
-      Then query result
-        | result |
-        |        |
-
-    Scenario: regexp_extract preserves later groups after unmatched optional group
-      When query
-        """
-        SELECT regexp_extract('aaaac', '(a+)(b)?(c)', 3) AS result
-        """
-      Then query result
-        | result |
-        | c      |
+      Examples:
+        | case                                                                 | value        | pattern                | group | result |
+        | regexp_extract on date-like string group 1                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 1     | 2024   |
+        | regexp_extract on date-like string group 2                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 2     | 01     |
+        | regexp_extract on date-like string group 3                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 3     | 15     |
+        | regexp_extract returns empty string for unmatched optional group     | 'aaaac'      | '(a+)(b)?(c)'          | 2     |        |
+        | regexp_extract preserves later groups after unmatched optional group | 'aaaac'      | '(a+)(b)?(c)'          | 3     | c      |
 
   Rule: No match and edge cases
 
-    Scenario: regexp_extract returns empty string when no match
+    Scenario Outline: No match and edge cases: <case>
       When query
         """
-        SELECT regexp_extract('hello', '(\\d+)', 1) AS result
+        SELECT regexp_extract(<value>, <pattern>, 1) AS result
         """
       Then query result
-        | result |
-        |        |
+        | result   |
+        | <result> |
 
-    Scenario: regexp_extract with anchored pattern at beginning
-      When query
-        """
-        SELECT regexp_extract('123abc', '^(\\d+)', 1) AS result
-        """
-      Then query result
-        | result |
-        | 123    |
-
-    Scenario: regexp_extract with anchored pattern at end
-      When query
-        """
-        SELECT regexp_extract('abc123', '(\\d+)$', 1) AS result
-        """
-      Then query result
-        | result |
-        | 123    |
+      Examples:
+        | case                                              | value    | pattern   | result |
+        | regexp_extract returns empty string when no match | 'hello'  | '(\\d+)'  |        |
+        | regexp_extract with anchored pattern at beginning | '123abc' | '^(\\d+)' | 123    |
+        | regexp_extract with anchored pattern at end       | 'abc123' | '(\\d+)$' | 123    |
 
   @spark_null
   Rule: Output schema

@@ -189,50 +189,22 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: XML escaping
 
-    Scenario: Less-than character is escaped
+    Scenario Outline: Escaping: <case>
       When query
         """
-        SELECT xpath_string(to_xml(named_struct('msg', 'a < b')), '/ROW/msg') AS result
+        SELECT xpath_string(to_xml(named_struct('msg', <value>)), '/ROW/msg') AS result
         """
       Then query result
-        | result |
-        | a < b  |
+        | result   |
+        | <result> |
 
-    Scenario: Greater-than character is escaped
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('msg', 'a > b')), '/ROW/msg') AS result
-        """
-      Then query result
-        | result |
-        | a > b  |
-
-    Scenario: Ampersand character is escaped
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('msg', 'a & b')), '/ROW/msg') AS result
-        """
-      Then query result
-        | result |
-        | a & b  |
-
-    Scenario: Multiple special characters together
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('msg', 'a < b & c > d')), '/ROW/msg') AS result
-        """
-      Then query result
-        | result        |
-        | a < b & c > d |
-
-    Scenario: Script tag content is safely escaped
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('msg', '<script>alert("xss")</script>')), '/ROW/msg') AS result
-        """
-      Then query result
-        | result                        |
-        | <script>alert("xss")</script> |
+      Examples:
+        | case                                 | value                           | result                        |
+        | Less-than character is escaped       | 'a < b'                         | a < b                         |
+        | Greater-than character is escaped    | 'a > b'                         | a > b                         |
+        | Ampersand character is escaped       | 'a & b'                         | a & b                         |
+        | Multiple special characters together | 'a < b & c > d'                 | a < b & c > d                 |
+        | Script tag content is safely escaped | '<script>alert("xss")</script>' | <script>alert("xss")</script> |
 
   Rule: Timestamp and date formatting
 
@@ -309,68 +281,24 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: Decimal and special values
 
-    Scenario: Decimal field is formatted as fixed-point string
+    Scenario Outline: Decimal and special values: <case>
       When query
         """
-        SELECT xpath_string(to_xml(named_struct('price', CAST(2.99 AS DECIMAL(5,2)))), '/ROW/price') AS result
-        """
-      Then query result
-        | result |
-        | 2.99   |
-
-    Scenario: Negative decimal preserves sign
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('price', CAST(-0.83 AS DECIMAL(5,2)))), '/ROW/price') AS result
-        """
-      Then query result
-        | result |
-        | -0.83  |
-
-    Scenario: Very large decimal value
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('big', CAST(999999.99 AS DECIMAL(10,2)))), '/ROW/big') AS result
-        """
-      Then query result
-        | result    |
-        | 999999.99 |
-
-    Scenario: Very small decimal value
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('tiny', CAST(0.0001 AS DECIMAL(5,4)))), '/ROW/tiny') AS result
-        """
-      Then query result
-        | result |
-        | 0.0001 |
-
-    Scenario: Floating-point NaN value
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('nan', CAST('NaN' AS DOUBLE))), '/ROW/nan') AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
-
-    Scenario: Floating-point positive infinity
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('pos', CAST('Infinity' AS DOUBLE))), '/ROW/pos') AS result
+        SELECT xpath_string(to_xml(named_struct(<field>, <value>)), <path>) AS result
         """
       Then query result
         | result   |
-        | Infinity |
+        | <result> |
 
-    Scenario: Floating-point negative infinity
-      When query
-        """
-        SELECT xpath_string(to_xml(named_struct('neg', CAST('-Infinity' AS DOUBLE))), '/ROW/neg') AS result
-        """
-      Then query result
-        | result    |
-        | -Infinity |
+      Examples:
+        | case                                             | field   | value                            | path         | result    |
+        | Decimal field is formatted as fixed-point string | 'price' | CAST(2.99 AS DECIMAL(5,2))       | '/ROW/price' | 2.99      |
+        | Negative decimal preserves sign                  | 'price' | CAST(-0.83 AS DECIMAL(5,2))      | '/ROW/price' | -0.83     |
+        | Very large decimal value                         | 'big'   | CAST(999999.99 AS DECIMAL(10,2)) | '/ROW/big'   | 999999.99 |
+        | Very small decimal value                         | 'tiny'  | CAST(0.0001 AS DECIMAL(5,4))     | '/ROW/tiny'  | 0.0001    |
+        | Floating-point NaN value                         | 'nan'   | CAST('NaN' AS DOUBLE)            | '/ROW/nan'   | NaN       |
+        | Floating-point positive infinity                 | 'pos'   | CAST('Infinity' AS DOUBLE)       | '/ROW/pos'   | Infinity  |
+        | Floating-point negative infinity                 | 'neg'   | CAST('-Infinity' AS DOUBLE)      | '/ROW/neg'   | -Infinity |
 
   Rule: Complex structures
 
@@ -407,14 +335,22 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: Options
 
-    Scenario: Custom rowTag changes root element name
+    Scenario Outline: Option: <case>
       When query
         """
-        SELECT to_xml(named_struct('a', 1), map('rowTag', 'Person')) LIKE '%<Person>%' AS result
+        SELECT to_xml(<args>) LIKE <pattern> AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                                      | args                                                          | pattern        | result |
+        | Custom rowTag changes root element name                   | named_struct('a', 1), map('rowTag', 'Person')                 | '%<Person>%'   | true   |
+        | Option keys are case-insensitive                          | named_struct('a', 1), map('ROWTAG', 'Item')                   | '%<Item>%'     | true   |
+        | Suppressed declaration when empty string passed           | named_struct('a', 1), map('declaration', '')                  | '%<?xml%'      | false  |
+        | nullValue option renders null fields as configured string | named_struct('a', CAST(NULL AS INT)), map('nullValue', 'N/A') | '%<a>N/A</a>%' | true   |
+        | Attribute prefix fields become XML attributes             | named_struct('_id', 99, 'name', 'Alice')                      | '%id="99"%'    | true   |
 
     Scenario: valueTag field is written as inline text content on the parent element
       When query
@@ -435,42 +371,6 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | has_content | has_element |
         | true        | false       |
-
-    Scenario: Option keys are case-insensitive
-      When query
-        """
-        SELECT to_xml(named_struct('a', 1), map('ROWTAG', 'Item')) LIKE '%<Item>%' AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: Suppressed declaration when empty string passed
-      When query
-        """
-        SELECT to_xml(named_struct('a', 1), map('declaration', '')) LIKE '%<?xml%' AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: nullValue option renders null fields as configured string
-      When query
-        """
-        SELECT to_xml(named_struct('a', CAST(NULL AS INT)), map('nullValue', 'N/A')) LIKE '%<a>N/A</a>%' AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: Attribute prefix fields become XML attributes
-      When query
-        """
-        SELECT to_xml(named_struct('_id', 99, 'name', 'Alice')) LIKE '%id="99"%' AS result
-        """
-      Then query result
-        | result |
-        | true   |
 
   Rule: Map fields
 
@@ -587,50 +487,22 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: Primitive arrays are repeated flat tags
 
-    Scenario: Primitive array repeats the field tag without an item wrapper
+    Scenario Outline: Primitive array: <case>
       When query
         """
-        SELECT replace(to_xml(named_struct('numbers', array(1, 2, 3))), '\n', '~') AS r
+        SELECT replace(to_xml(named_struct(<args>)), '\n', '~') AS r
         """
       Then query result
-        | r                                                                                       |
-        | <ROW>~    <numbers>1</numbers>~    <numbers>2</numbers>~    <numbers>3</numbers>~</ROW> |
+        | r        |
+        | <result> |
 
-    Scenario: Single-element primitive array
-      When query
-        """
-        SELECT replace(to_xml(named_struct('items', array(1))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                 |
-        | <ROW>~    <items>1</items>~</ROW> |
-
-    Scenario: NULL elements are dropped from a primitive array
-      When query
-        """
-        SELECT replace(to_xml(named_struct('items', array(1, CAST(NULL AS INT), 3))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                                      |
-        | <ROW>~    <items>1</items>~    <items>3</items>~</ROW> |
-
-    Scenario: Nested arrays wrap inner elements in item, outer keeps field tag
-      When query
-        """
-        SELECT replace(to_xml(named_struct('m', array(array(1, 2), array(3)))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                                                                                                   |
-        | <ROW>~    <m>~        <item>1</item>~        <item>2</item>~    </m>~    <m>~        <item>3</item>~    </m>~</ROW> |
-
-    Scenario: Array of structs repeats the field tag around struct fields
-      When query
-        """
-        SELECT replace(to_xml(named_struct('items', array(named_struct('x', 1), named_struct('x', 2)))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                                                                                |
-        | <ROW>~    <items>~        <x>1</x>~    </items>~    <items>~        <x>2</x>~    </items>~</ROW> |
+      Examples:
+        | case                                                             | args                                                       | result                                                                                                              |
+        | Primitive array repeats the field tag without an item wrapper    | 'numbers', array(1, 2, 3)                                  | <ROW>~    <numbers>1</numbers>~    <numbers>2</numbers>~    <numbers>3</numbers>~</ROW>                             |
+        | Single-element primitive array                                   | 'items', array(1)                                          | <ROW>~    <items>1</items>~</ROW>                                                                                   |
+        | NULL elements are dropped from a primitive array                 | 'items', array(1, CAST(NULL AS INT), 3)                    | <ROW>~    <items>1</items>~    <items>3</items>~</ROW>                                                              |
+        | Nested arrays wrap inner elements in item, outer keeps field tag | 'm', array(array(1, 2), array(3))                          | <ROW>~    <m>~        <item>1</item>~        <item>2</item>~    </m>~    <m>~        <item>3</item>~    </m>~</ROW> |
+        | Array of structs repeats the field tag around struct fields      | 'items', array(named_struct('x', 1), named_struct('x', 2)) | <ROW>~    <items>~        <x>1</x>~    </items>~    <items>~        <x>2</x>~    </items>~</ROW>                    |
 
   Rule: Binary fields
 
@@ -810,68 +682,24 @@ Feature: to_xml converts a struct value to an XML string
 
   Rule: Double and float use Java toString formatting
 
-    Scenario: Whole double keeps a decimal point
+    Scenario Outline: Java toString formatting: <case>
       When query
         """
-        SELECT replace(to_xml(named_struct('d', CAST(1.0 AS DOUBLE))), '\n', '~') AS r
+        SELECT replace(to_xml(named_struct(<args>)), '\n', '~') AS r
         """
       Then query result
-        | r                           |
-        | <ROW>~    <d>1.0</d>~</ROW> |
+        | r        |
+        | <result> |
 
-    Scenario: Large double uses scientific notation
-      When query
-        """
-        SELECT replace(to_xml(named_struct('d', CAST(1e20 AS DOUBLE))), '\n', '~') AS r
-        """
-      Then query result
-        | r                              |
-        | <ROW>~    <d>1.0E20</d>~</ROW> |
-
-    Scenario: Small double uses scientific notation
-      When query
-        """
-        SELECT replace(to_xml(named_struct('d', CAST(1e-7 AS DOUBLE))), '\n', '~') AS r
-        """
-      Then query result
-        | r                              |
-        | <ROW>~    <d>1.0E-7</d>~</ROW> |
-
-    Scenario: Medium whole double keeps a decimal point
-      When query
-        """
-        SELECT replace(to_xml(named_struct('d', CAST(123456.0 AS DOUBLE))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                |
-        | <ROW>~    <d>123456.0</d>~</ROW> |
-
-    Scenario: Negative zero double normalizes to positive zero
-      When query
-        """
-        SELECT replace(to_xml(named_struct('d', CAST(-0.0 AS DOUBLE))), '\n', '~') AS r
-        """
-      Then query result
-        | r                           |
-        | <ROW>~    <d>0.0</d>~</ROW> |
-
-    Scenario: Whole float keeps a decimal point
-      When query
-        """
-        SELECT replace(to_xml(named_struct('f', CAST(1.0 AS FLOAT))), '\n', '~') AS r
-        """
-      Then query result
-        | r                           |
-        | <ROW>~    <f>1.0</f>~</ROW> |
-
-    Scenario: Double array repeats the field tag with formatted values
-      When query
-        """
-        SELECT replace(to_xml(named_struct('v', array(CAST(1.0 AS DOUBLE), CAST(2.5 AS DOUBLE)))), '\n', '~') AS r
-        """
-      Then query result
-        | r                                          |
-        | <ROW>~    <v>1.0</v>~    <v>2.5</v>~</ROW> |
+      Examples:
+        | case                                                     | args                                                 | result                                     |
+        | Whole double keeps a decimal point                       | 'd', CAST(1.0 AS DOUBLE)                             | <ROW>~    <d>1.0</d>~</ROW>                |
+        | Large double uses scientific notation                    | 'd', CAST(1e20 AS DOUBLE)                            | <ROW>~    <d>1.0E20</d>~</ROW>             |
+        | Small double uses scientific notation                    | 'd', CAST(1e-7 AS DOUBLE)                            | <ROW>~    <d>1.0E-7</d>~</ROW>             |
+        | Medium whole double keeps a decimal point                | 'd', CAST(123456.0 AS DOUBLE)                        | <ROW>~    <d>123456.0</d>~</ROW>           |
+        | Negative zero double normalizes to positive zero         | 'd', CAST(-0.0 AS DOUBLE)                            | <ROW>~    <d>0.0</d>~</ROW>                |
+        | Whole float keeps a decimal point                        | 'f', CAST(1.0 AS FLOAT)                              | <ROW>~    <f>1.0</f>~</ROW>                |
+        | Double array repeats the field tag with formatted values | 'v', array(CAST(1.0 AS DOUBLE), CAST(2.5 AS DOUBLE)) | <ROW>~    <v>1.0</v>~    <v>2.5</v>~</ROW> |
 
   Rule: Array element naming option
 
