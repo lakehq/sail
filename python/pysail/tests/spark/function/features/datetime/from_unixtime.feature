@@ -16,8 +16,7 @@ Feature: from_unixtime with an argument coming from a column
         | result              |
         | 1970-01-01 00:00:00 |
 
-    # Sail applies the first row's value to every row: Sail returns ['1970-01-01 01:00:00', '1970-01-01 01:00:00'].
-    @column_args @sail-bug
+    @column_args
     Scenario: from_unixtime takes argument 2 from a column containing NULL
       When query
         """
@@ -28,7 +27,7 @@ Feature: from_unixtime with an argument coming from a column
         | 1970-01-01 00:00:00 |
         | NULL                |
 
-    @column_args @sail-bug
+    @column_args
     Scenario: from_unixtime takes argument 2 from a column holding two different values
       When query
         """
