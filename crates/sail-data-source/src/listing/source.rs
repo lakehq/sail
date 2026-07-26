@@ -264,6 +264,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             sort_order,
             options,
             lakehouse_table,
+            write_case_sensitive: _,
         } = info;
         let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {

@@ -159,3 +159,91 @@ df = (
 ```
 
 Columns not listed in `customSchema` retain their inferred types.
+
+## Writing
+
+Writes use the same `jdbc` format name and the same `pysail[jdbc]` extra.
+
+PostgreSQL uses Arrow-native ADBC bulk ingest. MySQL and SQL Server use a
+SQLAlchemy-core fallback (a parameterised `INSERT` built directly from Arrow
+values) and need their DBAPI driver installed separately: `pip install pymysql`
+(MySQL) or `pip install pymssql` (SQL Server). The Arrow-value path preserves
+exact integers (including bigints above 2^53) and keeps `NULL` distinct from a
+numeric zero.
+
+For SQL Server, `encrypt=true|false` is mapped onto pymssql's `encryption`
+mode, and `applicationIntent=ReadOnly` sets a read-only connection.
+Microsoft-JDBC-specific certificate properties such as
+`trustServerCertificate`, `hostNameInCertificate`, and `trustStore` are rejected:
+pymssql uses FreeTDS and cannot preserve those JDBC security semantics.
+`encrypt=strict` is also rejected instead of silently weakening it to an
+unencrypted connection.
+
+```python
+(
+    df.write.format("jdbc")
+    .option("url", "jdbc:postgresql://localhost:5432/mydb")
+    .option("dbtable", "orders")
+    .option("user", "alice")
+    .option("password", "secret")
+    .mode("append")  # or "overwrite"
+    .save()
+)
+```
+
+### Save modes
+
+- **append** — direct ingest into the target. At-least-once: a retried/speculated
+  Spark task re-ingests its rows (matches Spark's built-in JDBC writer, which
+  makes no exactly-once guarantee), so the target may gain duplicates.
+- **overwrite** — by default, drops and recreates the target from the DataFrame
+  schema before writing, matching Spark's built-in JDBC writer. For MySQL and
+  SQL Server, `truncate=true` truncates instead, preserving the table schema and
+  metadata. PostgreSQL also honors `truncate=true` and emits
+  `TRUNCATE TABLE ONLY`, preserving the target and avoiding truncation of
+  inheritance children. `cascadeTruncate=true` adds `CASCADE` for foreign-key
+  dependencies while retaining `ONLY`.
+  - PostgreSQL also supports the Sail extension `sail.jdbc.overwriteMode=atomic`, which loads all
+    partitions into one staging table, then swaps it over the target in a single
+    `DROP; RENAME` transaction (replaces the table object, so grants/ACLs/RLS are
+    **not** preserved); the target is never left partially written. It is, however,
+    **at-least-once** under Spark task retry / speculative execution — a re-run
+    partition re-ingests into the shared staging, so the swapped-in table can contain
+    duplicates (same as `append`); disable speculation for exactly-once overwrite.
+    `sail.jdbc.overwriteMode=truncate`
+    `TRUNCATE`s the target once then ingests directly, preserving the table object
+    but **non-atomically**. These extension modes intentionally differ from Spark
+    and must be requested explicitly.
+
+::: warning
+Concurrent overwrites to the same table are **not supported**. Two overwrite jobs
+running at once can interleave and leave a mixed result; Spark's own JDBC writer
+takes no lock and gives the same non-guarantee. Run overwrites one at a time.
+
+A failed atomic-overwrite cleanup can leave orphan `*__sail_stg_*` tables behind.
+They are safe to drop manually.
+:::
+
+| Write option              | Default | Description                                        |
+| ------------------------- | ------- | -------------------------------------------------- |
+| `dbtable`                 |         | Target table, optionally `<schema>.<table>`; surrounding whitespace is ignored |
+| `truncate`                | `false` | Truncate instead of drop/recreate on overwrite (Spark dialect SQL; PostgreSQL uses `TRUNCATE TABLE ONLY`) |
+| `cascadeTruncate`         | `false` | Cascade PostgreSQL truncate to FK dependencies     |
+| `sail.jdbc.overwriteMode` | —       | `atomic` or `truncate` (PostgreSQL overwrite only) |
+| `batchsize`               | `1000`  | Rows per ingest call                               |
+| `numPartitions`           | —       | Maximum write partitions/concurrent DB connections |
+| `isolationLevel`          | `READ_UNCOMMITTED` | `NONE`, `READ_UNCOMMITTED`, `READ_COMMITTED`, `REPEATABLE_READ`, or `SERIALIZABLE` |
+| `queryTimeout`            | `0`     | Statement/driver timeout in seconds; `0` disables it |
+| `createTableColumnTypes`  | —       | Spark DDL type overrides for selected columns      |
+| `createTableOptions`      | —       | Dialect DDL appended when a target is created      |
+| `tableComment`            | —       | Best-effort table comment, matching Spark behavior |
+| `driver`                  | —       | Native driver class is accepted; custom JVM drivers are rejected |
+
+A missing target is created from the DataFrame schema in every save mode. The
+default `errorIfExists` mode fails against an existing target, `ignore` skips
+the write without evaluating the input, and `append`/`overwrite` follow Spark's
+built-in JDBC writer semantics.
+
+`createTableOptions` is trusted raw database DDL, as it is in Spark. Do not build
+it from untrusted input. It is used only while creating a missing table or
+recreating one during default overwrite.

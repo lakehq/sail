@@ -12,18 +12,72 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_physical_plan::coalesce::CoalesceExec;
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
+
+fn merge_opaque_options(options: &[(String, String)]) -> HashMap<String, String> {
+    options
+        .iter()
+        .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
+        .collect()
+}
+
+fn sink_mode_name(mode: &SinkMode) -> &'static str {
+    match mode {
+        SinkMode::ErrorIfExists => "errorifexists",
+        SinkMode::IgnoreIfExists => "ignore",
+        SinkMode::Append => "append",
+        SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
+            "overwrite"
+        }
+    }
+}
+
+fn jdbc_write_num_partitions(
+    data_source_name: &str,
+    options: &[(String, String)],
+) -> Result<Option<usize>> {
+    if !data_source_name.eq_ignore_ascii_case("jdbc") {
+        return Ok(None);
+    }
+    let Some((_, value)) = options
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("numPartitions"))
+    else {
+        return Ok(None);
+    };
+    let Ok(value) = value.parse::<usize>() else {
+        return plan_err!("JDBC option 'numPartitions' must be a positive integer");
+    };
+    if value == 0 {
+        return plan_err!("JDBC option 'numPartitions' must be a positive integer");
+    }
+    Ok(Some(value))
+}
+
+fn apply_jdbc_partition_limit(
+    input: Arc<dyn ExecutionPlan>,
+    partition_limit: Option<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    match partition_limit {
+        Some(limit) if limit < input.properties().partitioning.partition_count() => {
+            Arc::new(CoalesceExec::new(input, limit))
+        }
+        _ => input,
+    }
+}
 
 /// TableFormat implementation for a Python data source.
 ///
@@ -98,7 +152,7 @@ impl PythonTableFormat {
     }
 
     /// Create PythonDataSource from options.
-    fn create_datasource(&self, options: &[HashMap<String, String>]) -> Result<PythonDataSource> {
+    fn create_datasource(&self, options: &[(String, String)]) -> Result<PythonDataSource> {
         // Get pickled class bytes: prefer embedded (session-scoped) over global registry
         let pickled_class = match &self.pickled_class {
             Some(bytes) => bytes.clone(),
@@ -115,11 +169,7 @@ impl PythonTableFormat {
         };
 
         // Merge options
-        let merged_options: HashMap<String, String> = options
-            .iter()
-            .flat_map(|m| m.iter())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let merged_options = merge_opaque_options(options);
 
         // Create datasource instance with options
         self.instantiate_datasource(&pickled_class, merged_options)
@@ -181,10 +231,10 @@ impl TableFormat for PythonTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
         // Create PythonDataSource from options
-        let opaque_options: Vec<HashMap<String, String>> = info
+        let opaque_options: Vec<(String, String)> = info
             .options
             .into_iter()
-            .map(|l| l.into_opaque_options())
+            .flat_map(|l| l.into_opaque_option_items())
             .collect();
         let datasource = self.create_datasource(&opaque_options)?;
 
@@ -211,6 +261,7 @@ impl TableFormat for PythonTableFormat {
             mode,
             partition_by,
             options,
+            write_case_sensitive,
             ..
         } = info;
 
@@ -233,6 +284,7 @@ impl TableFormat for PythonTableFormat {
                 self.pickled_class.clone(),
                 mode,
                 options,
+                write_case_sensitive,
             )),
         }))
     }
@@ -246,6 +298,7 @@ pub struct PythonWriteNode {
     pickled_class: Option<Vec<u8>>,
     mode: SinkMode,
     options: Vec<OptionLayer>,
+    write_case_sensitive: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
@@ -257,6 +310,7 @@ impl PythonWriteNode {
         pickled_class: Option<Vec<u8>>,
         mode: SinkMode,
         options: Vec<OptionLayer>,
+        write_case_sensitive: bool,
     ) -> Self {
         Self {
             input,
@@ -264,6 +318,7 @@ impl PythonWriteNode {
             pickled_class,
             mode,
             options,
+            write_case_sensitive,
             schema: Arc::new(DFSchema::empty()),
         }
     }
@@ -298,6 +353,7 @@ impl UserDefinedLogicalNodeCore for PythonWriteNode {
             pickled_class: self.pickled_class.clone(),
             mode: self.mode.clone(),
             options: self.options.clone(),
+            write_case_sensitive: self.write_case_sensitive,
             schema: self.schema.clone(),
         })
     }
@@ -326,12 +382,21 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             node.mode,
             SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
         );
-        let opaque_options: Vec<HashMap<String, String>> = node
+        let opaque_options: Vec<(String, String)> = node
             .options
             .clone()
             .into_iter()
-            .map(|l| l.into_opaque_options())
+            .flat_map(|l| l.into_opaque_option_items())
+            .chain(std::iter::once((
+                "__sail_save_mode".to_string(),
+                sink_mode_name(&node.mode).to_string(),
+            )))
+            .chain(std::iter::once((
+                "__sail_case_sensitive".to_string(),
+                node.write_case_sensitive.to_string(),
+            )))
             .collect();
+        let partition_limit = jdbc_write_num_partitions(&node.name, &opaque_options)?;
         let table_format = PythonTableFormat {
             name: node.name.clone(),
             pickled_class: node.pickled_class.clone(),
@@ -339,6 +404,7 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
         let datasource = table_format.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
+        let input = apply_jdbc_partition_limit(input.clone(), partition_limit);
         let schema = input.schema();
         let expected_partitions = input.properties().partitioning.partition_count();
         let writer_plan = executor
@@ -347,7 +413,7 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
         let pickled_writer = writer_plan.pickled_writer;
         let write_exec: Arc<dyn ExecutionPlan> =
             Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
-                input.clone(),
+                input,
                 pickled_writer.clone(),
                 writer_plan.is_arrow,
             ));
@@ -364,11 +430,78 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::physical_expr::Partitioning;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use sail_physical_plan::coalesce::CoalesceExec;
+
     use super::*;
 
     #[test]
     fn test_python_table_format_name() {
         let format = PythonTableFormat::new("test_datasource".to_string());
         assert_eq!(format.name(), "test_datasource");
+    }
+
+    #[test]
+    fn test_sink_mode_name_preserves_all_v1_modes() {
+        assert_eq!(sink_mode_name(&SinkMode::ErrorIfExists), "errorifexists");
+        assert_eq!(sink_mode_name(&SinkMode::IgnoreIfExists), "ignore");
+        assert_eq!(sink_mode_name(&SinkMode::Append), "append");
+        assert_eq!(sink_mode_name(&SinkMode::Overwrite), "overwrite");
+    }
+
+    #[test]
+    fn test_merge_opaque_options_is_case_insensitive_and_ordered() {
+        let options = vec![
+            ("URL".to_string(), "first".to_string()),
+            ("url".to_string(), "second".to_string()),
+            ("DbTable".to_string(), "items".to_string()),
+        ];
+        let merged = merge_opaque_options(&options);
+        assert_eq!(merged.get("url").map(String::as_str), Some("second"));
+        assert_eq!(merged.get("dbtable").map(String::as_str), Some("items"));
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn test_jdbc_write_num_partitions_is_case_insensitive_and_last_wins() {
+        let options = vec![
+            ("numPartitions".to_string(), "4".to_string()),
+            ("NUMPARTITIONS".to_string(), "2".to_string()),
+        ];
+        assert!(matches!(
+            jdbc_write_num_partitions("jdbc", &options),
+            Ok(Some(2))
+        ));
+        assert!(matches!(
+            jdbc_write_num_partitions("other", &options),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn test_jdbc_write_num_partitions_rejects_non_positive_values() {
+        for value in ["0", "-1", "not-an-integer"] {
+            let options = vec![("numPartitions".to_string(), value.to_string())];
+            assert!(jdbc_write_num_partitions("jdbc", &options).is_err());
+        }
+    }
+
+    #[test]
+    fn test_jdbc_partition_limit_uses_narrow_coalesce() -> Result<()> {
+        let schema = Arc::new(arrow_schema::Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(schema)),
+            Partitioning::RoundRobinBatch(4),
+        )?);
+
+        let limited = apply_jdbc_partition_limit(input, Some(2));
+        let coalesce = limited
+            .downcast_ref::<CoalesceExec>()
+            .ok_or_else(|| datafusion_common::exec_datafusion_err!("expected CoalesceExec"))?;
+
+        assert_eq!(coalesce.output_partitions(), 2);
+        Ok(())
     }
 }

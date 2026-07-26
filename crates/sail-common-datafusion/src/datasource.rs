@@ -60,11 +60,12 @@ pub enum OptionLayer {
 }
 
 impl OptionLayer {
-    /// Converts this option layer into an opaque key-value map.
+    /// Converts this option layer into ordered opaque key-value pairs.
     ///
-    /// This is used when a data source consumes untyped key-value options.
-    /// The returned map can be passed to code that accepts `HashMap<String, String>`.
-    pub fn into_opaque_options(self) -> HashMap<String, String> {
+    /// Unlike [`Self::into_opaque_options`], this preserves insertion order so
+    /// consumers can implement deterministic case-insensitive last-value-wins
+    /// semantics before collecting into a map.
+    pub fn into_opaque_option_items(self) -> Vec<(String, String)> {
         match self {
             OptionLayer::TablePropertyList { items } => items
                 .into_iter()
@@ -76,12 +77,20 @@ impl OptionLayer {
                     }
                 })
                 .collect(),
-            OptionLayer::OptionList { items } => items.into_iter().collect(),
+            OptionLayer::OptionList { items } => items,
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }
             | OptionLayer::AsOfIntegerVersion { .. }
-            | OptionLayer::AsOfStringVersion { .. } => HashMap::new(),
+            | OptionLayer::AsOfStringVersion { .. } => Vec::new(),
         }
+    }
+
+    /// Converts this option layer into an opaque key-value map.
+    ///
+    /// This is used when a data source consumes untyped key-value options.
+    /// The returned map can be passed to code that accepts `HashMap<String, String>`.
+    pub fn into_opaque_options(self) -> HashMap<String, String> {
+        self.into_opaque_option_items().into_iter().collect()
     }
 }
 
@@ -276,6 +285,8 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// Whether write-side name resolution follows Spark's case-sensitive analyzer setting.
+    pub write_case_sensitive: bool,
 }
 
 impl SinkInfo {
@@ -730,6 +741,25 @@ pub fn get_partition_columns_and_file_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_option_items_normalize_table_property_prefixes_in_order() {
+        let items = OptionLayer::TablePropertyList {
+            items: vec![
+                ("option.URL".to_string(), "first".to_string()),
+                ("url".to_string(), "second".to_string()),
+            ],
+        }
+        .into_opaque_option_items();
+
+        assert_eq!(
+            items,
+            vec![
+                ("URL".to_string(), "first".to_string()),
+                ("url".to_string(), "second".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn missing_jdbc_table_format_error_includes_registration_hint()

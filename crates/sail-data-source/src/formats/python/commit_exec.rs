@@ -18,7 +18,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, exec_err, internal_err};
 use futures::StreamExt;
 
-use super::executor::{InProcessExecutor, PythonExecutor};
+use super::executor::{InProcessExecutor, PrepareWriteResult, PythonExecutor};
 use super::write_exec::{COL_COMMIT_MESSAGE, COL_ERROR, COL_PARTITION_ID};
 
 /// Execution plan for commit/abort in Python datasource write flow.
@@ -30,6 +30,8 @@ pub struct PythonDataSourceWriteCommitExec {
     pickled_writer: Vec<u8>,
     /// Number of partition results expected from the write stage.
     expected_partitions: usize,
+    /// Shared once-per-plan preparation result.
+    prepare_result: Arc<tokio::sync::OnceCell<std::result::Result<PrepareWriteResult, String>>>,
     /// Execution plan properties.
     properties: Arc<PlanProperties>,
 }
@@ -52,6 +54,7 @@ impl PythonDataSourceWriteCommitExec {
             input,
             pickled_writer,
             expected_partitions,
+            prepare_result: Arc::new(tokio::sync::OnceCell::new()),
             properties,
         }
     }
@@ -135,12 +138,30 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             );
         }
 
-        let input_stream = self.input.execute(0, context)?;
+        let input = self.input.clone();
         let pickled_writer = self.pickled_writer.clone();
         let expected_partitions = self.expected_partitions;
+        let prepare_result = self.prepare_result.clone();
 
         let stream = futures::stream::once(async move {
             let executor = Arc::new(InProcessExecutor::from_app_config());
+            let prepared = prepare_result
+                .get_or_init(|| async {
+                    executor
+                        .prepare_write(&pickled_writer)
+                        .await
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            match prepared {
+                Ok(PrepareWriteResult::Skip) => {
+                    return Ok(RecordBatch::new_empty(Arc::new(Schema::empty())));
+                }
+                Ok(PrepareWriteResult::Write) => {}
+                Err(e) => return exec_err!("Python data-source write preparation failed: {e}"),
+            }
+
+            let input_stream = input.execute(0, context)?;
             let mut commit_messages: Vec<Option<Vec<u8>>> = vec![None; expected_partitions];
             let mut seen_partitions = vec![false; expected_partitions];
             let mut first_error: Option<String> = None;

@@ -66,6 +66,15 @@ pub struct WriterPlan {
     pub is_arrow: bool,
 }
 
+/// Driver-side preparation decision for a Python data-source write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrepareWriteResult {
+    /// Continue with distributed partition writes.
+    Write,
+    /// Complete successfully without evaluating the input plan.
+    Skip,
+}
+
 /// Result of a write operation from a single partition.
 ///
 /// Contains the optional commit message returned by `writer.write(iterator)`.
@@ -124,6 +133,11 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
         schema: &SchemaRef,
         overwrite: bool,
     ) -> Result<WriterPlan>;
+
+    /// Run the optional driver-side `_sail_prepare()` writer hook.
+    ///
+    /// Writers without the private Sail hook default to [`PrepareWriteResult::Write`].
+    async fn prepare_write(&self, pickled_writer: &[u8]) -> Result<PrepareWriteResult>;
 
     /// Execute a write operation with a stream of RecordBatches.
     ///
@@ -448,7 +462,6 @@ impl PythonExecutor for InProcessExecutor {
                 let is_arrow = writer
                     .is_instance(&arrow_writer_class)
                     .map_err(|e| ctx.wrap_error(format!("Failed to check isinstance: {}", e)))?;
-
                 // Pickle the writer
                 let pickled_writer = pickle_object(py, &writer)?;
 
@@ -463,6 +476,36 @@ impl PythonExecutor for InProcessExecutor {
                     pickled_writer,
                     is_arrow,
                 })
+            })
+        })
+        .await
+        .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?
+    }
+
+    async fn prepare_write(&self, pickled_writer: &[u8]) -> Result<PrepareWriteResult> {
+        let pickled_writer = pickled_writer.to_vec();
+        tokio::task::spawn_blocking(move || {
+            pyo3::Python::attach(|py| {
+                let writer = deserialize_object(py, &pickled_writer)?;
+                let has_prepare = writer
+                    .hasattr("_sail_prepare")
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                if !has_prepare {
+                    return Ok(PrepareWriteResult::Write);
+                }
+                let value = writer
+                    .call_method0("_sail_prepare")
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                let value = value
+                    .extract::<String>()
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                match value.to_ascii_lowercase().as_str() {
+                    "write" => Ok(PrepareWriteResult::Write),
+                    "skip" => Ok(PrepareWriteResult::Skip),
+                    other => datafusion_common::exec_err!(
+                        "_sail_prepare() must return 'write' or 'skip', got {other:?}"
+                    ),
+                }
             })
         })
         .await

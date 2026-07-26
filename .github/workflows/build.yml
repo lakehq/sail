@@ -151,6 +151,14 @@ jobs:
       - setup
       - rust-build
 
+  jdbc-tests:
+    name: JDBC Integration Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    uses: ./.github/workflows/jdbc-tests.yml
+    needs:
+      - setup
+      - rust-build
+
   codecov-notify:
     name: Codecov Notify
     if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
@@ -161,6 +169,7 @@ jobs:
       - spark-tests
       - ibis-tests
       - catalog-tests
+      - jdbc-tests
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:

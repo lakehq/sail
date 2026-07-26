@@ -408,6 +408,7 @@ impl TableFormat for DeltaTableFormat {
             sort_order,
             options,
             lakehouse_table,
+            write_case_sensitive: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
