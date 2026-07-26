@@ -137,6 +137,7 @@ impl PySparkUdtfPayload {
         })
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn build(
         python_version: &str,
         command: &[u8],
