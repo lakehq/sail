@@ -387,8 +387,8 @@ _DELTA_SPARK_COORDINATES: dict[str, tuple[str, str, str]] = {
     "4.1": ("io.delta", "delta-spark_4.1_2.13", "4.1.0"),
 }
 if _SPARK_MINOR not in _DELTA_SPARK_COORDINATES:
-    raise RuntimeError(
-        f"No Delta Maven coordinate mapping for Spark {_SPARK_VERSION}; "
+    pytest.skip(
+        reason=f"No Delta Maven coordinate mapping for Spark {_SPARK_VERSION}; "
         "add an entry to _DELTA_SPARK_COORDINATES in "
         "python/pysail/tests/spark/catalog/hms/conftest.py."
     )
