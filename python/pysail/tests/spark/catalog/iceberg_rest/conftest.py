@@ -154,7 +154,8 @@ def _lakekeeper_migration(
         if result["StatusCode"] != 0:
             stdout, stderr = container.get_logs()
             message = (stdout + stderr).decode(errors="replace")
-            raise RuntimeError(f"Lakekeeper database migration failed:\n{message}")
+            msg = f"Lakekeeper database migration failed:\n{message}"
+            raise RuntimeError(msg)
     finally:
         container.stop()
 
@@ -196,7 +197,8 @@ def lakekeeper_endpoint(lakekeeper_container: DockerContainer) -> str:
             time.sleep(1)
         else:
             return endpoint
-    raise AssertionError("unreachable")
+    msg = "unreachable"
+    raise AssertionError(msg)
 
 
 @pytest.fixture(scope="module")

@@ -24,6 +24,7 @@ def remote(
     seaweedfs_host_endpoint: str,
 ) -> Generator[str, None, None]:
     """Start Sail with the Lakekeeper-backed Iceberg REST catalog."""
+    del lakekeeper_warehouse_id
     catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{lakekeeper_endpoint}/catalog", warehouse="demo"}}]'
     with spark_connect_server(
         envs={
