@@ -143,6 +143,7 @@ impl PySparkUdtfPayload {
         eval_type: spec::PySparkUdfType,
         num_args: usize,
         input_types: &[DataType],
+        passthrough_columns: usize,
         kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
@@ -158,9 +159,17 @@ impl PySparkUdtfPayload {
                 write_conf(&mut data, config.to_key_value_pairs());
                 let mut eval_conf = vec![];
                 if eval_type == spec::PySparkUdfType::ArrowTable {
+                    let argument_types = input_types
+                        .get(passthrough_columns..)
+                        .ok_or_else(|| {
+                            PyUdfError::invalid(format!(
+                                "passthrough columns ({passthrough_columns}) exceed input columns ({})",
+                                input_types.len()
+                            ))
+                        })?;
                     eval_conf.push((
                         "input_type".to_string(),
-                        build_input_types_json(input_types)?,
+                        build_input_types_json(argument_types)?,
                     ))
                 }
                 write_conf(&mut data, eval_conf);
@@ -175,7 +184,15 @@ impl PySparkUdtfPayload {
                 if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowTable) =
                     (pyspark_version, eval_type)
                 {
-                    let schema_json = build_input_types_json(input_types)?;
+                    let argument_types = input_types
+                        .get(passthrough_columns..)
+                        .ok_or_else(|| {
+                            PyUdfError::invalid(format!(
+                                "passthrough columns ({passthrough_columns}) exceed input columns ({})",
+                                input_types.len()
+                            ))
+                        })?;
+                    let schema_json = build_input_types_json(argument_types)?;
                     data.extend((schema_json.len() as i32).to_be_bytes());
                     data.extend(schema_json.as_bytes());
                 }

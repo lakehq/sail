@@ -1178,12 +1178,10 @@ class PySparkArrowTableUdf:
         if first is None:
             return
         args = itertools.chain([first], args)
-        # Tee: one branch for the mapper (full batches), one for passthrough extraction.
-        # The mapper expects full input batches — it handles Python conversion and column
-        # selection internally (via converters + args_kwargs_offsets).
+        # Tee: one branch for the mapper, one for passthrough extraction.
         batches_for_passthrough, batches_for_mapper = itertools.tee(args)
-        if PYSPARK_VERSION >= (4, 2):
-            # Spark 4.2 interprets UDTF argument offsets relative to the input
+        if PYSPARK_VERSION >= (4, 1):
+            # Spark 4.1+ interprets UDTF argument offsets relative to the input
             # supplied to its worker. Sail's execution batches also include
             # lateral-join passthrough columns, so remove those before invoking
             # the worker and retain the original stream for result expansion.

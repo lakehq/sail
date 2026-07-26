@@ -145,6 +145,26 @@ def test_arrow_udtf_type_conversion_error_class_is_preserved():
         ArrowOutputUDTF().collect()
 
 
+@pytest.mark.parametrize("use_arrow", [False, True])
+def test_arrow_udtf_lateral_view_uses_argument_schema(spark, use_arrow):
+    """Passthrough columns must not shift Arrow UDTF argument conversions."""
+
+    @udtf(returnType="output: string", useArrow=use_arrow)
+    class EchoUDTF:
+        def eval(self, value):
+            yield (value,)
+
+    function_name = f"echo_udtf_{'' if use_arrow else 'not_'}use_arrow"
+    spark.udtf.register(function_name, EchoUDTF)
+
+    df = spark.sql(
+        f"""SELECT passthrough, value, output
+        FROM VALUES (X'706173737468726f756768', 'value') AS input(passthrough, value)
+        LATERAL VIEW {function_name}(value) AS output"""  # noqa: S608
+    )
+    assert df.collect() == [Row(passthrough=b"passthrough", value="value", output="value")]
+
+
 @pytest.mark.skipif(
     pyspark_version() < (4, 1),
     reason="UDTF analyze tests require PySpark 4.1+",
