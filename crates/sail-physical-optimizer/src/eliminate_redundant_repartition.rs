@@ -10,13 +10,16 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion_physical_expr::Partitioning;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
-/// EliminateRedundantRepartition optimizer rule removes a RepartitionExec
-/// that is directly on top of an ExplicitRepartitionExec, since the input has
-/// already been explicitly repartitioned and the additional repartition is
-/// redundant.
+/// `EliminateRedundantRepartition` optimizer rule removes a `RepartitionExec`
+/// with `Partitioning::RoundRobinBatch` that sits directly on top of an
+/// `ExplicitRepartitionExec`.
 ///
-/// This rule should be applied after the EnforceDistribution
-/// rule and before the RewriteExplicitRepartition rule.
+/// `RepartitionExec` with `Partitioning::Hash(..)` or `Partitioning::UnknownPartitioning`
+/// is left untouched, since eliminating it could violate the parent node's
+/// distribution requirement.
+///
+/// This rule should be applied after the `EnforceDistribution`
+/// rule and before the `RewriteExplicitRepartition` rule.
 pub struct EliminateRedundantRepartition {}
 
 impl EliminateRedundantRepartition {
@@ -38,27 +41,22 @@ impl PhysicalOptimizerRule for EliminateRedundantRepartition {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|node: Arc<dyn ExecutionPlan>| {
-            if node.downcast_ref::<RepartitionExec>().is_none() {
+            let Some(repartition) = node.downcast_ref::<RepartitionExec>() else {
                 return Ok(Transformed::no(node));
             };
 
-            // Do not eliminate hash partitioning, as it may voilate the parent node's distribution requirements.
-            if matches!(
-                node.properties().output_partitioning(),
-                Partitioning::Hash(_, _)
-            ) {
+            let child = repartition.input();
+            let Some(_explicit) = child.downcast_ref::<ExplicitRepartitionExec>() else {
                 return Ok(Transformed::no(node));
             };
 
-            let [child] = node.children()[..] else {
-                return Ok(Transformed::no(node));
-            };
-
-            if child.downcast_ref::<ExplicitRepartitionExec>().is_some() {
-                Ok(Transformed::yes(child.clone()))
-            } else {
-                Ok(Transformed::no(node))
+            // Eliminating a RepartitionExec with a RoundRobinBatch scheme that sits directly
+            // on top of an ExplicitRepartitionExec does not violate the parent node's
+            // distribution requirements.
+            if matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
+                return Ok(Transformed::yes(child.clone()));
             }
+            Ok(Transformed::no(node))
         })?;
         Ok(result.data)
     }
@@ -98,34 +96,92 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
     }
 
+    fn empty_plan() -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(schema()))
+    }
+
+    fn optimize(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        EliminateRedundantRepartition::new()
+            .optimize(plan, &ConfigOptions::default())
+            .unwrap()
+    }
+
     #[test]
-    fn test_eliminate_redundant_repartition_above_explicit_repartition() {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema()));
+    fn test_eliminates_rr_repartition_above_rr_explicit() {
         let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
-            input,
+            empty_plan(),
             Partitioning::RoundRobinBatch(3),
         ));
         let redundant: Arc<dyn ExecutionPlan> = Arc::new(
             RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
         );
-
-        let rule = EliminateRedundantRepartition::new();
-        let result = rule.optimize(redundant, &ConfigOptions::default()).unwrap();
+        let result = optimize(redundant);
 
         assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
         assert_eq!(result.output_partitioning().partition_count(), 3);
     }
 
     #[test]
-    fn test_no_change_when_child_is_not_explicit_repartition() {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema()));
-        let repartition: Arc<dyn ExecutionPlan> =
-            Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(3)).unwrap());
+    fn test_eliminates_rr_repartition_above_hash_explicit() {
+        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::Hash(vec![], 3),
+        ));
+        let redundant: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
+        );
+        let result = optimize(redundant);
 
-        let rule = EliminateRedundantRepartition::new();
-        let result = rule
-            .optimize(repartition, &ConfigOptions::default())
-            .unwrap();
+        assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
+    }
+
+    #[test]
+    fn test_eliminates_rr_repartition_above_unknown_explicit() {
+        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::UnknownPartitioning(3),
+        ));
+        let redundant: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
+        );
+        let result = optimize(redundant);
+
+        assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
+    }
+
+    #[test]
+    fn test_no_change_when_repartition_is_hash() {
+        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::RoundRobinBatch(3),
+        ));
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(explicit, Partitioning::Hash(vec![], 10)).unwrap());
+        let result = optimize(plan);
+
+        assert!(result.downcast_ref::<RepartitionExec>().is_some());
+    }
+
+    #[test]
+    fn test_no_change_when_repartition_is_unknown() {
+        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::RoundRobinBatch(3),
+        ));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(explicit, Partitioning::UnknownPartitioning(10)).unwrap(),
+        );
+        let result = optimize(plan);
+
+        assert!(result.downcast_ref::<RepartitionExec>().is_some());
+    }
+
+    #[test]
+    fn test_no_change_when_child_is_not_explicit_repartition() {
+        let repartition: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(3)).unwrap(),
+        );
+        let result = optimize(repartition);
 
         assert!(result.downcast_ref::<RepartitionExec>().is_some());
     }

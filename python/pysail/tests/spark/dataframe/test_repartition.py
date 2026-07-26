@@ -156,14 +156,14 @@ def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
 
 @pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
-def test_eliminate_redundant_repartition_above_explicit_repartition_plan(spark, snapshot):
+def test_eliminate_rr_repartition_above_rr_explicit_repartition_plan(spark, snapshot):
     df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0).repartition(10)
     plan = normalized_plan(df)
 
     assert plan == snapshot
 
 
-def test_eliminate_redundant_repartition_above_explicit_repartition_result(spark):
+def test_eliminate_rr_repartition_above_rr_explicit_repartition_result(spark):
     df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0).orderBy("id")
     result = df.collect()
 

@@ -1,6 +1,6 @@
 # serializer version: 1
 ---
-name: "test_eliminate_redundant_repartition_above_explicit_repartition_plan"
+name: "test_eliminate_rr_repartition_above_rr_explicit_repartition_plan"
 data:
   |-
     == Physical Plan ==
