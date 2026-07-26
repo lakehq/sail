@@ -649,6 +649,7 @@ message RecursiveQueryExecNode {
   bytes static_term = 2;
   bytes recursive_term = 3;
   bool is_distinct = 4;
+  bytes output_schema = 5;
 }
 
 message SortMergeJoinExecNode {

@@ -38,6 +38,15 @@ Feature: array_compact() removes null values from an array
         | result |
         | []     |
 
+    Scenario: array_compact with untyped null values returns empty array
+      When query
+        """
+        SELECT array_compact(array(NULL, NULL)) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
     Scenario: array_compact with null at beginning
       When query
         """

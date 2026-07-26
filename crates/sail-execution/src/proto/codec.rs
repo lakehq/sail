@@ -614,11 +614,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 static_term,
                 recursive_term,
                 is_distinct,
+                output_schema,
             }) => {
                 let static_term = try_decode_physical_plan(ctx, self, &static_term)?;
                 let recursive_term = try_decode_physical_plan(ctx, self, &recursive_term)?;
+                let output_schema = Arc::new(try_decode_schema(&output_schema)?);
                 Ok(Arc::new(RecursiveQueryExec::try_new(
                     name,
+                    output_schema,
                     static_term,
                     recursive_term,
                     is_distinct,
@@ -1518,11 +1521,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let recursive_term =
                 try_encode_physical_plan(self, recursive_query.recursive_term().clone())?;
             let is_distinct = recursive_query.is_distinct();
+            let output_schema = try_encode_schema(recursive_query.schema().as_ref())?;
             NodeKind::RecursiveQuery(r#gen::RecursiveQueryExecNode {
                 name,
                 static_term,
                 recursive_term,
                 is_distinct,
+                output_schema,
             })
         } else if let Some(sort_merge_join) = node.downcast_ref::<SortMergeJoinExec>() {
             let left = try_encode_physical_plan(self, sort_merge_join.left().clone())?;
@@ -4371,6 +4376,46 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_recursive_query_preserves_output_schema() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let static_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+        let static_term: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&static_schema)));
+        let recursive_term: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&output_schema)));
+        let plan = Arc::new(RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&output_schema),
+            static_term,
+            recursive_term,
+            false,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let recursive_query = decoded
+            .downcast_ref::<RecursiveQueryExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a RecursiveQueryExec"))?;
+
+        assert_eq!(recursive_query.schema(), output_schema);
+        assert_eq!(recursive_query.static_term().schema(), output_schema);
+        assert_eq!(recursive_query.recursive_term().schema(), output_schema);
+        Ok(())
     }
 
     #[test]
