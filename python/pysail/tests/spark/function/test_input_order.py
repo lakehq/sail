@@ -8,13 +8,14 @@ Sail-vs-Spark divergence (floating-point summation order).
 Note: the ``pandas_udf`` tests require the Python UDF worker, which does not run against a
 local Sail server (they pass against JVM Spark, matching ``udf/test_pandas_agg_window.py``).
 """
+
 import re
 import tempfile
 
 import pandas as pd
 import pytest
 from pyspark.sql import Window
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.functions import pandas_udf
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -57,27 +58,19 @@ def test_repartition_then_order_preserved(spark):
 
 
 def test_coalesce_window_sees_input_order(spark):
-    df = spark.createDataFrame(
-        [(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g")
-    ).coalesce(1)
+    df = spark.createDataFrame([(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g")).coalesce(1)
     w_desc = Window.partitionBy("g").orderBy(F.desc("k"))
     w_none = Window.partitionBy("g")
-    result = df.orderBy("k").select(
-        "v", "k", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l")
-    )
+    result = df.orderBy("k").select("v", "k", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
     got = sorted((r.v, r.k, r.s, r.l) for r in result.collect())
     assert got == [(10, "a", 60, 10), (20, "b", 50, 10), (30, "c", 30, 10)]
 
 
 def test_projected_column_order_survives_parquet_roundtrip(spark):
-    df = spark.createDataFrame(
-        [(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g")
-    ).coalesce(1)
+    df = spark.createDataFrame([(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g")).coalesce(1)
     w_desc = Window.partitionBy("g").orderBy(F.desc("k"))
     w_none = Window.partitionBy("g")
-    result = df.orderBy("k").select(
-        "*", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l")
-    )
+    result = df.orderBy("k").select("*", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
     assert result.columns == ["v", "k", "g", "s", "l"]
     assert result.select("*").columns == ["v", "k", "g", "s", "l"]
     with tempfile.TemporaryDirectory() as path:
@@ -106,8 +99,7 @@ def test_pivot_first_preserves_order(spark):
 
 def test_first_is_not_rewritten_with_an_order_by_in_the_plan(spark):
     explain = spark.sql(
-        "EXPLAIN EXTENDED SELECT first(v) FROM "
-        "(SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)"
+        "EXPLAIN EXTENDED SELECT first(v) FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)"
     ).first()[0]
     assert re.search(r"first(?:_value)?\([^\n]* ORDER BY \[", explain, re.IGNORECASE) is None
 
@@ -119,9 +111,13 @@ def test_first_is_not_rewritten_with_an_order_by_in_the_plan(spark):
     "in the original doctest). JVM Spark sums sequentially and yields a stable non-zero value.",
 )
 def test_skewness_is_order_of_summation_dependent(spark):
-    sk = spark.sql(
-        "SELECT skewness(v) AS sk FROM (SELECT * FROM VALUES "
-        "(CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') "
-        "AS t(v, k) ORDER BY k)"
-    ).first().sk
+    sk = (
+        spark.sql(
+            "SELECT skewness(v) AS sk FROM (SELECT * FROM VALUES "
+            "(CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') "
+            "AS t(v, k) ORDER BY k)"
+        )
+        .first()
+        .sk
+    )
     assert sk != 0.0
