@@ -739,3 +739,71 @@ Feature: transform higher-order function
       Then query result
         | result |
         | [[1]]  |
+
+    Scenario: a backtick-spelled internal parameter name does not shadow an outer variable
+      When query
+        """
+        SELECT transform(array(1), `#0` -> transform(array(2), `#0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    Scenario: the collision is independent of the internal name suffix
+      When query
+        """
+        SELECT transform(array(1), `#1` -> transform(array(2), `#1`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    Scenario: the captured value is preserved not the inner element
+      When query
+        """
+        SELECT transform(array(5), `#0` -> transform(array(2), `#0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[5]]  |
+
+    Scenario: a captured variable inside a wrapped filter predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `#0` -> filter(array(2), `#0` > 1)) AS result
+        """
+      Then query result
+        | result |
+        | [[]]   |
+
+    Scenario: a captured variable inside a wrapped exists predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `#0` -> exists(array(2), `#0` > 0)) AS result
+        """
+      Then query result
+        | result  |
+        | [true]  |
+
+  Rule: Subquery expressions are rejected anywhere in the call
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1)), 9) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the array argument with a real lambda is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1, 2)), x -> x + 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the lambda body is rejected
+      When query
+        """
+        SELECT transform(array(1, 2), x -> (SELECT 9)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

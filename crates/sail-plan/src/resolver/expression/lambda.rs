@@ -56,6 +56,19 @@ fn expr_python_udf_name(expr: &expr::Expr) -> PlanResult<Option<String>> {
     Ok(found)
 }
 
+/// Collects the names of every lambda variable referenced anywhere in an
+/// expression's tree.
+fn referenced_lambda_variables(expr: &expr::Expr) -> PlanResult<std::collections::HashSet<String>> {
+    let mut names = std::collections::HashSet::new();
+    expr.apply(|e| {
+        if let expr::Expr::LambdaVariable(variable) = e {
+            names.insert(variable.name.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(names)
+}
+
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {
         spec::Expr::LambdaFunction { .. } => true,
@@ -167,12 +180,6 @@ impl PlanResolver<'_> {
                     let body = self
                         .resolve_named_expression(expression, schema, state)
                         .await?;
-                    // Opaque, plan-unique parameter names. DataFusion resolves
-                    // lambda variables by name at evaluation time, so a plain name
-                    // like `x` could shadow a captured outer variable of the same
-                    // name (Spark avoids this with `hidden = true`). The generated
-                    // `#N` ids cannot be spelled as user lambda variables.
-                    //
                     // Only declare the parameters Spark's wrapping declares (a
                     // single element parameter for the element-wise functions),
                     // not every optional parameter the function supports. The body
@@ -180,9 +187,22 @@ impl PlanResolver<'_> {
                     // `transform`'s index) would only force DataFusion to
                     // materialize an unused per-element column.
                     let param_count = wrapped_lambda_param_count(function_name, param_fields.len());
-                    let params: Vec<String> = (0..param_count)
-                        .map(|_| state.register_hidden_field_name("lambda_param"))
-                        .collect();
+                    // Generated placeholder parameter names. Spark's hidden lambda
+                    // parameters use expression identity and never participate in
+                    // name resolution; DataFusion resolves lambda variables by name,
+                    // so a placeholder must not match any variable the body captures
+                    // (including a backtick-spelled `#N`), or evaluation would rebind
+                    // it. `transform(array(1), `#0` -> transform(array(2), `#0`))`
+                    // is the adversarial case: the inner body captures the outer
+                    // `#0`, so the placeholder is chosen to avoid it.
+                    let captured = referenced_lambda_variables(&body.expr)?;
+                    let mut params: Vec<String> = Vec::with_capacity(param_count);
+                    while params.len() < param_count {
+                        let candidate = state.register_hidden_field_name("lambda_param");
+                        if !captured.contains(&candidate) {
+                            params.push(candidate);
+                        }
+                    }
                     let name = format!("lambdafunction({})", body.name.clone().one()?);
                     NamedExpr::new(
                         vec![name],
@@ -193,21 +213,31 @@ impl PlanResolver<'_> {
             names.push(name.one()?);
             exprs.push(expr);
         }
+        // Spark rejects subquery expressions anywhere in a higher-order function
+        // — in a value argument as well as in a lambda body (SPARK-47509 is a
+        // correctness fix). The guard is on by default, controlled by
+        // `spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`.
+        if !self.config.allow_subquery_in_higher_order_functions {
+            for expr in &exprs {
+                // A lambda's parameters are opaque; only its body can carry a
+                // subquery. Every other argument is checked whole.
+                let scope = match expr {
+                    expr::Expr::Lambda(lambda) => &lambda.body,
+                    other => other,
+                };
+                if expr_contains_subquery(scope)? {
+                    return Err(PlanError::AnalysisError(
+                        "Subquery expressions are not supported within higher-order functions. \
+                         Please remove all subquery expressions."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         for expr in &exprs {
             let expr::Expr::Lambda(lambda) = expr else {
                 continue;
             };
-            // Spark rejects subquery expressions inside a higher-order function
-            // (SPARK-47509 is a correctness bug); the guard is on by default
-            // (`spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`
-            // defaults to false).
-            if expr_contains_subquery(&lambda.body)? {
-                return Err(PlanError::AnalysisError(
-                    "Subquery expressions are not supported within higher-order functions. \
-                     Please remove all subquery expressions."
-                        .to_string(),
-                ));
-            }
             // Spark rejects Python UDFs inside a higher-order function lambda
             // (`UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`, checked in
             // `CheckAnalysis`), because the evaluator cannot drive the Python
