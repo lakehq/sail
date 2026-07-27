@@ -85,7 +85,9 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionCastColumnExpr, StructFieldMatching,
+};
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -1150,10 +1152,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan(ctx, self, &input)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode { input, schema }) => {
+            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
+                input,
+                schema,
+                column_mapping_mode,
+            }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let schema = Arc::new(try_decode_schema(&schema)?);
-                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+                let column_mapping_mode =
+                    self.try_decode_delta_column_mapping_mode(column_mapping_mode)?;
+                Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
+                    input,
+                    schema,
+                    column_mapping_mode,
+                )))
             }
             NodeKind::DeletionVectorWriter(r#gen::DeletionVectorWriterExecNode {
                 input,
@@ -2026,7 +2038,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(relaxed_tz_cast) = node.downcast_ref::<RelaxedTzCastExec>() {
             let input = try_encode_physical_plan(self, relaxed_tz_cast.input().clone())?;
             let schema = try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode { input, schema })
+            let column_mapping_mode =
+                Self::try_encode_delta_column_mapping_mode(relaxed_tz_cast.column_mapping_mode())?;
+            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
+                input,
+                schema,
+                column_mapping_mode,
+            })
         } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
             let input = try_encode_physical_plan(self, dv_writer_exec.input().clone())?;
             let condition = try_encode_physical_expr(self, dv_writer_exec.condition())?;
@@ -3269,16 +3287,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
             ExprKind::SchemaEvolutionCast(node) => {
-                let (input, input_field, target_field) = self.try_decode_cast_column_expr(
-                    &node,
-                    inputs,
-                    "SchemaEvolutionCastColumnExpr",
-                )?;
-                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new(
+                let (input, input_field, target_field, matching) = self
+                    .try_decode_cast_column_expr(&node, inputs, "SchemaEvolutionCastColumnExpr")?;
+                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
                     input,
                     input_field,
                     target_field,
                     None,
+                    matching,
                 )))
             }
             // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
@@ -3311,6 +3327,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),
+                cast.matching(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
@@ -3342,10 +3359,16 @@ impl RemoteExecutionCodec {
         node: &CastColumnExprNode,
         inputs: &[Arc<dyn PhysicalExpr>],
         expr_name: &str,
-    ) -> Result<(Arc<dyn PhysicalExpr>, Arc<Field>, Arc<Field>)> {
+    ) -> Result<(
+        Arc<dyn PhysicalExpr>,
+        Arc<Field>,
+        Arc<Field>,
+        StructFieldMatching,
+    )> {
         let CastColumnExprNode {
             input_schema,
             target_schema,
+            struct_field_matching,
         } = node;
         if inputs.len() != 1 {
             return plan_err!(
@@ -3374,6 +3397,7 @@ impl RemoteExecutionCodec {
             inputs[0].clone(),
             Arc::new(input_field),
             Arc::new(target_field),
+            Self::try_decode_struct_field_matching(*struct_field_matching)?,
         ))
     }
 
@@ -3381,6 +3405,7 @@ impl RemoteExecutionCodec {
         &self,
         input_field: &Field,
         target_field: &Field,
+        matching: StructFieldMatching,
     ) -> Result<CastColumnExprNode> {
         let input_schema = Schema::new(vec![input_field.clone()]);
         let input_schema = try_encode_schema(&input_schema)?;
@@ -3389,7 +3414,26 @@ impl RemoteExecutionCodec {
         Ok(CastColumnExprNode {
             input_schema,
             target_schema,
+            struct_field_matching: Self::try_encode_struct_field_matching(matching),
         })
+    }
+
+    fn try_decode_struct_field_matching(mode: i32) -> Result<StructFieldMatching> {
+        match r#gen::StructFieldMatching::try_from(mode)
+            .map_err(|_| plan_datafusion_err!("invalid struct field matching mode"))?
+        {
+            r#gen::StructFieldMatching::Name => Ok(StructFieldMatching::Name),
+            r#gen::StructFieldMatching::PhysicalName => Ok(StructFieldMatching::PhysicalName),
+            r#gen::StructFieldMatching::FieldId => Ok(StructFieldMatching::FieldId),
+        }
+    }
+
+    fn try_encode_struct_field_matching(mode: StructFieldMatching) -> i32 {
+        (match mode {
+            StructFieldMatching::Name => r#gen::StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName => r#gen::StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId => r#gen::StructFieldMatching::FieldId,
+        }) as i32
     }
 
     fn try_decode_physical_sink_mode(
@@ -4419,6 +4463,30 @@ mod tests {
         assert_eq!(recursive_query.schema(), output_schema);
         assert_eq!(recursive_query.static_term().schema(), output_schema);
         assert_eq!(recursive_query.recursive_term().schema(), output_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_field_matching_proto_round_trip_and_default() -> Result<()> {
+        for mode in [
+            StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            let encoded = RemoteExecutionCodec::try_encode_struct_field_matching(mode);
+            assert_eq!(
+                RemoteExecutionCodec::try_decode_struct_field_matching(encoded)?,
+                mode
+            );
+        }
+
+        assert_eq!(
+            RemoteExecutionCodec::try_decode_struct_field_matching(
+                r#gen::CastColumnExprNode::default().struct_field_matching,
+            )?,
+            StructFieldMatching::Name
+        );
+        assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
         Ok(())
     }
 

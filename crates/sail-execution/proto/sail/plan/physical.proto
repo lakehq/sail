@@ -79,9 +79,16 @@ message ExtendedPhysicalExprNode {
   }
 }
 
+enum StructFieldMatching {
+  STRUCT_FIELD_MATCHING_NAME = 0;
+  STRUCT_FIELD_MATCHING_PHYSICAL_NAME = 1;
+  STRUCT_FIELD_MATCHING_FIELD_ID = 2;
+}
+
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+  StructFieldMatching struct_field_matching = 3;
 }
 
 message LambdaExprNode {
@@ -864,6 +871,7 @@ message CoalesceExecNode {
 message RelaxedTzCastExecNode {
   bytes input = 1;
   bytes schema = 2;
+  DeltaColumnMappingMode column_mapping_mode = 3;
 }
 
 message JoinOn {
