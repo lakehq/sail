@@ -1,7 +1,7 @@
 @make_dt_interval
 Feature: make_dt_interval output schema
 
-  @spark_null
+  @spark_null @spark-4
   Rule: Output schema
 
     Scenario: a non-null literal input to make_dt_interval yields the schema Spark declares

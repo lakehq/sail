@@ -1,7 +1,7 @@
 @make_interval
 Feature: make_interval output schema
 
-  @spark_null
+  @spark_null @spark-4
   Rule: Output schema
 
     @sail-bug
