@@ -85,7 +85,7 @@ struct SparkConfigNotice {
 fn apply_spark_config_overrides(config: &mut SparkConfig) {
     // TODO: remove these overrides
     config.entries.iter_mut().for_each(|entry| {
-        // Spark 4.1 changes the local relation cache threshold from 64 MB to 1 MB
+        // Spark 4.1+ changes the local relation cache threshold from 64 MB to 1 MB
         // which causes DataFrame creation more likely to fail since we do not support
         // caching local relations as artifacts yet.
         // Here we override the default value to 2^31-1 (2147483647, Integer.MAX_VALUE)
@@ -95,11 +95,15 @@ fn apply_spark_config_overrides(config: &mut SparkConfig) {
         if entry.key == "spark.sql.session.localRelationCacheThreshold" {
             entry.default_value = Some("2147483647".to_string())
         }
-        // Spark 4.1 enables safe conversion to Arrow by default, but we turn it off
+        // Spark 4.1+ enables safe conversion to Arrow by default, but we turn it off
         // to avoid a few PySpark test failures caused by datetime conversions.
         // More investigation is needed here.
         if entry.key == "spark.sql.execution.pandas.convertToArrowArraySafely" {
             entry.default_value = Some("false".to_string())
+        }
+        // Spark 4.1+ allows plan compression which we do not support yet, so we turn it off.
+        if entry.key == "spark.connect.session.planCompression.threshold" {
+            entry.default_value = Some("-1".to_string())
         }
     });
 }
