@@ -181,6 +181,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             arguments_len,
             &input_types,
+            passthrough_columns,
             kwargs,
             &return_type,
             &self.config.pyspark_udf_config,

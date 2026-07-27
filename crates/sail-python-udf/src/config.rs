@@ -20,6 +20,8 @@ pub struct PySparkUdfConfig {
     #[pyo3(get)]
     pub python_udf_pandas_int_to_decimal_coercion_enabled: bool,
     #[pyo3(get)]
+    pub python_udf_pandas_prefer_int_extension_dtype: bool,
+    #[pyo3(get)]
     pub binary_as_bytes: bool,
 }
 
@@ -34,6 +36,7 @@ impl Default for PySparkUdfConfig {
             python_udf_pandas_conversion_enabled: false,
             python_udtf_pandas_conversion_enabled: false,
             python_udf_pandas_int_to_decimal_coercion_enabled: false,
+            python_udf_pandas_prefer_int_extension_dtype: false,
             binary_as_bytes: true,
         }
     }
@@ -80,6 +83,11 @@ impl PySparkUdfConfig {
         out.push((
             "spark.sql.execution.pythonUDF.pandas.intToDecimalCoercionEnabled".to_string(),
             self.python_udf_pandas_int_to_decimal_coercion_enabled
+                .to_string(),
+        ));
+        out.push((
+            "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype".to_string(),
+            self.python_udf_pandas_prefer_int_extension_dtype
                 .to_string(),
         ));
         out.push((

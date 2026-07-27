@@ -18,9 +18,9 @@ use crate::spark::connect::{
     AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
     ArtifactStatusesRequest, ArtifactStatusesResponse, CloneSessionRequest, CloneSessionResponse,
     Command, ConfigRequest, ConfigResponse, ExecutePlanRequest, FetchErrorDetailsRequest,
-    FetchErrorDetailsResponse, InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest,
-    ReleaseExecuteRequest, ReleaseExecuteResponse, ReleaseSessionRequest, ReleaseSessionResponse,
-    config_request, plan,
+    FetchErrorDetailsResponse, GetStatusRequest, GetStatusResponse, InterruptRequest,
+    InterruptResponse, Plan, ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse,
+    ReleaseSessionRequest, ReleaseSessionResponse, config_request, plan,
 };
 
 #[derive(Debug)]
@@ -483,5 +483,13 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         Err(Status::unimplemented("clone session"))
+    }
+
+    async fn get_status(
+        &self,
+        request: Request<GetStatusRequest>,
+    ) -> Result<Response<GetStatusResponse>, Status> {
+        debug!("{:?}", request.into_inner());
+        Err(Status::unimplemented("get status"))
     }
 }
