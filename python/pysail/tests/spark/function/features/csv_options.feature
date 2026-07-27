@@ -306,7 +306,6 @@ Feature: CSV expression functions handle Spark's CSV options
         | result            |
         | STRUCT<_c0: DATE> |
 
-    @sail-bug
     Scenario: schema_of_csv honors a dateFormat
       # Sail hardcodes the DATE inference format to `%Y-%m-%d` and never reads `dateFormat`.
       When query
@@ -317,7 +316,6 @@ Feature: CSV expression functions handle Spark's CSV options
         | result            |
         | STRUCT<_c0: DATE> |
 
-    @sail-bug
     Scenario: schema_of_csv honors a timestampFormat that carries no time
       # Sail parses the value with a date-time parser that requires a time component, so a
       # date-only format never matches and the field falls back to STRING.
@@ -471,38 +469,46 @@ Feature: CSV expression functions handle Spark's CSV options
         | "2";"x" |
         | "3";"x" |
 
-  Rule: A NULL option value is rejected
-
-    # Spark rejects the call outright, even when the key is one it does not know, so this is not
-    # per-option validation but a property of the options map itself.
-
-    Scenario: from_csv rejects a NULL value for a known option
-      When query
-        """
-        SELECT from_csv('1', 'a INT', map('header', CAST(NULL AS STRING))) AS result
-        """
-      Then query error Failed preparing of the function .from_csv. for call
-
-    Scenario: from_csv rejects a NULL value for an unknown option
-      When query
-        """
-        SELECT from_csv('1', 'a INT', map('unknownOption', CAST(NULL AS STRING))) AS result
-        """
-      Then query error Failed preparing of the function .from_csv. for call
-
-    Scenario: to_csv rejects a NULL option value
-      When query
-        """
-        SELECT to_csv(named_struct('a', 1), map('sep', CAST(NULL AS STRING))) AS result
-        """
-      Then query error Failed preparing of the function .to_csv. for call
-
-    Scenario: schema_of_csv rejects a NULL option value
-      When query
-        """
-        SELECT schema_of_csv('1', map('sep', CAST(NULL AS STRING))) AS result
-        """
-      Then query error Failed preparing of the function .schema_of_csv. for call
+  # FOLLOW-UP: NULL option-value semantics diverge across Spark versions. Up to 4.1.x Spark
+  # rejects the whole call ("Failed preparing of the function ... for call"), which is what Sail's
+  # `reject_null_entries` matches. In 4.2.0 this changed: a NULL value is no longer a structural
+  # error (a known key reports "flag can be true or false", an unknown key is accepted). Sail has
+  # no target-version signal reaching the CSV UDF, so it cannot branch by version yet. These
+  # scenarios are parked (not deleted) until a dedicated PR decides the version story; enabling
+  # them now would fail the 4.2.0 CI leg while passing the 4.1.1 one.
+  #
+  # Rule: A NULL option value is rejected
+  #
+  #   # Spark rejects the call outright, even when the key is one it does not know, so this is not
+  #   # per-option validation but a property of the options map itself.
+  #
+  #   Scenario: from_csv rejects a NULL value for a known option
+  #     When query
+  #       """
+  #       SELECT from_csv('1', 'a INT', map('header', CAST(NULL AS STRING))) AS result
+  #       """
+  #     Then query error Failed preparing of the function .from_csv. for call
+  #
+  #   Scenario: from_csv rejects a NULL value for an unknown option
+  #     When query
+  #       """
+  #       SELECT from_csv('1', 'a INT', map('unknownOption', CAST(NULL AS STRING))) AS result
+  #       """
+  #     Then query error Failed preparing of the function .from_csv. for call
+  #
+  #   Scenario: to_csv rejects a NULL option value
+  #     When query
+  #       """
+  #       SELECT to_csv(named_struct('a', 1), map('sep', CAST(NULL AS STRING))) AS result
+  #       """
+  #     Then query error Failed preparing of the function .to_csv. for call
+  #
+  #   Scenario: schema_of_csv rejects a NULL option value
+  #     When query
+  #       """
+  #       SELECT schema_of_csv('1', map('sep', CAST(NULL AS STRING))) AS result
+  #       """
+  #     Then query error Failed preparing of the function .schema_of_csv. for call
 
   Rule: A field is not trimmed before it is parsed
 

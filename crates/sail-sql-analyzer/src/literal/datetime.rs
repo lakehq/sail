@@ -35,13 +35,24 @@ impl TryFrom<TimeValue> for NaiveTime {
     type Error = SqlError;
 
     fn try_from(value: TimeValue) -> SqlResult<Self> {
-        NaiveTime::from_hms_nano_opt(
+        let second = if value.second == 60 {
+            if value.hour != 23 || value.minute != 59 {
+                return Err(SqlError::invalid("leap second must be at 23:59:60"));
+            }
+            59
+        } else {
+            value.second
+        };
+
+        let time = NaiveTime::from_hms_nano_opt(
             value.hour as u32,
             value.minute as u32,
-            value.second as u32,
+            second as u32,
             value.nanoseconds,
         )
-        .ok_or_else(|| SqlError::invalid(format!("{value:?}")))
+        .ok_or_else(|| SqlError::invalid(format!("{value:?}")))?;
+
+        Ok(time)
     }
 }
 
@@ -59,9 +70,18 @@ impl<'a> TimestampValue<'a> {
             time,
             timezone,
         } = self;
+
+        let is_leap_second = time.second == 60;
         let date = NaiveDate::try_from(date)?;
         let time = NaiveTime::try_from(time)?;
         let datetime = date.and_time(time);
+
+        let datetime = if is_leap_second {
+            datetime + chrono::Duration::seconds(1)
+        } else {
+            datetime
+        };
+
         Ok((datetime, timezone))
     }
 }
@@ -100,6 +120,11 @@ where
         .map(|s: &str| s.parse::<T>().unwrap())
 }
 
+/// Parses fractional seconds with configurable digit range.
+///
+/// The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
+/// but Spark stores timestamps with microsecond precision (6 digits). Nanosecond part is
+/// truncated during conversion to match Spark behavior.
 #[expect(clippy::unwrap_used)]
 fn fraction<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
 where

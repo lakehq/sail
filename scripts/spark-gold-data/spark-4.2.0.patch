@@ -1,8 +1,8 @@
 diff --git a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
-index 810bdabebb3..079df78998d 100644
+index 3fac57dbe5d..38584fb1b8c 100644
 --- a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
 +++ b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
-@@ -408,6 +408,8 @@ private[spark] object Logging {
+@@ -413,6 +413,8 @@ private[spark] object Logging {
    @volatile private[spark] var sparkShellThresholdLevel: Level = null
    @volatile private[spark] var setLogLevelPrinted: Boolean = false
  
@@ -11,13 +11,13 @@ index 810bdabebb3..079df78998d 100644
    val initLock = new Object()
    try {
      // We use reflection here to handle the case where users remove the
-diff --git a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
-index 3b0ec30ee86..bdb6c5e200b 100644
---- a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
-+++ b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
-@@ -89,15 +89,54 @@ abstract class SparkFunSuite
- 
-   protected val regenerateGoldenFiles: Boolean = System.getenv("SPARK_GENERATE_GOLDEN_FILES") == "1"
+diff --git a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
+index 10504684be9..f3bb4a8f15e 100644
+--- a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
++++ b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
+@@ -91,15 +91,54 @@ trait SparkTestSuite
+   protected def regenerateGoldenFiles: Boolean =
+     System.getenv("SPARK_GENERATE_GOLDEN_FILES") == "1"
  
 +  /**
 +   * The environment variable for specifying the directory to write test suite data.
@@ -34,7 +34,7 @@ index 3b0ec30ee86..bdb6c5e200b 100644
 +      )
 +    }
 +    val className = this.getClass.getName.stripSuffix("$").split('.').last
-+    new java.io.File(outputDir, s"$className.jsonl")
++    new File(outputDir, s"$className.jsonl")
 +  }
 +
 +  /** Write test data to the output file. */
@@ -71,7 +71,7 @@ index 3b0ec30ee86..bdb6c5e200b 100644
        // Avoid leaking map entries in tests that use accumulators without SparkContext
        AccumulatorContext.clear()
 diff --git a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
-index 32270df0a98..a52bb7920f6 100644
+index c997a102a70..93403dc7454 100644
 --- a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
 +++ b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
 @@ -35,13 +35,25 @@ import org.apache.spark.sql.errors.QueryParsingErrors
@@ -111,10 +111,10 @@ index 32270df0a98..a52bb7920f6 100644
    }
  
 diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
-index 216136d8a7c..35d9aa9c7c4 100644
+index 29bf924f244..dee33a596e2 100644
 --- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
 +++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
-@@ -27,6 +27,7 @@ import org.apache.spark.sql.errors.QueryParsingErrors
+@@ -28,6 +28,7 @@ import org.apache.spark.sql.errors.QueryParsingErrors
  import org.apache.spark.sql.internal.SQLConf
  import org.apache.spark.sql.types.StructType
  
@@ -122,7 +122,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
  /**
   * Base class for all ANTLR4 [[ParserInterface]] implementations.
   */
-@@ -35,7 +36,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -36,7 +37,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates Expression for a given SQL string. */
    override def parseExpression(sqlText: String): Expression =
@@ -131,7 +131,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
        val ctx = parser.singleExpression()
        withErrorHandling(ctx, Some(sqlText)) {
          astBuilder.visitSingleExpression(ctx)
-@@ -44,7 +45,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -45,7 +46,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates TableIdentifier for a given SQL string. */
    override def parseTableIdentifier(sqlText: String): TableIdentifier =
@@ -140,7 +140,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
        val ctx = parser.singleTableIdentifier()
        withErrorHandling(ctx, Some(sqlText)) {
          astBuilder.visitSingleTableIdentifier(ctx)
-@@ -53,7 +54,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -54,7 +55,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates FunctionIdentifier for a given SQL string. */
    override def parseFunctionIdentifier(sqlText: String): FunctionIdentifier = {
@@ -149,7 +149,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
        val ctx = parser.singleFunctionIdentifier()
        withErrorHandling(ctx, Some(sqlText)) {
          astBuilder.visitSingleFunctionIdentifier(ctx)
-@@ -63,7 +64,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -64,7 +65,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates a multi-part identifier for a given SQL string */
    override def parseMultipartIdentifier(sqlText: String): Seq[String] = {
@@ -158,7 +158,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
        val ctx = parser.singleMultipartIdentifier()
        withErrorHandling(ctx, Some(sqlText)) {
          astBuilder.visitSingleMultipartIdentifier(ctx)
-@@ -73,7 +74,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -74,7 +75,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates LogicalPlan for a given SQL string of query. */
    override def parseQuery(sqlText: String): LogicalPlan =
@@ -167,7 +167,7 @@ index 216136d8a7c..35d9aa9c7c4 100644
        if (!SQLConf.get.getConf(SQLConf.LEGACY_PARSE_QUERY_WITHOUT_EOF)) {
          val ctx = parser.singleQuery()
  
-@@ -90,7 +91,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -91,7 +92,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
      }
  
    /** Creates LogicalPlan for a given SQL string. */

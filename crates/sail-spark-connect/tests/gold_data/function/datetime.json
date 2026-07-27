@@ -2575,6 +2575,72 @@
     },
     {
       "input": {
+        "query": "SELECT time_bucket(INTERVAL '1' HOUR, TIMESTAMP '2024-01-01 11:27:00');",
+        "result": [
+          "2024-01-01 11:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_bucket(INTERVAL '01' HOUR, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_bucket"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_bucket(INTERVAL '1' MONTH, TIMESTAMP '2024-07-20 14:30:00', TIMESTAMP '2024-06-15 09:00:00');",
+        "result": [
+          "2024-07-15 09:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_bucket(INTERVAL '1' MONTH, TIMESTAMP '2024-07-20 14:30:00', TIMESTAMP '2024-06-15 09:00:00')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_bucket"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_bucket(INTERVAL '15' MINUTE, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00');",
+        "result": [
+          "2024-01-01 11:15:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_bucket(INTERVAL '15' MINUTE, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_bucket"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT time_diff('HOUR', TIME'20:30:29', TIME'12:00:00');",
         "result": [
           "-8"
@@ -2637,6 +2703,534 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_micros(0);",
+        "result": [
+          "00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_micros(0)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_micros(52200000000);",
+        "result": [
+          "14:30:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_micros(52200000000)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_micros(52200500000);",
+        "result": [
+          "14:30:00.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_micros(52200500000)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_micros(86399999999);",
+        "result": [
+          "23:59:59.999999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_micros(86399999999)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_millis(0);",
+        "result": [
+          "00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_millis(0)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_millis(52200000);",
+        "result": [
+          "14:30:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_millis(52200000)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_millis(52200500);",
+        "result": [
+          "14:30:00.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_millis(52200500)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_millis(86399999);",
+        "result": [
+          "23:59:59.999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_millis(86399999)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_seconds(0);",
+        "result": [
+          "00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_seconds(0)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_seconds(52200);",
+        "result": [
+          "14:30:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_seconds(52200)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_seconds(52200.5);",
+        "result": [
+          "14:30:00.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_seconds(52200.5)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_from_seconds(86399.999999);",
+        "result": [
+          "23:59:59.999999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_from_seconds(86399.999999)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_from_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_micros(TIME'00:00:00');",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_micros(TIME '00:00:00')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_micros(TIME'14:30:00');",
+        "result": [
+          "52200000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_micros(TIME '14:30:00')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_micros(TIME'14:30:00.5');",
+        "result": [
+          "52200500000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_micros(TIME '14:30:00.5')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_micros(TIME'23:59:59.999999');",
+        "result": [
+          "86399999999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_micros(TIME '23:59:59.999999')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_micros"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_millis(TIME'00:00:00');",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_millis(TIME '00:00:00')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_millis(TIME'14:30:00');",
+        "result": [
+          "52200000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_millis(TIME '14:30:00')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_millis(TIME'14:30:00.5');",
+        "result": [
+          "52200500"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_millis(TIME '14:30:00.5')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_millis(TIME'23:59:59.999');",
+        "result": [
+          "86399999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_millis(TIME '23:59:59.999')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_millis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_seconds(TIME'00:00:00');",
+        "result": [
+          "0.000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_seconds(TIME '00:00:00')",
+              "nullable": true,
+              "type": "decimal(14, 6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_seconds(TIME'14:30:00');",
+        "result": [
+          "52200.000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_seconds(TIME '14:30:00')",
+              "nullable": true,
+              "type": "decimal(14, 6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_seconds(TIME'14:30:00.5');",
+        "result": [
+          "52200.500000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_seconds(TIME '14:30:00.5')",
+              "nullable": true,
+              "type": "decimal(14, 6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_seconds"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_to_seconds(TIME'23:59:59.999999');",
+        "result": [
+          "86399.999999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_to_seconds(TIME '23:59:59.999999')",
+              "nullable": true,
+              "type": "decimal(14, 6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: time_to_seconds"
       }
     },
     {

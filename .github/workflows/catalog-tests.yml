@@ -11,7 +11,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     env:
-      HATCH_ENV: "test.spark-4.1.1"
+      HATCH_ENV: "test.spark-4.2.0"
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-catalog-it-%p-%m.profraw

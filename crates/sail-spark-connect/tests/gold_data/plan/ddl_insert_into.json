@@ -812,6 +812,12 @@
       }
     },
     {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl\nREPLACE WHERE a > 5\n(SELECT * FROM source) AS s",
+      "output": {
+        "failure": "invalid argument: found AS at 75:77 expected 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
         "success": {
@@ -875,6 +881,74 @@
       }
     },
     {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t\nREPLACE ON (t.a = s.b)\n(SELECT * FROM source) AS s",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t\nREPLACE USING (col1, col2)\n(SELECT * FROM source) AS s",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE ON t.col1 = col2 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE USING (col1, col2) SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[INSERT_REPLACE_WHERE_TABLE_ALIAS_NOT_ALLOWED] Table alias is not allowed with INSERT INTO ... REPLACE WHERE because the WHERE condition is evaluated against the target table directly.\nUse INSERT INTO ... REPLACE ON if you need to reference the target table via an alias. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nINSERT INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE WHERE a > 5 SELECT * FROM source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t REPLACE ON t.a = s.a AND t.b = s.b (SELECT * FROM source) AS s",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t REPLACE ON t.col1 = col2 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t REPLACE USING (col1, col2) SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t REPLACE USING (id) SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[INSERT_REPLACE_WHERE_TABLE_ALIAS_NOT_ALLOWED] Table alias is not allowed with INSERT INTO ... REPLACE WHERE because the WHERE condition is evaluated against the target table directly.\nUse INSERT INTO ... REPLACE ON if you need to reference the target table via an alias. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nINSERT INTO testcat.ns1.ns2.tbl AS t REPLACE WHERE a > 5 SELECT * FROM source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl BY NAME REPLACE WHERE a > 5 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found REPLACE at 40:47 expected query"
+      }
+    },
+    {
       "input": "INSERT INTO testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
       "output": {
         "success": {
@@ -923,6 +997,105 @@
               "mode": {
                 "insertByName": {
                   "overwrite": false
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl REPLACE ON col1 = col2 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found ON at 40:42 expected 'WHERE'"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl REPLACE WHERE a > 5 SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "mode": {
+                "replace": {
+                  "condition": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          ">"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 5
+                              }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    "source": "a > 5 "
+                  }
                 }
               },
               "partition": [],
