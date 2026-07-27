@@ -975,42 +975,99 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
             // Each request re-reads the credential and retries once on a 401, so a token that rotates
             // partway through the cascade is recovered per request instead of leaving a partial drop.
-            let tables_result = self
+            match self
                 .with_auth_retry(|client| {
                     let prefix = prefix.clone();
                     let ns_string = ns_string.clone();
                     async move { client.list_tables(prefix, ns_string, None, None).await }
                 })
-                .await?;
-            if let Ok(tables) = tables_result {
-                for identifier in tables.inner.identifiers.unwrap_or_default() {
-                    let _ = self
-                        .with_auth_retry(|client| {
-                            let prefix = prefix.clone();
-                            let ns_string = ns_string.clone();
-                            let name = identifier.name.clone();
-                            async move { client.drop_table(prefix, ns_string, name, Some(true)).await }
-                        })
-                        .await?;
+                .await?
+            {
+                Ok(tables) => {
+                    for identifier in tables.inner.identifiers.unwrap_or_default() {
+                        match self
+                            .with_auth_retry(|client| {
+                                let prefix = prefix.clone();
+                                let ns_string = ns_string.clone();
+                                let name = identifier.name.clone();
+                                async move {
+                                    client.drop_table(prefix, ns_string, name, Some(true)).await
+                                }
+                            })
+                            .await?
+                        {
+                            Ok(_) => {}
+                            // The table was already removed (a concurrent drop), which is
+                            // an acceptable outcome for a cascade, so keep going.
+                            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                            Err(e) => {
+                                return Err(CatalogError::External(format!(
+                                    "Failed to drop table '{}' while cascading namespace drop: {e}",
+                                    identifier.name
+                                )));
+                            }
+                        }
+                    }
+                }
+                // The namespace itself is already gone; fall through to drop_namespace,
+                // which applies the canonical if_exists handling below.
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to list tables while cascading namespace drop: {e}"
+                    )));
                 }
             }
-            let views_result = self
+            match self
                 .with_auth_retry(|client| {
                     let prefix = prefix.clone();
                     let ns_string = ns_string.clone();
                     async move { client.list_views(prefix, ns_string, None, None).await }
                 })
-                .await?;
-            if let Ok(views) = views_result {
-                for identifier in views.inner.identifiers.unwrap_or_default() {
-                    let _ = self
-                        .with_auth_retry(|client| {
-                            let prefix = prefix.clone();
-                            let ns_string = ns_string.clone();
-                            let name = identifier.name.clone();
-                            async move { client.drop_view(prefix, ns_string, name).await }
-                        })
-                        .await?;
+                .await?
+            {
+                Ok(views) => {
+                    for identifier in views.inner.identifiers.unwrap_or_default() {
+                        match self
+                            .with_auth_retry(|client| {
+                                let prefix = prefix.clone();
+                                let ns_string = ns_string.clone();
+                                let name = identifier.name.clone();
+                                async move { client.drop_view(prefix, ns_string, name).await }
+                            })
+                            .await?
+                        {
+                            Ok(_) => {}
+                            // The view was already removed (a concurrent drop), which is
+                            // an acceptable outcome for a cascade, so keep going.
+                            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                            Err(e) => {
+                                return Err(CatalogError::External(format!(
+                                    "Failed to drop view '{}' while cascading namespace drop: {e}",
+                                    identifier.name
+                                )));
+                            }
+                        }
+                    }
+                }
+                // The namespace itself is already gone; fall through to drop_namespace,
+                // which applies the canonical if_exists handling below.
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                // The views endpoint is optional in the Iceberg REST spec, so a catalog
+                // that does not implement it answers 405 or 501. There are then no views
+                // to cascade, so tolerate it and continue to the namespace drop. The tables
+                // endpoint is mandatory, so the list_tables arm above does not tolerate these
+                // statuses and a 405 or 501 there is surfaced as a genuine failure.
+                Err(e)
+                    if matches!(
+                        e.status(),
+                        Some(reqwest::StatusCode::METHOD_NOT_ALLOWED)
+                            | Some(reqwest::StatusCode::NOT_IMPLEMENTED)
+                    ) => {}
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to list views while cascading namespace drop: {e}"
+                    )));
                 }
             }
         }
@@ -2740,6 +2797,329 @@ mod tests {
     async fn test_drop_database() {
         test_drop_database_impl(None).await;
         test_drop_database_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_table_drop_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // The per-object table drop hits a real server error, so the cascade must abort.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1/tables/table1").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once a table drop fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_table_drop_failure() {
+        test_drop_database_cascade_propagates_table_drop_failure_impl(None).await;
+        test_drop_database_cascade_propagates_table_drop_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_table_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // A concurrent removal leaves the table already gone; the cascade tolerates that.
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/tables/table1"),
+            "NoSuchTableException",
+            "The given table does not exist",
+        )
+        .await;
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/views"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // The cascade proceeds and drops the namespace itself.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_table() {
+        test_drop_database_cascade_tolerates_missing_table_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_table_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_list_tables_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        // Listing the tables fails outright, which the cascade must surface.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/tables").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once the listing fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_list_tables_failure() {
+        test_drop_database_cascade_propagates_list_tables_failure_impl(None).await;
+        test_drop_database_cascade_propagates_list_tables_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_views_endpoint_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A catalog without a views endpoint answers 405, which must not abort the cascade.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(405))
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_views_endpoint() {
+        test_drop_database_cascade_tolerates_missing_views_endpoint_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_views_endpoint_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(
+        name: Option<&str>,
+    ) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A catalog without a views endpoint may answer 501 instead of 405, which
+        // must also be tolerated so the cascade still drops the namespace.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(501))
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_unimplemented_views_endpoint() {
+        test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(None).await;
+        test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_list_views_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A genuine views listing failure (not a missing endpoint) must abort the cascade.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once the listing fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_list_views_failure() {
+        test_drop_database_cascade_propagates_list_views_failure_impl(None).await;
+        test_drop_database_cascade_propagates_list_views_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_namespace_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        // The namespace disappeared before the cascade started; both listings answer 404.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/tables").as_str()))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&ctx.server)
+            .await;
+
+        // With if_exists set, the trailing namespace 404 is the success path.
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1"),
+            "NoSuchNamespaceException",
+            "The given namespace does not exist",
+        )
+        .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: true,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_namespace() {
+        test_drop_database_cascade_tolerates_missing_namespace_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_namespace_impl(Some("test")).await;
     }
 
     async fn test_drop_table_impl(name: Option<&str>) {
