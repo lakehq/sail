@@ -1,7 +1,5 @@
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -38,59 +36,25 @@ impl CatalogCredentials for StaticCatalogCredentials {
     }
 }
 
-/// How long a token read from a [`FileCatalogCredentials`] file is reused before
-/// the file is checked again. Kubelet refreshes projected service account tokens
-/// well before they expire (by default once 80% of their lifetime has elapsed),
-/// so a short interval keeps the in-memory token fresh without reading the file
-/// on every catalog request.
-const FILE_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-
 /// Credentials backed by a token file on disk, such as a kubelet-projected
-/// service account token. The token is cached in memory and re-read when the
-/// file's modification time changes or the refresh interval elapses, so a
-/// rotated token is picked up without restarting the server.
+/// service account token. The file is read on every call, so a rotated token
+/// is picked up without restarting the server. The Iceberg REST provider reads
+/// the credential fresh for each request and retries once on a `401`, so a
+/// token that rotates mid-operation is recovered without an in-memory cache.
 #[derive(Debug)]
 pub struct FileCatalogCredentials {
     path: PathBuf,
-    cached: Mutex<Option<CachedCredential>>,
-}
-
-#[derive(Debug, Clone)]
-struct CachedCredential {
-    credential: String,
-    modified: Option<SystemTime>,
-    read_at: Instant,
 }
 
 impl FileCatalogCredentials {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            cached: Mutex::new(None),
-        }
+        Self { path: path.into() }
     }
 }
 
 #[async_trait::async_trait]
 impl CatalogCredentials for FileCatalogCredentials {
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
-        let modified = tokio::fs::metadata(&self.path)
-            .await
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        {
-            let cached = self
-                .cached
-                .lock()
-                .map_err(|e| CatalogError::Internal(format!("token file cache poisoned: {e}")))?;
-            if let Some(cached) = cached.as_ref() {
-                let fresh = cached.read_at.elapsed() < FILE_CREDENTIALS_REFRESH_INTERVAL;
-                let changed = modified.is_some() && modified != cached.modified;
-                if fresh && !changed {
-                    return Ok(Some(cached.credential.clone()));
-                }
-            }
-        }
         let credential = tokio::fs::read_to_string(&self.path)
             .await
             .map_err(|e| {
@@ -107,15 +71,6 @@ impl CatalogCredentials for FileCatalogCredentials {
                 self.path.display()
             )));
         }
-        let mut cached = self
-            .cached
-            .lock()
-            .map_err(|e| CatalogError::Internal(format!("token file cache poisoned: {e}")))?;
-        *cached = Some(CachedCredential {
-            credential: credential.clone(),
-            modified,
-            read_at: Instant::now(),
-        });
         Ok(Some(credential))
     }
 }
@@ -124,10 +79,9 @@ impl CatalogCredentials for FileCatalogCredentials {
 mod tests {
     #![expect(clippy::unwrap_used)]
 
-    use std::fs::{File, FileTimes};
+    use std::fs::File;
     use std::io::Write;
     use std::path::Path;
-    use std::time::{Duration, SystemTime};
 
     use tempfile::TempDir;
 
@@ -136,12 +90,6 @@ mod tests {
     fn write_token(path: &Path, contents: &str) {
         let mut file = File::create(path).unwrap();
         file.write_all(contents.as_bytes()).unwrap();
-    }
-
-    fn set_modified(path: &Path, modified: SystemTime) {
-        let file = File::options().write(true).open(path).unwrap();
-        file.set_times(FileTimes::new().set_modified(modified))
-            .unwrap();
     }
 
     #[tokio::test]
@@ -171,12 +119,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retrieve_rereads_when_modification_time_changes() {
+    async fn retrieve_rereads_rotated_token() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("token");
         write_token(&path, "first-token");
-        let earlier = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
-        set_modified(&path, earlier);
 
         let credentials = FileCatalogCredentials::new(&path);
         assert_eq!(
@@ -184,12 +130,10 @@ mod tests {
             Some("first-token".to_string())
         );
 
-        // Rotate the token and advance the file's modification time. The refresh
-        // interval has not elapsed, so the mtime change is the only thing that can
-        // trigger a re-read. This mirrors kubelet swapping a projected token.
+        // Every call reads the file, so a rotated token (for example kubelet
+        // swapping a projected service account token) is picked up on the next
+        // retrieve without restarting the server.
         write_token(&path, "second-token");
-        set_modified(&path, earlier + Duration::from_secs(60));
-
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("second-token".to_string())
@@ -222,8 +166,7 @@ mod tests {
             "unexpected error: {error:?}"
         );
 
-        // An empty read must not be cached: once the file holds a token again,
-        // the next retrieve returns it.
+        // Once the file holds a token again, the next retrieve returns it.
         write_token(&path, "recovered-token");
         assert_eq!(
             credentials.retrieve().await.unwrap(),

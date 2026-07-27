@@ -41,7 +41,7 @@ use sail_iceberg::{
 };
 use tokio::sync::OnceCell;
 
-use crate::r#gen::ApiClient;
+use crate::r#gen::{ApiClient, ApiError};
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
@@ -188,6 +188,27 @@ impl IcebergRestCatalogProvider {
         .await
     }
 
+    /// Run a single outbound REST request, retrying it once if the server
+    /// answers `401 Unauthorized`. Each attempt builds an [`ApiClient`] from a
+    /// freshly resolved credential, so a projected service account token that
+    /// rotated mid-operation is picked up on the retry. The credential is
+    /// re-read per request, so every request in a `drop_database` cascade sees
+    /// the current token. The shared `reqwest::Client` and its connection pool
+    /// are reused across attempts.
+    async fn with_auth_retry<T, E, F, Fut>(&self, call: F) -> CatalogResult<Result<T, ApiError<E>>>
+    where
+        F: Fn(ApiClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
+    {
+        let client = self.client().await?;
+        let result = call(client).await;
+        if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            let client = self.client().await?;
+            return Ok(call(client).await);
+        }
+        Ok(result)
+    }
+
     // Merge the local catalog config with the [`crate::r#gen::CatalogConfig`] fetched from the REST server.
     // This only happens once, then the result is cached.
     async fn resolved_catalog_config(&self) -> CatalogResult<&CatalogConfig<'static>> {
@@ -225,34 +246,39 @@ impl IcebergRestCatalogProvider {
         table: &str,
         access_delegation: Option<&str>,
     ) -> CatalogResult<crate::r#gen::LoadTableResult> {
-        let client = self.client().await?;
         let catalog_config = self.resolved_catalog_config().await?;
-        client
-            .load_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                table.to_string(),
-                access_delegation.map(ToOwned::to_owned),
-                None,
-                None,
-            )
-            .await
-            .map(|response| response.inner)
-            .map_err(|e| match e {
-                e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                    CatalogObject::Table,
-                    format!(
-                        "{}.{}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ),
-                ),
-                _ => CatalogError::External(format!(
-                    "Failed to load table {}.{}: {e}",
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let table_name = table.to_string();
+        let access_delegation = access_delegation.map(ToOwned::to_owned);
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let namespace = namespace.clone();
+            let table_name = table_name.clone();
+            let access_delegation = access_delegation.clone();
+            async move {
+                client
+                    .load_table(prefix, namespace, table_name, access_delegation, None, None)
+                    .await
+            }
+        })
+        .await?
+        .map(|response| response.inner)
+        .map_err(|e| match e {
+            e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "{}.{}",
                     quote_namespace_if_needed(database),
                     quote_name_if_needed(table)
-                )),
-            })
+                ),
+            ),
+            _ => CatalogError::External(format!(
+                "Failed to load table {}.{}: {e}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )),
+        })
     }
 
     fn normalize_scan_planning_mode(value: &str) -> CatalogResult<String> {
@@ -782,7 +808,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let CreateDatabaseOptions {
             if_not_exists,
@@ -803,10 +828,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             namespace: Box::new(database.clone().into()),
             properties: if props.is_empty() { None } else { Some(props) },
         };
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .create_namespace(catalog_config.prefix().map(ToOwned::to_owned), request)
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let request = request.clone();
+                async move { client.create_namespace(prefix, request).await }
+            })
+            .await?
             .map(|response| response.inner);
 
         match result {
@@ -841,12 +871,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let namespace = catalog_config.namespace_string(database)?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .load_namespace_metadata(catalog_config.prefix().map(ToOwned::to_owned), namespace)
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.load_namespace_metadata(prefix, namespace).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -883,19 +917,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let parent = prefix
             .map(|namespace| catalog_config.namespace_string(namespace))
             .transpose()?;
+        let request_prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .list_namespaces(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                None,
-                None,
-                parent,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let request_prefix = request_prefix.clone();
+                let parent = parent.clone();
+                async move {
+                    client
+                        .list_namespaces(request_prefix, None, None, parent)
+                        .await
+                }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
 
@@ -919,47 +956,63 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let DropDatabaseOptions { if_exists, cascade } = options;
 
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let ns_string = catalog_config.namespace_string(database)?;
+
         if cascade {
             // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
-            let prefix = catalog_config.prefix().map(ToOwned::to_owned);
-            let ns_string = catalog_config.namespace_string(database)?;
-            let tables_result = client
-                .list_tables(prefix.clone(), ns_string.clone(), None, None)
-                .await;
+            // Each request re-reads the credential and retries once on a 401, so a token that rotates
+            // partway through the cascade is recovered per request instead of leaving a partial drop.
+            let tables_result = self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let ns_string = ns_string.clone();
+                    async move { client.list_tables(prefix, ns_string, None, None).await }
+                })
+                .await?;
             if let Ok(tables) = tables_result {
                 for identifier in tables.inner.identifiers.unwrap_or_default() {
-                    let _ = client
-                        .drop_table(
-                            prefix.clone(),
-                            ns_string.clone(),
-                            identifier.name,
-                            Some(true),
-                        )
-                        .await;
+                    let _ = self
+                        .with_auth_retry(|client| {
+                            let prefix = prefix.clone();
+                            let ns_string = ns_string.clone();
+                            let name = identifier.name.clone();
+                            async move { client.drop_table(prefix, ns_string, name, Some(true)).await }
+                        })
+                        .await?;
                 }
             }
-            let views_result = client
-                .list_views(prefix.clone(), ns_string.clone(), None, None)
-                .await;
+            let views_result = self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let ns_string = ns_string.clone();
+                    async move { client.list_views(prefix, ns_string, None, None).await }
+                })
+                .await?;
             if let Ok(views) = views_result {
                 for identifier in views.inner.identifiers.unwrap_or_default() {
-                    let _ = client
-                        .drop_view(prefix.clone(), ns_string.clone(), identifier.name)
-                        .await;
+                    let _ = self
+                        .with_auth_retry(|client| {
+                            let prefix = prefix.clone();
+                            let ns_string = ns_string.clone();
+                            let name = identifier.name.clone();
+                            async move { client.drop_view(prefix, ns_string, name).await }
+                        })
+                        .await?;
                 }
             }
         }
 
-        match client
-            .drop_namespace(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-            )
-            .await
+        match self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let ns_string = ns_string.clone();
+                async move { client.drop_namespace(prefix, ns_string).await }
+            })
+            .await?
         {
             Ok(_) => Ok(()),
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
@@ -997,7 +1050,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         if mode.ignore_if_exists()
             && let Ok(existing) = self.get_table(database, table).await
@@ -1061,14 +1113,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: if props.is_empty() { None } else { Some(props) },
         };
 
-        let result = client
-            .create_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let request = request.clone();
+                async move { client.create_table(prefix, namespace, None, request).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
@@ -1091,16 +1145,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
 
-        let result = client
-            .list_tables(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                None,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.list_tables(prefix, namespace, None, None).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
 
@@ -1135,16 +1189,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropTableOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let DropTableOptions { if_exists, purge } = options;
-        match client
-            .drop_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                table.to_string(),
-                Some(purge),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let table_name = table.to_string();
+        match self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let table_name = table_name.clone();
+                async move {
+                    client
+                        .drop_table(prefix, namespace, table_name, Some(purge))
+                        .await
+                }
+            })
+            .await?
         {
             Ok(_) => Ok(()),
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
@@ -1183,7 +1243,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let namespace = catalog_config.namespace_string(database)?;
         let requirements = requirements
             .into_iter()
@@ -1209,14 +1268,21 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             requirements,
             updates,
         };
-        let response = client
-            .update_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                namespace,
-                table.to_string(),
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let table_name = table.to_string();
+        let response = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let table_name = table_name.clone();
+                let request = request.clone();
+                async move {
+                    client
+                        .update_table(prefix, namespace, table_name, request)
+                        .await
+                }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -1330,7 +1396,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let CreateViewOptions {
             columns,
@@ -1440,13 +1505,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: props,
         };
 
-        let result = client
-            .create_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let request = request.clone();
+                async move { client.create_view(prefix, namespace, request).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
 
@@ -1455,14 +1523,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
-        let result = client
-            .load_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                view.to_string(),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let view_name = view_name.clone();
+                async move { client.load_view(prefix, namespace, view_name).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if matches!(
@@ -1492,16 +1563,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
 
-        let result = client
-            .list_views(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                None,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.list_views(prefix, namespace, None, None).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if matches!(e.status(), Some(reqwest::StatusCode::NOT_FOUND)) => {
@@ -1546,15 +1617,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let DropViewOptions { if_exists } = options;
-        match client
-            .drop_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                view.to_string(),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        match self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let view_name = view_name.clone();
+                async move { client.drop_view(prefix, namespace, view_name).await }
+            })
+            .await?
         {
             Ok(_) => Ok(()),
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
@@ -1917,8 +1991,10 @@ fn parse_unary_sort_transform(
 #[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use arrow::datatypes::DataType;
-    use sail_catalog::credentials::EmptyCatalogCredentials;
+    use sail_catalog::credentials::{EmptyCatalogCredentials, FileCatalogCredentials};
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common::spec;
     use sail_common_datafusion::catalog::{
@@ -1926,8 +2002,9 @@ mod tests {
         LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
         TableLifecycle,
     };
+    use tempfile::TempDir;
     use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     use super::*;
 
@@ -3470,5 +3547,177 @@ mod tests {
     async fn test_get_database() {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
+    }
+
+    fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {
+        ApiError::Unknown(crate::r#gen::Response {
+            inner: (),
+            status,
+            headers: reqwest::header::HeaderMap::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_retries_once_on_unauthorized() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Err(error_with_status(reqwest::StatusCode::UNAUTHORIZED))
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_does_not_retry_more_than_once() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move { Err(error_with_status(reqwest::StatusCode::UNAUTHORIZED)) }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_does_not_retry_non_unauthorized() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Err(error_with_status(
+                        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                    ))
+                }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn drop_database_cascade_recovers_when_token_rotates_midway() {
+        let dir = TempDir::new().unwrap();
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "token-a").unwrap();
+
+        let server = MockServer::start().await;
+
+        // Bootstrap config. Reachable with the original token.
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {}
+            })))
+            .mount(&server)
+            .await;
+
+        // The namespace still holds one table when the cascade begins. Listing
+        // is authorized with the original token.
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/dbc/tables"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [ { "namespace": ["dbc"], "name": "t1" } ]
+            })))
+            .mount(&server)
+            .await;
+
+        // The first drop of the table arrives with the old token. The server
+        // rejects it with 401 and, at that moment, the projected token file
+        // rotates to a new value (as kubelet would swap it).
+        let rotate_path = token_path.clone();
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc/tables/t1"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(move |_req: &Request| {
+                std::fs::write(&rotate_path, "token-b").unwrap();
+                ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": "token expired",
+                        "type": "NotAuthorizedException",
+                        "code": 401
+                    }
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The retry re-reads the rotated token and is authorized.
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc/tables/t1"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The remaining cascade requests all use the rotated token.
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/dbc/views"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let options = IcebergRestCatalogOptions {
+            credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
+            properties: props,
+        };
+        let catalog = IcebergRestCatalogProvider::new(String::new(), options);
+
+        let namespace = Namespace::try_from(vec!["dbc".to_string()]).unwrap();
+        let result = catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+
+        assert!(result.is_ok(), "cascade drop should succeed: {result:?}");
+        // The rotated token is the one the file ends up holding, and every
+        // mounted request expectation (including the retried table drop) is
+        // verified when the server is dropped.
+        assert_eq!(
+            std::fs::read_to_string(&token_path).unwrap(),
+            "token-b".to_string()
+        );
     }
 }
