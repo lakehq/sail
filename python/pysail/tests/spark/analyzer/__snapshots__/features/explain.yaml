@@ -53,6 +53,9 @@ data:
             Projection: column1 AS #0, column2 AS #1
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
   
+    logical_plan after expand_view_types_at_output:
+    SAME TEXT AS ABOVE
+  
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
