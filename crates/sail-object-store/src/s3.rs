@@ -173,6 +173,7 @@ pub fn parse_s3_url(
             if scheme == "http" {
                 builder = builder.with_allow_http(true);
             }
+            let endpoint = || url[..url::Position::BeforePath].to_string();
             match host.split('.').collect::<Vec<&str>>()[..] {
                 // Support for path-style continues for buckets created on/before Sept. 30, 2020:
                 // https://aws.amazon.com/blogs/aws/amazon-s3-path-deprecation-plan-the-rest-of-the-story/
@@ -222,12 +223,12 @@ pub fn parse_s3_url(
                 [bucket, "s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
                     builder = builder.with_bucket_name(bucket);
                     builder = builder.with_region(region.trim_start_matches("oss-"));
-                    builder = builder.with_endpoint(format!("{scheme}://{host}"));
+                    builder = builder.with_endpoint(endpoint());
                     builder = builder.with_virtual_hosted_style_request(true);
                 }
                 ["s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
                     builder = builder.with_region(region.trim_start_matches("oss-"));
-                    builder = builder.with_endpoint(format!("{scheme}://{host}"));
+                    builder = builder.with_endpoint(endpoint());
                     builder = builder.with_virtual_hosted_style_request(false);
                     if let Some(bucket) = first_path_segment {
                         builder = builder.with_bucket_name(bucket);
@@ -279,8 +280,8 @@ mod tests {
 
     #[test]
     fn parse_aliyun_oss_virtual_hosted_endpoint() {
-        let url = Url::parse("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com/path/to/data")
-            .unwrap();
+        let url =
+            Url::parse("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com:9443/path/to/data").unwrap();
         let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
 
         assert_eq!(
@@ -290,13 +291,17 @@ mod tests {
         assert_eq!(
             builder.get_config_value(&AmazonS3ConfigKey::Region),
             Some("cn-hangzhou".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Endpoint),
+            Some("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com:9443".to_string())
         );
     }
 
     #[test]
     fn parse_aliyun_oss_path_style_endpoint() {
-        let url = Url::parse("https://s3.oss-cn-hangzhou.aliyuncs.com/bucket/path/to/data")
-            .unwrap();
+        let url =
+            Url::parse("https://s3.oss-cn-hangzhou.aliyuncs.com:9443/bucket/path/to/data").unwrap();
         let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
 
         assert_eq!(
@@ -306,6 +311,10 @@ mod tests {
         assert_eq!(
             builder.get_config_value(&AmazonS3ConfigKey::Region),
             Some("cn-hangzhou".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Endpoint),
+            Some("https://s3.oss-cn-hangzhou.aliyuncs.com:9443".to_string())
         );
     }
 }

@@ -58,7 +58,7 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 
 Some HTTPS URLs are automatically recognized as cloud storage:
 
-- **S3**: URLs containing `amazonaws.com`, `r2.cloudflarestorage.com`, or Aliyun OSS S3-compatible endpoints under `aliyuncs.com`.
+- **S3**: URLs containing `amazonaws.com`, `r2.cloudflarestorage.com`, or Aliyun OSS S3-compatible endpoints such as `<bucket>.s3.oss-<region>.aliyuncs.com` and `s3.oss-<region>.aliyuncs.com`.
 - **Azure**: URLs containing `dfs.core.windows.net`, `blob.core.windows.net`, `dfs.fabric.microsoft.com`, or `blob.fabric.microsoft.com`.
 
 These URLs will use the appropriate cloud storage backend instead of the generic HTTP store.

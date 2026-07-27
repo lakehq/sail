@@ -255,7 +255,7 @@ mod tests {
     use tokio::runtime::Handle;
     use url::Url;
 
-    use super::{is_aliyun_oss_url, DynamicObjectStoreRegistry, ObjectStoreKey};
+    use super::{DynamicObjectStoreRegistry, ObjectStoreKey, is_aliyun_oss_url};
 
     #[test]
     fn object_store_key_separates_session_fingerprints() {
