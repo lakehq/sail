@@ -18,7 +18,9 @@ use sail_data_source::options::ResolveOptions;
 use crate::datasource::scan::{
     FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
 };
-use crate::datasource::{DeltaScanConfig, df_logical_schema, simplify_expr};
+use crate::datasource::{
+    DeltaScanConfig, df_logical_schema, rewrite_predicate_for_column_mapping, simplify_expr,
+};
 use crate::delta_log::LogStoreRef;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
@@ -27,7 +29,7 @@ use crate::physical_plan::planner::metadata_predicate::{
 use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
-use crate::schema::get_physical_schema;
+use crate::schema::{attach_column_mapping_metadata, get_physical_schema};
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::table::DeltaSnapshot;
 
@@ -41,15 +43,24 @@ pub(crate) async fn plan_delta_scan(
     filters: &[Expr],
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let config = config.clone();
+    let mut config = config.clone();
     snapshot
         .ensure_data_read_supported()
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
-    let schema = config
-        .schema
-        .clone()
-        .unwrap_or_else(|| Arc::new(snapshot.schema().clone()));
+    let kmode = snapshot.effective_column_mapping_mode();
+    let schema = match config.schema.clone() {
+        Some(requested) if kmode != ColumnMappingMode::None => {
+            let schema = Arc::new(attach_column_mapping_metadata(
+                requested.as_ref(),
+                snapshot.schema(),
+            ));
+            config.schema = Some(Arc::clone(&schema));
+            schema
+        }
+        Some(requested) => requested,
+        None => Arc::new(snapshot.schema().clone()),
+    };
 
     let full_logical_schema = df_logical_schema(
         snapshot,
@@ -175,10 +186,9 @@ pub(crate) async fn plan_delta_scan(
     };
 
     // Build physical file schema (non-partition columns)
-    let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
     let kschema_arc = snapshot.schema();
     let logical_kernel = StructType::try_from(kschema_arc)?;
-    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
+    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode)?;
     let physical_partition_cols: HashSet<String> = snapshot
         .physical_partition_columns()
         .into_iter()
@@ -209,6 +219,18 @@ pub(crate) async fn plan_delta_scan(
     } else {
         None
     };
+    // The parquet scan resolves predicate columns against the physical file schema,
+    // so column-mapped tables need the predicate rewritten from logical to physical names.
+    let pushdown_filter = pushdown_filter
+        .map(|expr| {
+            rewrite_predicate_for_column_mapping(
+                expr,
+                snapshot.schema(),
+                kmode,
+                &table_partition_cols,
+            )
+        })
+        .transpose()?;
 
     // When the table protocol declares the deletionVectors feature, always use the
     // metadata-as-data path (DeltaScanByAddsExec) which loads a fresh snapshot and
@@ -276,9 +298,11 @@ pub(crate) async fn plan_delta_scan(
             input_field.data_type() != field.data_type()
         });
         if needs_wrapping {
-            return Ok(
-                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
-            );
+            return Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
+                renamed,
+                output_schema,
+                kmode,
+            )) as Arc<dyn ExecutionPlan>);
         }
         return Ok(renamed);
     }

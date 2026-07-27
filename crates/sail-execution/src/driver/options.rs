@@ -5,13 +5,14 @@ use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
+use crate::id::DriverId;
 use crate::worker_manager::WorkerManager;
 
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
-    pub driver_listen_host: String,
-    pub driver_listen_port: u16,
+    pub driver_id: DriverId,
+    pub driver_server_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
     pub worker_initial_count: usize,
@@ -34,12 +35,14 @@ impl DriverOptions {
     pub fn new(
         config: &AppConfig,
         runtime: RuntimeHandle,
+        driver_id: DriverId,
+        driver_server_port: u16,
         worker_manager: Arc<dyn WorkerManager>,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
-            driver_listen_host: config.cluster.driver_listen_host.clone(),
-            driver_listen_port: config.cluster.driver_listen_port,
+            driver_id,
+            driver_server_port,
             driver_external_host: config.cluster.driver_external_host.clone(),
             driver_external_port: config.cluster.driver_external_port,
             worker_initial_count: config.cluster.worker_initial_count,

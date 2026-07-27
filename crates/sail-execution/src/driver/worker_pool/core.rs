@@ -37,12 +37,8 @@ impl WorkerPool {
         Ok(())
     }
 
-    pub fn set_driver_server_port(&mut self, port: u16) {
-        self.driver_server_port = Some(port);
-    }
-
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
-        let Ok(worker_id) = self.worker_id_generator.next() else {
+        let Ok(worker_id) = self.worker_id_generator.generate() else {
             error!("failed to generate worker ID");
             ctx.send(DriverEvent::Shutdown { history: None });
             return;
@@ -70,17 +66,14 @@ impl WorkerPool {
         let span = Span::root("WorkerPool::start_worker", SpanContext::random())
             .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
         let _guard = span.set_local_parent();
-        let Some(port) = self.driver_server_port else {
-            error!("the driver server is not ready");
-            return;
-        };
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
             driver_external_port: if self.options.driver_external_port > 0 {
                 self.options.driver_external_port
             } else {
-                port
+                self.options.driver_server_port
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,

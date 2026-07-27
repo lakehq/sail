@@ -156,7 +156,7 @@ impl AddAugmentationConfig {
             add_fields.push(Arc::new(Field::new(
                 FIELD_NAME_PARTITION_VALUES_PARSED,
                 partition_values_parsed.data_type().clone(),
-                false,
+                true,
             )));
             add_cols.push(Arc::new(partition_values_parsed));
         }

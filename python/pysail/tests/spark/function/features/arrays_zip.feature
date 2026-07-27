@@ -1,3 +1,4 @@
+@arrays_zip
 Feature: arrays_zip comprehensive tests
 
   Rule: Basic usage
@@ -187,6 +188,38 @@ Feature: arrays_zip comprehensive tests
         | result |
         | NULL   |
 
+    # Columnar path: neither column is fully NULL, so the invoke short-circuits do
+    # not fire — the combined validity mask makes every row NULL and the result
+    # values struct ends up empty. This exercises the flatten build with empty
+    # `take` outputs (the path that replaced the removed all-null special case).
+    Scenario: arrays_zip all rows NULL via combined validity across columns
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result
+        FROM VALUES
+          (array(1), CAST(NULL AS ARRAY<INT>)),
+          (CAST(NULL AS ARRAY<INT>), array(2))
+        AS t(a, b)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
+
+    Scenario: arrays_zip mixed valid and NULL rows via a per-row NULL array
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result
+        FROM VALUES
+          (array(1,2), array('x','y')),
+          (array(3), CAST(NULL AS ARRAY<STRING>))
+        AS t(a, b)
+        """
+      Then query result ordered
+        | result           |
+        | [{1, x}, {2, y}] |
+        | NULL             |
+
     Scenario: arrays_zip untyped empty array() pads first as NULL
       When query
         """
@@ -195,6 +228,46 @@ Feature: arrays_zip comprehensive tests
       Then query result
         | result                 |
         | [{NULL, 1}, {NULL, 2}] |
+
+  Rule: Columnar multi-row paths (flatten build)
+    # Multi-row FROM VALUES columns exercise the flatten kernel's per-row offset
+    # and null-pad logic that single-row literals never reach.
+
+    Scenario: arrays_zip empty rows in a column
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result
+        FROM VALUES (array(), array()), (array(), array()) AS t(a, b)
+        """
+      Then query result ordered
+        | result |
+        | []     |
+        | []     |
+
+    Scenario: arrays_zip ragged lengths per row in a column
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result
+        FROM VALUES
+          (array(1,2,3), array('a')),
+          (array(4), array('b','c','d'))
+        AS t(a, b)
+        """
+      Then query result ordered
+        | result                         |
+        | [{1, a}, {2, NULL}, {3, NULL}] |
+        | [{4, b}, {NULL, c}, {NULL, d}] |
+
+    Scenario: arrays_zip empty and non-empty rows in a column
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result
+        FROM VALUES (array(), array(1)), (array(2), array()) AS t(a, b)
+        """
+      Then query result ordered
+        | result      |
+        | [{NULL, 1}] |
+        | [{2, NULL}] |
 
   Rule: Type variety
 

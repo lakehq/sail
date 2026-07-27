@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-execution = { path = "../sail-execution" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-plan = { path = "../sail-plan" }

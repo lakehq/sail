@@ -4,15 +4,26 @@ mod options;
 mod session;
 
 use std::fmt;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
-use sail_server::actor::ActorHandle;
+use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::runtime::RuntimeHandle;
+use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
+use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
+use crate::session_factory::{
+    ServerSessionInfo, ServerSessionJobRunnerFactory, SessionFactory, SessionJobRunnerFactory,
+};
 pub(crate) use crate::session_manager::actor::SessionManagerActor;
 pub(crate) use crate::session_manager::event::SessionManagerEvent;
 pub use crate::session_manager::options::SessionManagerOptions;
+
+pub type ServerSessionFactoryFn =
+    fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
 
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
@@ -57,4 +68,53 @@ impl SessionManager {
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
+}
+
+pub async fn create_session_manager(
+    config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
+    session_factory_fn: ServerSessionFactoryFn,
+    session_timeout: Duration,
+) -> SessionResult<SessionManager> {
+    let system = Arc::new(Mutex::new(ActorSystem::new()));
+    let session_factory = {
+        let config = config.clone();
+        let runtime = runtime.clone();
+        Box::new(move || session_factory_fn(config.clone(), runtime.clone()))
+    };
+    let job_runner_factory = {
+        let config = config.clone();
+        let runtime = runtime.clone();
+        let system = system.clone();
+        Box::new(move || {
+            Box::new(ServerSessionJobRunnerFactory::new(
+                config.clone(),
+                runtime.clone(),
+                system.clone(),
+            )) as Box<dyn SessionJobRunnerFactory>
+        })
+    };
+    let gateway = if matches!(&config.mode, ExecutionMode::Local) {
+        None
+    } else {
+        Some(
+            DriverGateway::try_new(DriverGatewayOptions::new(&config))
+                .await
+                .map_err(|e| {
+                    SessionError::internal(format!("failed to create driver gateway: {e}"))
+                })?,
+        )
+    };
+    let mut options =
+        SessionManagerOptions::new(runtime, system, session_factory, job_runner_factory)
+            .with_session_timeout(session_timeout)
+            .with_options(
+                config
+                    .raw()
+                    .map_err(|e| SessionError::internal(e.to_string()))?,
+            );
+    if let Some(gateway) = gateway {
+        options = options.with_driver_gateway(gateway);
+    }
+    SessionManager::try_new(options)
 }

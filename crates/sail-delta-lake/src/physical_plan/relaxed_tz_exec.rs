@@ -14,16 +14,27 @@ use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::datasource::scan::map_statistics_to_schema;
+use crate::schema::restore_logical_record_batch;
+use crate::spec::ColumnMappingMode;
 
 #[derive(Debug, Clone)]
 pub struct RelaxedTzCastExec {
     input: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
+    column_mapping_mode: ColumnMappingMode,
     properties: Arc<PlanProperties>,
 }
 
 impl RelaxedTzCastExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Self {
+        Self::new_with_column_mapping(input, schema, ColumnMappingMode::None)
+    }
+
+    pub fn new_with_column_mapping(
+        input: Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        column_mapping_mode: ColumnMappingMode,
+    ) -> Self {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
@@ -33,12 +44,17 @@ impl RelaxedTzCastExec {
         Self {
             input,
             schema,
+            column_mapping_mode,
             properties,
         }
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub const fn column_mapping_mode(&self) -> ColumnMappingMode {
+        self.column_mapping_mode
     }
 
     fn aligned_timestamp_columns(&self) -> Vec<String> {
@@ -116,7 +132,11 @@ impl ExecutionPlan for RelaxedTzCastExec {
         let input = children.one().map_err(|_| {
             internal_datafusion_err!("RelaxedTzCastExec must have exactly one child")
         })?;
-        Ok(Arc::new(Self::new(input, Arc::clone(&self.schema))))
+        Ok(Arc::new(Self::new_with_column_mapping(
+            input,
+            Arc::clone(&self.schema),
+            self.column_mapping_mode,
+        )))
     }
 
     fn execute(
@@ -125,10 +145,16 @@ impl ExecutionPlan for RelaxedTzCastExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let schema = Arc::clone(&self.schema);
+        let column_mapping_mode = self.column_mapping_mode;
         let stream = self.input.execute(partition, context)?;
         let stream = stream.map(move |batch| {
             let schema = Arc::clone(&schema);
-            batch.and_then(|batch| cast_record_batch_relaxed_tz(&batch, &schema))
+            batch.and_then(|batch| match column_mapping_mode {
+                ColumnMappingMode::None => cast_record_batch_relaxed_tz(&batch, &schema),
+                ColumnMappingMode::Name | ColumnMappingMode::Id => {
+                    restore_logical_record_batch(&batch, &schema, column_mapping_mode)
+                }
+            })
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(

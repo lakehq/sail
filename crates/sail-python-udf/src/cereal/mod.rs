@@ -1,5 +1,6 @@
 use datafusion::arrow::datatypes::DataType;
 use pyo3::prelude::PyAnyMethods;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
@@ -10,36 +11,34 @@ use crate::error::{PyUdfError, PyUdfResult};
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PySparkVersion {
     V3,
     V4_0,
     V4_1,
-}
-
-impl PySparkVersion {
-    fn is_v4(&self) -> bool {
-        matches!(self, PySparkVersion::V4_0 | PySparkVersion::V4_1)
-    }
+    V4_2,
 }
 
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
-    use pyo3::prelude::PyAnyMethods;
-    use pyo3::types::PyModule;
+    static PYSPARK_VERSION: PyOnceLock<PySparkVersion> = PyOnceLock::new();
 
     Python::attach(|py| {
-        let module = PyModule::import(py, "pyspark")?;
-        let version: String = module.getattr("__version__")?.extract()?;
-        if version.starts_with("3.") {
-            Ok(PySparkVersion::V3)
-        } else if version.starts_with("4.0.") {
-            Ok(PySparkVersion::V4_0)
-        } else if version.starts_with("4.") {
-            Ok(PySparkVersion::V4_1)
-        } else {
-            Err(PyUdfError::invalid(format!(
-                "unsupported PySpark version: {version}"
-            )))
-        }
+        PYSPARK_VERSION
+            .get_or_try_init(py, || {
+                let module = PyModule::import(py, "pyspark")?;
+                let version: String = module.getattr("__version__")?.extract()?;
+                let parts: Vec<_> = version.split('.').collect();
+                match parts.as_slice() {
+                    ["3", ..] => Ok(PySparkVersion::V3),
+                    ["4", "0", ..] => Ok(PySparkVersion::V4_0),
+                    ["4", "1", ..] => Ok(PySparkVersion::V4_1),
+                    ["4", "2", ..] => Ok(PySparkVersion::V4_2),
+                    _ => Err(PyUdfError::invalid(format!(
+                        "unsupported PySpark version: {version}"
+                    ))),
+                }
+            })
+            .copied()
     })
 }
 
@@ -101,6 +100,16 @@ pub(crate) fn write_kwarg(data: &mut Vec<u8>, kwargs: &[Option<String>], index: 
         data.extend(name_bytes);
     } else {
         data.extend(0u8.to_be_bytes()); // positional argument flag
+    }
+}
+
+pub(crate) fn write_conf(data: &mut Vec<u8>, conf: Vec<(String, String)>) {
+    data.extend((conf.len() as i32).to_be_bytes());
+    for (key, value) in conf {
+        data.extend((key.len() as i32).to_be_bytes());
+        data.extend(key.as_bytes());
+        data.extend((value.len() as i32).to_be_bytes());
+        data.extend(value.as_bytes());
     }
 }
 
