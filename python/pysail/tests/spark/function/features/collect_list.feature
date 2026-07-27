@@ -206,10 +206,15 @@ Feature: collect_list / collect_set
 
   Rule: collect_set float equality diverges from Spark
 
-    # Spark's collect_set never treats two NaNs as equal, so duplicate NaNs are all kept.
-    # Sail (DataFusion's distinct array_agg) deduplicates NaN, dropping the repeat -> divergence.
-    @sail-bug
-    Scenario: collect_set keeps duplicate NaN values
+    # collect_set's NaN dedup changed in Spark 4.2 (verified against JVM 3.5.7 / 4.0.1 / 4.1.1 /
+    # 4.2.0):
+    #   * <= 4.1: Spark never treats two NaNs as equal, so duplicate NaNs are all kept
+    #     ([1.0, NaN, NaN]). Sail (DataFusion's distinct array_agg) dedupes NaN -> @sail-bug.
+    #   * 4.2: Spark now dedupes NaN too ([1.0, NaN]) -> Sail matches Spark.
+    # Split into one scenario per behavior. NOTE: currently UNGATED and untagged, so each scenario
+    # fails hard on the version where the other behavior holds — the next commit gates each by
+    # Spark version and restores @sail-bug on the <= 4.1 case (where Sail diverges).
+    Scenario: collect_set keeps duplicate NaN values (Spark <= 4.1)
       When query
         """
         SELECT sort_array(collect_set(v)) AS r FROM VALUES
@@ -219,6 +224,17 @@ Feature: collect_list / collect_set
       Then query result
         | r               |
         | [1.0, NaN, NaN] |
+
+    Scenario: collect_set dedupes duplicate NaN values (Spark 4.2+)
+      When query
+        """
+        SELECT sort_array(collect_set(v)) AS r FROM VALUES
+          (CAST('NaN' AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (1.0D)
+        AS t(v)
+        """
+      Then query result
+        | r          |
+        | [1.0, NaN] |
 
     # Spark's collect_set treats -0.0 and 0.0 as equal and keeps a single 0.0. Sail keeps both
     # -> divergence.
