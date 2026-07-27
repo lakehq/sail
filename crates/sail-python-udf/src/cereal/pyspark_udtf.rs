@@ -9,7 +9,7 @@ use sail_pyarrow::{FromPyArrow, ToPyArrow};
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
-    should_write_config, supports_kwargs, write_kwarg,
+    should_write_config, supports_kwargs, write_conf, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -31,9 +31,20 @@ impl PySparkUdtfPayload {
         let serializer = PyModule::import(py, intern!(py, "pyspark.serializers"))?
             .getattr(intern!(py, "CPickleSerializer"))?
             .call0()?;
-        let tuple = PyModule::import(py, intern!(py, "pyspark.worker"))?
-            .getattr(intern!(py, "read_udtf"))?
-            .call1((serializer, infile, eval_type))?;
+        let worker = PyModule::import(py, intern!(py, "pyspark.worker"))?;
+        let read_udtf = worker.getattr(intern!(py, "read_udtf"))?;
+        let tuple = match get_pyspark_version()? {
+            PySparkVersion::V4_2 => {
+                let runner_conf = worker
+                    .getattr(intern!(py, "RunnerConf"))?
+                    .call1((&infile,))?;
+                let eval_conf = worker.getattr(intern!(py, "EvalConf"))?.call1((&infile,))?;
+                read_udtf.call1((serializer, infile, eval_type, runner_conf, eval_conf))?
+            }
+            PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
+                read_udtf.call1((serializer, infile, eval_type))?
+            }
+        };
         tuple
             .get_item(0)?
             .into_pyobject(py)
@@ -126,12 +137,14 @@ impl PySparkUdtfPayload {
         })
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn build(
         python_version: &str,
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
         input_types: &[DataType],
+        passthrough_columns: usize,
         kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
@@ -142,39 +155,67 @@ impl PySparkUdtfPayload {
 
         data.extend(i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
 
-        if should_write_config(eval_type) {
-            let config = config.to_key_value_pairs();
-            data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
-            for (key, value) in config {
-                data.extend((key.len() as i32).to_be_bytes()); // length of the key
-                data.extend(key.as_bytes());
-                data.extend((value.len() as i32).to_be_bytes()); // length of the value
-                data.extend(value.as_bytes());
+        match pyspark_version {
+            PySparkVersion::V4_2 => {
+                write_conf(&mut data, config.to_key_value_pairs());
+                let mut eval_conf = vec![];
+                if eval_type == spec::PySparkUdfType::ArrowTable {
+                    let argument_types = input_types
+                        .get(passthrough_columns..)
+                        .ok_or_else(|| {
+                            PyUdfError::invalid(format!(
+                                "passthrough columns ({passthrough_columns}) exceed input columns ({})",
+                                input_types.len()
+                            ))
+                        })?;
+                    eval_conf.push((
+                        "input_type".to_string(),
+                        build_input_types_json(argument_types)?,
+                    ))
+                }
+                write_conf(&mut data, eval_conf);
             }
-        }
+            PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
+                if should_write_config(eval_type) {
+                    write_conf(&mut data, config.to_key_value_pairs());
+                }
 
-        // PySpark 4.1+ reads input types for ArrowTable UDTFs.
-        // PySpark 4.0.x does not read input types and would misparse the stream.
-        if matches!(pyspark_version, PySparkVersion::V4_1)
-            && matches!(eval_type, spec::PySparkUdfType::ArrowTable)
-        {
-            let schema_json = build_input_types_json(input_types)?;
-            data.extend((schema_json.len() as i32).to_be_bytes());
-            data.extend(schema_json.as_bytes());
-        }
+                // PySpark 4.1+ reads input types for ArrowTable UDTFs.
+                // PySpark 4.0.x does not read input types and would misparse the stream.
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowTable
+                {
+                    let argument_types = input_types
+                        .get(passthrough_columns..)
+                        .ok_or_else(|| {
+                            PyUdfError::invalid(format!(
+                                "passthrough columns ({passthrough_columns}) exceed input columns ({})",
+                                input_types.len()
+                            ))
+                        })?;
+                    let schema_json = build_input_types_json(argument_types)?;
+                    data.extend((schema_json.len() as i32).to_be_bytes());
+                    data.extend(schema_json.as_bytes());
+                }
 
-        // PySpark 4.1+ reads table argument offsets for ArrowUdtf before the arg offsets.
-        // PySpark 4.0.x does not use the ArrowUdtf eval type.
-        if matches!(pyspark_version, PySparkVersion::V4_1)
-            && matches!(eval_type, spec::PySparkUdfType::ArrowUdtf)
-        {
-            data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
+                // PySpark 4.1+ reads table argument offsets for ArrowUdtf before the arg offsets.
+                // PySpark 4.0.x does not use the ArrowUdtf eval type.
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowUdtf
+                {
+                    data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
+                }
+            }
         }
 
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
-        let allow_kwargs = pyspark_version.is_v4() && supports_kwargs(eval_type);
+        let allow_kwargs = match pyspark_version {
+            PySparkVersion::V4_2 => true,
+            PySparkVersion::V4_0 | PySparkVersion::V4_1 => supports_kwargs(eval_type),
+            PySparkVersion::V3 => false,
+        };
         data.extend(num_args.to_be_bytes()); // number of arguments
         for index in 0..num_args {
             data.extend(index.to_be_bytes()); // argument offset
@@ -183,9 +224,12 @@ impl PySparkUdtfPayload {
             }
         }
 
-        if pyspark_version.is_v4() {
-            data.extend(0i32.to_be_bytes()); // number of partition child indexes
-            data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
+        match pyspark_version {
+            PySparkVersion::V4_0 | PySparkVersion::V4_1 | PySparkVersion::V4_2 => {
+                data.extend(0i32.to_be_bytes()); // number of partition child indexes
+                data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
+            }
+            PySparkVersion::V3 => {}
         }
 
         data.extend((command.len() as i32).to_be_bytes()); // length of the function
@@ -203,9 +247,12 @@ impl PySparkUdtfPayload {
         data.extend((type_string.len() as u32).to_be_bytes());
         data.extend(type_string.as_bytes());
 
-        if pyspark_version.is_v4() {
-            // TODO: support UDTF name
-            data.extend(0u32.to_be_bytes()); // length of UDTF name
+        match pyspark_version {
+            PySparkVersion::V4_0 | PySparkVersion::V4_1 | PySparkVersion::V4_2 => {
+                // TODO: support UDTF name
+                data.extend(0u32.to_be_bytes()); // length of UDTF name
+            }
+            PySparkVersion::V3 => {}
         }
 
         Ok(data)

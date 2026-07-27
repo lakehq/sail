@@ -2,138 +2,6 @@
   "tests": [
     {
       "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_merge_bigint(kll_sketch_agg_bigint(col), kll_sketch_agg_bigint(col)))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_bigint(kll_sketch_merge_bigint(kll_sketch_agg_bigint(col), kll_sketch_agg_bigint(col)))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_double(kll_sketch_agg_double(col))) > 0 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_double(kll_sketch_agg_double(col))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_double(kll_sketch_merge_double(kll_sketch_agg_double(col), kll_sketch_agg_double(col)))) > 0 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_double(kll_sketch_merge_double(kll_sketch_agg_double(col), kll_sketch_agg_double(col)))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_merge_float(kll_sketch_agg_float(col), kll_sketch_agg_float(col)))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(length(kll_sketch_to_string_float(kll_sketch_merge_float(kll_sketch_agg_float(col), kll_sketch_agg_float(col)))) > 0)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT aes_decrypt(unbase64('2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo='), '1234567890abcdef', 'CBC');",
         "result": [
           "Apache Spark"
@@ -262,90 +130,6 @@
       },
       "output": {
         "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT approx_top_k_estimate(approx_top_k_accumulate(expr)) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);",
-        "result": [
-          "[{\"item\":0,\"count\":2},{\"item\":4,\"count\":2},{\"item\":1,\"count\":2},{\"item\":2,\"count\":1},{\"item\":3,\"count\":1}]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "approx_top_k_estimate(approx_top_k_accumulate(expr, 10000), 5)",
-              "nullable": false,
-              "type": {
-                "type": "array",
-                "elementType": {
-                  "type": "struct",
-                  "fields": [
-                    {
-                      "name": "item",
-                      "nullable": true,
-                      "type": "integer",
-                      "metadata": {}
-                    },
-                    {
-                      "name": "count",
-                      "nullable": false,
-                      "type": "long",
-                      "metadata": {}
-                    }
-                  ]
-                },
-                "containsNull": false
-              },
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: approx_top_k_accumulate"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT approx_top_k_estimate(approx_top_k_accumulate(expr), 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' tab(expr);",
-        "result": [
-          "[{\"item\":\"c\",\"count\":4},{\"item\":\"d\",\"count\":2}]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "approx_top_k_estimate(approx_top_k_accumulate(expr, 10000), 2)",
-              "nullable": false,
-              "type": {
-                "type": "array",
-                "elementType": {
-                  "type": "struct",
-                  "fields": [
-                    {
-                      "name": "item",
-                      "nullable": true,
-                      "type": "string",
-                      "metadata": {}
-                    },
-                    {
-                      "name": "count",
-                      "nullable": false,
-                      "type": "long",
-                      "metadata": {}
-                    }
-                  ]
-                },
-                "containsNull": false
-              },
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: approx_top_k_accumulate"
       }
     },
     {
@@ -658,6 +442,28 @@
     },
     {
       "input": {
+        "query": "SELECT current_path();",
+        "result": [
+          "system.builtin,system.session,spark_catalog.default"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_path()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: current_path"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT current_schema();",
         "result": [
           "default"
@@ -702,36 +508,6 @@
     },
     {
       "input": {
-        "query": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));",
-        "result": [
-          "[false]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: from_avro"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));",
-        "result": [
-          "[false]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: from_protobuf"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));",
         "result": [
           "6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210"
@@ -765,50 +541,6 @@
               "name": "hex(aes_encrypt(Spark, 0000111122223333, GCM, DEFAULT, , ))",
               "nullable": true,
               "type": "string",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT hll_sketch_estimate(hll_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
-        "result": [
-          "3"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "hll_sketch_estimate(hll_sketch_agg(col, 12))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);",
-        "result": [
-          "6"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "hll_sketch_estimate(hll_union(hll_sketch_agg(col1, 12), hll_sketch_agg(col2, 12), false))",
-              "nullable": false,
-              "type": "long",
               "metadata": {}
             }
           ]
@@ -928,204 +660,6 @@
     },
     {
       "input": {
-        "query": "SELECT kll_sketch_get_n_bigint(kll_sketch_agg_bigint(col)) FROM VALUES (1), (2), (3), (4), (5) tab(col);",
-        "result": [
-          "5"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "kll_sketch_get_n_bigint(kll_sketch_agg_bigint(col))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_n_double(kll_sketch_agg_double(col)) FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
-        "result": [
-          "5"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "kll_sketch_get_n_double(kll_sketch_agg_double(col))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_n_float(kll_sketch_agg_float(col)) FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
-        "result": [
-          "5"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "kll_sketch_get_n_float(kll_sketch_agg_float(col))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(col), 0.5) > 1 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(col), 0.5) > 1)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_quantile_double(kll_sketch_agg_double(col), 0.5) > 1 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_quantile_double(kll_sketch_agg_double(col), 0.5) > 1)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_quantile_float(kll_sketch_agg_float(col), 0.5) > 1 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_quantile_float(kll_sketch_agg_float(col), 0.5) > 1)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_rank_bigint(kll_sketch_agg_bigint(col), 3) > 0.3 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_rank_bigint(kll_sketch_agg_bigint(col), 3) > 0.3)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_rank_double(kll_sketch_agg_double(col), 3.0) > 0.3 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_rank_double(kll_sketch_agg_double(col), 3.0) > 0.3)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT kll_sketch_get_rank_float(kll_sketch_agg_float(col), 3.0) > 0.3 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "(kll_sketch_get_rank_float(kll_sketch_agg_float(col), 3.0) > 0.3)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT monotonically_increasing_id();",
         "result": [
           "0"
@@ -1214,21 +748,6 @@
     },
     {
       "input": {
-        "query": "SELECT schema_of_avro('{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{\"name\": \"u\", \"type\": [\"int\", \"string\"]}]}', map());",
-        "result": [
-          "STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: schema_of_avro"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT session_user();",
         "result": [
           "mockingjay"
@@ -1269,139 +788,6 @@
       },
       "output": {
         "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);",
-        "result": [
-          "2"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "theta_sketch_estimate(theta_difference(theta_sketch_agg(col1, 12), theta_sketch_agg(col2, 12)))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT theta_sketch_estimate(theta_intersection(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);",
-        "result": [
-          "2"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "theta_sketch_estimate(theta_intersection(theta_sketch_agg(col1, 12), theta_sketch_agg(col2, 12)))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
-        "result": [
-          "3"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "theta_sketch_estimate(theta_sketch_agg(col, 12))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT theta_sketch_estimate(theta_union(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);",
-        "result": [
-          "6"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "theta_sketch_estimate(theta_union(theta_sketch_agg(col1, 12), theta_sketch_agg(col2, 12), 12))",
-              "nullable": false,
-              "type": "long",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);",
-        "result": [
-          "[true]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: to_avro"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT to_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}') IS NULL FROM (SELECT NULL AS s);",
-        "result": [
-          "[true]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: to_avro"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);",
-        "result": [
-          "[true]"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": []
-        }
-      },
-      "output": {
-        "failure": "not implemented: function: to_protobuf"
       }
     },
     {

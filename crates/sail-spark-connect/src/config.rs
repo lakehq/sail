@@ -11,6 +11,8 @@ use crate::spark::config::{
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
     SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED,
+    SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_PREFER_INT_EXTENSION_DTYPE,
+    SPARK_SQL_EXECUTION_PYTHON_UDTF_ARROW_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_PIVOT_MAX_VALUES,
@@ -194,6 +196,11 @@ fn versioned_default_value(key: &str) -> Option<&'static str> {
         SPARK_SQL_ANSI_ENABLED if get_pyspark_major_version().is_some_and(|x| x < 4) => {
             Some("false")
         }
+        SPARK_SQL_EXECUTION_PYTHON_UDTF_ARROW_ENABLED
+            if get_pyspark_major_minor_version().is_some_and(|x| x < (4, 2)) =>
+        {
+            Some("false")
+        }
         _ => None,
     }
 }
@@ -205,6 +212,16 @@ fn get_pyspark_major_version() -> Option<u64> {
         get_pyspark_version()
             .ok()
             .and_then(|version| version.split('.').next()?.parse().ok())
+    })
+}
+
+fn get_pyspark_major_minor_version() -> Option<(u64, u64)> {
+    static PYSPARK_MAJOR_MINOR_VERSION: OnceLock<Option<(u64, u64)>> = OnceLock::new();
+
+    *PYSPARK_MAJOR_MINOR_VERSION.get_or_init(|| {
+        let version = get_pyspark_version().ok()?;
+        let mut parts = version.split('.');
+        Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
     })
 }
 
@@ -375,6 +392,14 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .transpose()?
         {
             output.python_udf_pandas_int_to_decimal_coercion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_PREFER_INT_EXTENSION_DTYPE)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_prefer_int_extension_dtype = value;
         }
 
         if let Some(value) = config

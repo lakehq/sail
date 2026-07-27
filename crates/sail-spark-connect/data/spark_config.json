@@ -1,5 +1,5 @@
 {
-  "sparkVersion": "4.1.1",
+  "sparkVersion": "4.2.0",
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
     {
@@ -167,8 +167,18 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.analyzer.expandTagPassthroughDuplicates",
+      "doc": "When true, Expand tags pass-through child attributes that share a name with a grouping attribute using __is_duplicate metadata, so that name-based resolution against the Expand output does not produce AMBIGUOUS_REFERENCE errors.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.analyzer.failAmbiguousSelfJoin",
       "doc": "When true, fail the Dataset query if it contains ambiguous self-join.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.analyzer.lowerEmptyGroupingSetToGlobalAggregate.enabled",
+      "doc": "When true, a grand-total GROUP BY GROUPING SETS (()) (and the equivalent empty CUBE() / ROLLUP()) is lowered to a global aggregate during analysis, so it returns one row over empty input, matching an aggregation with no GROUP BY clause. When false, falls back to the legacy Expand-based lowering that returns no rows over empty input.",
       "defaultValue": "true"
     },
     {
@@ -252,6 +262,16 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.analyzer.strictDataFrameColumnResolution",
+      "doc": "When true (default), enforce strict resolution of Spark Connect DataFrame columns (UnresolvedAttribute carrying a plan id tag) via plan-id-based resolution. When false, also try name-based resolution as a fallback for tagged attributes.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.analyzer.subqueryAliasAlwaysPropagateMetadataColumns",
+      "doc": "When true, SubqueryAlias always propagates metadata columns from its child. When false, SubqueryAlias only propagates metadata columns if the child is a LeafNode or another SubqueryAlias (legacy behavior).",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.analyzer.unionIsResolvedWhenDuplicatesPerChildResolved",
       "doc": "When true, union should only be resolved once there are no duplicate attributes in each branch.",
       "defaultValue": "true"
@@ -289,6 +309,11 @@
         "version": "3.4.0",
         "comment": "This was an internal configuration. It is not needed anymore since Spark SQL always returns null when getting a map value with a non-existing key. See SPARK-40066 for more details."
       }
+    },
+    {
+      "key": "spark.sql.artifact.cacheStorageLevel",
+      "doc": "Storage level for cached blocks in artifact manager. Valid values are any StorageLevel name (e.g., MEMORY_AND_DISK_SER, DISK_ONLY, MEMORY_ONLY, etc.).",
+      "defaultValue": "MEMORY_AND_DISK_SER"
     },
     {
       "key": "spark.sql.artifact.copyFromLocalToFs.allowDestLocal",
@@ -600,6 +625,31 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.codegen.wholeStage.union.enabled",
+      "doc": "When both this conf and `spark.sql.codegen.wholeStage` are true, UnionExec participates in whole-stage codegen on its non-partitioning-aware path: the parent and all children fuse into a single WholeStageCodegenExec stage.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.codegen.wholeStage.union.maxChildren",
+      "doc": "Maximum number of UnionExec children eligible for whole-stage codegen fusion. Each child is emitted as its own helper method, so this conf bounds class-level costs of the fused stage (total bytecode size, constant pool growth, JIT compilation time) rather than the JVM per-method bytecode limit. Unions with more children fall back to per-child codegen stages. Only effective when `spark.sql.codegen.wholeStage.union.enabled` is true.",
+      "defaultValue": "64"
+    },
+    {
+      "key": "spark.sql.collation.allowInMapKeys",
+      "doc": "Allow for non-UTF8_BINARY collated strings inside of map's keys",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.collation.objectLevel.enabled",
+      "doc": "Object level collations feature is under development and its use should be done under this feature flag. The feature allows setting default collation for all underlying columns within that object, except the ones that were previously created.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.collation.schemaLevel.enabled",
+      "doc": "Schema level collations feature is under development and its use should be done under this feature flag. The feature allows setting default collation for all underlying objects within that schema, except the ones that were previously created.An object with an explicitly set collation will not inherit the collation from the schema.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.columnNameOfCorruptRecord",
       "doc": "The name of internal column for storing raw/un-parsed JSON and CSV records that fail to parse.",
       "defaultValue": "_corrupt_record"
@@ -725,6 +775,11 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.defaultPath",
+      "doc": "Default SQL PATH used when no SET PATH has been issued in the session; this is also the value to which `SET PATH = DEFAULT_PATH` expands. Accepts the full SET PATH grammar; an inner DEFAULT_PATH token resolves to the spark-builtin default ordering. The PATH keyword is not allowed in this conf value. When empty, the spark-builtin default ordering controlled by `spark.sql.functionResolution.sessionOrder` applies. Validated for syntax at set time; redundant entries are tolerated (lookup uses first-match resolution). The interactive SET PATH form still rejects static duplicates as a typo guard.",
+      "defaultValue": ""
+    },
+    {
       "key": "spark.sql.defaultSizeInBytes",
       "doc": "The default table size used in query planning. By default, it is set to Long.MaxValue which is larger than `spark.sql.autoBroadcastJoinThreshold` to be more conservative. That is to say by default the optimizer will not choose to broadcast a table unless it knows for sure its size is small enough.",
       "defaultValue": "9223372036854775807b"
@@ -736,13 +791,18 @@
       "isStatic": true
     },
     {
+      "key": "spark.sql.dropTableOnView.enabled",
+      "doc": "When true, DROP TABLE command will work on VIEW as well.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.enforceTypeCoercionBeforeUnionDeduplication.enabled",
       "doc": "When set to true, we enforce type coercion to run before deduplication of UNION children outputs. Otherwise, order is relative to rule ordering.",
       "defaultValue": "true"
     },
     {
       "key": "spark.sql.error.messageFormat",
-      "doc": "When PRETTY, the error message consists of textual representation of error class, message and query context. The MINIMAL and STANDARD formats are pretty JSON formats where STANDARD includes an additional JSON field `message`. This configuration property influences on error messages of Thrift Server and SQL CLI while running queries.",
+      "doc": "When PRETTY, the error message consists of textual representation of error class, message and query context. Stack traces are only shown for internal errors (SQLSTATE XX***). When DEBUG, the output is the same as PRETTY but stack traces are always included. The MINIMAL and STANDARD formats are pretty JSON formats where STANDARD includes an additional JSON field `message`. This configuration property influences on error messages of Thrift Server and SQL CLI while running queries.",
       "defaultValue": "PRETTY"
     },
     {
@@ -769,7 +829,7 @@
     {
       "key": "spark.sql.execution.arrow.enabled",
       "doc": "(Deprecated since Spark 3.0, please set 'spark.sql.execution.arrow.pyspark.enabled'.)",
-      "defaultValue": "false",
+      "defaultValue": "true",
       "deprecated": {
         "version": "3.0",
         "comment": "Use 'spark.sql.execution.arrow.pyspark.enabled' instead of it."
@@ -828,6 +888,11 @@
       "key": "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
       "doc": "When true, validate the schema of Arrow batches returned by mapInArrow, mapInPandas and DataSource against the expected schema to ensure that they are compatible.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.execution.arrow.pythonUDF.columnarInput.enabled",
+      "doc": "When true, Arrow-based Python UDFs (pandas UDFs) can accept columnar input directly from upstream operators that produce Arrow-backed ColumnarBatch (e.g., DataSource V2 connectors), bypassing the ColumnarToRow and ArrowWriter conversion. This optimization reduces data transfer overhead between the JVM and Python worker processes.",
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.execution.arrow.sparkr.enabled",
@@ -957,7 +1022,7 @@
     {
       "key": "spark.sql.execution.pythonUDF.arrow.enabled",
       "doc": "Enable Arrow optimization in regular Python UDFs. This optimization can only be enabled when the given function takes at least one argument.",
-      "defaultValue": "false"
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.execution.pythonUDF.arrow.legacy.fallbackOnUDT",
@@ -970,9 +1035,14 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype",
+      "doc": "When true, convert integers to Pandas ExtensionDtype (e.g. pandas.Int64Dtype) for Pandas UDF execution. Otherwise, depends on the behavior of pyarrow.Array.to_pandas on each input arrow batch.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.execution.pythonUDTF.arrow.enabled",
       "doc": "Enable Arrow optimization for Python UDTFs.",
-      "defaultValue": "false"
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.execution.rangeExchange.sampleSizePerPartition",
@@ -1038,6 +1108,11 @@
       "doc": "Flag that determines if we should load extensions from the classpath using the SparkSessionExtensionsProvider mechanism. This is a test only flag.",
       "defaultValue": "true",
       "isStatic": true
+    },
+    {
+      "key": "spark.sql.fileSource.insert.enforceNotNull",
+      "doc": "When true, Spark enforces NOT NULL constraints when inserting data into file-based data source tables (e.g., Parquet, ORC, JSON), consistent with the behavior for other data sources and V2 catalog tables. When false (default), null values are silently accepted into NOT NULL columns.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.files.ignoreCorruptFiles",
@@ -1108,9 +1183,19 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.function.protobufExtensions.enabled",
+      "doc": "When true, the from_protobuf and to_protobuf operators will support proto2 extensions when a binary file descriptor set is provided. This property will have no effect for the overloads taking a Java class name instead of a file descriptor set.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.functionResolution.sessionOrder",
+      "doc": "Order of the session (temporary) function namespace when resolving unqualified function names. Valid values: 'first', 'second', 'last'. 'first': session -> builtin -> persistent (SQL temp creation blocked if conflicts with builtin). 'second': builtin -> session -> persistent (default). 'last': builtin -> persistent (current schema) -> session.",
+      "defaultValue": "second"
+    },
+    {
       "key": "spark.sql.geospatial.enabled",
       "doc": "When true, enables geospatial types (GEOGRAPHY/GEOMETRY) and ST functions.",
-      "defaultValue": "false"
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.globalTempDatabase",
@@ -1141,11 +1226,7 @@
     {
       "key": "spark.sql.hive.convertCTAS",
       "doc": "When true, a table created by a Hive CTAS statement (no USING clause) without specifying any storage property will be converted to a data source table, using the data source set by spark.sql.sources.default.",
-      "defaultValue": "false",
-      "deprecated": {
-        "version": "3.1",
-        "comment": "Set 'spark.sql.legacy.createHiveTableByDefault' to false instead."
-      }
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.hive.dropPartitionByName.enabled",
@@ -1244,6 +1325,31 @@
     {
       "key": "spark.sql.inMemoryTableScanStatistics.enable",
       "doc": "When true, enable in-memory table scan accumulators.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.insertIntoReplaceOn.enabled",
+      "doc": "Enable the SQL syntax INSERT INTO ... REPLACE ON (...). The command atomically inserts new rows into a table after deleting all existing rows that match the new rows according to the specified matching condition. The inserted rows are specified by a VALUES expression or the result of a query.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.insertIntoReplaceOnByName.enabled",
+      "doc": "Enable the SQL syntax INSERT INTO ... BY NAME REPLACE ON. Allows using the BY NAME clause with INSERT INTO REPLACE ON.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.insertIntoReplaceUsing.enabled",
+      "doc": "Enable the SQL syntax INSERT INTO ... REPLACE USING (...). The command atomically inserts new rows into a table after deleting all existing rows that match the new rows according to the key columns specified in the statement. The inserted rows are specified by a VALUES expression or the result of a query.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.insertIntoReplaceUsingByName.enabled",
+      "doc": "Enable the SQL syntax INSERT INTO ... BY NAME REPLACE USING (...). Allows using the BY NAME clause with INSERT INTO REPLACE USING.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.insertNestedTypeCoercion.enabled",
+      "doc": "If enabled, allow INSERT INTO WITH SCHEMA EVOLUTION to fill missing nested struct fields with null when the source has fewer nested fields than the target table. Also relaxes by-position column-count enforcement so trailing missing top-level columns are filled with their default value (or null). This is experimental and the semantics may change.",
       "defaultValue": "false"
     },
     {
@@ -1360,6 +1466,11 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction",
+      "doc": "When true (legacy behavior), a SQL UDF parameter alias shadows a parameterless built-in function (current_user, current_date, current_time, current_timestamp, user, session_user, grouping__id) of the same name. When false (the default), the parameterless built-in function takes precedence, matching the documented name resolution rules.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.legacy.allowUntypedScalaUDF",
       "doc": "When set to true, user is allowed to use org.apache.spark.sql.functions. udf(f: AnyRef, dataType: DataType). Otherwise, an exception will be thrown at runtime.",
       "defaultValue": "false"
@@ -1427,6 +1538,11 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.legacy.collationAwareHashFunctions",
+      "doc": "Enables collation aware hashing (legacy behavior) for collated strings in Murmur3Hash and XxHash64 user-facing expressions.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.legacy.compareDateTimestampInTimestamp",
       "doc": "(Removed)",
       "defaultValue": "true",
@@ -1453,6 +1569,11 @@
     {
       "key": "spark.sql.legacy.csv.enableDateTimeParsingFallback",
       "doc": "When true, enable legacy date/time parsing fallback in CSV"
+    },
+    {
+      "key": "spark.sql.legacy.cteDuplicateAttributeNames",
+      "doc": "When true, CTE references sometimes (e.g., self-joins) may incorrectly unify columnnames that differ only in casing (e.g., COLNAME and colname become the same). This isthe legacy behavior. When false, column name casing is preserved correctly.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.legacy.ctePrecedencePolicy",
@@ -1734,6 +1855,11 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.legacy.persistentCatalogFirst",
+      "doc": "When true (legacy), partially qualified function names like 'builtin.func' or 'session.func' resolve to the persistent catalog first. When false (default), the system catalog is prioritized (system.builtin.func or system.session.func).",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.legacy.postgres.datetimeMapping.enabled",
       "doc": "When true, TimestampType maps to TIMESTAMP WITHOUT TIME ZONE in PostgreSQL for writing; otherwise, TIMESTAMP WITH TIME ZONE. When true, TIMESTAMP WITH TIME ZONE can be converted to TimestampNTZType when JDBC read option preferTimestampNTZ is true; otherwise, converted to TimestampType regardless of preferTimestampNTZ.",
       "defaultValue": "false"
@@ -1869,6 +1995,11 @@
       "defaultValue": "4"
     },
     {
+      "key": "spark.sql.listagg.allowDistinctCastWithOrder.enabled",
+      "doc": "When true, LISTAGG(DISTINCT expr) WITHIN GROUP (ORDER BY expr) is allowed on non-string expr when the implicit cast to string preserves equality (e.g., integer, decimal, date). When false, the function argument and ORDER BY expression must have the exact same type, which requires explicit casts.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.mapKeyDedupPolicy",
       "doc": "The policy to deduplicate map keys in builtin function: CreateMap, MapFromArrays, MapFromEntries, StringToMap, MapConcat and TransformKeys. When EXCEPTION, the query fails if duplicated map keys are detected. When LAST_WIN, the map key that is inserted at last takes precedence.",
       "defaultValue": "EXCEPTION"
@@ -1942,6 +2073,11 @@
     {
       "key": "spark.sql.optimizer.avoidCollapseUDFWithExpensiveExpr",
       "doc": "Whether to avoid collapsing projections that would duplicate expensive expressions in UDFs.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizer.avoidDoubleFilterEval",
+      "doc": "When true avoid pushing expensive (UDF, etc.) filters down if it could result indouble evaluation. This was the behaviour prior to 3.X.",
       "defaultValue": "true"
     },
     {
@@ -2079,9 +2215,29 @@
       "defaultValue": "400"
     },
     {
+      "key": "spark.sql.optimizer.mapLookupHashThreshold",
+      "doc": "The minimum number of map entries to attempt hash-based lookup in `element_at` and the `[]` operator. Only applies to foldable map expressions (constants / literals), where the hash index can be built once and reused across all rows. Non-foldable maps always use linear scan to avoid per-row hash-table rebuild overhead. Below this threshold, linear scan is used. For key types that do not support hashing (e.g. arrays, structs, binary), linear scan is always used regardless of map size.",
+      "defaultValue": "1000"
+    },
+    {
       "key": "spark.sql.optimizer.maxIterations",
       "doc": "The max number of iterations the optimizer runs.",
       "defaultValue": "100"
+    },
+    {
+      "key": "spark.sql.optimizer.mergeSubplans.filterPropagation.enabled",
+      "doc": "When set to true, subquery plans that differ only in their filter conditions can be merged by propagating filters up to enclosing non-grouping aggregates.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizer.mergeSubplans.filterPropagation.symmetricFilterPropagation.enabled",
+      "doc": "When set to true, two non-grouping aggregate subplans that both have filter conditions (but with different predicates) can be merged into a single scan using FILTER (WHERE ...) clauses on each aggregate expression. Merging two filtered scans broadens the combined filter to OR(f1, f2), which may reduce IO pruning (e.g. partition or file skipping) compared to the individual filters. Disabled by default; enable once the behaviour has been validated in your workload, particularly on heavily partitioned or file-pruned tables. Has no effect when spark.sql.optimizer.mergeSubplans.filterPropagation.enabled is false.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.optimizer.mergeSubplans.filterPropagation.throughJoin.enabled",
+      "doc": "When set to true, filter attributes can propagate through Join nodes during subplan merging, allowing subplans that differ only in their filter conditions and share a common join to be merged into a single scan. A filter attribute is only propagated through a join when it originates from the non-nullable (preserved) side: the left side of LeftOuter/LeftSemi/LeftAnti, the right side of RightOuter, or either side of Inner/Cross. FullOuter joins are never eligible. Has no effect when spark.sql.optimizer.mergeSubplans.filterPropagation.enabled is false.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.optimizer.metadataOnly",
@@ -2101,6 +2257,11 @@
       "key": "spark.sql.optimizer.nestedSchemaPruning.enabled",
       "doc": "Prune nested fields from a logical relation's output which are unnecessary in satisfying a query. This optimization allows columnar file format readers to avoid reading unnecessary nested column data. Currently Parquet and ORC are the data sources that implement this optimization.",
       "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizer.optimizeExpandRatio",
+      "doc": "Threshold for inserting a pre-aggregation step before the Expand operator produced by RewriteDistinctAggregates. Queries with multiple COUNT(DISTINCT) on different columns are rewritten using an Expand that duplicates each row N times (one per distinct group). When N >= this threshold, a de-duplication aggregate on (grouping keys + all distinct columns) is inserted before the Expand to reduce the amplified data volume. Only applies to pure distinct aggregates without non-distinct aggregates or FILTER clauses. Set to -1 to disable.",
+      "defaultValue": "-1"
     },
     {
       "key": "spark.sql.optimizer.optimizeOneRowRelationSubquery",
@@ -2175,6 +2336,11 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.optimizer.pushDownJoinThroughUnion.enabled",
+      "doc": "When true, pushes down Join through Union when the right side is small enough to broadcast. This can improve performance by allowing each Union branch to directly perform a broadcast join, avoiding materializing the entire Union result.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.optimizer.replaceExceptWithFilter",
       "doc": "When true, the apply function of the rule verifies whether the right node of the except operation is of type Filter or Project followed by Filter. If yes, the rule further verifies 1) Excluding the filter operations from the right (as well as the left node, if any) on the top, whether both the nodes evaluates to a same result. 2) The left and right nodes don't contain any SubqueryExpressions. 3) The output column names of the left node are distinct. If all the conditions are met, the rule will replace the except operation with a Filter by flipping the filter condition(s) of the right node.",
       "defaultValue": "true"
@@ -2216,7 +2382,7 @@
     },
     {
       "key": "spark.sql.optimizer.runtime.rowLevelOperationGroupFilter.enabled",
-      "doc": "Enables runtime group filtering for group-based row-level operations. Data sources that replace groups of data (e.g. files, partitions) may prune entire groups using provided data source filters when planning a row-level operation scan. However, such filtering is limited as not all expressions can be converted into data source filters and some expressions can only be evaluated by Spark (e.g. subqueries). Since rewriting groups is expensive, Spark can execute a query at runtime to find what records match the condition of the row-level operation. The information about matching records will be passed back to the row-level operation scan, allowing data sources to discard groups that don't have to be rewritten.",
+      "doc": "Enables runtime filtering for group-based and delta-based row-level operations. Data sources may prune entire file groups at runtime when planning a row-level operation scan. Planning-time filter pushdown is limited as not all expressions can be converted into data source filters and some expressions can only be evaluated by Spark (e.g. subqueries). Since rewriting groups or scanning unnecessary files is expensive, Spark can execute a lightweight query at runtime to find what records match the condition of the row-level operation. The information about matching records will be passed back to the row-level operation scan, allowing data sources to skip files that don't have to be processed.",
       "defaultValue": "true"
     },
     {
@@ -2461,6 +2627,11 @@
       "defaultValue": "10"
     },
     {
+      "key": "spark.sql.parquet.reader.respectUnknownTypeAnnotation.enabled",
+      "doc": "When enabled, respects the UNKNOWN type annotation in Parquet files during schema inference and infers NullType. When disabled, ignores the UNKNOWN annotation and uses the physical type instead.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.parquet.recordLevelFilter.enabled",
       "doc": "If true, enables Parquet's native record-level filtering using the pushed down filters. This configuration only has an effect when 'spark.sql.parquet.filterPushdown' is enabled and the vectorized reader is not used. You can ensure the vectorized reader is not used by setting 'spark.sql.parquet.enableVectorizedReader' to false.",
       "defaultValue": "false"
@@ -2512,6 +2683,16 @@
     {
       "key": "spark.sql.parser.quotedRegexColumnNames",
       "doc": "When true, quoted Identifiers (using backticks) in SELECT statement are interpreted as regular expressions.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.parser.singleCharacterPipeOperator.enabled",
+      "doc": "When true, the single character pipe token '|' can be used as an alternative to '|>' for SQL pipe operators. When false, only '|>' is recognized as a pipe operator, and '|' is only used for bitwise OR operations. This provides syntax compatibility with other languages like Splunk SPL and Kusto that use '|' for pipe operations.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.path.enabled",
+      "doc": "When true, enables the SQL Standard PATH feature: SET PATH, path-based routine resolution, and CURRENT_PATH(). When false, SET PATH is rejected and resolution uses the default path only.",
       "defaultValue": "false"
     },
     {
@@ -2587,6 +2768,10 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.pyspark.dataSource.profiler",
+      "doc": "Configure the Python Data Source profiler by enabling or disabling it with the option to choose between \"perf\" and \"memory\" types, or unsetting the config disables the profiler. This is disabled by default."
+    },
+    {
       "key": "spark.sql.pyspark.inferNestedDictAsStruct.enabled",
       "doc": "PySpark's SparkSession.createDataFrame infers the nested dict as a map by default. When it set to true, it infers the nested dict as a struct.",
       "defaultValue": "false"
@@ -2610,6 +2795,11 @@
       "key": "spark.sql.pyspark.plotting.max_rows",
       "doc": "The visual limit on plots. If set to 1000 for top-n-based plots (pie, bar, barh), the first 1000 data points will be used for plotting. For sampled-based plots (scatter, area, line), 1000 data points will be randomly sampled.",
       "defaultValue": "1000"
+    },
+    {
+      "key": "spark.sql.pyspark.toJSON.returnDataFrame",
+      "doc": "When true, DataFrame.toJSON in PySpark Classic returns a Dataframe instead of RDD.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.pyspark.udf.profiler",
@@ -2698,7 +2888,12 @@
     },
     {
       "key": "spark.sql.scripting.continueHandlerEnabled",
-      "doc": "EXPERIMENTAL FEATURE/WORK IN PROGRESS: SQL Scripting CONTINUE HANDLER feature is under development and still not working as intended. This feature switch is intended to be used internally for development and testing, not by end users. YOU ARE ADVISED AGAINST USING THIS FEATURE AS ITS NOT FINISHED.",
+      "doc": "SQL Scripting CONTINUE HANDLER feature enables CONTINUE exception handlers which are essential for cursor iteration with NOT FOUND conditions.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.scripting.cursorEnabled",
+      "doc": "SQL Scripting CURSOR feature enables declarative cursors with DECLARE CURSOR, OPEN, FETCH, and CLOSE statements.",
       "defaultValue": "false"
     },
     {
@@ -2739,7 +2934,7 @@
     {
       "key": "spark.sql.session.localRelationSizeLimit",
       "doc": "Limit on how large ChunkedCachedLocalRelation.data can be in bytes.If the limit is exceeded, an exception is thrown.",
-      "defaultValue": "3GB"
+      "defaultValue": "3221225472"
     },
     {
       "key": "spark.sql.session.timeZone",
@@ -2764,12 +2959,17 @@
     {
       "key": "spark.sql.shuffle.orderIndependentChecksum.enableFullRetryOnMismatch",
       "doc": "Whether to retry all tasks of a consumer stage when we detect checksum mismatches with its producer stages.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.shuffle.orderIndependentChecksum.enableQueryLevelRollbackOnMismatch",
+      "doc": "Whether to rollback all the consumer stages from the same query executor when we detect checksum mismatches with its producer stages, including cancel running shuffle map stages and resubmit, clean up all the shuffle data written for available shuffle map stages and abort the running result stages.",
       "defaultValue": "false"
     },
     {
       "key": "spark.sql.shuffle.orderIndependentChecksum.enabled",
       "doc": "Whether to calculate order independent checksum for the shuffle data or not. If enabled, Spark will calculate a checksum that is independent of the input row order for each mapper and returns the checksums from executors to driver. This is different from the checksum computed when spark.shuffle.checksum.enabled is enabled which is sensitive to shuffle data ordering to detect file corruption. While this checksum will be the same even if the shuffle row order changes and it is used to detect whether different task attempts of the same partition produce different output data or not (same set of keyValue pairs). In case the output data has changed across retries, Spark will need to retry all tasks of the consumer stages to avoid correctness issues.",
-      "defaultValue": "false"
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.shuffle.partitions",
@@ -2928,7 +3128,7 @@
     },
     {
       "key": "spark.sql.sources.v2.bucketing.partiallyClusteredDistribution.enabled",
-      "doc": "During a storage-partitioned join, whether to allow input partitions to be partially clustered, when both sides of the join are of KeyGroupedPartitioning. At planning time, Spark will pick the side with less data size based on table statistics, group and replicate them to match the other side. This is an optimization on skew join and can help to reduce data skewness when certain partitions are assigned large amount of data. This config requires both spark.sql.sources.v2.bucketing.enabled and spark.sql.sources.v2.bucketing.pushPartValues.enabled to be enabled",
+      "doc": "During a storage-partitioned join, whether to allow input partitions to be partially clustered, when both sides of the join are of KeyedPartitioning. At planning time, Spark will pick the side with less data size based on table statistics, group and replicate them to match the other side. This is an optimization on skew join and can help to reduce data skewness when certain partitions are assigned large amount of data. This config requires both spark.sql.sources.v2.bucketing.enabled and spark.sql.sources.v2.bucketing.pushPartValues.enabled to be enabled",
       "defaultValue": "false"
     },
     {
@@ -2937,13 +3137,28 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.sources.v2.bucketing.partitionKeyOrdering.enabled",
+      "doc": "When enabled, Spark derives output ordering from the partition key expressions of a V2 data source that reports a KeyedPartitioning but does not report explicit ordering via SupportsReportOrdering. Within a single partition all rows share the same key value, so the data is trivially sorted by those expressions. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.sources.v2.bucketing.preserveKeyOrderingOnCoalesce.enabled",
+      "doc": "When enabled, Spark preserves sort orders over partition key expressions when GroupPartitionsExec coalesces multiple input partitions into one output partition. Because all merged partitions share the same partition key value, sort orders over those key expressions remain valid after the merge. This applies to both key-derived ordering (from SupportsReportOrdering) and ordering derived from spark.sql.sources.v2.bucketing.partitionKeyOrdering.enabled. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.sources.v2.bucketing.preserveOrderingOnCoalesce.enabled",
+      "doc": "When turned on, GroupPartitionsExec will use sorted merge to preserve full ordering (as opposed to the key-derived ordering preserved by spark.sql.sources.v2.bucketing.preserveKeyOrderingOnCoalesce.enabled) when coalescing multiple partitions with the same key. This allows eliminating downstream sorts when data is both partitioned and sorted. When this config is enabled, the effect of spark.sql.sources.v2.bucketing.preserveKeyOrderingOnCoalesce.enabled is fully subsumed: full ordering implies key-derived ordering. However, sorted merge uses more resources (priority queue, comparison overhead) than simple concatenation, especially when coalescing many partitions. When turned off, only key-derived ordering is preserved during coalescing. This config requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.sources.v2.bucketing.pushPartValues.enabled",
-      "doc": "Whether to pushdown common partition values when spark.sql.sources.v2.bucketing.enabled is enabled. When turned on, if both sides of a join are of KeyGroupedPartitioning and if they share compatible partition keys, even if they don't have the exact same partition values, Spark will calculate a superset of partition values and pushdown that info to scan nodes, which will use empty partitions for the missing partition values on either side. This could help to eliminate unnecessary shuffles",
+      "doc": "Whether to pushdown common partition values when spark.sql.sources.v2.bucketing.enabled is enabled. When turned on, if both sides of a join are of KeyedPartitioning and if they share compatible partition keys, even if they don't have the exact same partition values, Spark will calculate a superset of partition values and pushdown that info to group partition nodes, which will use empty partitions for the missing partition values on either side. This could help to eliminate unnecessary shuffles",
       "defaultValue": "true"
     },
     {
       "key": "spark.sql.sources.v2.bucketing.shuffle.enabled",
-      "doc": "During a storage-partitioned join, whether to allow to shuffle only one side. When only one side is KeyGroupedPartitioning, if the conditions are met, spark will only shuffle the other side. This optimization will reduce the amount of data that needs to be shuffle. This config requires spark.sql.sources.v2.bucketing.enabled to be enabled",
+      "doc": "During a storage-partitioned join, whether to allow to shuffle only one side. When only one side is KeyedPartitioning, if the conditions are met, spark will only shuffle the other side. This optimization will reduce the amount of data that needs to be shuffle. This config requires spark.sql.sources.v2.bucketing.enabled to be enabled",
       "defaultValue": "false"
     },
     {
@@ -3022,13 +3237,18 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.streaming.checkUnfinishedRepartitionOnRestart",
+      "doc": "When true, checks if the latest batch is for an unfinished state repartitioning operation, on query restart. If so, it will fail the query and require the repartitioning to be complete before restarting the query.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.streaming.checkpoint.escapedPathCheck.enabled",
       "doc": "Whether to detect a streaming query may pick up an incorrect checkpoint path due to SPARK-26824.",
       "defaultValue": "true"
     },
     {
       "key": "spark.sql.streaming.checkpoint.fileChecksum.enabled",
-      "doc": "When true, checksum would be generated and verified for checkpoint files. This is used to detect file corruption.",
+      "doc": "When true, checksum would be generated and verified for checkpoint files. This is used to detect file corruption. This is only enabled when STATE_STORE_CHECKPOINT_FORMAT_VERSION >= 2",
       "defaultValue": "true"
     },
     {
@@ -3040,6 +3260,11 @@
       "key": "spark.sql.streaming.checkpoint.renamedFileCheck.enabled",
       "doc": "When true, Spark will validate if renamed checkpoint file exists.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.streaming.checkpoint.verifyMetadataExists.enabled",
+      "doc": "When true, validates that the checkpoint metadata file exists when offset or commit logs contain data. This prevents generating a new query ID when checkpoint data already exists, which would cause data duplication in exactly-once sinks.",
+      "defaultValue": "true"
     },
     {
       "key": "spark.sql.streaming.checkpointLocation",
@@ -3140,8 +3365,13 @@
       "doc": "WARN: This config is used internally and is not intended to be user-facing. This config can be removed without support of compatibility in any time. DO NOT USE THIS CONFIG DIRECTLY AND USE THE CONFIG `spark.sql.shuffle.partitions`. The default number of partitions to use when shuffling data for stateful operations. If not specified, this config picks up the value of `spark.sql.shuffle.partitions`. Note: For structured streaming, this configuration cannot be changed between query restarts from the same checkpoint location."
     },
     {
+      "key": "spark.sql.streaming.join.stateFormatV4.enabled",
+      "doc": "When true, enables state format version 4 for stream-stream joins. This config will be removed once V4 is complete.",
+      "defaultValue": "false"
+    },
+    {
       "key": "spark.sql.streaming.join.stateFormatVersion",
-      "doc": "State format version used by streaming join operations in a streaming query. State between versions are tend to be incompatible, so state format version shouldn't be modified after running. Version 3 uses a single state store with virtual column families instead of four stores and is only supported with RocksDB.",
+      "doc": "State format version used by streaming join operations in a streaming query. State between versions are tend to be incompatible, so state format version shouldn't be modified after running. Version 3 uses a single state store with virtual column families instead of four stores and is only supported with RocksDB. NOTE: version 1 is DEPRECATED and should not be explicitly set by users. Version 4 is under development and only available for testing.",
       "defaultValue": "2"
     },
     {
@@ -3190,6 +3420,11 @@
       "defaultValue": "100"
     },
     {
+      "key": "spark.sql.streaming.offsetLog.formatVersion",
+      "doc": "The version of the offset log format. The default value is 1.",
+      "defaultValue": "1"
+    },
+    {
       "key": "spark.sql.streaming.optimizeOneRowPlan.enabled",
       "doc": "When true, enable OptimizeOneRowPlan rule for the case where the child is a streaming Dataset. This is a fallback flag to revert the 'incorrect' behavior, hence this configuration must not be used without understanding in depth. Use this only to quickly recover failure in existing query!",
       "defaultValue": "false"
@@ -3198,6 +3433,16 @@
       "key": "spark.sql.streaming.pollingDelay",
       "doc": "How long to delay polling new data when no data is available",
       "defaultValue": "10ms"
+    },
+    {
+      "key": "spark.sql.streaming.queryEvolution.enableSinkEvolution",
+      "doc": "When true, streaming sinks can be named using the name() API on DataStreamWriter. This enables sink evolution capability where sinks can be changed while maintaining a historical record of all sinks used in the checkpoint.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.streaming.queryEvolution.enableSourceEvolution",
+      "doc": "When true, enforces that all streaming sources must be explicitly named via the .name() API. This enables streaming source evolution, allowing sources to be added, removed, or reordered without losing state.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.streaming.ratioExtraSpaceAllowedInCheckpoint",
@@ -3230,6 +3475,21 @@
       "defaultValue": "1"
     },
     {
+      "key": "spark.sql.streaming.stateStore.autoSnapshotRepair.enabled",
+      "doc": "When true, enables automatic repair of state store snapshot, when a bad snapshot is detected while loading the state store, to prevent the query from failing. Typically, queries will fail when they are unable to load a snapshot, but this helps recover by skipping the bad snapshot and uses the change files.NOTE: For RocksDB state store, changelog checkpointing must be enabled",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.autoSnapshotRepair.maxChangeFileReplay",
+      "doc": "When autoSnapshotRepair is enabled, this specifies the maximum number of change files allowed to be replayed to rebuild state due to bad snapshots.",
+      "defaultValue": "500"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.autoSnapshotRepair.numFailuresBeforeActivating",
+      "doc": "When autoSnapshotRepair is enabled, it will wait for the specified number of snapshot load failures, before it attempts to repair.",
+      "defaultValue": "1"
+    },
+    {
       "key": "spark.sql.streaming.stateStore.checkpointFormatVersion",
       "doc": "The version of the approach of doing state store checkpoint",
       "defaultValue": "1"
@@ -3255,9 +3515,24 @@
       "defaultValue": "unsaferow"
     },
     {
+      "key": "spark.sql.streaming.stateStore.fileChecksumThreadPoolSize",
+      "doc": "Number of threads used to read/write files and their corresponding checksum files concurrently. Set to 0 to disable the thread pool and run operations sequentially on the calling thread. WARNING: Reducing below the default value of 4 may have performance impact.",
+      "defaultValue": "4"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.forceSnapshotUploadOnLag",
+      "doc": "When enabled, state stores with lagging snapshot uploads will automatically trigger a snapshot on the next commit. Requires spark.sql.streaming.stateStore.coordinatorReportSnapshotUploadLag to be true.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.streaming.stateStore.formatValidation.enabled",
       "doc": "When true, check if the data from state store is valid or not when running streaming queries. This can happen if the state store format has been changed. Note, the feature is only effective in the build-in HDFS state store provider now.",
       "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.maintenanceForceShutdownTimeout",
+      "doc": "Timeout in seconds to wait for tasks to respond to cancellation after force shutdown is initiated. This applies after the graceful shutdown timeout has been exceeded.",
+      "defaultValue": "60000ms"
     },
     {
       "key": "spark.sql.streaming.stateStore.maintenanceInterval",
@@ -3323,6 +3598,21 @@
       "key": "spark.sql.streaming.stateStore.rocksdb.formatVersion",
       "doc": "Set the RocksDB format version. This will be stored in the checkpoint when starting a streaming query. The checkpoint will use this RocksDB format version in the entire lifetime of the query.",
       "defaultValue": "5"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.rocksdb.mergeOperatorVersion",
+      "doc": "Set the RocksDB merge operator version. This will be stored in the checkpoint when starting a streaming query. The checkpoint will use this merge operator version for the entire lifetime of the query.",
+      "defaultValue": "2"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.rowChecksum.enabled",
+      "doc": "When true, checksum would be generated and verified for each state store row. This is used to detect row level corruption. Note: This configuration cannot be changed between query restarts from the same checkpoint location.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.streaming.stateStore.rowChecksum.readVerificationRatio",
+      "doc": "When specified, Spark will do row checksum verification for every specified number of rows read from state store. The check is to ensure the row read from state store is not corrupt. Default is 0, which means no verification during read but we will still do verification when loading from checkpoint location.Example, if you set to 1, it will do the check for every row read from the state store.If set to 10, it will do the check for every 10th row read from the state store.",
+      "defaultValue": "0"
     },
     {
       "key": "spark.sql.streaming.stateStore.skipNullsForStreamStreamJoins.enabled",
@@ -3419,6 +3709,11 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.streaming.validateEventTimeWatermarkColumn",
+      "doc": "When true, check that eventTime in withWatermark is a top-level column.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.streaming.verifyCheckpointDirectoryEmptyOnStart",
       "doc": "When true, verifies that the checkpoint directory (offsets, state, commits) is empty when first starting a streaming query. This prevents prevents sharing checkpoint directories between different queries.",
       "defaultValue": "true"
@@ -3431,6 +3726,11 @@
     {
       "key": "spark.sql.subexpressionElimination.enabled",
       "doc": "When true, common subexpressions will be eliminated.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.subexpressionElimination.filterExec.enabled",
+      "doc": "When true (and subexpression elimination is enabled), FilterExec whole-stage codegen eliminates common subexpressions shared across its predicates. When false, FilterExec falls back to the predicate codegen that loads input columns lazily and short-circuits, avoiding eager materialization of all predicate-referenced columns on every row. Only affects FilterExec; subexpression elimination elsewhere is unaffected.",
       "defaultValue": "true"
     },
     {
@@ -3462,6 +3762,11 @@
     {
       "key": "spark.sql.thriftserver.scheduler.pool",
       "doc": "Set a Fair Scheduler pool for a JDBC client session."
+    },
+    {
+      "key": "spark.sql.thriftserver.shuffleDependency.fileCleanup.enabled",
+      "doc": "When enabled, shuffle files will be cleaned up at the end of Thrift server SQL executions.",
+      "defaultValue": "false"
     },
     {
       "key": "spark.sql.thriftserver.ui.retainedSessions",
@@ -3507,6 +3812,21 @@
       "key": "spark.sql.tvf.allowMultipleTableArguments.enabled",
       "doc": "When true, allows multiple table arguments for table-valued functions, receiving the cartesian product of all the rows of these tables.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.types.framework.enabled",
+      "doc": "When true, use the Types Framework for supported types (currently TimeType). The framework centralizes type-specific operations in Ops classes instead of scattered pattern matching. When false, use legacy scattered implementation.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.udt.allowCreatingUDTFromString",
+      "doc": "When true, Spark loads and instantiates the UserDefinedType class named in a schema string (for example the schema stored in Parquet/ORC file metadata) while inferring or parsing a schema. Because the class name is taken from the data being read, a crafted file can make Spark load an arbitrary class from the classpath. Set this to false to block loading UDT classes by name, optionally allowing specific classes via 'spark.sql.udt.allowedDynamicUDTClasses'.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.udt.allowedDynamicUDTClasses",
+      "doc": "When 'spark.sql.udt.allowCreatingUDTFromString' is false, UserDefinedType classes listed here (by fully qualified class name) may still be loaded and instantiated from a schema string. Has no effect when UDT loading is enabled.",
+      "defaultValue": ""
     },
     {
       "key": "spark.sql.ui.explainMode",
@@ -3570,6 +3890,11 @@
       "defaultValue": "300"
     },
     {
+      "key": "spark.sql.variant.validateUnicodeInJsonParsing",
+      "doc": "When true, parsing variant from JSON rejects strings that contain unpaired UTF-16 surrogate code units (such as a lone high surrogate like \\uD835), which are invalid per RFC 8259 section 7. When false, restores the legacy permissive behavior in which the unpaired surrogate is silently replaced by the Unicode replacement character during UTF-8 encoding, causing data corruption that diverges from strict JSON parsers.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.variant.writeShredding.enabled",
       "doc": "When true, the Parquet writer is allowed to write shredded variant. ",
       "defaultValue": "true"
@@ -3586,6 +3911,26 @@
       "isStatic": true
     },
     {
+      "key": "spark.sql.window.segmentTree.blockSize",
+      "doc": "Block size, in rows, for the block-chunked segment tree used by moving window frames. Each leaf of the tree aggregates this many consecutive rows. Smaller values reduce per-partition memory and speed up tree build for small partitions, but make the tree deeper and increase query cost for wide frames. Larger values amortize build cost and shrink the tree but increase the per-block prefix/suffix scan cost within a block. The default is tuned for partitions on the order of tens of thousands to millions of rows.",
+      "defaultValue": "65536"
+    },
+    {
+      "key": "spark.sql.window.segmentTree.enabled",
+      "doc": "Use block-chunked segment tree for moving aggregate window frames whose functions are all DeclarativeAggregate without FILTER/DISTINCT.",
+      "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.window.segmentTree.fanout",
+      "doc": "Fanout of internal nodes for the block-chunked segment tree.",
+      "defaultValue": "16"
+    },
+    {
+      "key": "spark.sql.window.segmentTree.minPartitionRows",
+      "doc": "Minimum partition row count to activate the segment-tree moving frame. Partitions smaller than this fall back to the default sliding implementation.",
+      "defaultValue": "64"
+    },
+    {
       "key": "spark.sql.windowExec.buffer.in.memory.threshold",
       "doc": "Threshold for number of rows guaranteed to be held in memory by the window operator",
       "defaultValue": "4096"
@@ -3599,6 +3944,11 @@
       "key": "spark.sql.windowExec.buffer.spill.threshold",
       "doc": "Threshold for number of rows to be spilled by window operator",
       "defaultValue": "2147483647"
+    },
+    {
+      "key": "spark.sql.xml.variant.respectInferSchema",
+      "doc": "Kill switch for the SPARK-56554 fix. When true (default), the XML to Variant parser honors the 'inferSchema' option: if 'inferSchema' is false, primitive leaf values (text and attributes) are preserved as strings inside the Variant instead of being inferred as boolean, long, or decimal. Set this conf to false to restore the pre-SPARK-56554 behavior of always inferring types regardless of the 'inferSchema' option.",
+      "defaultValue": "true"
     }
   ]
 }
