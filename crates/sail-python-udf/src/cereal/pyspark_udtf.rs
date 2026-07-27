@@ -182,8 +182,8 @@ impl PySparkUdtfPayload {
 
                 // PySpark 4.1+ reads input types for ArrowTable UDTFs.
                 // PySpark 4.0.x does not read input types and would misparse the stream.
-                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowTable) =
-                    (pyspark_version, eval_type)
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowTable
                 {
                     let argument_types = input_types
                         .get(passthrough_columns..)
@@ -200,8 +200,8 @@ impl PySparkUdtfPayload {
 
                 // PySpark 4.1+ reads table argument offsets for ArrowUdtf before the arg offsets.
                 // PySpark 4.0.x does not use the ArrowUdtf eval type.
-                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowUdtf) =
-                    (pyspark_version, eval_type)
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowUdtf
                 {
                     data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
                 }

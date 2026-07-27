@@ -12,7 +12,7 @@ index 3fac57dbe5d..38584fb1b8c 100644
    try {
      // We use reflection here to handle the case where users remove the
 diff --git a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
-index 10504684be9..5280ac1db06 100644
+index 10504684be9..f3bb4a8f15e 100644
 --- a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
 +++ b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
 @@ -91,15 +91,54 @@ trait SparkTestSuite

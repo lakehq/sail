@@ -1,5 +1,5 @@
 diff --git a/python/packaging/classic/setup.py b/python/packaging/classic/setup.py
-index 122c4ca6d4b..11f2de1d53e 100755
+index 122c4ca6d4b..8a17c9d3878 100755
 --- a/python/packaging/classic/setup.py
 +++ b/python/packaging/classic/setup.py
 @@ -214,6 +214,9 @@ try:
@@ -85,7 +85,7 @@ index 122c4ca6d4b..11f2de1d53e 100755
          ],
          include_package_data=True,
          package_dir={
-@@ -346,10 +409,29 @@ try:
+@@ -346,10 +408,29 @@ try:
                  "start-history-server.sh",
                  "stop-history-server.sh",
              ],
@@ -117,7 +117,7 @@ index 122c4ca6d4b..11f2de1d53e 100755
          scripts=scripts,
          license="Apache-2.0",
 diff --git a/python/pyspark/sql/connect/client/core.py b/python/pyspark/sql/connect/client/core.py
-index b2e30a8325d..570e2d0bf09 100644
+index b2e30a8325d..b99eed69504 100644
 --- a/python/pyspark/sql/connect/client/core.py
 +++ b/python/pyspark/sql/connect/client/core.py
 @@ -352,6 +352,10 @@ class DefaultChannelBuilder(ChannelBuilder):

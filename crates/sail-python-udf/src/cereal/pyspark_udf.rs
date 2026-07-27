@@ -85,8 +85,8 @@ impl PySparkUdfPayload {
 
                 // PySpark 4.1 reads input types for ArrowBatched UDFs.
                 // PySpark 4.0.x does not read input types and would misparse the stream.
-                if let (PySparkVersion::V4_1, spec::PySparkUdfType::ArrowBatched) =
-                    (pyspark_version, eval_type)
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowBatched
                 {
                     let schema_json = build_input_types_json(input_types)?;
                     data.extend((schema_json.len() as i32).to_be_bytes());

@@ -545,9 +545,11 @@ else:
         ).column(0)
 
 
-def _record_batch(args: Sequence[pa.Array], num_rows: int | None = None) -> pa.RecordBatch:
+def _record_batch(
+    args: Sequence[pa.Array], *, names: Sequence[str] | None = None, num_rows: int | None = None
+) -> pa.RecordBatch:
     if args:
-        return pa.RecordBatch.from_arrays(args, [f"_{i}" for i in range(len(args))])
+        return pa.RecordBatch.from_arrays(args, names if names is not None else [f"_{i}" for i in range(len(args))])
     # Older supported PyArrow releases do not expose a row-count argument on
     # RecordBatch.from_arrays. Select away a temporary column instead.
     return pa.RecordBatch.from_arrays([pa.nulls(num_rows or 0)], ["_"]).select([])
@@ -699,7 +701,7 @@ class PySparkArrowBatchUdf:
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if PYSPARK_VERSION >= (4, 2):
-            return _output_column(self._udf(None, iter([_record_batch(args, num_rows)])))
+            return _output_column(self._udf(None, iter([_record_batch(args, num_rows=num_rows)])))
         if self._use_legacy:
             return self._call_legacy(args, num_rows)
         return self._call_arrow(args, num_rows)
@@ -804,7 +806,7 @@ class PySparkScalarArrowUdf:
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if PYSPARK_VERSION >= (4, 2):
-            return _output_column(self._udf(None, iter([_record_batch(args, num_rows)])))
+            return _output_column(self._udf(None, iter([_record_batch(args, num_rows=num_rows)])))
         inputs = tuple(args)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         if isinstance(output, pa.ChunkedArray):
@@ -833,7 +835,7 @@ class PySparkScalarArrowIterUdf:
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if PYSPARK_VERSION >= (4, 2):
-            return _output_column(self._udf(None, iter([_record_batch(args, num_rows)])))
+            return _output_column(self._udf(None, iter([_record_batch(args, num_rows=num_rows)])))
         inputs = tuple(args)
         [(output, output_type)] = list(self._udf(None, [inputs]))
         if isinstance(output, pa.ChunkedArray):
@@ -1186,11 +1188,11 @@ class PySparkArrowTableUdf:
             # lateral-join passthrough columns, so remove those before invoking
             # the worker and retain the original stream for result expansion.
             def strip_passthrough(batch: pa.RecordBatch) -> pa.RecordBatch:
-                arrays = batch.columns[self._passthrough_columns :]
-                names = batch.schema.names[self._passthrough_columns :]
-                if arrays:
-                    return pa.RecordBatch.from_arrays(arrays, names)
-                return pa.RecordBatch.from_arrays([pa.nulls(batch.num_rows)], ["_"]).select([])
+                return _record_batch(
+                    batch.columns[self._passthrough_columns :],
+                    names=batch.schema.names[self._passthrough_columns :],
+                    num_rows=batch.num_rows,
+                )
 
             batches_for_mapper = (strip_passthrough(batch) for batch in batches_for_mapper)
         outputs = self._udf(None, batches_for_mapper)

@@ -11,7 +11,7 @@ use crate::error::{PyUdfError, PyUdfResult};
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PySparkVersion {
     V3,
     V4_0,
