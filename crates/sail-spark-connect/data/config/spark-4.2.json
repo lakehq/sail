@@ -3,6 +3,235 @@
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
     {
+      "key": "spark.connect.authenticate.token",
+      "doc": "A pre-shared token that will be used to authenticate clients. This secret must be passed as a bearer token by for clients to connect.",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.copyFromLocalToFs.allowDestLocal",
+      "doc": "\n(Deprecated since Spark 4.0, please set\n'spark.sql.artifact.copyFromLocalToFs.allowDestLocal' instead.\n",
+      "defaultValue": "false",
+      "isStatic": true,
+      "deprecated": {
+        "version": "4.0",
+        "comment": "Use 'spark.sql.artifact.copyFromLocalToFs.allowDestLocal' instead."
+      }
+    },
+    {
+      "key": "spark.connect.execute.manager.abandonedTombstonesSize",
+      "doc": "Maximum size of the cache of abandoned executions.",
+      "defaultValue": "10000",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.manager.detachedTimeout",
+      "doc": "Timeout after which executions without an attached RPC will be removed.",
+      "defaultValue": "5m",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.manager.maintenanceInterval",
+      "doc": "Interval at which execution manager will search for abandoned executions to remove.",
+      "defaultValue": "30s",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.reattachable.enabled",
+      "doc": "Enables reattachable execution on the server. If disabled and a client requests it, non-reattachable execution will follow and should run until query completion. This will work, unless there is a GRPC stream error, in which case the client will discover that execution is not reattachable when trying to reattach fails.",
+      "defaultValue": "true",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.reattachable.observerRetryBufferSize",
+      "doc": "For reattachable execution, the total size of responses that were already sent to be kept in the buffer in case of connection error and client needing to retry. Set 0 to don't buffer anything (even last sent response).With any value greater than 0, the last sent response will always be buffered.",
+      "defaultValue": "10m",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.reattachable.senderMaxStreamDuration",
+      "doc": "For reattachable execution, after this amount of time the response stream will be automatically completed and client needs to send a new ReattachExecute RPC to continue. Set to 0 for unlimited.",
+      "defaultValue": "2m",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.execute.reattachable.senderMaxStreamSize",
+      "doc": "For reattachable execution, after total responses size exceeds this value, the response stream will be automatically completed and client needs to send a new ReattachExecute RPC to continue. Set to 0 for unlimited.",
+      "defaultValue": "1g",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.extensions.command.classes",
+      "doc": "\nComma separated list of classes that implement the trait\norg.apache.spark.sql.connect.plugin.CommandPlugin to support custom\nCommand types in proto.\n",
+      "defaultValue": "",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.extensions.expression.classes",
+      "doc": "\nComma separated list of classes that implement the trait\norg.apache.spark.sql.connect.plugin.ExpressionPlugin to support custom\nExpression types in proto.\n",
+      "defaultValue": "",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.extensions.getStatus.classes",
+      "doc": "\nComma separated list of classes that implement the trait\norg.apache.spark.sql.connect.plugin.GetStatusPlugin to support custom\nGetStatus extensions in proto.\n",
+      "defaultValue": "",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.extensions.relation.classes",
+      "doc": "\nComma separated list of classes that implement the trait\norg.apache.spark.sql.connect.plugin.RelationPlugin to support custom\nRelation types in proto.\n",
+      "defaultValue": "",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.arrow.maxBatchSize",
+      "doc": "When using Apache Arrow, limit the maximum size of one arrow batch, in bytes unless otherwise specified, that can be sent from server side to client side. Currently, we conservatively use 70% of it because the size is not accurate but estimated.",
+      "defaultValue": "134217728b",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.binding.address",
+      "doc": "The address for Spark Connect server to bind.",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.binding.port",
+      "doc": "The port for Spark Connect server to bind.",
+      "defaultValue": "15002",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.interceptor.classes",
+      "doc": "Comma separated list of class names that must implement the io.grpc.ServerInterceptor interface.",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.marshallerRecursionLimit",
+      "doc": "\nSets the recursion limit to grpc protobuf messages.\n",
+      "defaultValue": "1024",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.maxInboundMessageSize",
+      "doc": "Sets the maximum inbound message in bytes size for the gRPC requests.Requests with a larger payload will fail.",
+      "defaultValue": "134217728b",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.maxMetadataSize",
+      "doc": "Sets the maximum size of metadata fields. For instance, it restricts metadata fields in `ErrorInfo`.",
+      "defaultValue": "1024b",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.grpc.port.maxRetries",
+      "doc": "The max port retry attempts for the gRPC server binding.By default, it's set to 0, and the server will fail fast in case of port conflicts.",
+      "defaultValue": "0",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.jvmStacktrace.maxSize",
+      "doc": "\nSets the maximum stack trace size to display when\n`spark.sql.pyspark.jvmStacktrace.enabled` is true.\n",
+      "defaultValue": "1024",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.maxPlanSize",
+      "doc": "The maximum size of a (decompressed) proto plan that can be executed in Spark Connect. If the size of the plan exceeds this limit, an error will be thrown. The size is in bytes.",
+      "defaultValue": "536870912b",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.ml.backend.classes",
+      "doc": "\nComma separated list of classes that implement the trait\norg.apache.spark.sql.connect.plugin.MLBackendPlugin to replace the\nspecified Spark ML operators with a backend-specific implementation.\n",
+      "defaultValue": ""
+    },
+    {
+      "key": "spark.connect.progress.reportInterval",
+      "doc": "The interval at which the progress of a query is reported to the client. If the value is set to a negative value the progress reports will be disabled.",
+      "defaultValue": "2s"
+    },
+    {
+      "key": "spark.connect.session.connectML.mlCache.memoryControl.enabled",
+      "doc": "Enables ML cache memory control, it includes offloading model to disk, limiting model size, and limiting per-session ML cache size.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.connect.session.connectML.mlCache.memoryControl.maxInMemorySize",
+      "doc": "Maximum in-memory size of the MLCache per session. The cache will offload the least recently used models to Spark driver local disk if the size exceeds this limit. The size is in bytes.",
+      "defaultValue": "268435456b"
+    },
+    {
+      "key": "spark.connect.session.connectML.mlCache.memoryControl.maxModelSize",
+      "doc": "Maximum size of a single SparkML model. The size is in bytes.",
+      "defaultValue": "1g"
+    },
+    {
+      "key": "spark.connect.session.connectML.mlCache.memoryControl.maxStorageSize",
+      "doc": "Maximum total size (including in-memory and offloaded data) of the ml cache. The size is in bytes.",
+      "defaultValue": "10g"
+    },
+    {
+      "key": "spark.connect.session.connectML.mlCache.memoryControl.offloadingTimeout",
+      "doc": "Timeout of model offloading in MLCache. Models will be offloaded to Spark driver local disk if they are not used for this amount of time. The timeout is in minutes.",
+      "defaultValue": "900000ms"
+    },
+    {
+      "key": "spark.connect.session.inactiveOperations.cacheExpiration",
+      "doc": "Expiration time for inactive operation IDs cache in Spark Connect Session. Operations are cached after completion for a period of time to detect duplicates. The time should allow for network late arrivals, at least several minutes.",
+      "defaultValue": "1800000ms",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.session.manager.closedSessionsTombstonesSize",
+      "doc": "Maximum size of the cache of sessions after which sessions that did not receive any requests will be removed.",
+      "defaultValue": "1000",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.session.manager.defaultSessionTimeout",
+      "doc": "Timeout after which sessions without any new incoming RPC will be removed. Setting it to -1 indicates that sessions should be kept forever.",
+      "defaultValue": "60m",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.session.manager.maintenanceInterval",
+      "doc": "Interval at which session manager will search for expired sessions to remove.",
+      "defaultValue": "30s",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.session.planCache.alwaysCacheDataSourceReadsEnabled",
+      "doc": "When true, always cache the translation of Read.DataSource plans in the plan cache. This massively improves the performance of queries that reuse the same Read.DataSource within the same session, since these translations/analyses are usually quite costly.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.connect.session.planCache.enabled",
+      "doc": "When true, the cache of resolved logical plans is enabled if 'spark.connect.session.planCache.maxSize' is greater than zero. When false, the cache is disabled even if 'spark.connect.session.planCache.maxSize' is greater than zero. The caching is best-effort and not guaranteed.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.connect.session.planCache.maxSize",
+      "doc": "Sets the maximum number of cached resolved logical plans in Spark Connect Session. If set to a value less or equal than zero will disable the plan cache.",
+      "defaultValue": "32",
+      "isStatic": true
+    },
+    {
+      "key": "spark.connect.session.planCompression.defaultAlgorithm",
+      "doc": "The default algorithm of proto plan compression.",
+      "defaultValue": "ZSTD"
+    },
+    {
+      "key": "spark.connect.session.planCompression.threshold",
+      "doc": "The threshold in bytes for the size of proto plan to be compressed. If the size of proto plan is smaller than this threshold, it will not be compressed. Set to -1 to disable plan compression.",
+      "defaultValue": "10485760"
+    },
+    {
+      "key": "spark.connect.session.resultChunking.maxChunkSize",
+      "doc": "The max size of a chunk in responses for a result batch. Result chunking is enabled if this config is set to a value greater than 0 and if the client allows it in ResultChunkingOptions. Otherwise, for example if set to -1, this feature is disabled. While spark.connect.grpc.arrow.maxBatchSize determines the max size of a result batch, maxChunkSize defines the max size of each individual chunk that is part of the batch that will be sent in a response. This allows the server to send large rows to clients. The size is in bytes.",
+      "defaultValue": "120795955b"
+    },
+    {
       "key": "spark.python.sql.dataFrameDebugging.enabled",
       "doc": "Enable the DataFrame debugging. This feature is enabled by default, but has a non-trivial performance overhead because of the stack trace collection.",
       "defaultValue": "true",
@@ -660,9 +889,31 @@
       "fallback": "spark.memory.offHeap.enabled"
     },
     {
+      "key": "spark.sql.connect.enrichError.enabled",
+      "doc": "\nWhen true, it enriches errors with full exception messages and optionally server-side\nstacktrace on the client side via an additional RPC.\n",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.connect.serverStacktrace.enabled",
+      "doc": "When true, it sets the server-side stacktrace in the user-facing Spark exception.",
+      "defaultValue": "true"
+    },
+    {
       "key": "spark.sql.connect.shuffleDependency.fileCleanup.enabled",
       "doc": "When enabled, shuffle files will be cleaned up at the end of Spark Connect SQL executions.",
       "fallback": "spark.sql.shuffleDependency.fileCleanup.enabled"
+    },
+    {
+      "key": "spark.sql.connect.ui.retainedSessions",
+      "doc": "The number of client sessions kept in the Spark Connect UI history.",
+      "defaultValue": "200",
+      "isStatic": true
+    },
+    {
+      "key": "spark.sql.connect.ui.retainedStatements",
+      "doc": "The number of statements kept in the Spark Connect UI history.",
+      "defaultValue": "200",
+      "isStatic": true
     },
     {
       "key": "spark.sql.constraintPropagation.enabled",

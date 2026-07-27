@@ -13,7 +13,11 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use crate::spec::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+use crate::spec::{
+    ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
+};
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
@@ -115,8 +119,14 @@ fn column_mapping_physical_name(field: &StructField) -> Option<&str> {
         })
 }
 
+fn strip_parquet_field_id_metadata(metadata: &mut HashMap<String, MetadataValue>) {
+    metadata.remove(PARQUET_FIELD_ID_META_KEY);
+    metadata.remove(ColumnMetadataKey::ParquetFieldId.as_ref());
+}
+
 fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, MetadataValue> {
     let mut merged = prev.metadata().clone();
+    strip_parquet_field_id_metadata(&mut merged);
 
     for (key, value) in new.metadata() {
         let is_column_mapping_key =
@@ -125,7 +135,9 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
         if is_column_mapping_key {
             // Preserve existing column mapping metadata if present; otherwise add it.
             merged.entry(key.clone()).or_insert_with(|| value.clone());
-        } else {
+        } else if key != PARQUET_FIELD_ID_META_KEY
+            && key != ColumnMetadataKey::ParquetFieldId.as_ref()
+        {
             // For non-column-mapping keys, prefer the value from the new field (to keep user-added metadata).
             merged.insert(key.clone(), value.clone());
         }
@@ -137,7 +149,9 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
 fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     let next_id = counter.fetch_add(1, Ordering::Relaxed);
     let physical_name = format!("col-{}", uuid::Uuid::new_v4());
-    let annotated = field.clone().add_metadata([
+    let mut annotated = field.clone();
+    strip_parquet_field_id_metadata(&mut annotated.metadata);
+    let annotated = annotated.add_metadata([
         ("delta.columnMapping.id", MetadataValue::Number(next_id)),
         (
             "delta.columnMapping.physicalName",
@@ -268,4 +282,42 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
 fn empty_struct_type() -> StructType {
     StructType::try_new(Vec::<StructField>::new())
         .unwrap_or_else(|_| unreachable!("empty struct type is always valid"))
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn annotation_strips_transient_parquet_field_ids() {
+        let rate = StructField::new("rate", DataType::LONG, true).with_metadata([
+            (PARQUET_FIELD_ID_META_KEY, MetadataValue::Number(30)),
+            (
+                ColumnMetadataKey::ParquetFieldId.as_ref(),
+                MetadataValue::Number(30),
+            ),
+        ]);
+        let nested = StructType::try_new(vec![rate]).expect("nested schema");
+        let details = StructField::new("details", DataType::Struct(Box::new(nested)), true)
+            .with_metadata([(PARQUET_FIELD_ID_META_KEY, MetadataValue::Number(20))]);
+        let schema = StructType::try_new(vec![details]).expect("schema");
+
+        let annotated = annotate_schema_for_column_mapping(&schema);
+        let details = annotated.field("details").expect("details field");
+        let DataType::Struct(nested) = details.data_type() else {
+            panic!("details must be a struct");
+        };
+        let rate = nested.field("rate").expect("rate field");
+
+        for field in [details, rate] {
+            assert!(!field.metadata().contains_key(PARQUET_FIELD_ID_META_KEY));
+            assert!(
+                !field
+                    .metadata()
+                    .contains_key(ColumnMetadataKey::ParquetFieldId.as_ref())
+            );
+            assert!(field.metadata().contains_key("delta.columnMapping.id"));
+        }
+    }
 }
