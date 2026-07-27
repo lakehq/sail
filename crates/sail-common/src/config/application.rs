@@ -585,6 +585,8 @@ pub enum CatalogType {
     Glue {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,

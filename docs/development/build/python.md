@@ -128,7 +128,7 @@ The `PYSPARK_SUBMIT_ARGS` environment variable is no longer needed since Spark 4
 
 ```bash
 env SPARK_REMOTE="local" \
-  hatch run test.spark-4.1.1:pytest --pyargs pysail
+  hatch run test.spark-4.2.0:pytest --pyargs pysail
 ```
 
 ::: info

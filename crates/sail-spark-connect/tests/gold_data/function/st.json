@@ -10,7 +10,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')))",
+              "name": "hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'), NDR))",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -32,7 +32,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')))",
+              "name": "hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 0), NDR))",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -42,6 +42,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 'XDR'));",
+        "result": [
+          "00000000013FF00000000000004000000000000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 0), XDR))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: one value expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: StGeomFromWKB { signature: Signature { type_signature: Exact([Binary]), volatility: Immutable, parameter_names: None } } }, args: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None)] }), Literal(Utf8(\"XDR\"), None)]"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326)));",
+        "result": [
+          "0101000000000000000000F03F0000000000000040"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326), NDR))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None), Literal(Int32(4326), None)]"
       }
     },
     {
@@ -98,7 +142,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'))",
+              "name": "st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 0))",
               "nullable": false,
               "type": "integer",
               "metadata": {}
@@ -108,6 +152,28 @@
       },
       "output": {
         "failure": "not implemented: function: st_srid"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326));",
+        "result": [
+          "4326"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 4326))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None), Literal(Int32(4326), None)]"
       }
     },
     {
@@ -142,7 +208,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "st_srid(st_setsrid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 3857))",
+              "name": "st_srid(st_setsrid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040', 0), 3857))",
               "nullable": false,
               "type": "integer",
               "metadata": {}

@@ -11,6 +11,7 @@ AWS Glue catalog can be configured using the following options:
 
 - `type` (required): The string `glue`.
 - `name` (required): The name of the catalog.
+- `catalog_id` (optional): The AWS Glue Data Catalog ID. If not set, AWS uses the account ID associated with the active credentials.
 - `region` (optional): The AWS region (e.g., `us-east-1`). If not set, it uses the default region from the AWS credential provider chain.
 - `endpoint_url` (optional): The custom endpoint URL.
 
@@ -22,6 +23,9 @@ You can use any AWS credential provider supported by the AWS SDK to authenticate
 
 ```bash
 export SAIL_CATALOG__LIST='[{type="glue", name="sail", region="us-west-2"}]'
+
+# Using an explicit AWS Glue Data Catalog ID
+export SAIL_CATALOG__LIST='[{type="glue", name="sail", catalog_id="123456789012", region="us-west-2"}]'
 
 # Using a custom endpoint (e.g., LocalStack)
 export SAIL_CATALOG__LIST='[{type="glue", name="sail", region="us-east-1", endpoint_url="http://localhost:4566"}]'

@@ -1,7 +1,7 @@
 Feature: date_format with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
-  # through a column. All expected values were captured on Spark JVM 4.1.1.
+  # through a column. All expected values were captured on Spark JVM 4.x.
 
   Rule: date_format — the argument is resolved per row, not taken from the first row
 
@@ -15,8 +15,7 @@ Feature: date_format with an argument coming from a column
         | result |
         | 2016   |
 
-    # Sail applies the first row's value to every row: Sail returns ['2016', '2016'].
-    @column_args @sail-bug
+    @column_args
     Scenario: date_format takes argument 2 from a column containing NULL
       When query
         """
@@ -27,7 +26,7 @@ Feature: date_format with an argument coming from a column
         | 2016   |
         | NULL   |
 
-    @column_args @sail-bug
+    @column_args
     Scenario: date_format takes argument 2 from a column holding two different values
       When query
         """

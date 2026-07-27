@@ -19,16 +19,21 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Schema as ArrowSchema};
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result};
+use datafusion::common::{Column, DFSchema, Result, ScalarValue};
+use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::simplify::SimplifyContextBuilder;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::expressions::Column as PhysicalColumn;
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::{
+    Column as PhysicalColumn, Literal as PhysicalLiteral,
+};
 
-use crate::spec::DeltaResult;
+use crate::schema::arrow_field_physical_name;
+use crate::spec::{ColumnMappingMode, DeltaResult};
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
@@ -111,6 +116,122 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
     is_applicable
 }
 
+/// Rewrite column references in a parquet pushdown predicate from logical names to the
+/// physical names used in the data files of column-mapped tables. Nested struct field
+/// accesses (`get_field`) are rewritten as well, using the column mapping metadata carried
+/// by the logical schema. Partition columns are exposed to the file scan as virtual columns
+/// under their logical names and are left untouched.
+pub fn rewrite_predicate_for_column_mapping(
+    expr: Arc<dyn PhysicalExpr>,
+    logical_schema: &ArrowSchema,
+    mode: ColumnMappingMode,
+    partition_cols: &[String],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    if mode == ColumnMappingMode::None {
+        return Ok(expr);
+    }
+    Ok(rewrite_expr_for_column_mapping(expr, logical_schema, mode, partition_cols)?.0)
+}
+
+/// Recursively rewrite an expression, returning the rewritten expression along with the
+/// logical schema field it resolves to (when the expression is a column or a chain of
+/// struct field accesses rooted at a column).
+fn rewrite_expr_for_column_mapping(
+    expr: Arc<dyn PhysicalExpr>,
+    logical_schema: &ArrowSchema,
+    mode: ColumnMappingMode,
+    partition_cols: &[String],
+) -> Result<(Arc<dyn PhysicalExpr>, Option<FieldRef>)> {
+    if let Some(column) = expr.downcast_ref::<PhysicalColumn>() {
+        if partition_cols.iter().any(|col| col == column.name()) {
+            return Ok((expr, None));
+        }
+        let Some((_, field)) = logical_schema.fields().find(column.name()) else {
+            return Ok((expr, None));
+        };
+        let physical_name = arrow_field_physical_name(field, mode);
+        let rewritten: Arc<dyn PhysicalExpr> = if physical_name == column.name() {
+            Arc::clone(&expr)
+        } else {
+            // Column mapping changes names, not file order, so the logical index remains valid.
+            Arc::new(PhysicalColumn::new(physical_name, column.index()))
+        };
+        return Ok((rewritten, Some(Arc::clone(field))));
+    }
+
+    if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() {
+        let children = expr.children();
+        let Some((source_expr, path_exprs)) = children.split_first() else {
+            return Ok((expr, None));
+        };
+        let (new_source, source_field) = rewrite_expr_for_column_mapping(
+            Arc::clone(source_expr),
+            logical_schema,
+            mode,
+            partition_cols,
+        )?;
+        let mut current_field = source_field;
+        // Rewriters preserve the original Arc when unchanged, making pointer identity sufficient.
+        let mut changed = !Arc::ptr_eq(&new_source, source_expr);
+        let mut new_children = Vec::with_capacity(children.len());
+        new_children.push(new_source);
+
+        for path_expr in path_exprs {
+            let field_name = path_expr
+                .downcast_ref::<PhysicalLiteral>()
+                .and_then(|lit| lit.value().try_as_str().flatten());
+            let child_field = match (&current_field, field_name) {
+                (Some(source_field), Some(name)) => match source_field.data_type() {
+                    ArrowDataType::Struct(children) => {
+                        children.iter().find(|f| f.name() == name).cloned()
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let rewritten_path = child_field.as_ref().and_then(|child| {
+                let physical_name = arrow_field_physical_name(child, mode);
+                (physical_name != child.name().as_str()).then(|| {
+                    Arc::new(PhysicalLiteral::new(ScalarValue::Utf8(Some(
+                        physical_name.to_string(),
+                    )))) as Arc<dyn PhysicalExpr>
+                })
+            });
+            changed |= rewritten_path.is_some();
+            new_children.push(rewritten_path.unwrap_or_else(|| Arc::clone(path_expr)));
+            current_field = child_field;
+        }
+
+        if changed {
+            let rewritten = Arc::clone(&expr).with_new_children(new_children)?;
+            return Ok((rewritten, current_field));
+        }
+        return Ok((expr, current_field));
+    }
+
+    let children = expr.children();
+    if children.is_empty() {
+        return Ok((expr, None));
+    }
+    let mut new_children = Vec::with_capacity(children.len());
+    let mut changed = false;
+    for child in children {
+        let (new_child, _) = rewrite_expr_for_column_mapping(
+            Arc::clone(child),
+            logical_schema,
+            mode,
+            partition_cols,
+        )?;
+        changed |= !Arc::ptr_eq(&new_child, child);
+        new_children.push(new_child);
+    }
+    if changed {
+        Ok((Arc::clone(&expr).with_new_children(new_children)?, None))
+    } else {
+        Ok((expr, None))
+    }
+}
+
 /// Extract column names referenced by a `PhysicalExpr`.
 pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
     let mut columns = HashSet::<String>::new();
@@ -148,6 +269,81 @@ impl PredicateProperties {
             .iter()
             .all(|col| self.partition_columns.contains(col));
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::common::config::ConfigOptions;
+    use datafusion::physical_expr::expressions::{
+        Column as PhysicalColumn, Literal as PhysicalLiteral,
+    };
+
+    use super::*;
+
+    fn mapped_field(name: &str, physical_name: &str, data_type: ArrowDataType) -> FieldRef {
+        Arc::new(
+            datafusion::arrow::datatypes::Field::new(name, data_type, true).with_metadata(
+                HashMap::from([(
+                    "delta.columnMapping.physicalName".to_string(),
+                    physical_name.to_string(),
+                )]),
+            ),
+        )
+    }
+
+    #[test]
+    fn rewrites_every_segment_of_flattened_get_field_path() -> Result<()> {
+        let inner = mapped_field("inner", "col-inner", ArrowDataType::Int64);
+        let outer = mapped_field(
+            "outer",
+            "col-outer",
+            ArrowDataType::Struct(vec![inner].into()),
+        );
+        let root = mapped_field(
+            "root",
+            "col-root",
+            ArrowDataType::Struct(vec![outer].into()),
+        );
+        let schema = ArrowSchema::new(vec![root]);
+        let args: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(PhysicalColumn::new("root", 0)),
+            Arc::new(PhysicalLiteral::new(ScalarValue::Utf8(Some(
+                "outer".to_string(),
+            )))),
+            Arc::new(PhysicalLiteral::new(ScalarValue::Utf8(Some(
+                "inner".to_string(),
+            )))),
+        ];
+        let expr = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion::functions::core::get_field(),
+            args,
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let rewritten =
+            rewrite_predicate_for_column_mapping(expr, &schema, ColumnMappingMode::Name, &[])?;
+        let children = rewritten.children();
+
+        let root = children[0]
+            .downcast_ref::<PhysicalColumn>()
+            .expect("root column");
+        assert_eq!(root.name(), "col-root");
+        let path = children[1..]
+            .iter()
+            .map(|child| {
+                child
+                    .downcast_ref::<PhysicalLiteral>()
+                    .and_then(|literal| literal.value().try_as_str().flatten())
+                    .expect("literal path")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(path, ["col-outer", "col-inner"]);
         Ok(())
     }
 }
