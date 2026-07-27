@@ -1,4 +1,20 @@
+@product @sail-only
 Feature: product returns the multiplicative product of all non-null input values
+
+  # NOTE: Spark SQL does NOT currently recognise `product` as a routine —
+  # `SELECT product(...)` raises `UNRESOLVED_ROUTINE` on JVM Spark; the function
+  # is exposed ONLY through the DataFrame API (`pyspark.sql.functions.product`).
+  # Sail, however, registers `product` as a SQL aggregate and window function,
+  # so this whole feature is tagged `@sail-only` (skipped on JVM Spark).
+  #
+  # The DataFrame-API equivalent of these scenarios lives in the sibling file
+  # `python/pysail/tests/spark/function/test_product.py`, which runs against both
+  # Sail and JVM Spark.
+  #
+  # When Spark SQL eventually enables `product` as a routine, remove the
+  # `@sail-only` tag from this feature AND delete `test_product.py`.
+  #
+  # Expected values validated against Spark JVM 4.1.
 
   Rule: product multiplies non-null values
 
@@ -107,3 +123,260 @@ Feature: product returns the multiplicative product of all non-null input values
         | a | 10.0 |
         | b | NULL |
         | c | 12.0 |
+
+  Rule: Edge cases validated against Spark JVM
+
+    Scenario: product returns a single value unchanged as a double
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (5) AS t(v)
+        """
+      Then query result
+        | result |
+        | 5.0    |
+
+    Scenario: product returns zero when any value is zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (2), (0), (3) AS t(v)
+        """
+      Then query result
+        | result |
+        | 0.0    |
+
+    Scenario: product multiplies negative values with the correct sign
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (-2), (3), (-4) AS t(v)
+        """
+      Then query result
+        | result |
+        | 24.0   |
+
+    Scenario: product overflows to Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (1e200D), (1e200D) AS t(v)
+        """
+      Then query result
+        | result   |
+        | Infinity |
+
+    Scenario: product propagates NaN
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('nan')), (2.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    Scenario: product returns NaN for Infinity times zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('inf')), (0.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    # @sail-bug: Sail renders large doubles in scientific notation as `1e18`,
+    # while Spark renders `1.0E18` (missing `.0` mantissa, lowercase `e`).
+    # This is a general float-to-string formatting gap, not specific to product.
+    @sail-bug
+    Scenario: product accepts bigint input and returns a double
+      When query
+        """
+        SELECT product(CAST(v AS BIGINT)) AS result FROM VALUES (1000000), (1000000), (1000000) AS t(v)
+        """
+      Then query result
+        | result |
+        | 1.0E18 |
+
+    Scenario: product accepts decimal input
+      When query
+        """
+        SELECT product(CAST(v AS DECIMAL(10, 2))) AS result FROM VALUES (1), (2), (3) AS t(v)
+        """
+      Then query result
+        | result |
+        | 6.0    |
+
+    Scenario: product accepts numeric strings via implicit cast
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES ('2'), ('3') AS t(v)
+        """
+      Then query result
+        | result |
+        | 6.0    |
+
+  Rule: Infinity propagation and sign
+
+    Scenario: product keeps a lone positive Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('inf')) AS t(v)
+        """
+      Then query result
+        | result   |
+        | Infinity |
+
+    Scenario: product keeps a lone negative Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('-inf')) AS t(v)
+        """
+      Then query result
+        | result    |
+        | -Infinity |
+
+    Scenario: product multiplies positive and negative Infinity to negative Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('inf')), (double('-inf')) AS t(v)
+        """
+      Then query result
+        | result    |
+        | -Infinity |
+
+    Scenario: product multiplies two negative Infinities to positive Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('-inf')), (double('-inf')) AS t(v)
+        """
+      Then query result
+        | result   |
+        | Infinity |
+
+    Scenario: product multiplies Infinity by a negative number to negative Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('inf')), (-2.0D) AS t(v)
+        """
+      Then query result
+        | result    |
+        | -Infinity |
+
+    Scenario: product returns NaN for negative Infinity times zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('-inf')), (0.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    Scenario: product keeps Infinity when NULL values are skipped
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('inf')), (CAST(NULL AS DOUBLE)) AS t(v)
+        """
+      Then query result
+        | result   |
+        | Infinity |
+
+  Rule: NaN propagation
+
+    Scenario: product keeps a lone NaN
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('nan')) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    Scenario: product returns NaN for NaN times Infinity
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('nan')), (double('inf')) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    Scenario: product keeps NaN when NULL values are skipped
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (double('nan')), (CAST(NULL AS DOUBLE)) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+  Rule: Signed zero, underflow and identity
+
+    Scenario: product preserves negative zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (CAST('-0.0' AS DOUBLE)) AS t(v)
+        """
+      Then query result
+        | result |
+        | -0.0   |
+
+    Scenario: product produces negative zero from a negative value times zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (-2.0D), (0.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | -0.0   |
+
+    Scenario: product underflows to zero
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (1e-300D), (1e-300D) AS t(v)
+        """
+      Then query result
+        | result |
+        | 0.0    |
+
+    Scenario: product multiplies a tiny and a huge value back to one
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (1e-200D), (1e200D) AS t(v)
+        """
+      Then query result
+        | result |
+        | 1.0    |
+
+    Scenario: product multiplies ones to one
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (1.0D), (1.0D), (1.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | 1.0    |
+
+    Scenario: product multiplies fractions
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (0.5D), (0.5D), (0.5D) AS t(v)
+        """
+      Then query result
+        | result |
+        | 0.125  |
+
+    Scenario: product returns the lone non-null value when a NULL precedes it
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (CAST(NULL AS INT)), (7) AS t(v)
+        """
+      Then query result
+        | result |
+        | 7.0    |
+
+  Rule: Input type validation
+
+    # Spark rejects boolean input with DATATYPE_MISMATCH (product requires DOUBLE);
+    # Sail rejects it from `coerce_types` with an unsupported-type error.
+    Scenario: product rejects boolean input
+      When query
+        """
+        SELECT product(v) AS result FROM VALUES (true), (false) AS t(v)
+        """
+      Then query error expects a numeric type
