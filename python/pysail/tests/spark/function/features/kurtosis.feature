@@ -141,9 +141,119 @@ Feature: kurtosis returns the kurtosis of the values in a group
 
     # Spark rejects boolean input with DATATYPE_MISMATCH; Sail rejects it from
     # `coerce_types` with an unsupported-type error. The regex matches both.
-    Scenario: kurtosis rejects boolean input
+    # BOOLEAN is not implicitly castable to DOUBLE, so the rejection is an
+    # analysis-time type check that is NOT gated by spark.sql.ansi.enabled:
+    # Spark rejects in BOTH modes (validated against Spark JVM 4.2), and Sail
+    # matches by rejecting unconditionally. The pair guards against anyone making
+    # the coercion ANSI-conditional.
+    Scenario: kurtosis rejects boolean input in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT kurtosis(v) AS result FROM VALUES (true), (false), (true) AS t(v)
         """
       Then query error (DATATYPE_MISMATCH|numeric type)
+
+    Scenario: kurtosis rejects boolean input in non-ANSI mode
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT kurtosis(v) AS result FROM VALUES (true), (false), (true) AS t(v)
+        """
+      Then query error (DATATYPE_MISMATCH|numeric type)
+
+  Rule: kurtosis with special float values
+
+    # Any NaN in the group propagates to a NaN result: m2 is NaN (not zero), so
+    # this is not the divide-by-zero NULL branch. Validated against Spark JVM 4.2.
+    Scenario: kurtosis with a NaN value is NaN
+      When query
+        """
+        SELECT kurtosis(v) AS result FROM VALUES (1.0D), (2.0D), (double('nan')) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    # An infinite value makes the central moments non-finite; Inf/Inf yields NaN.
+    Scenario: kurtosis with an infinite value is NaN
+      When query
+        """
+        SELECT kurtosis(v) AS result FROM VALUES (1.0D), (2.0D), (double('inf')) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    # Values are individually finite but the higher-order moments overflow double
+    # to Infinity, so the result is NaN rather than a finite number.
+    Scenario: kurtosis overflows to NaN for very large magnitudes
+      When query
+        """
+        SELECT kurtosis(v) AS result
+        FROM VALUES (1.0E150D), (2.0E150D), (3.0E150D), (4.0E150D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+    # -0.0 and 0.0 compare equal, so the group has zero variance (m2 = 0) and
+    # kurtosis is NULL — not NaN — under the default (non-legacy) config.
+    Scenario: kurtosis of negative and positive zero is NULL
+      When query
+        """
+        SELECT kurtosis(v) AS result FROM VALUES (CAST('-0.0' AS DOUBLE)), (0.0D), (0.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: kurtosis over float inputs and with modifiers
+
+    Scenario: kurtosis over float (32-bit) values
+      When query
+        """
+        SELECT round(kurtosis(CAST(v AS FLOAT)), 10) AS result
+        FROM VALUES (1), (2), (3), (100) AS t(v)
+        """
+      Then query result
+        | result        |
+        | -0.6674067136 |
+
+    Scenario: kurtosis with DISTINCT deduplicates before aggregating
+      When query
+        """
+        SELECT round(kurtosis(DISTINCT v), 10) AS result
+        FROM VALUES (1.0D), (1.0D), (2.0D), (3.0D), (100.0D) AS t(v)
+        """
+      Then query result
+        | result        |
+        | -0.6674067136 |
+
+    Scenario: kurtosis with a FILTER clause aggregates only matching rows
+      When query
+        """
+        SELECT round(kurtosis(v) FILTER (WHERE v < 50), 10) AS result
+        FROM VALUES (1.0D), (2.0D), (3.0D), (100.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | -1.5   |
+
+  Rule: kurtosis under legacy statistical aggregate mode
+
+    # Under spark.sql.legacy.statisticalAggregate=true, the divide-by-zero branch
+    # (m2 == 0: all values identical, or a single value) returns NaN instead of
+    # NULL (`divideByZeroEvalResult = if nullOnDivideByZero NULL else NaN`). Sail
+    # registers the config but ignores its effect and always returns NULL, so this
+    # is a real divergence — validated against Spark JVM 4.2.
+    @sail-bug
+    Scenario: kurtosis of identical values is NaN in legacy mode
+      Given config spark.sql.legacy.statisticalAggregate = true
+      When query
+        """
+        SELECT kurtosis(v) AS result FROM VALUES (2.0D), (2.0D), (2.0D) AS t(v)
+        """
+      Then query result
+        | result |
+        | NaN    |
