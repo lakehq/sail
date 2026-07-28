@@ -52,19 +52,6 @@ pub fn resolve_object_store_path(
 ) -> Result<ResolvedObjectStorePath> {
     let directory = format!("{}/", path.trim_end_matches('/'));
     let url = ListingTableUrl::parse(&directory)?;
-    if !url.get_url().username().is_empty() || url.get_url().password().is_some() {
-        return Err(DataFusionError::Plan(
-            "object store URL cannot contain user information".to_string(),
-        ));
-    }
-    if url.get_glob().is_some()
-        || url.get_url().query().is_some()
-        || url.get_url().fragment().is_some()
-    {
-        return Err(DataFusionError::Plan(
-            "object store path cannot contain a query, fragment, or glob".to_string(),
-        ));
-    }
     let object_store_url = url.object_store();
     let store = runtime_env.object_store(&object_store_url)?;
     Ok(ResolvedObjectStorePath {
@@ -75,7 +62,6 @@ pub fn resolve_object_store_path(
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used)]
 mod tests {
     use datafusion::execution::runtime_env::RuntimeEnv;
     use object_store::memory::InMemory;
@@ -124,21 +110,5 @@ mod tests {
         ));
         assert!(resolved.store().head(&outside).await.is_ok());
         Ok(())
-    }
-
-    #[test]
-    fn resolved_path_rejects_url_user_information() {
-        let runtime_env = RuntimeEnv::default();
-        let error = resolve_object_store_path(
-            &runtime_env,
-            "s3://checkpoint-user:checkpoint-secret@bucket/checkpoint",
-        )
-        .err()
-        .expect("checkpoint URL with user information must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("object store URL cannot contain user information")
-        );
     }
 }

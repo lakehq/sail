@@ -12,7 +12,6 @@ use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -149,10 +148,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 prefix.clone(),
                 Arc::clone(&storage_schema),
             )?);
-            let commit_input: Arc<dyn ExecutionPlan> =
-                Arc::new(CoalescePartitionsExec::new(writer));
             Arc::new(RemoteCheckpointCommitExec::new(
-                commit_input,
+                writer,
                 node.relation_id().to_string(),
                 object_store_url,
                 prefix,
@@ -661,8 +658,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checkpoint_command_plans_writer_coalesce_and_commit() -> datafusion_common::Result<()>
-    {
+    async fn checkpoint_command_optimizer_coalesces_writer_before_commit()
+    -> datafusion_common::Result<()> {
         let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
             "memory:///checkpoint".to_string(),
         )));

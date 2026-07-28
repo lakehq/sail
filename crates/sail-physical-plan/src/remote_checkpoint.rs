@@ -157,8 +157,8 @@ impl DataSource for CheckpointDataSource {
             .map(|source| self.map_source(source))
     }
 
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.source.create_sibling_state()
+    fn create_sibling_state(&self, config: &ConfigOptions) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.source.create_sibling_state(config)
     }
 
     fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
