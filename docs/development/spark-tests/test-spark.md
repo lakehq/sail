@@ -19,7 +19,7 @@ Before running Spark tests, you need to install the [patched PySpark package](./
 
 ```bash
 hatch run test-spark.spark-4.2.0:install-pyspark
-hatch run test-spark.spark-3.5.7:install-pyspark
+hatch run test-spark.spark-3.5.9:install-pyspark
 ```
 
 You can choose to run any or all of the commands above, depending on whether you have built the patched PySpark package for the corresponding Spark version.
@@ -86,16 +86,16 @@ The steps above start the server in the `default` Hatch environment.
 There are a few PySpark UDF tests that would fail in this setup, since they import testing UDFs available only in the **patched** PySpark library (installed in the `test-spark` Hatch environment).
 There are also a few data-dependent tests that would fail, since the data files in the `python/test_support` directory are only available in the **patched** PySpark library.
 
-Moreover, when the server is started in the `default` environment which has the PySpark 4.2.0 library installed, the tests for PySpark 3.5.7 does not work.
+Moreover, when the server is started in the `default` environment which has the PySpark 4.2.0 library installed, the tests for PySpark 3.5.9 do not work.
 
 To use the same PySpark library for both the server and the tests, run the server and the tests in the same `test-spark` environment.
 
 ```bash
-hatch run test-spark.spark-3.5.7:scripts/spark-tests/run-server.sh
+hatch run test-spark.spark-3.5.9:scripts/spark-tests/run-server.sh
 ```
 
 ```bash
-hatch run test-spark.spark-3.5.7:scripts/spark-tests/run-tests.sh
+hatch run test-spark.spark-3.5.9:scripts/spark-tests/run-tests.sh
 ```
 
 However, running the server outside the `default` environment [pollutes the build cache](../recipes/reducing-build-time.md), so you may notice that the server takes longer to build and start.

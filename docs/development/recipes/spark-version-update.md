@@ -31,7 +31,7 @@ In the project root directory, run a command like the following for each support
 
 ```bash
 env SPARK_LOCAL_IP=127.0.0.1 \
-  hatch run test.spark-3.5.7:scripts/spark-config/generate.py \
+  hatch run test.spark-3.5.9:scripts/spark-config/generate.py \
   -o crates/sail-spark-connect/data/config/spark-3.5.json
 ```
 
@@ -56,35 +56,35 @@ Update the parity test patch whenever changing a Spark version in the `test-spar
 
 We build patched PySpark packages to run parity tests for the supported Spark major versions.
 
-First, update the patch file. Here are example steps for updating from Spark `3.5.6` to `3.5.7`.
+First, update the patch file. Here are example steps for updating from Spark `3.5.8` to `3.5.9`.
 
-1. Create a branch `patch-v3.5.6` from the `v3.5.6` tag.
-2. Run `git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.6.patch` to apply the current patch. Commit the changes.
-3. Create another branch `patch-v3.5.7` from the `v3.5.7` tag.
-4. Merge branch `patch-v3.5.6` into branch `patch-v3.5.7` and resolve any merge conflicts.
-5. Run `git -C opt/spark diff -p v3.5.7 patch-v3.5.7 > scripts/spark-tests/spark-3.5.7.patch` to generate the new patch.
-6. Remove the old patch `scripts/spark-tests/spark-3.5.6.patch`.
+1. Create a branch `patch-v3.5.8` from the `v3.5.8` tag.
+2. Run `git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.8.patch` to apply the current patch. Commit the changes.
+3. Create another branch `patch-v3.5.9` from the `v3.5.9` tag.
+4. Merge branch `patch-v3.5.8` into branch `patch-v3.5.9` and resolve any merge conflicts.
+5. Run `git -C opt/spark diff -p v3.5.9 patch-v3.5.9 > scripts/spark-tests/spark-3.5.9.patch` to generate the new patch.
+6. Remove the old patch `scripts/spark-tests/spark-3.5.8.patch`.
 
 The patch must include all PySpark tests in the built package. Make sure the patched `setup.py` includes all test subpackages in the corresponding Spark version.
 
 The following command verifies that the patched PySpark package can be built successfully for the new Spark version. Note that the command may take a long time to run. For example, in GitHub Actions, it takes about 30 minutes.
 
 ```bash
-env SPARK_VERSION=3.5.7 scripts/spark-tests/build-pyspark.sh
+env SPARK_VERSION=3.5.9 scripts/spark-tests/build-pyspark.sh
 ```
 
 ### Gold Data
 
 Update the gold data patch whenever changing the Spark version used by `scripts/spark-gold-data/bootstrap.sh`.
 
-First, update the patch file. Here are example steps for updating from Spark `3.5.6` to `3.5.7`.
+First, update the patch file. Here are example steps for updating from Spark `3.5.8` to `3.5.9`.
 
-1. Create a branch `gold-patch-v3.5.6` from the `v3.5.6` tag.
-2. Run `git -C opt/spark apply ../../scripts/spark-gold-data/spark-3.5.6.patch` to apply the current patch. Commit the changes.
-3. Create another branch `gold-patch-v3.5.7` from the `v3.5.7` tag.
-4. Merge branch `gold-patch-v3.5.6` into branch `gold-patch-v3.5.7` and resolve any merge conflicts.
-5. Run `git -C opt/spark diff -p v3.5.7 gold-patch-v3.5.7 > scripts/spark-gold-data/spark-3.5.7.patch` to generate the new patch.
-6. Remove the old patch `scripts/spark-gold-data/spark-3.5.6.patch`.
+1. Create a branch `gold-patch-v3.5.8` from the `v3.5.8` tag.
+2. Run `git -C opt/spark apply ../../scripts/spark-gold-data/spark-3.5.8.patch` to apply the current patch. Commit the changes.
+3. Create another branch `gold-patch-v3.5.9` from the `v3.5.9` tag.
+4. Merge branch `gold-patch-v3.5.8` into branch `gold-patch-v3.5.9` and resolve any merge conflicts.
+5. Run `git -C opt/spark diff -p v3.5.9 gold-patch-v3.5.9 > scripts/spark-gold-data/spark-3.5.9.patch` to generate the new patch.
+6. Remove the old patch `scripts/spark-gold-data/spark-3.5.8.patch`.
 
 Then update the Spark version mentioned in `scripts/spark-gold-data/bootstrap.sh`.
 
