@@ -1,5 +1,5 @@
 {
-  "sparkVersion": "4.0.1",
+  "sparkVersion": "4.0.4",
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
     {
@@ -3209,6 +3209,16 @@
       "key": "spark.sql.tvf.allowMultipleTableArguments.enabled",
       "doc": "When true, allows multiple table arguments for table-valued functions, receiving the cartesian product of all the rows of these tables.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.udt.allowCreatingUDTFromString",
+      "doc": "When true, Spark loads and instantiates the UserDefinedType class named in a schema string (for example the schema stored in Parquet/ORC file metadata) while inferring or parsing a schema. Because the class name is taken from the data being read, a crafted file can make Spark load an arbitrary class from the classpath. Set this to false to block loading UDT classes by name, optionally allowing specific classes via 'spark.sql.udt.allowedDynamicUDTClasses'.",
+      "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.udt.allowedDynamicUDTClasses",
+      "doc": "When 'spark.sql.udt.allowCreatingUDTFromString' is false, UserDefinedType classes listed here (by fully qualified class name) may still be loaded and instantiated from a schema string. Has no effect when UDT loading is enabled.",
+      "defaultValue": ""
     },
     {
       "key": "spark.sql.ui.explainMode",

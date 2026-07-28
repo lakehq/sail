@@ -1,8 +1,8 @@
 diff --git a/pom.xml b/pom.xml
-index a0e25ce4d8d..261a2b03380 100644
+index 49eca0f7555..98bac4fb95c 100644
 --- a/pom.xml
 +++ b/pom.xml
-@@ -3357,6 +3357,10 @@
+@@ -3353,6 +3353,10 @@
              <relocation>
                <pattern>com.google.common</pattern>
                <shadedPattern>${spark.shade.packageName}.guava</shadedPattern>
@@ -132,7 +132,7 @@ index a063f27c9ea..784161bbade 100644
  
          cls.connect.set_hook("readTable", cls._read_table)
 diff --git a/python/pyspark/testing/objects.py b/python/pyspark/testing/objects.py
-index 5b97664afbd..b9deeef91c8 100644
+index 2acbd0ba1b4..3232d6c2478 100644
 --- a/python/pyspark/testing/objects.py
 +++ b/python/pyspark/testing/objects.py
 @@ -45,7 +45,7 @@ class ExamplePointUDT(UserDefinedType):
@@ -145,7 +145,7 @@ index 5b97664afbd..b9deeef91c8 100644
      @classmethod
      def scalaUDT(cls):
 diff --git a/python/setup.py b/python/setup.py
-index ddd961d0412..f58d965e737 100755
+index 16ae358caec..f1dff5d4afd 100755
 --- a/python/setup.py
 +++ b/python/setup.py
 @@ -183,6 +183,9 @@ try:
