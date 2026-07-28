@@ -1132,6 +1132,24 @@
     },
     {
       "input": {
+        "query": "SELECT dimension_col, measure(measure_col)",
+        "result": [
+          "FROM test_metric_view",
+          "GROUP BY dimension_col;",
+          "dim_1, 100",
+          "dim_2, 200"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "analysis error: attribute ObjectName([Identifier(\"dimension_col\")]) is missing from the schema: cannot resolve attribute"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);",
         "result": [
           "true"
@@ -1434,6 +1452,72 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kll_sketch_get_n_bigint(kll_merge_agg_bigint(sketch)) FROM (SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (1), (2), (3) tab(col) UNION ALL SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (4), (5), (6) tab(col)) t;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kll_sketch_get_n_bigint(kll_merge_agg_bigint(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kll_sketch_get_n_double(kll_merge_agg_double(sketch)) FROM (SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) tab(col) UNION ALL SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)), (CAST(6.0 AS DOUBLE)) tab(col)) t;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kll_sketch_get_n_double(kll_merge_agg_double(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kll_sketch_get_n_float(kll_merge_agg_float(sketch)) FROM (SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)) tab(col) UNION ALL SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)), (CAST(6.0 AS FLOAT)) tab(col)) t;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kll_sketch_get_n_float(kll_merge_agg_float(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
       }
     },
     {
@@ -1812,6 +1896,32 @@
     },
     {
       "input": {
+        "query": "SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "[\"b\",\"c\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "max_by(x, y, 2)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT mean(col) FROM VALUES (1), (2), (3) AS tab(col);",
         "result": [
           "2.0"
@@ -1933,6 +2043,32 @@
               "name": "min_by(x, y)",
               "nullable": true,
               "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "[\"a\",\"c\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "min_by(x, y, 2)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
               "metadata": {}
             }
           ]
@@ -4238,6 +4374,138 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D), (3, 15.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D), (4, 12.0D) tab(key, summary));",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary, 12, 'sum')) FROM VALUES (1, 5.0D), (1, 1.0D), (2, 2.0D), (2, 3.0D), (3, 2.2D) tab(key, summary);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary, 12, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_double(tuple_union_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D) tab(key, summary));",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_double(tuple_union_agg_double(sketch, 12, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 2), (3, 3), (4, 4) tab(key, summary));",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_integer(tuple_union_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 5), (2, 10) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 3), (3, 7) tab(key, summary));",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_integer(tuple_union_agg_integer(sketch, 12, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
       }
     },
     {

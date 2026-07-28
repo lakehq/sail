@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn timestamp_inference_matches_spark() {
-        // (input, expected) pairs verified against Spark 4.1.1 JVM
+        // (input, expected) pairs verified against Spark 4.x JVM
         // (`schema_of_json(..., map('inferTimestamp','true'))`).
         let cases: &[(&str, bool)] = &[
             ("2024", true),

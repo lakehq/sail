@@ -2,16 +2,8 @@ use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
-use crate::formats::binary::TableBinaryOptions;
 use crate::options::r#gen::{BinaryReadOptions, BinaryReadPartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
-
-impl BinaryReadOptions {
-    pub fn into_table_options(self) -> TableBinaryOptions {
-        let BinaryReadOptions { path_glob_filter } = self;
-        TableBinaryOptions { path_glob_filter }
-    }
-}
 
 impl ResolveOptions for BinaryReadOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
@@ -37,20 +29,17 @@ mod tests {
 
         let kv = option_list(&[]);
         let options = BinaryReadOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.path_glob_filter, None);
 
         let kv = option_list(&[("path_glob_filter", "*.png")]);
         let options = BinaryReadOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.path_glob_filter, Some("*.png".to_string()));
 
         let kv = option_list(&[("pathGlobFilter", "*.pdf")]);
         let options = BinaryReadOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.path_glob_filter, Some("*.pdf".to_string()));
 
         Ok(())

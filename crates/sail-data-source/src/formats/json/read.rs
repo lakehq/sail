@@ -116,6 +116,10 @@ impl ReadFormat for JsonReadFormat {
 
         Ok(config)
     }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
+    }
 }
 
 /// A tuple of (Schema, records_consumed) where records_consumed is the number of records that were

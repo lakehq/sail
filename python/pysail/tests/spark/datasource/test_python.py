@@ -15,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 try:
@@ -446,7 +447,7 @@ def test_python_empty_partitions(spark):
 def test_python_default_single_partition(spark):
     """Test that missing partitions() defaults to a single partition."""
     import pyarrow as pa
-    from pyspark.sql.datasource import DataSource, DataSourceReader
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
     class DefaultPartitionDataSource(DataSource):
         """DataSource that relies on the default partitions()."""
@@ -463,8 +464,12 @@ def test_python_default_single_partition(spark):
 
     class DefaultPartitionReader(DataSourceReader):
         def read(self, partition):
-            if partition is not None:
-                msg = f"Expected default partition to be None, got {partition!r}"
+            if pyspark_version() >= (4, 2):
+                is_default_partition = isinstance(partition, InputPartition) and partition.value is None
+            else:
+                is_default_partition = partition is None
+            if not is_default_partition:
+                msg = f"Expected default partition, got {partition!r}"
                 raise ValueError(msg)
             batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3]}, schema=pa.schema([("id", pa.int32())]))
             yield batch

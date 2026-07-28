@@ -34,6 +34,10 @@ def pytest_configure(config):
         "markers",
         "integration: mark test as requiring external services and deselected by default",
     )
+    config.addinivalue_line(
+        "markers",
+        "spark_null: output-schema/nullability scenarios; run the whole suite with -m spark_null",
+    )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.files")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
