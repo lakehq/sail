@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
+use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -31,13 +31,15 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatCreateTableResult, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatRegistry,
+    create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
+use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
@@ -139,6 +141,35 @@ impl TableFormat for IcebergTableFormat {
                     lakehouse_table,
                 },
             )),
+        }))
+    }
+
+    async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+        let DeleteInfo {
+            table_name,
+            path,
+            condition,
+            lakehouse_table,
+            options,
+        } = info;
+        let write_node = RowLevelWriteNode::new_delete(
+            Arc::new(LogicalPlan::EmptyRelation(
+                datafusion_expr::logical_plan::EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            )),
+            Arc::new(DFSchema::empty()),
+            condition,
+            self.name().to_string(),
+            path,
+            table_name,
+            options,
+            lakehouse_table,
+        );
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(write_node),
         }))
     }
 
@@ -619,10 +650,10 @@ impl IcebergTableFormat {
         }
     }
 
-    // TODO: Implement row-level DELETE/UPDATE/MERGE for this format. Expanded
-    // inputs should consume Sail row intent tags to decide which rows rewrite
-    // data files and which rows produce low-level delete artifacts, then strip
-    // all internal metadata before writing user data.
+    // TODO: Implement row-level UPDATE/MERGE for this format. Expanded inputs
+    // should consume Sail row intent tags to decide which rows rewrite data files
+    // and which rows produce low-level delete artifacts, then strip all internal
+    // metadata before writing user data.
 }
 
 /// Create an Iceberg table provider for reading.
@@ -647,7 +678,7 @@ pub async fn create_iceberg_provider_concrete(
     Ok(Arc::new(provider))
 }
 
-async fn build_iceberg_provider(
+pub(crate) async fn build_iceberg_provider(
     ctx: &dyn Session,
     info: SourceInfo,
 ) -> Result<Arc<IcebergTableProvider>> {
@@ -1056,6 +1087,42 @@ mod tests {
     };
 
     use super::*;
+
+    #[tokio::test]
+    async fn create_deleter_builds_conditionless_iceberg_row_level_node() -> Result<()> {
+        use datafusion::execution::context::SessionContext;
+
+        let state = SessionContext::default().state();
+        let plan = IcebergTableFormat
+            .create_deleter(
+                &state,
+                DeleteInfo {
+                    table_name: vec!["catalog".to_string(), "table".to_string()],
+                    path: "file:///tmp/iceberg-delete".to_string(),
+                    condition: None,
+                    lakehouse_table: None,
+                    options: vec![],
+                },
+            )
+            .await?;
+        let LogicalPlan::Extension(extension) = plan else {
+            return plan_err!("Iceberg DELETE must produce an extension node");
+        };
+        let node = extension
+            .node
+            .as_any()
+            .downcast_ref::<RowLevelWriteNode>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Iceberg DELETE extension must be a RowLevelWriteNode".to_string(),
+                )
+            })?;
+
+        assert_eq!(node.target_format(), "iceberg");
+        assert_eq!(node.target_location(), "file:///tmp/iceberg-delete");
+        assert!(node.condition().is_none());
+        Ok(())
+    }
 
     #[test]
     fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() -> Result<()> {

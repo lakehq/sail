@@ -42,14 +42,18 @@ use crate::operations::bootstrap::{
     bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
 };
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
+use crate::operations::{
+    DeleteFilesOperation, SnapshotProduceOperation, Transaction, TransactionAction,
+};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
-use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::spec::{
+    Operation, PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement,
+};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
@@ -65,6 +69,8 @@ pub struct IcebergCommitExec {
     table_url: Url,
     lakehouse_table: Option<LakehouseExecutionContext>,
     expected_snapshot_id: Option<Option<i64>>,
+    removed_data_file_paths: Vec<String>,
+    operation_override: Option<Operation>,
     cache: Arc<PlanProperties>,
 }
 
@@ -90,12 +96,34 @@ impl IcebergCommitExec {
             table_url,
             lakehouse_table,
             expected_snapshot_id: None,
+            removed_data_file_paths: vec![],
+            operation_override: None,
             cache,
         }
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
         self.expected_snapshot_id = expected_snapshot_id;
+        self
+    }
+
+    pub fn with_rewrite_data_files(
+        self,
+        removed_data_file_paths: Vec<String>,
+        operation: Operation,
+    ) -> Self {
+        self.with_optional_rewrite_data_files(removed_data_file_paths, Some(operation))
+    }
+
+    pub fn with_optional_rewrite_data_files(
+        mut self,
+        mut removed_data_file_paths: Vec<String>,
+        operation: Option<Operation>,
+    ) -> Self {
+        removed_data_file_paths.sort();
+        removed_data_file_paths.dedup();
+        self.removed_data_file_paths = removed_data_file_paths;
+        self.operation_override = operation;
         self
     }
 
@@ -113,6 +141,14 @@ impl IcebergCommitExec {
 
     pub fn expected_snapshot_id(&self) -> Option<Option<i64>> {
         self.expected_snapshot_id
+    }
+
+    pub fn removed_data_file_paths(&self) -> &[String] {
+        &self.removed_data_file_paths
+    }
+
+    pub fn operation_override(&self) -> Option<&Operation> {
+        self.operation_override.as_ref()
     }
 
     fn add_expected_snapshot_requirement(
@@ -427,7 +463,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 self.table_url.clone(),
                 self.lakehouse_table.clone(),
             )
-            .with_expected_snapshot_id(self.expected_snapshot_id),
+            .with_expected_snapshot_id(self.expected_snapshot_id)
+            .with_optional_rewrite_data_files(
+                self.removed_data_file_paths.clone(),
+                self.operation_override.clone(),
+            ),
         ))
     }
 
@@ -452,6 +492,8 @@ impl ExecutionPlan for IcebergCommitExec {
         let table_url = self.table_url.clone();
         let lakehouse_table = self.lakehouse_table.clone();
         let expected_snapshot_id = self.expected_snapshot_id;
+        let removed_data_file_paths = self.removed_data_file_paths.clone();
+        let operation_override = self.operation_override.clone();
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -475,6 +517,12 @@ impl ExecutionPlan for IcebergCommitExec {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() {
+                if expected_snapshot_id.is_some() || operation_override.is_some() {
+                    return Err(DataFusionError::Internal(
+                        "missing commit_meta action from validated mutation writer output"
+                            .to_string(),
+                    ));
+                }
                 let array = Arc::new(UInt64Array::from(vec![0u64]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
@@ -490,13 +538,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
                 data_files: added_data_files,
+                files_to_remove: removed_data_file_paths,
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
-                operation: commit_meta.operation,
+                operation: operation_override.unwrap_or(commit_meta.operation),
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
@@ -642,6 +691,13 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
+                if matches!(commit_info.operation, Operation::Delete)
+                    && commit_info.files_to_remove.is_empty()
+                {
+                    let array = Arc::new(UInt64Array::from(vec![0u64]));
+                    let batch = RecordBatch::try_new(schema, vec![array])?;
+                    return Ok(batch);
+                }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
                 if let Some(new_schema) = commit_info.schema.clone() {
@@ -893,6 +949,21 @@ impl ExecutionPlan for IcebergCommitExec {
                         }
                         producer
                             .commit(LocalOverwriteOperation)
+                            .await
+                            .map_err(DataFusionError::Execution)?
+                    }
+                    crate::spec::Operation::Delete => {
+                        let producer = crate::operations::SnapshotProducer::new(
+                            &tx,
+                            commit_info.data_files.clone(),
+                            Some(store_ctx.clone()),
+                            Some(manifest_meta),
+                        )
+                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
+                        producer
+                            .commit(DeleteFilesOperation::new(
+                                commit_info.files_to_remove.clone(),
+                            ))
                             .await
                             .map_err(DataFusionError::Execution)?
                     }
@@ -1157,7 +1228,13 @@ fn commit_conflict_error() -> DataFusionError {
 mod tests {
     use std::collections::HashMap;
 
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::prelude::SessionContext;
+    use futures::TryStreamExt;
+    use object_store::memory::InMemory;
+
     use super::*;
+    use crate::physical_plan::action_schema::{encode_commit_meta, iceberg_action_schema};
     use crate::spec::FormatVersion;
 
     fn table_metadata_at_snapshot(snapshot_id: Option<i64>) -> TableMetadata {
@@ -1200,7 +1277,11 @@ mod tests {
                 Url::parse("file:///tmp/table").expect("valid table URL"),
                 None,
             )
-            .with_expected_snapshot_id(Some(Some(41))),
+            .with_expected_snapshot_id(Some(Some(41)))
+            .with_rewrite_data_files(
+                vec!["data/affected.parquet".to_string()],
+                crate::spec::Operation::Delete,
+            ),
         );
 
         let rewritten = commit
@@ -1211,6 +1292,119 @@ mod tests {
             .expect("rewritten plan remains an Iceberg commit");
 
         assert_eq!(rewritten.expected_snapshot_id(), Some(Some(41)));
+        assert_eq!(
+            rewritten.removed_data_file_paths(),
+            &["data/affected.parquet".to_string()]
+        );
+        assert_eq!(
+            rewritten.operation_override(),
+            Some(&crate::spec::Operation::Delete)
+        );
+    }
+
+    fn validation_only_delete_input(table_url: &Url) -> Result<Arc<dyn ExecutionPlan>> {
+        let batch = encode_commit_meta(CommitMeta {
+            table_uri: table_url.to_string(),
+            row_count: 0,
+            operation: Operation::Append,
+            requirements: vec![],
+            table_properties: vec![],
+            lakehouse_table: None,
+            schema: None,
+            partition_spec: None,
+        })?;
+        let schema = iceberg_action_schema()?;
+        let input: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_from_batches(schema, vec![batch])?;
+        Ok(input)
+    }
+
+    #[tokio::test]
+    async fn validated_mutation_rejects_missing_writer_commit_meta() -> Result<()> {
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let commit: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergCommitExec::new(
+                input,
+                Url::parse("file:///tmp/iceberg-missing-mutation-meta")
+                    .map_err(|error| DataFusionError::Plan(error.to_string()))?,
+                None,
+            )
+            .with_expected_snapshot_id(Some(None))
+            .with_rewrite_data_files(vec![], Operation::Delete),
+        );
+        let context = SessionContext::new();
+
+        let error = datafusion::physical_plan::collect(commit, context.task_ctx())
+            .await
+            .expect_err("validated mutation without commit metadata must fail closed");
+        assert!(error.to_string().contains("missing commit_meta"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn validation_only_delete_rejects_stale_snapshot_and_writes_no_metadata() -> Result<()> {
+        let table_url = Url::parse("memory://strict-delete/table")
+            .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+        let object_store = Arc::new(InMemory::new());
+        let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+        let metadata = table_metadata_at_snapshot(Some(2))
+            .to_json()
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        store_ctx
+            .prefixed
+            .put(
+                &object_store::path::Path::from("metadata/v1.metadata.json"),
+                object_store::PutPayload::from(Bytes::from(metadata)),
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let context = SessionContext::new();
+        context.runtime_env().register_object_store(
+            &Url::parse("memory://strict-delete")
+                .map_err(|error| DataFusionError::Plan(error.to_string()))?,
+            object_store,
+        );
+
+        let stale: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergCommitExec::new(
+                validation_only_delete_input(&table_url)?,
+                table_url.clone(),
+                None,
+            )
+            .with_expected_snapshot_id(Some(Some(1)))
+            .with_rewrite_data_files(vec![], Operation::Delete),
+        );
+        let error = datafusion::physical_plan::collect(stale, context.task_ctx())
+            .await
+            .expect_err("advanced snapshot must reject a validation-only delete");
+        assert!(error.to_string().contains("expected snapshot Some(1)"));
+        assert!(error.to_string().contains("found Some(2)"));
+
+        let current: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergCommitExec::new(validation_only_delete_input(&table_url)?, table_url, None)
+                .with_expected_snapshot_id(Some(Some(2)))
+                .with_rewrite_data_files(vec![], Operation::Delete),
+        );
+        let batches = datafusion::physical_plan::collect(current, context.task_ctx()).await?;
+        assert_eq!(batches.len(), 1);
+        let counts = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| DataFusionError::Internal("count must be UInt64".to_string()))?;
+        assert_eq!(counts.value(0), 0);
+
+        let metadata_objects = store_ctx
+            .prefixed
+            .list(Some(&object_store::path::Path::from("metadata")))
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        assert_eq!(metadata_objects.len(), 1);
+        Ok(())
     }
 
     #[test]

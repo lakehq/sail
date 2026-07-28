@@ -20,6 +20,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-logical-plan = { path = "../sail-logical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 # DataFusion dependencies

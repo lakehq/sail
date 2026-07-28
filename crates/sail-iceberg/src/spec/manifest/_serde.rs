@@ -32,9 +32,58 @@ pub(super) struct IntLongMapEntry {
     value: i64,
 }
 
+fn serialize_byte_vec<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_bytes(value)
+}
+
+fn deserialize_byte_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ByteVecVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ByteVecVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an Avro bytes value")
+        }
+
+        fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_vec())
+        }
+
+        fn visit_borrowed_bytes<E>(self, value: &'de [u8]) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_vec())
+        }
+
+        fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value)
+        }
+    }
+
+    deserializer.deserialize_byte_buf(ByteVecVisitor)
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntBytesMapEntry {
     key: i32,
+    #[serde(
+        serialize_with = "serialize_byte_vec",
+        deserialize_with = "deserialize_byte_vec"
+    )]
     value: Vec<u8>,
 }
 

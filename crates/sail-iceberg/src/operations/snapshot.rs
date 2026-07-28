@@ -574,7 +574,7 @@ mod tests {
     use crate::datasource::IcebergTableProvider;
     use crate::datasource::type_converter::iceberg_schema_to_arrow;
     use crate::io::{load_manifest, load_manifest_list};
-    use crate::operations::RewriteFilesOperation;
+    use crate::operations::{DeleteFilesOperation, RewriteFilesOperation};
     use crate::spec::manifest::{ManifestEntry, ManifestStatus};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{DataContentType, DataFileFormat, ManifestListWriter};
@@ -1278,6 +1278,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metadata_objects.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_file_rewrite_records_delete_snapshot_operation() {
+        let fixture = single_file_parent("memory://delete-rewrite-test/table/").await;
+
+        let action_commit = SnapshotProducer::new(
+            &fixture.tx,
+            vec![],
+            Some(fixture.store_ctx.clone()),
+            Some(fixture.manifest_metadata),
+        )
+        .with_write_path_mode(WritePathMode::Relative)
+        .commit(DeleteFilesOperation::new(vec![fixture.live_file.file_path]))
+        .await
+        .unwrap();
+
+        let new_snapshot = action_commit
+            .updates()
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(new_snapshot.summary.operation, Operation::Delete);
     }
 
     #[tokio::test]

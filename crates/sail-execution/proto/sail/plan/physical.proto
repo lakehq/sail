@@ -965,6 +965,10 @@ message IcebergCommitExecNode {
   bool validate_read_snapshot = 4;
   // Absent when validation is required and the target had no current snapshot.
   optional int64 expected_snapshot_id = 5;
+  // Static live data-file paths selected for a copy-on-write rewrite.
+  repeated string removed_data_file_paths = 6;
+  // Optional Iceberg Operation serialized as JSON; empty means use the writer operation.
+  string operation_override_json = 7;
 }
 
 message IcebergManifestScanExecNode {

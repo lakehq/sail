@@ -39,3 +39,32 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
         Some(&self.deleted_data_file_paths)
     }
 }
+
+/// A snapshot operation that removes and optionally replaces specific live data files as a
+/// logical row-level delete.
+#[derive(Debug, Clone)]
+pub struct DeleteFilesOperation {
+    deleted_data_file_paths: Vec<String>,
+}
+
+impl DeleteFilesOperation {
+    pub fn new(deleted_data_file_paths: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            deleted_data_file_paths: deleted_data_file_paths.into_iter().collect(),
+        }
+    }
+
+    pub fn deleted_data_file_paths(&self) -> &[String] {
+        &self.deleted_data_file_paths
+    }
+}
+
+impl SnapshotProduceOperation for DeleteFilesOperation {
+    fn operation(&self) -> &'static str {
+        "delete"
+    }
+
+    fn deleted_data_file_paths_for_rewrite(&self) -> Option<&[String]> {
+        Some(&self.deleted_data_file_paths)
+    }
+}

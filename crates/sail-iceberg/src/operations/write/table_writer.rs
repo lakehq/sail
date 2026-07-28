@@ -292,7 +292,7 @@ impl IcebergTableWriter {
                 }
             };
             let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
-                .finish(meta)?
+                .finish(meta, self.config.iceberg_schema.as_ref())?
                 .data_file;
             self.written.push(df);
         }
