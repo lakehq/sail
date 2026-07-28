@@ -7,6 +7,8 @@ if [ -z "${JAVA_HOME:-}" ]; then
   exit 1
 fi
 
+spark_version="4.2.0"
+
 project_path="$(git rev-parse --show-toplevel)"
 
 scripts_path="${project_path}/scripts/spark-gold-data"
@@ -15,7 +17,7 @@ output_path="${project_path}/crates/sail-spark-connect/tests/gold_data"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 
-apply_git_patch "${project_path}"/opt/spark "v4.2.0" "${scripts_path}/spark-4.2.0.patch"
+apply_git_patch "${project_path}"/opt/spark "v${spark_version}" "${scripts_path}/spark-${spark_version}.patch"
 
 cd "${project_path}"/opt/spark
 
@@ -37,14 +39,6 @@ env SPARK_LOCAL_IP=127.0.0.1 \
 echo "Removing existing test data..."
 rm -rf "${output_path}"
 mkdir -p "${output_path}"
-
-cat <<EOF > "${output_path}/README.md"
-# Gold Data for Spark Tests
-
-This directory contains the gold data for the Spark tests.
-All the files in this directory, including this README file, are auto-generated.
-Please do not modify them manually.
-EOF
 
 cargo run -p sail-gold-test --bin spark-gold-data -- \
   --input "${logs_path}" \

@@ -1,0 +1,38 @@
+@try_subtract
+Feature: try_subtract output schema
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to try_subtract yields the schema Spark declares
+      When query
+        """
+        SELECT try_subtract(2, 1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: a non-null column input to try_subtract yields the schema Spark declares
+      When query
+        """
+        SELECT try_subtract(CAST(id AS INT), 1) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+    Scenario: a nullable column input to try_subtract stays nullable
+      When query
+        """
+        SELECT try_subtract(c, 1) AS result FROM VALUES (2), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

@@ -27,7 +27,7 @@ You can choose to run any or all of the commands, depending on the Spark version
 
 ```bash
 env SPARK_VERSION=4.2.0 scripts/spark-tests/build-pyspark.sh
-env SPARK_VERSION=3.5.7 scripts/spark-tests/build-pyspark.sh
+env SPARK_VERSION=3.5.9 scripts/spark-tests/build-pyspark.sh
 ```
 
 ::: info
