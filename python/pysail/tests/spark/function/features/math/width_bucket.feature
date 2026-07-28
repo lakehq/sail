@@ -4,7 +4,6 @@ Feature: width_bucket output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to width_bucket yields the schema Spark declares
       When query
         """
@@ -16,7 +15,6 @@ Feature: width_bucket output schema
          |-- result: long (nullable = true)
         """
 
-    @sail-bug
     Scenario: a nullable column input to width_bucket stays nullable
       When query
         """
@@ -53,7 +51,8 @@ Feature: width_bucket output schema
         | <result>             |
 
       Examples:
-        | case                             | args               | result |
-        | width_bucket doctest #2 (result) | 0.0, 10.0, 0.0, 5  | 6      |
-        | width_bucket doctest #3 (result) | 10.0, 0.0, 10.0, 5 | 6      |
-        | width_bucket doctest #4 (result) | 10.0, 0.0, 0.0, 5  | NULL   |
+        | case                                       | args                 | result |
+        | width_bucket returns middle bucket         | 5.0, 0.0, 10.0, 5    | 3      |
+        | width_bucket doctest #2 (result)           | 0.0, 10.0, 0.0, 5    | 6      |
+        | width_bucket doctest #3 (result)           | 10.0, 0.0, 10.0, 5   | 6      |
+        | width_bucket doctest #4 (result)           | 10.0, 0.0, 0.0, 5    | NULL   |
