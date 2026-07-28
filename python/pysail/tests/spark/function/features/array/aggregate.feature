@@ -234,7 +234,6 @@ Feature: aggregate higher-order function
         | 0      |
         | NULL   |
 
-    @sail-bug
     Scenario: A merge lambda whose type does not match the accumulator is still an error
       When query
         """

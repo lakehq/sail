@@ -161,7 +161,6 @@ Feature: array_sort higher-order function
         | []     |
         | NULL   |
 
-    @sail-bug
     Scenario: A comparator that does not return INT is still an error
       When query
         """

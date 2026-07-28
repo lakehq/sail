@@ -127,11 +127,14 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         if merge.data_type() != &DataType::Null
             && !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type())
         {
+            // Mirror Spark's `UNEXPECTED_INPUT_TYPE` wording (the merge lambda is
+            // the third parameter) so error-parity tests match on the same text.
             return plan_err!(
-                "{} merge lambda result type must match zero value type, got {} and {}",
+                "cannot resolve `{}`: The third parameter requires the \"{}\" type, \
+                 however the merge lambda has the type \"{}\"",
                 self.name(),
-                merge.data_type(),
-                zero.data_type()
+                zero.data_type(),
+                merge.data_type()
             );
         }
 

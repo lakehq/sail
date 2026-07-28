@@ -115,10 +115,12 @@ impl HigherOrderUDFImpl for SparkArraySort {
         let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
         // Spark requires the comparator to return exactly `IntegerType` (Int32);
-        // bigint/double/etc. raise `UNEXPECTED_RETURN_TYPE` at analysis.
+        // bigint/double/etc. raise `UNEXPECTED_RETURN_TYPE` at analysis. The
+        // message mirrors Spark's so error-parity tests match on the same text.
         if lambda.data_type() != &DataType::Int32 {
             return plan_err!(
-                "{} comparator must return INT, got {}",
+                "cannot resolve `{}`: The `lambdafunction` requires return \"INT\" type, \
+                 but the actual is \"{}\" type",
                 self.name(),
                 lambda.data_type()
             );
