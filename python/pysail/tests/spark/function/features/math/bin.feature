@@ -199,7 +199,6 @@ Feature: bin converts integral values to binary strings
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable string
       When query
         """
@@ -211,7 +210,6 @@ Feature: bin converts integral values to binary strings
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable string
       When query
         """

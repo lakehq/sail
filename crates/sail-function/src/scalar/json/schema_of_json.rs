@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
+use datafusion_common::{DataFusionError, Result, exec_err, internal_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -105,7 +105,10 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

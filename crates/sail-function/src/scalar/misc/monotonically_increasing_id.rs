@@ -1,6 +1,9 @@
-use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_common::internal_err;
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -38,7 +41,16 @@ impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `MonotonicallyIncreasingID` declares `override def nullable: Boolean = false`
+    // (MonotonicallyIncreasingID.scala:72).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

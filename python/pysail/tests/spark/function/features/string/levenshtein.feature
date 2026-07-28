@@ -186,7 +186,6 @@ Feature: levenshtein() returns edit distance between two strings
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: non-null string literals yield a non-nullable integer
       When query
         """
@@ -198,7 +197,6 @@ Feature: levenshtein() returns edit distance between two strings
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: non-null string columns yield a non-nullable integer
       When query
         """

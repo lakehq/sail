@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -32,6 +35,14 @@ impl ArrayMin {
             signature: Signature::array(Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
+            DataType::Null => Ok(DataType::Null),
+            _ => plan_err!("ArrayMin can only accept List or LargeList."),
+        }
+    }
 }
 
 impl ScalarUDFImpl for ArrayMin {
@@ -43,12 +54,25 @@ impl ScalarUDFImpl for ArrayMin {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMin can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ArrayMin` declares `override def nullable: Boolean = true`
+    // (collectionOperations.scala:2329) even though it is null-intolerant — an empty array
+    // yields NULL. Deriving from the inputs here would be the unsound direction.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -77,6 +101,14 @@ impl ArrayMax {
             signature: Signature::array(Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
+            DataType::Null => Ok(DataType::Null),
+            _ => plan_err!("ArrayMax can only accept List or LargeList."),
+        }
+    }
 }
 
 impl ScalarUDFImpl for ArrayMax {
@@ -88,12 +120,25 @@ impl ScalarUDFImpl for ArrayMax {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMax can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ArrayMax` declares `override def nullable: Boolean = true`
+    // (collectionOperations.scala:2402) even though it is null-intolerant — an empty array
+    // yields NULL. Deriving from the inputs here would be the unsound direction.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

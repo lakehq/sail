@@ -106,7 +106,6 @@ Feature: soundex() returns the Soundex code of a string
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null string literal yields a non-nullable string
       When query
         """
@@ -118,7 +117,6 @@ Feature: soundex() returns the Soundex code of a string
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null string column yields a non-nullable string
       When query
         """

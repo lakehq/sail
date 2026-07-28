@@ -4,10 +4,12 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder, as_largestring_array,
     as_string_array, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type, Int64Type};
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
@@ -48,7 +50,19 @@ impl ScalarUDFImpl for SparkBin {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `bin` is null-intolerant, so nullability follows the input.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Utf8,
+            args.arg_fields.iter().any(|f| f.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

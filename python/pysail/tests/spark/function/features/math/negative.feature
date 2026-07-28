@@ -190,7 +190,6 @@ Feature: unary minus (negative) honors ANSI overflow semantics
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """

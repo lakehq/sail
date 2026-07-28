@@ -2,15 +2,17 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType,
-    TimeUnit,
+    DataType, DurationMicrosecondType, Field, FieldRef, IntervalMonthDayNano, IntervalUnit,
+    IntervalYearMonthType, TimeUnit,
 };
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::literal::interval::IntervalValue;
@@ -52,7 +54,18 @@ macro_rules! define_interval_udf {
             }
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok($return_type)
+                internal_err!(
+                    "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+                    self.name()
+                )
+            }
+
+            // String-to-interval conversion behind `CAST(string AS INTERVAL)`: the kernel maps
+            // null to null and raises on an unparsable value rather than yielding NULL, so
+            // nullability follows the input.
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+                let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+                Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

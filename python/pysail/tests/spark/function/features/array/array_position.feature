@@ -4,7 +4,6 @@ Feature: array_position output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to array_position yields the schema Spark declares
       When query
         """

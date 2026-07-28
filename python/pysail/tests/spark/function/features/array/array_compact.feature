@@ -102,7 +102,6 @@ Feature: array_compact() removes null values from an array
          |    |-- element: integer (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a non-null array column yields a non-nullable array
       When query
         """

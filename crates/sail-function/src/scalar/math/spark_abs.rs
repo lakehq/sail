@@ -7,8 +7,8 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DurationSecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
@@ -16,7 +16,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -42,6 +42,21 @@ impl SparkAbs {
         }
     }
 
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types[0].is_numeric()
+            || arg_types[0].is_null()
+            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
+        {
+            Ok(arg_types[0].clone())
+        } else {
+            Err(unsupported_data_type_exec_err(
+                "abs",
+                "Numeric, Interval, or Duration type",
+                &arg_types[0],
+            ))
+        }
+    }
+
     pub fn ansi_mode(&self) -> bool {
         self.ansi_mode
     }
@@ -56,19 +71,25 @@ impl ScalarUDFImpl for SparkAbs {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_numeric()
-            || arg_types[0].is_null()
-            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
-        {
-            Ok(arg_types[0].clone())
-        } else {
-            Err(unsupported_data_type_exec_err(
-                "abs",
-                "Numeric, Interval, or Duration type",
-                &arg_types[0],
-            ))
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `abs` is null-intolerant, so nullability follows the input.
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.output_type(&data_types)?,
+            args.arg_fields.iter().any(|f| f.is_nullable()),
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

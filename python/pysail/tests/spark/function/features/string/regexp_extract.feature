@@ -58,7 +58,6 @@ Feature: regexp_extract() extracts regex capture groups from strings
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null string literal yields a non-nullable string
       When query
         """
@@ -70,7 +69,6 @@ Feature: regexp_extract() extracts regex capture groups from strings
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null string column yields a non-nullable string
       When query
         """

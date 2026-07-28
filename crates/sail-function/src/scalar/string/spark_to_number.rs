@@ -71,8 +71,10 @@ impl ScalarUDFImpl for SparkToNumber {
 
     /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // We cannot know the final DataType result without knowing the format input args
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

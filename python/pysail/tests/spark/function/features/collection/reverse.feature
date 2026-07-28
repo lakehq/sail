@@ -4,7 +4,6 @@ Feature: reverse output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to reverse yields the schema Spark declares
       When query
         """
@@ -16,7 +15,6 @@ Feature: reverse output schema
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to reverse yields the schema Spark declares
       When query
         """

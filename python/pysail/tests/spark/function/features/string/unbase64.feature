@@ -4,7 +4,6 @@ Feature: unbase64 output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to unbase64 yields the schema Spark declares
       When query
         """
@@ -16,7 +15,6 @@ Feature: unbase64 output schema
          |-- result: binary (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to unbase64 yields the schema Spark declares
       When query
         """

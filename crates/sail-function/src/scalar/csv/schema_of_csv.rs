@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
@@ -119,7 +121,16 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `SchemaOfCsv` declares `override def nullable: Boolean = false` and passes
+    // `returnNullable = false` (csvExpressions.scala:157) — the schema string always exists.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, false)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

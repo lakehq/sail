@@ -3,9 +3,9 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int64Builder, new_null_array,
 };
-use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
@@ -38,18 +38,8 @@ impl ThetaSketchEstimateFunction {
             ),
         }
     }
-}
 
-impl ScalarUDFImpl for ThetaSketchEstimateFunction {
-    fn name(&self) -> &str {
-        "theta_sketch_estimate"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
             return exec_err!(
                 "theta_sketch_estimate requires 1 argument, got {}",
@@ -62,6 +52,40 @@ impl ScalarUDFImpl for ThetaSketchEstimateFunction {
                 exec_err!("theta_sketch_estimate requires a binary argument, got {data_type}")
             }
         }
+    }
+}
+
+impl ScalarUDFImpl for ThetaSketchEstimateFunction {
+    fn name(&self) -> &str {
+        "theta_sketch_estimate"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ThetaSketchEstimate` is a null-intolerant `UnaryExpression` with no
+    // `nullable` override (thetasketchesExpressions.scala:38).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -96,6 +120,11 @@ impl ThetaUnionFunction {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        validate_binary_set_op_types("theta_union", arg_types, true)?;
+        Ok(DataType::Binary)
+    }
 }
 
 impl ScalarUDFImpl for ThetaUnionFunction {
@@ -107,9 +136,28 @@ impl ScalarUDFImpl for ThetaUnionFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        validate_binary_set_op_types("theta_union", arg_types, true)?;
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ThetaUnion` is a null-intolerant `TernaryExpression` with no `nullable`
+    // override (thetasketchesExpressions.scala:77).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -151,6 +199,11 @@ impl ThetaIntersectionFunction {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        validate_binary_set_op_types("theta_intersection", arg_types, false)?;
+        Ok(DataType::Binary)
+    }
 }
 
 impl ScalarUDFImpl for ThetaIntersectionFunction {
@@ -162,9 +215,28 @@ impl ScalarUDFImpl for ThetaIntersectionFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        validate_binary_set_op_types("theta_intersection", arg_types, false)?;
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ThetaIntersection` is a null-intolerant `BinaryExpression` with no
+    // `nullable` override (thetasketchesExpressions.scala:184).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -204,6 +276,11 @@ impl ThetaDifferenceFunction {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        validate_binary_set_op_types("theta_difference", arg_types, false)?;
+        Ok(DataType::Binary)
+    }
 }
 
 impl ScalarUDFImpl for ThetaDifferenceFunction {
@@ -215,9 +292,28 @@ impl ScalarUDFImpl for ThetaDifferenceFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        validate_binary_set_op_types("theta_difference", arg_types, false)?;
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ThetaDifference` is a null-intolerant `BinaryExpression` with no `nullable`
+    // override (thetasketchesExpressions.scala:136).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

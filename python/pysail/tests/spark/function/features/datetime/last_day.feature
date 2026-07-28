@@ -533,7 +533,6 @@ Feature: last_day comprehensive tests
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null date literal yields a date
       When query
         """
@@ -545,7 +544,6 @@ Feature: last_day comprehensive tests
          |-- result: date (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null date column yields a date
       When query
         """

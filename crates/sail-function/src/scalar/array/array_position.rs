@@ -7,13 +7,14 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, FieldRef, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue, exec_err};
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_common::internal_err;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
 
@@ -46,7 +47,20 @@ impl ScalarUDFImpl for SparkArrayPosition {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ArrayPosition` is a null-intolerant `BinaryExpression` with no `nullable`
+    // override (collectionOperations.scala:2481).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> DataFusionResult<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Int64,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {

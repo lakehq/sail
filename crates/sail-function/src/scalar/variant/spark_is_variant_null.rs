@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/is_variant_null.rs>
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
-use datafusion::common::{exec_datafusion_err, exec_err};
+use arrow_schema::{DataType, Field, FieldRef};
+use datafusion::common::{exec_datafusion_err, exec_err, internal_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
@@ -44,7 +44,16 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Boolean)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark builds `is_variant_null` with `propagateNull = false, returnNullable = false`,
+        // so the result is never null — a NULL variant yields `false`, not NULL.
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

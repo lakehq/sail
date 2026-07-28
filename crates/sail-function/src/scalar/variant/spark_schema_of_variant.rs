@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
-use datafusion::common::{exec_datafusion_err, exec_err};
+use arrow_schema::{DataType, Field, FieldRef};
+use datafusion::common::{exec_datafusion_err, exec_err, internal_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
@@ -51,7 +51,19 @@ impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `schema_of_variant` is null-intolerant, so nullability follows the input.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Utf8,
+            args.arg_fields.iter().any(|f| f.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

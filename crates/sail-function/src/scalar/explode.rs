@@ -1,7 +1,11 @@
-use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::plan_err;
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_common::{internal_err, plan_err};
 use datafusion_expr::ScalarFunctionArgs;
 
 pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
@@ -42,6 +46,16 @@ impl Explode {
         }
     }
 
+    pub fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types {
+            &[DataType::List(f)]
+            | &[DataType::LargeList(f)]
+            | &[DataType::FixedSizeList(f, _)]
+            | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
+            _ => plan_err!("{} should only be called with a list or map", self.name()),
+        }
+    }
+
     pub fn kind(&self) -> &ExplodeKind {
         &self.kind
     }
@@ -63,14 +77,24 @@ impl ScalarUDFImpl for Explode {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types {
-            &[DataType::List(f)]
-            | &[DataType::LargeList(f)]
-            | &[DataType::FixedSizeList(f, _)]
-            | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
-            _ => plan_err!("{} should only be called with a list or map", self.name()),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Generator: `explode_outer` emits a NULL row for an empty or NULL input, and the
+    // element type of the exploded array is nullable in Spark.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {

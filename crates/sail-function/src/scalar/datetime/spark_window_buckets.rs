@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ListArray, StructArray, TimestampMicrosecondArray};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
 use datafusion_common::cast::as_timestamp_microsecond_array;
-use datafusion_common::{Result, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Computes Spark `window` candidates at execute time, so the plan stays bounded
 /// regardless of the `windowDuration / slideDuration` ratio. For each input
@@ -27,6 +29,23 @@ impl SparkWindowBuckets {
             slide_duration,
             start_time,
         }
+    }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let tz = match arg_types {
+            [DataType::Timestamp(TimeUnit::Microsecond, tz)] => tz.clone(),
+            other => {
+                return plan_err!(
+                    "window_buckets expects a single Timestamp(Microsecond, *) argument, got {other:?}"
+                );
+            }
+        };
+        let field_type = DataType::Timestamp(TimeUnit::Microsecond, tz);
+        let item = DataType::Struct(Fields::from(vec![
+            Field::new("start", field_type.clone(), true),
+            Field::new("end", field_type, true),
+        ]));
+        Ok(DataType::List(Arc::new(Field::new("item", item, true))))
     }
 
     pub fn window_duration(&self) -> i64 {
@@ -51,21 +70,28 @@ impl ScalarUDFImpl for SparkWindowBuckets {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let tz = match arg_types {
-            [DataType::Timestamp(TimeUnit::Microsecond, tz)] => tz.clone(),
-            other => {
-                return plan_err!(
-                    "window_buckets expects a single Timestamp(Microsecond, *) argument, got {other:?}"
-                );
-            }
-        };
-        let field_type = DataType::Timestamp(TimeUnit::Microsecond, tz);
-        let item = DataType::Struct(Fields::from(vec![
-            Field::new("start", field_type.clone(), true),
-            Field::new("end", field_type, true),
-        ]));
-        Ok(DataType::List(Arc::new(Field::new("item", item, true))))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `TimeWindow` is null-intolerant with no `nullable` override
+    // (TimeWindow.scala:241).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

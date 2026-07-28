@@ -609,7 +609,6 @@ Feature: abs comprehensive tests
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -621,7 +620,6 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """

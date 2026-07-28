@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, plan_datafusion_err, plan_err};
+use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -40,18 +40,8 @@ impl SparkArray {
             aliases: vec![String::from("spark_make_array")],
         }
     }
-}
 
-impl ScalarUDFImpl for SparkArray {
-    fn name(&self) -> &str {
-        "spark_array"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
@@ -67,6 +57,23 @@ impl ScalarUDFImpl for SparkArray {
             }
         }
     }
+}
+
+impl ScalarUDFImpl for SparkArray {
+    fn name(&self) -> &str {
+        "spark_array"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_types = args
@@ -76,7 +83,7 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
-        let return_type = match self.return_type(&data_types)? {
+        let return_type = match self.output_type(&data_types)? {
             DataType::List(field) => DataType::List(Arc::new(
                 field.as_ref().clone().with_nullable(contains_null),
             )),

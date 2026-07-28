@@ -6,9 +6,11 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -34,6 +36,17 @@ impl SparkArrayCompact {
             signature: Signature::array(Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::List(_) | DataType::LargeList(_) => Ok(arg_types[0].clone()),
+            DataType::Null => Ok(DataType::Null),
+            _ => plan_err!(
+                "spark_array_compact can only accept List or LargeList, got {:?}",
+                arg_types[0]
+            ),
+        }
+    }
 }
 
 impl ScalarUDFImpl for SparkArrayCompact {
@@ -45,15 +58,28 @@ impl ScalarUDFImpl for SparkArrayCompact {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(_) | DataType::LargeList(_) => Ok(arg_types[0].clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!(
-                "spark_array_compact can only accept List or LargeList, got {:?}",
-                arg_types[0]
-            ),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ArrayCompact` rewrites to `KnownNotContainsNull(ArrayFilter(child, ..))`
+    // (collectionOperations.scala:5395), so nullability follows the input array.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

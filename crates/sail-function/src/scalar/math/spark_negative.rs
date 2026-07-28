@@ -1,9 +1,11 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegative;
 
 /// `ConfigOptions` snapshots with `execution.enable_ansi_mode` pinned. Negation
@@ -64,8 +66,27 @@ impl ScalarUDFImpl for SparkNegative {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `negative` is null-intolerant, so nullability follows the input.
+        // `self.inner` does not override this hook, so delegating would inherit
+        // DataFusion's `nullable = true` default.
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.inner.return_type(&data_types)?,
+            args.arg_fields.iter().any(|f| f.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

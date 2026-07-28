@@ -3,10 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray, StringArrayType,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::internal_err;
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use url::Url;
 
 use crate::functions_utils::make_scalar_function;
@@ -26,6 +29,39 @@ impl ParseUrl {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+
+    pub(crate) fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return plan_err!(
+                "{} expects 2 or 3 arguments, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        }
+        // The return type should match the largest size datatype
+        match arg_types.len() {
+            2 | 3 if arg_types.iter().all(is_string_type) => {
+                if arg_types
+                    .iter()
+                    .any(|arg| matches!(arg, DataType::LargeUtf8))
+                {
+                    Ok(DataType::LargeUtf8)
+                } else {
+                    Ok(DataType::Utf8)
+                }
+            }
+            2 | 3 => plan_err!(
+                "`{}` expects STRING arguments, got {:?}",
+                &self.name(),
+                arg_types
+            ),
+            _ => plan_err!(
+                "`{}` expects 2 or 3 arguments, got {}",
+                &self.name(),
+                arg_types.len()
+            ),
         }
     }
     /// Parses a URL and extracts the specified component.
@@ -140,37 +176,24 @@ impl ScalarUDFImpl for ParseUrl {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "{} expects 2 or 3 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        // The return type should match the largest size datatype
-        match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => {
-                if arg_types
-                    .iter()
-                    .any(|arg| matches!(arg, DataType::LargeUtf8))
-                {
-                    Ok(DataType::LargeUtf8)
-                } else {
-                    Ok(DataType::Utf8)
-                }
-            }
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
-            _ => plan_err!(
-                "`{}` expects 2 or 3 arguments, got {}",
-                &self.name(),
-                arg_types.len()
-            ),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `ParseUrl` declares `override def nullable: Boolean = true`
+    // (urlExpressions.scala:221) — an absent URL part yields NULL.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

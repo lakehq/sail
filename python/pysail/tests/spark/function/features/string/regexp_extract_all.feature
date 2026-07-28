@@ -77,7 +77,6 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null string literal yields a non-nullable array
       When query
         """
@@ -102,7 +101,6 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
          |    |-- element: string (containsNull = true)
         """
 
-    @sail-bug
     Scenario: a non-null string column yields a non-nullable array
       When query
         """
