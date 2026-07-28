@@ -1,9 +1,34 @@
+use std::sync::Arc;
+
 use indexmap::IndexMap;
-use sail_server::actor::{Actor, ActorAction, ActorContext};
+use log::info;
+use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
+use sail_execution::error::{ExecutionError, ExecutionResult};
+use sail_execution::{DriverId, IdGenerator};
+use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;
 use crate::session_manager::options::SessionManagerOptions;
+
+struct SessionDriverRegistry {
+    handle: ActorHandle<SessionManagerActor>,
+}
+
+#[tonic::async_trait]
+impl DriverRegistryAccessor for SessionDriverRegistry {
+    async fn get(&self, driver_id: DriverId) -> ExecutionResult<DriverHandle> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.handle
+            .send(SessionManagerEvent::GetDriver {
+                driver_id,
+                result: tx,
+            })
+            .await
+            .map_err(ExecutionError::from)?;
+        rx.await.map_err(ExecutionError::from)?
+    }
+}
 
 #[tonic::async_trait]
 impl Actor for SessionManagerActor {
@@ -14,13 +39,29 @@ impl Actor for SessionManagerActor {
         "SessionManagerActor"
     }
 
-    fn new(options: Self::Options) -> Self {
-        let factory = (options.factory)();
+    fn new(mut options: Self::Options) -> Self {
+        let session_factory = (options.session_factory)();
+        let job_runner_factory = (options.job_runner_factory)();
+        let gateway = options.take_driver_gateway();
         Self {
             options,
-            factory,
+            session_factory,
+            job_runner_factory,
             sessions: IndexMap::new(),
+            drivers: Default::default(),
+            gateway,
+            driver_id_generator: IdGenerator::new(),
         }
+    }
+
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        let Some(gateway) = &mut self.gateway else {
+            return;
+        };
+        gateway.start(Arc::new(SessionDriverRegistry {
+            handle: ctx.handle().clone(),
+        }));
+        info!("driver server is ready on port {}", gateway.port());
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
@@ -47,6 +88,16 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::ObserveState { observer } => {
                 self.handle_observe_state(ctx, observer)
             }
+            SessionManagerEvent::GetDriver { driver_id, result } => {
+                self.handle_get_driver(driver_id, result)
+            }
+        }
+    }
+
+    async fn stop(self, _ctx: &mut ActorContext<Self>) {
+        if let Some(mut gateway) = self.gateway {
+            gateway.stop().await;
+            info!("driver server has stopped");
         }
     }
 }

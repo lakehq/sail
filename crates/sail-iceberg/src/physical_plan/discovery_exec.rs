@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -14,7 +13,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::TryStreamExt;
 
 pub const COL_PARTITION_SCAN: &str = "partition_scan";
@@ -130,10 +129,6 @@ impl ExecutionPlan for IcebergDiscoveryExec {
         "IcebergDiscoveryExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }
@@ -221,9 +216,11 @@ mod tests {
         assert!(schema.is_some());
         // upstream (2 fields) + partition_scan (1 field) = 3
         assert_eq!(schema.as_ref().map(|s| s.fields().len()), Some(3));
-        assert!(schema
-            .as_ref()
-            .map(|s| s.field_with_name(COL_PARTITION_SCAN).is_ok())
-            .is_some_and(|v| v));
+        assert!(
+            schema
+                .as_ref()
+                .map(|s| s.field_with_name(COL_PARTITION_SCAN).is_ok())
+                .is_some_and(|v| v)
+        );
     }
 }

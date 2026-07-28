@@ -7,14 +7,14 @@ use std::time::Duration;
 use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use log::{debug, Log};
+use log::{Log, debug};
 use opentelemetry::metrics::Meter;
-use opentelemetry::{global, InstrumentationScope};
+use opentelemetry::{InstrumentationScope, global};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
@@ -208,16 +208,16 @@ fn init_datafusion_telemetry() -> TelemetryResult<()> {
 pub fn shutdown_telemetry() {
     debug!("Shutting down OpenTelemetry...");
     fastrace::flush();
-    if let Ok(mut status) = TELEMETRY_STATUS.lock() {
-        if let TelemetryStatus::Initialized(ref state) = *status {
-            if let Some(provider) = &state.meter_provider {
-                let _ = provider.shutdown();
-            }
-            if let Some(provider) = &state.logger_provider {
-                let _ = provider.shutdown();
-            }
-            *status = TelemetryStatus::Finalized;
+    if let Ok(mut status) = TELEMETRY_STATUS.lock()
+        && let TelemetryStatus::Initialized(ref state) = *status
+    {
+        if let Some(provider) = &state.meter_provider {
+            let _ = provider.shutdown();
         }
+        if let Some(provider) = &state.logger_provider {
+            let _ = provider.shutdown();
+        }
+        *status = TelemetryStatus::Finalized;
     }
 }
 

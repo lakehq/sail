@@ -22,11 +22,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::spec::encrypted_key::EncryptedKey;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::statistic_file::{PartitionStatisticsFile, StatisticsFile};
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema;
-use crate::spec::snapshots::{Snapshot, SnapshotReference, MAIN_BRANCH};
+use crate::spec::snapshots::{MAIN_BRANCH, Snapshot, SnapshotReference};
 use crate::spec::sort::SortOrder;
 
 /// Iceberg table metadata
@@ -64,6 +65,12 @@ pub struct TableMetadata {
     pub properties: HashMap<String, String>,
     /// long ID of the current table snapshot
     pub current_snapshot_id: Option<i64>,
+    /// A long higher than all assigned row IDs; the next snapshot's first-row-id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_row_id: Option<i64>,
+    /// Iceberg v3 encrypted table keys. We preserves this metadata but does not decrypt data yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub encryption_keys: Vec<EncryptedKey>,
     /// A list of valid snapshots
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,
@@ -115,6 +122,7 @@ pub struct MetadataLog {
 enum TableMetadataEnum {
     V1(TableMetadata),
     V2(TableMetadata),
+    V3(TableMetadata),
 }
 
 impl TableMetadata {
@@ -186,7 +194,9 @@ impl TableMetadata {
                         e
                     })
                     .map(|tm| match tm {
-                        TableMetadataEnum::V1(t) | TableMetadataEnum::V2(t) => t,
+                        TableMetadataEnum::V1(t)
+                        | TableMetadataEnum::V2(t)
+                        | TableMetadataEnum::V3(t) => t,
                     })
             }
             Err(e) => {
@@ -196,8 +206,52 @@ impl TableMetadata {
         }
     }
 
+    pub fn ensure_required_format_fields(&mut self) {
+        if self.format_version >= FormatVersion::V2 {
+            if self.table_uuid.is_none() {
+                self.table_uuid = Some(Uuid::new_v4());
+            }
+            if self.sort_orders.is_empty() {
+                self.sort_orders.push(SortOrder::unsorted_order());
+            }
+            if self.default_sort_order_id.is_none() {
+                self.default_sort_order_id = Some(SortOrder::unsorted_order().order_id as i32);
+            }
+        }
+
+        if self.format_version >= FormatVersion::V3 && self.next_row_id.is_none() {
+            self.next_row_id = Some(self.inferred_next_row_id());
+        }
+    }
+
+    pub fn row_lineage_start_row_id(&mut self) -> Option<i64> {
+        self.ensure_required_format_fields();
+        (self.format_version >= FormatVersion::V3).then(|| self.next_row_id.unwrap_or(0))
+    }
+
+    pub fn advance_next_row_id(&mut self, added_rows: i64) {
+        if let Some(start_row_id) = self.row_lineage_start_row_id() {
+            self.next_row_id = Some(start_row_id + added_rows);
+        }
+    }
+
+    fn inferred_next_row_id(&self) -> i64 {
+        self.snapshots
+            .iter()
+            .filter_map(
+                |snapshot| match (snapshot.first_row_id, snapshot.added_rows) {
+                    (Some(first_row_id), Some(added_rows)) => Some(first_row_id + added_rows),
+                    _ => None,
+                },
+            )
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Serialize table metadata to JSON bytes
     pub fn to_json(&self) -> Result<Vec<u8>, serde_json::Error> {
-        serde_json::to_vec(self)
+        let mut metadata = self.clone();
+        metadata.ensure_required_format_fields();
+        serde_json::to_vec(&metadata)
     }
 }

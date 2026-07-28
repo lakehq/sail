@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Column;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::expr::{Alias, Sort};
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
@@ -12,8 +12,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_sort(
@@ -53,28 +53,28 @@ impl PlanResolver<'_> {
     /// SELECT a, sum(b) AS s FROM VALUES (1, 2) AS t(a, b) GROUP BY a ORDER BY sum(b)
     /// ```
     fn rebase_query_sort_orders(sorts: Vec<Sort>, plan: &LogicalPlan) -> PlanResult<Vec<Sort>> {
-        let candidate = match plan {
-            LogicalPlan::Projection(Projection { input, expr, .. }) => {
-                let sorts = sorts
-                    .iter()
-                    .map(|x| Self::rebase_sort_before_projection(x.clone(), expr))
-                    .collect::<PlanResult<Vec<_>>>()?;
-
-                if let LogicalPlan::Aggregate(aggregate) = input.as_ref() {
-                    Some((aggregate, sorts))
-                } else if let LogicalPlan::Window(Window { input, .. }) = input.as_ref() {
-                    if let LogicalPlan::Aggregate(aggregate) = input.as_ref() {
-                        Some((aggregate, sorts))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
+        let LogicalPlan::Projection(Projection { input, expr, .. }) = plan else {
+            return Ok(sorts);
         };
-        if let Some((aggregate, sorts)) = candidate {
+        let aggregate = Self::input_aggregate(input.as_ref());
+        let sorts = sorts
+            .iter()
+            .map(|x| Self::rebase_sort_to_projection_input(x.clone(), expr))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let sorts = if let Some(aggregate) = aggregate {
+            sorts
+                .into_iter()
+                .map(|sort| Self::rewrite_sort_grouping_expr(sort, aggregate))
+                .collect::<PlanResult<Vec<_>>>()?
+        } else {
+            sorts
+        };
+        let sorts = sorts
+            .iter()
+            .map(|x| Self::rebase_sort_to_projection_output(x.clone(), expr))
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        if let Some(aggregate) = aggregate {
             let Aggregate {
                 input,
                 group_expr,
@@ -95,7 +95,34 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn rebase_sort_before_projection(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
+    fn input_aggregate(plan: &LogicalPlan) -> Option<&Aggregate> {
+        match plan {
+            LogicalPlan::Aggregate(aggregate) => Some(aggregate),
+            LogicalPlan::Window(Window { input, .. }) => match input.as_ref() {
+                LogicalPlan::Aggregate(aggregate) => Some(aggregate),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn rewrite_sort_grouping_expr(sort: Sort, aggregate: &Aggregate) -> PlanResult<Sort> {
+        let Sort {
+            expr,
+            asc,
+            nulls_first,
+        } = sort;
+        let has_grouping_set = Self::has_grouping_set(&aggregate.group_expr);
+        let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&aggregate.group_expr);
+        let expr = Self::rewrite_grouping_expr(expr, &grouping_exprs, has_grouping_set)?;
+        Ok(Sort {
+            expr,
+            asc,
+            nulls_first,
+        })
+    }
+
+    fn rebase_sort_to_projection_input(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
         let Sort {
             expr,
             asc,
@@ -109,20 +136,56 @@ impl PlanResolver<'_> {
                     name,
                     ..
                 }) = expr
+                    && relation == &col.relation
+                    && name == &col.name
                 {
-                    if relation == &col.relation && name == &col.name {
-                        return Some(expr.as_ref().clone());
-                    }
+                    return Some(expr.as_ref().clone());
                 }
                 None
             })
         };
         let expr = expr
             .transform_down(|e| {
-                if let Expr::Column(ref col) = e {
-                    if let Some(expr) = find(col) {
-                        return Ok(Transformed::yes(expr));
-                    }
+                if let Expr::Column(ref col) = e
+                    && let Some(expr) = find(col)
+                {
+                    return Ok(Transformed::yes(expr));
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()?;
+        Ok(Sort {
+            expr,
+            asc,
+            nulls_first,
+        })
+    }
+
+    fn rebase_sort_to_projection_output(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
+        let Sort {
+            expr,
+            asc,
+            nulls_first,
+        } = sort;
+        let find = |target: &Expr| -> Option<Expr> {
+            projection.iter().find_map(|expr| {
+                if let Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    ..
+                }) = expr
+                    && expr.as_ref() == target
+                {
+                    return Some(Expr::Column(Column::new(relation.clone(), name.clone())));
+                }
+                None
+            })
+        };
+        let expr = expr
+            .transform_down(|e| {
+                if let Some(expr) = find(&e) {
+                    return Ok(Transformed::yes(expr));
                 }
                 Ok(Transformed::no(e))
             })

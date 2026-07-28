@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,15 +11,15 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{arrow_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, arrow_datafusion_err, plan_err};
 use futures::{Stream, StreamExt};
+use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
-use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::source::StreamSource;
 
-use crate::options::gen::RateReadOptions;
+use crate::options::r#gen::RateReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct RateStreamSource {
@@ -165,10 +164,6 @@ impl DisplayAs for RateSourceExec {
 impl ExecutionPlan for RateSourceExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -24,8 +23,8 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use url::Url;
 
 use crate::io::StoreContext;
-use crate::spec::delete_index::DeleteFileRef;
 use crate::spec::Schema as IcebergSchema;
+use crate::spec::delete_index::DeleteFileRef;
 
 /// Column name used in Iceberg position-delete files for the target data-file path.
 const POS_DELETE_FILE_PATH_COL: &str = "file_path";
@@ -133,10 +132,6 @@ impl DisplayAs for IcebergDeleteApplyExec {
 impl ExecutionPlan for IcebergDeleteApplyExec {
     fn name(&self) -> &str {
         "IcebergDeleteApplyExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -521,7 +516,7 @@ mod tests {
     #[test]
     fn mask_respects_row_offset_window() {
         let batch = make_batch(); // 5 rows
-                                  // Upstream row offset 10 means this batch spans rows [10, 15).
+        // Upstream row offset 10 means this batch spans rows [10, 15).
         let positions = vec![9u64, 11, 14, 20];
         let mask = compute_delete_mask(&batch, 10, &positions, &[]).unwrap();
         // 9 < 10 → out; 11 → drop idx 1; 14 → drop idx 4; 20 → out.

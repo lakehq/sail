@@ -16,6 +16,8 @@ pub enum DefaultTimestampType {
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
+    /// The locale of the session.
+    pub session_locale: Arc<str>,
     /// The default timestamp type.
     pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
@@ -30,6 +32,16 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
     pub cross_join_enabled: bool,
+    /// Whether identifiers (e.g. column names) are matched case-sensitively.
+    /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
+    pub case_sensitive: bool,
+    /// The maximum number of distinct values collected for a pivot without an explicit
+    /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
+    pub pivot_max_values: usize,
+    /// Whether a table-valued function may receive more than one `TABLE (...)` argument
+    /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
+    /// arguments produce the cartesian product of their rows.
+    pub tvf_allow_multiple_table_arguments: bool,
 }
 
 impl PlanConfig {
@@ -45,14 +57,18 @@ impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: Arc::from("UTC"),
+            session_locale: Arc::from("en-US"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
-            ansi_mode: false,
+            ansi_mode: true,
             cross_join_enabled: true,
+            case_sensitive: false,
+            pivot_max_values: 10000,
+            tvf_allow_multiple_table_arguments: false,
         }
     }
 }

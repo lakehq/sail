@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
 use sail_telemetry::layers::{TracingClientLayer, TracingClientService};
-use tokio::sync::{oneshot, OnceCell};
+use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tower::ServiceBuilder;

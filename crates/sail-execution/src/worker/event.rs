@@ -11,7 +11,7 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
-use crate::worker::gen;
+use crate::worker::r#gen;
 
 pub enum WorkerEvent {
     ServerReady {
@@ -306,7 +306,7 @@ pub struct WorkerLocation {
     pub port: u16,
 }
 
-impl From<WorkerLocation> for gen::WorkerLocation {
+impl From<WorkerLocation> for r#gen::WorkerLocation {
     fn from(value: WorkerLocation) -> Self {
         Self {
             worker_id: value.worker_id.into(),
@@ -316,10 +316,10 @@ impl From<WorkerLocation> for gen::WorkerLocation {
     }
 }
 
-impl TryFrom<gen::WorkerLocation> for WorkerLocation {
+impl TryFrom<r#gen::WorkerLocation> for WorkerLocation {
     type Error = ExecutionError;
 
-    fn try_from(value: gen::WorkerLocation) -> Result<Self, Self::Error> {
+    fn try_from(value: r#gen::WorkerLocation) -> Result<Self, Self::Error> {
         let port = u16::try_from(value.port).map_err(|_| {
             ExecutionError::InvalidArgument(format!("invalid port: {}", value.port))
         })?;

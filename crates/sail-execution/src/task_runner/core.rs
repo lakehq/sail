@@ -4,27 +4,25 @@ use std::sync::Arc;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
-use sail_telemetry::{trace_execution_plan, TracingExecOptions};
+use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
-use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::proto::{RemoteExecutionCodec, decode_remote_physical_plan};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -84,9 +82,9 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
+        let plan =
+            decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
+        let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,
             key,
@@ -112,20 +110,29 @@ impl TaskRunner {
         Ok(stream)
     }
 
-    fn rewrite_parquet_adapters(
+    fn rewrite_file_scans(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let result = plan.transform(|node| {
-            if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
-                if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
-                {
-                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-                    let builder = FileScanConfigBuilder::from(base_config.clone())
-                        .with_expr_adapter(Some(adapter_factory));
-                    let new_exec = DataSourceExec::from_data_source(builder.build());
-                    return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
+            if let Some(ds) = node.downcast_ref::<DataSourceExec>()
+                && let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>()
+            {
+                // DataFusion file scans can use process-local sibling state to let
+                // partitions steal work from a shared queue of all file groups. In Sail
+                // cluster mode each partition runs as an isolated task with its own
+                // deserialized plan, so that queue would be recreated in every task and
+                // every task would scan every file. Preserve-order disables sibling
+                // work sharing and keeps each task on its own file group.
+                let mut builder =
+                    FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
+                if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                    let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
+                        Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
+                    builder = builder.with_expr_adapter(Some(adapter_factory));
                 }
+                let new_exec = DataSourceExec::from_data_source(builder.build());
+                return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
             }
             Ok(Transformed::no(node))
         });
@@ -146,7 +153,7 @@ impl TaskRunner {
     {
         let handle = ctx.handle();
         let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<usize>>() {
+            if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
                 let Some(input) = inputs.get(*placeholder.input()) else {
                     return internal_err!(
                         "stage input index {} out of bounds for {}",
@@ -180,7 +187,9 @@ impl TaskRunner {
             }
         };
         let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
-        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+        let row_based = output.row_based();
+        let shuffle =
+            ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);
         Ok(Arc::new(shuffle))
     }
 }

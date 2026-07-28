@@ -17,14 +17,63 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/_serde.rs
 
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{DataContentType, DataFileFormat};
-use crate::spec::types::{RawLiteral, StructType};
+use crate::spec::Schema;
+use crate::spec::types::{Datum, PrimitiveLiteral, RawLiteral, StructType, Type};
 
-// Note: We currently omit metrics maps serialization on write (left as None),
-// and default them to empty on read. Partition is encoded as a struct record
-// according to the partition spec's StructType.
+#[derive(Serialize, Deserialize)]
+pub(super) struct IntLongMapEntry {
+    key: i32,
+    value: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct IntBytesMapEntry {
+    key: i32,
+    value: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OptionalRawLiteralSerde {
+    Some(RawLiteral),
+    Optional(Option<RawLiteral>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OptionalVecSerde<T> {
+    Some(Vec<T>),
+    Optional(Option<Vec<T>>),
+    Other(IgnoredAny),
+}
+
+fn deserialize_optional_raw_literal<'de, D>(deserializer: D) -> Result<Option<RawLiteral>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    OptionalRawLiteralSerde::deserialize(deserializer).map(|value| match value {
+        OptionalRawLiteralSerde::Some(value) => Some(value),
+        OptionalRawLiteralSerde::Optional(value) => value,
+    })
+}
+
+fn deserialize_optional_vec<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    OptionalVecSerde::<T>::deserialize(deserializer).map(|value| match value {
+        OptionalVecSerde::Some(value) => Some(value),
+        OptionalVecSerde::Optional(value) => value,
+        OptionalVecSerde::Other(_) => None,
+    })
+}
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV2 {
@@ -48,15 +97,63 @@ pub(super) struct DataFileSerde {
     pub content: i32,
     pub file_path: String,
     pub file_format: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_raw_literal"
+    )]
     pub partition: Option<RawLiteral>,
     pub record_count: i64,
     pub file_size_in_bytes: i64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub column_sizes: Option<Vec<IntLongMapEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub value_counts: Option<Vec<IntLongMapEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub null_value_counts: Option<Vec<IntLongMapEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub nan_value_counts: Option<Vec<IntLongMapEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub lower_bounds: Option<Vec<IntBytesMapEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
+    pub upper_bounds: Option<Vec<IntBytesMapEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_metadata: Option<Vec<u8>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
     pub split_offsets: Option<Vec<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_vec"
+    )]
     pub equality_ids: Option<Vec<i32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order_id: Option<i32>,
@@ -92,21 +189,135 @@ impl ManifestEntryV2 {
         self,
         partition_spec_id: i32,
         partition_type: &StructType,
-    ) -> super::ManifestEntry {
+        schema: Option<&Schema>,
+    ) -> Result<super::ManifestEntry, String> {
         let status = match self.status {
             1 => super::ManifestStatus::Added,
             2 => super::ManifestStatus::Deleted,
             _ => super::ManifestStatus::Existing,
         };
-        super::ManifestEntry::new(
+        Ok(super::ManifestEntry::new(
             status,
             self.snapshot_id,
             self.sequence_number,
             self.file_sequence_number,
             self.data_file
-                .into_data_file(partition_spec_id, partition_type),
-        )
+                .into_data_file(partition_spec_id, partition_type, schema)?,
+        ))
     }
+}
+
+fn int_long_map_from(values: HashMap<i32, u64>) -> Option<Vec<IntLongMapEntry>> {
+    if values.is_empty() {
+        None
+    } else {
+        let mut out = values
+            .into_iter()
+            .map(|(key, value)| IntLongMapEntry {
+                key,
+                value: value as i64,
+            })
+            .collect::<Vec<_>>();
+        out.sort_by_key(|entry| entry.key);
+        Some(out)
+    }
+}
+
+fn int_long_map_into(
+    name: &str,
+    values: Option<Vec<IntLongMapEntry>>,
+) -> Result<HashMap<i32, u64>, String> {
+    values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            if entry.value < 0 {
+                Err(format!(
+                    "Invalid negative value {} for Iceberg data file metric `{name}` field id {}",
+                    entry.value, entry.key
+                ))
+            } else {
+                Ok((entry.key, entry.value as u64))
+            }
+        })
+        .collect()
+}
+
+fn i128_to_min_big_endian(value: i128) -> Vec<u8> {
+    let bytes = value.to_be_bytes();
+    let mut start = 0;
+    while start < bytes.len() - 1 {
+        let current = bytes[start];
+        let next = bytes[start + 1];
+        let redundant_positive = current == 0x00 && (next & 0x80) == 0;
+        let redundant_negative = current == 0xff && (next & 0x80) != 0;
+        if redundant_positive || redundant_negative {
+            start += 1;
+        } else {
+            break;
+        }
+    }
+    bytes[start..].to_vec()
+}
+
+fn datum_to_bytes(datum: &Datum) -> Result<Vec<u8>, String> {
+    let bytes = match &datum.literal {
+        PrimitiveLiteral::Boolean(value) => vec![u8::from(*value)],
+        PrimitiveLiteral::Int(value) => value.to_le_bytes().to_vec(),
+        PrimitiveLiteral::Long(value) => value.to_le_bytes().to_vec(),
+        PrimitiveLiteral::Float(value) => value.0.to_le_bytes().to_vec(),
+        PrimitiveLiteral::Double(value) => value.0.to_le_bytes().to_vec(),
+        PrimitiveLiteral::Int128(value) => i128_to_min_big_endian(*value),
+        PrimitiveLiteral::String(value) => value.as_bytes().to_vec(),
+        PrimitiveLiteral::UInt128(value) => value.to_be_bytes().to_vec(),
+        PrimitiveLiteral::Binary(value) => value.clone(),
+    };
+    if datum.r#type.compatible(&datum.literal) {
+        Ok(bytes)
+    } else {
+        Err(format!(
+            "Literal is not compatible with Iceberg type {}",
+            datum.r#type
+        ))
+    }
+}
+
+fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
+    if values.is_empty() {
+        Ok(None)
+    } else {
+        let mut out = values
+            .into_iter()
+            .map(|(key, value)| datum_to_bytes(&value).map(|value| IntBytesMapEntry { key, value }))
+            .collect::<Result<Vec<_>, String>>()?;
+        out.sort_by_key(|entry| entry.key);
+        Ok(Some(out))
+    }
+}
+
+fn bytes_map_into(
+    values: Option<Vec<IntBytesMapEntry>>,
+    schema: Option<&Schema>,
+) -> HashMap<i32, Datum> {
+    // TODO: Preserve raw bound bytes like `Map<Integer, ByteBuffer>` metrics.
+    // For now, keep only bounds we can decode into `Datum`; unknown fields and unsupported
+    // primitive encodings are ignored so manifest reads remain non-fatal after schema evolution.
+    values
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let primitive = schema
+                .and_then(|schema| schema.field_by_id(entry.key))
+                .and_then(|field| match field.field_type.as_ref() {
+                    Type::Primitive(primitive) => Some(primitive.clone()),
+                    Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
+                })?;
+            primitive
+                .literal_from_bytes(&entry.value)
+                .ok()
+                .map(|literal| (entry.key, Datum::new(primitive, literal)))
+        })
+        .collect()
 }
 
 #[expect(dead_code)]
@@ -151,6 +362,12 @@ impl DataFileSerde {
             )?),
             record_count: df.record_count as i64,
             file_size_in_bytes: df.file_size_in_bytes as i64,
+            column_sizes: int_long_map_from(df.column_sizes),
+            value_counts: int_long_map_from(df.value_counts),
+            null_value_counts: int_long_map_from(df.null_value_counts),
+            nan_value_counts: int_long_map_from(df.nan_value_counts),
+            lower_bounds: bytes_map_from(df.lower_bounds)?,
+            upper_bounds: bytes_map_from(df.upper_bounds)?,
             key_metadata: df.key_metadata,
             split_offsets: if df.split_offsets.is_empty() {
                 None
@@ -174,7 +391,8 @@ impl DataFileSerde {
         self,
         partition_spec_id: i32,
         partition_type: &StructType,
-    ) -> super::DataFile {
+        schema: Option<&Schema>,
+    ) -> Result<super::DataFile, String> {
         let content = match self.content {
             0 => DataContentType::Data,
             1 => DataContentType::PositionDeletes,
@@ -185,9 +403,10 @@ impl DataFileSerde {
             "PARQUET" => DataFileFormat::Parquet,
             "AVRO" => DataFileFormat::Avro,
             "ORC" => DataFileFormat::Orc,
+            "PUFFIN" => DataFileFormat::Puffin,
             _ => DataFileFormat::Parquet,
         };
-        super::DataFile {
+        Ok(super::DataFile {
             content,
             file_path: self.file_path,
             file_format,
@@ -197,12 +416,12 @@ impl DataFileSerde {
                 .unwrap_or_default(),
             record_count: self.record_count as u64,
             file_size_in_bytes: self.file_size_in_bytes as u64,
-            column_sizes: Default::default(),
-            value_counts: Default::default(),
-            null_value_counts: Default::default(),
-            nan_value_counts: Default::default(),
-            lower_bounds: Default::default(),
-            upper_bounds: Default::default(),
+            column_sizes: int_long_map_into("column_sizes", self.column_sizes)?,
+            value_counts: int_long_map_into("value_counts", self.value_counts)?,
+            null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
+            nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
+            lower_bounds: bytes_map_into(self.lower_bounds, schema),
+            upper_bounds: bytes_map_into(self.upper_bounds, schema),
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
@@ -213,6 +432,6 @@ impl DataFileSerde {
             referenced_data_file: self.referenced_data_file,
             content_offset: self.content_offset,
             content_size_in_bytes: self.content_size_in_bytes,
-        }
+        })
     }
 }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aws_config::identity::IdentityCache;
 use aws_config::{BehaviorVersion, SdkConfig};
-use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_smithy_async::rt::sleep::TokioSleep;
 use aws_smithy_async::time::SystemTimeSource;
 use aws_smithy_runtime_api::client::identity::{
@@ -18,7 +18,7 @@ use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
-    resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
 use tokio::sync::OnceCell;
@@ -156,15 +156,17 @@ pub fn parse_s3_url(
         )),
     })?;
     let first_path_segment = url.path_segments().into_iter().flatten().next();
-    debug!("Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}");
+    debug!(
+        "Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}"
+    );
 
     match scheme {
         "s3" | "s3a" => {
             builder = builder.with_bucket_name(host);
-            if let Some(bucket_prefix) = host.strip_suffix("--x-s3") {
-                if let Some(_bucket_az) = bucket_prefix.rsplit_once("--") {
-                    builder = builder.with_s3_express(true);
-                }
+            if let Some(bucket_prefix) = host.strip_suffix("--x-s3")
+                && let Some(_bucket_az) = bucket_prefix.rsplit_once("--")
+            {
+                builder = builder.with_s3_express(true);
             }
         }
         "http" | "https" => {
@@ -228,7 +230,7 @@ pub fn parse_s3_url(
                         source: Box::new(plan_datafusion_err!(
                             "URL did not match any known pattern for scheme: {url}"
                         )),
-                    })
+                    });
                 }
             }
         }

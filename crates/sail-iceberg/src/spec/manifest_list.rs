@@ -18,7 +18,7 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest_list.rs
 
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value as avro_from_value};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::FormatVersion;
@@ -86,10 +86,36 @@ impl ManifestList {
                             if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
                                 entries.push(mf);
                             } else {
-                                let err = format!("Avro decode error: Failed to deserialize Avro value into value: {value:?}");
+                                let err = format!(
+                                    "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
+                                );
                                 return Err(err);
                             }
                         }
+                    }
+                }
+                Ok(ManifestList::new(entries))
+            }
+            FormatVersion::V3 => {
+                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+                let mut entries = Vec::new();
+                for value in reader {
+                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+                    match avro_from_value::<_serde::ManifestFileV3>(&value) {
+                        Ok(v3) => entries.push(ManifestFile::from(v3)),
+                        Err(_) => match avro_from_value::<_serde::ManifestFileV2>(&value) {
+                            Ok(v2) => entries.push(ManifestFile::from(v2)),
+                            Err(_) => {
+                                if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
+                                    entries.push(mf);
+                                } else {
+                                    let err = format!(
+                                        "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
+                                    );
+                                    return Err(err);
+                                }
+                            }
+                        },
                     }
                 }
                 Ok(ManifestList::new(entries))
@@ -123,44 +149,21 @@ impl ManifestListWriter {
         ManifestList::new(self.entries)
     }
 
-    pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
+    pub fn to_bytes(&self, version: FormatVersion) -> Result<Vec<u8>, String> {
         use apache_avro::Writer;
 
-        use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
+        use crate::spec::manifest_list::schema::{
+            MANIFEST_LIST_AVRO_SCHEMA_V2, MANIFEST_LIST_AVRO_SCHEMA_V3,
+        };
 
         // TODO: Implement typed V1 writer; currently only V2 is supported.
-        let mut writer = Writer::new(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new());
+        let schema = match version {
+            FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
+            FormatVersion::V1 | FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
+        };
+        let mut writer = Writer::new(schema, Vec::new());
 
         for mf in &self.entries {
-            let v2 = _serde::ManifestFileV2 {
-                manifest_path: mf.manifest_path.clone(),
-                manifest_length: mf.manifest_length,
-                partition_spec_id: mf.partition_spec_id,
-                content: match mf.content {
-                    ManifestContentType::Data => 0,
-                    ManifestContentType::Deletes => 1,
-                },
-                sequence_number: mf.sequence_number,
-                min_sequence_number: mf.min_sequence_number,
-                added_snapshot_id: mf.added_snapshot_id,
-                added_files_count: mf.added_files_count.unwrap_or(0),
-                existing_files_count: mf.existing_files_count.unwrap_or(0),
-                deleted_files_count: mf.deleted_files_count.unwrap_or(0),
-                added_rows_count: mf.added_rows_count.unwrap_or(0),
-                existing_rows_count: mf.existing_rows_count.unwrap_or(0),
-                deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
-                partitions: mf.partitions.clone().map(|ps| {
-                    ps.into_iter()
-                        .map(|p| FieldSummaryAvro {
-                            contains_null: p.contains_null,
-                            contains_nan: p.contains_nan,
-                            lower_bound: p.lower_bound_bytes,
-                            upper_bound: p.upper_bound_bytes,
-                        })
-                        .collect()
-                }),
-                key_metadata: mf.key_metadata.clone(),
-            };
             // Enforce required fields for V2
             if mf.added_files_count.is_none()
                 || mf.existing_files_count.is_none()
@@ -171,9 +174,67 @@ impl ManifestListWriter {
             {
                 return Err("Missing required V2 counts/rows fields".to_string());
             }
-            writer
-                .append_ser(v2)
-                .map_err(|e| format!("Avro append error: {e}"))?;
+            let content = match mf.content {
+                ManifestContentType::Data => 0,
+                ManifestContentType::Deletes => 1,
+            };
+            let partitions = mf.partitions.clone().map(|ps| {
+                ps.into_iter()
+                    .map(|p| FieldSummaryAvro {
+                        contains_null: p.contains_null,
+                        contains_nan: p.contains_nan,
+                        lower_bound: p.lower_bound_bytes,
+                        upper_bound: p.upper_bound_bytes,
+                    })
+                    .collect()
+            });
+            match version {
+                FormatVersion::V3 => {
+                    let v3 = _serde::ManifestFileV3 {
+                        manifest_path: mf.manifest_path.clone(),
+                        manifest_length: mf.manifest_length,
+                        partition_spec_id: mf.partition_spec_id,
+                        content,
+                        sequence_number: mf.sequence_number,
+                        min_sequence_number: mf.min_sequence_number,
+                        added_snapshot_id: mf.added_snapshot_id,
+                        added_files_count: mf.added_files_count.unwrap_or(0),
+                        existing_files_count: mf.existing_files_count.unwrap_or(0),
+                        deleted_files_count: mf.deleted_files_count.unwrap_or(0),
+                        added_rows_count: mf.added_rows_count.unwrap_or(0),
+                        existing_rows_count: mf.existing_rows_count.unwrap_or(0),
+                        deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
+                        partitions,
+                        key_metadata: mf.key_metadata.clone(),
+                        first_row_id: mf.first_row_id,
+                    };
+                    writer
+                        .append_ser(v3)
+                        .map_err(|e| format!("Avro append error: {e}"))?;
+                }
+                FormatVersion::V1 | FormatVersion::V2 => {
+                    let v2 = _serde::ManifestFileV2 {
+                        manifest_path: mf.manifest_path.clone(),
+                        manifest_length: mf.manifest_length,
+                        partition_spec_id: mf.partition_spec_id,
+                        content,
+                        sequence_number: mf.sequence_number,
+                        min_sequence_number: mf.min_sequence_number,
+                        added_snapshot_id: mf.added_snapshot_id,
+                        added_files_count: mf.added_files_count.unwrap_or(0),
+                        existing_files_count: mf.existing_files_count.unwrap_or(0),
+                        deleted_files_count: mf.deleted_files_count.unwrap_or(0),
+                        added_rows_count: mf.added_rows_count.unwrap_or(0),
+                        existing_rows_count: mf.existing_rows_count.unwrap_or(0),
+                        deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
+                        partitions,
+                        key_metadata: mf.key_metadata.clone(),
+                    };
+                    writer
+                        .append_ser(v2)
+                        .map_err(|e| format!("Avro append error: {e}"))?;
+                }
+            }
         }
 
         writer
@@ -332,6 +393,16 @@ impl ManifestList {
                     _ => None,
                 };
 
+                let first_row_id = match get("first_row_id") {
+                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
+                        AvroValue::Long(value) => Some(*value),
+                        AvroValue::Null => None,
+                        _ => None,
+                    },
+                    Some(AvroValue::Long(value)) => Some(*value),
+                    _ => None,
+                };
+
                 let content = match content {
                     0 => ManifestContentType::Data,
                     1 => ManifestContentType::Deletes,
@@ -354,6 +425,7 @@ impl ManifestList {
                     deleted_rows_count: Some(deleted_rows_count),
                     partitions,
                     key_metadata,
+                    first_row_id,
                 })
             }
             _ => Err("not a record".into()),
@@ -389,6 +461,40 @@ impl From<_serde::ManifestFileV2> for ManifestFile {
             deleted_rows_count: Some(avro.deleted_rows_count),
             partitions,
             key_metadata: avro.key_metadata,
+            first_row_id: None,
+        }
+    }
+}
+
+impl From<_serde::ManifestFileV3> for ManifestFile {
+    fn from(avro: _serde::ManifestFileV3) -> Self {
+        let content = match avro.content {
+            0 => ManifestContentType::Data,
+            1 => ManifestContentType::Deletes,
+            _ => ManifestContentType::Data,
+        };
+
+        let partitions = avro
+            .partitions
+            .map(|summaries| summaries.into_iter().map(FieldSummary::from).collect());
+
+        ManifestFile {
+            manifest_path: avro.manifest_path,
+            manifest_length: avro.manifest_length,
+            partition_spec_id: avro.partition_spec_id,
+            content,
+            sequence_number: avro.sequence_number,
+            min_sequence_number: avro.min_sequence_number,
+            added_snapshot_id: avro.added_snapshot_id,
+            added_files_count: Some(avro.added_files_count),
+            existing_files_count: Some(avro.existing_files_count),
+            deleted_files_count: Some(avro.deleted_files_count),
+            added_rows_count: Some(avro.added_rows_count),
+            existing_rows_count: Some(avro.existing_rows_count),
+            deleted_rows_count: Some(avro.deleted_rows_count),
+            partitions,
+            key_metadata: avro.key_metadata,
+            first_row_id: avro.first_row_id,
         }
     }
 }
@@ -458,6 +564,9 @@ pub struct ManifestFile {
     /// Implementation-specific key metadata for encryption.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_metadata: Option<Vec<u8>>,
+    /// The starting row ID to assign to rows in this manifest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_row_id: Option<i64>,
 }
 
 impl ManifestFile {
@@ -556,6 +665,7 @@ pub struct ManifestFileBuilder {
     deleted_rows_count: Option<i64>,
     partitions: Option<Vec<FieldSummary>>,
     key_metadata: Option<Vec<u8>>,
+    first_row_id: Option<i64>,
 }
 
 impl ManifestFileBuilder {
@@ -577,6 +687,7 @@ impl ManifestFileBuilder {
             deleted_rows_count: None,
             partitions: None,
             key_metadata: None,
+            first_row_id: None,
         }
     }
 
@@ -650,6 +761,12 @@ impl ManifestFileBuilder {
         self
     }
 
+    /// Set the first row ID.
+    pub fn with_first_row_id(mut self, first_row_id: i64) -> Self {
+        self.first_row_id = Some(first_row_id);
+        self
+    }
+
     /// Build the manifest file.
     pub fn build(self) -> Result<ManifestFile, String> {
         let manifest_path = self.manifest_path.ok_or("manifest_path is required")?;
@@ -670,6 +787,7 @@ impl ManifestFileBuilder {
             deleted_rows_count: self.deleted_rows_count,
             partitions: self.partitions,
             key_metadata: self.key_metadata,
+            first_row_id: self.first_row_id,
         })
     }
 }
@@ -748,6 +866,43 @@ pub(super) mod _serde {
         #[serde(rename = "key_metadata")]
         pub key_metadata: Option<Vec<u8>>,
     }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct ManifestFileV3 {
+        #[serde(rename = "manifest_path")]
+        pub manifest_path: String,
+        #[serde(rename = "manifest_length")]
+        pub manifest_length: i64,
+        #[serde(rename = "partition_spec_id")]
+        pub partition_spec_id: i32,
+        #[serde(rename = "content")]
+        pub content: i32,
+        #[serde(rename = "sequence_number")]
+        pub sequence_number: i64,
+        #[serde(rename = "min_sequence_number")]
+        pub min_sequence_number: i64,
+        #[serde(rename = "added_snapshot_id")]
+        pub added_snapshot_id: i64,
+        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
+        pub added_files_count: i32,
+        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
+        pub existing_files_count: i32,
+        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
+        pub deleted_files_count: i32,
+        #[serde(rename = "added_rows_count")]
+        pub added_rows_count: i64,
+        #[serde(rename = "existing_rows_count")]
+        pub existing_rows_count: i64,
+        #[serde(rename = "deleted_rows_count")]
+        pub deleted_rows_count: i64,
+        #[serde(rename = "partitions")]
+        pub partitions: Option<Vec<FieldSummaryAvro>>,
+        #[serde(rename = "key_metadata")]
+        pub key_metadata: Option<Vec<u8>>,
+        #[serde(rename = "first_row_id", default)]
+        pub first_row_id: Option<i64>,
+    }
 }
 
 impl From<_serde::ManifestFileV1> for ManifestFile {
@@ -770,6 +925,7 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
                 .partitions
                 .map(|v| v.into_iter().map(FieldSummary::from).collect()),
             key_metadata: v1.key_metadata,
+            first_row_id: None,
         }
     }
 }

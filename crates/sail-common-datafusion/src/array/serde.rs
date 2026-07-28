@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 use serde::{Deserialize, Serialize};
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;

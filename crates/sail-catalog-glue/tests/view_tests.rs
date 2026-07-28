@@ -102,9 +102,11 @@ async fn test_create_view() {
             assert_eq!(definition, "SELECT id, name, price FROM products");
             assert_eq!(columns.len(), 3);
             assert_eq!(comment, &Some("View of products".to_string()));
-            assert!(properties
-                .iter()
-                .any(|(k, v)| k == "owner" && v == "test_user"));
+            assert!(
+                properties
+                    .iter()
+                    .any(|(k, v)| k == "owner" && v == "test_user")
+            );
         }
         _ => panic!("Expected View kind"),
     }

@@ -1,0 +1,52 @@
+- name: "from_csv"
+  scope: "sql_builtin"
+  group: "csv_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.CsvToStructs"
+  signatures:
+    - "from_csv(csvStr, schema[, options])"
+  usage: "from_csv(csvStr, schema[, options]) - Returns a struct value with the given `csvStr` and `schema`."
+  examples: |2-
+    
+        Examples:
+          > SELECT from_csv('1, 0.8', 'a INT, b DOUBLE');
+           {"a":1,"b":0.8}
+          > SELECT from_csv('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
+           {"time":2015-08-26 00:00:00}
+      
+  since: "3.0.0"
+
+- name: "schema_of_csv"
+  scope: "sql_builtin"
+  group: "csv_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.SchemaOfCsv"
+  signatures:
+    - "schema_of_csv(csv[, options])"
+  usage: "schema_of_csv(csv[, options]) - Returns schema in the DDL format of CSV string."
+  examples: |2-
+    
+        Examples:
+          > SELECT schema_of_csv('1,abc');
+           STRUCT<_c0: INT, _c1: STRING>
+      
+  since: "3.0.0"
+
+- name: "to_csv"
+  scope: "sql_builtin"
+  group: "csv_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.StructsToCsv"
+  signatures:
+    - "to_csv(expr[, options])"
+  usage: "to_csv(expr[, options]) - Returns a CSV string with a given struct value"
+  examples: |2-
+    
+        Examples:
+          > SELECT to_csv(named_struct('a', 1, 'b', 2));
+           1,2
+          > SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
+           26/08/2015
+      
+  since: "3.0.0"
+

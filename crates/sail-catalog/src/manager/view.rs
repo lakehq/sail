@@ -26,6 +26,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -49,6 +50,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -124,13 +126,13 @@ impl CatalogManager {
                 Err(e) => return Err(e),
             }
         }
-        if let [x @ .., name] = view {
-            if self.state()?.is_global_temporary_view_database(x) {
-                match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
-                    Ok(_) => return Ok(()),
-                    Err(CatalogError::NotFound(_, _)) => {}
-                    Err(e) => return Err(e),
-                }
+        if let [x @ .., name] = view
+            && self.state()?.is_global_temporary_view_database(x)
+        {
+            match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
+                Ok(_) => return Ok(()),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
             }
         }
         self.drop_view(view, options).await
@@ -173,6 +175,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }
@@ -188,6 +191,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }

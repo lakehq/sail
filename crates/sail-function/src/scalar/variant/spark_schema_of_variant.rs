@@ -42,10 +42,6 @@ impl Default for SparkSchemaOfVariantUdf {
 }
 
 impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "schema_of_variant"
     }
@@ -86,10 +82,8 @@ impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
             }
             ColumnarValue::Array(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
-                let mut builder = arrow::array::StringBuilder::with_capacity(
-                    variant_array.len(),
-                    variant_array.len() * 10,
-                );
+                let mut builder =
+                    arrow::array::StringBuilder::with_capacity(variant_array.len(), 0);
                 for v in variant_array.iter() {
                     match v {
                         Some(variant) => {

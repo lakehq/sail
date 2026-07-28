@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -12,7 +11,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -82,10 +81,6 @@ impl DisplayAs for ShowStringExec {
 impl ExecutionPlan for ShowStringExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -222,7 +217,7 @@ impl Stream for ShowStringStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            match self.poll(cx) {
+            match self.as_mut().get_mut().poll(cx) {
                 Poll::Pending => break Poll::Pending,
                 Poll::Ready(ShowStringState::Show) => {
                     self.input = None;

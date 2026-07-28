@@ -1,0 +1,18 @@
+# This crate is a copy of `arrow-pyarrow` with minor modifications to make it compile with PyO3 0.29.
+# This is needed to unblock PyO3 upgrade to 0.29 for a security fix.
+# We should remove this crate once the upstream `arrow-pyarrow` crate is updated
+# to use the new PyO3 version.
+
+[package]
+name = "sail-pyarrow"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
+pyo3 = { workspace = true }

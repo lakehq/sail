@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::functions::unicode::reverse::ReverseFunc;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
@@ -128,10 +127,6 @@ fn reverse_binary(arg: &ColumnarValue) -> Result<ColumnarValue> {
 }
 
 impl ScalarUDFImpl for SparkReverse {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_reverse"
     }

@@ -623,7 +623,7 @@ mod tests {
     use sail_catalog::error::CatalogError;
 
     use super::{
-        load_gssapi_library_by_name_for_test, select_security_layer, SaslQop, SecurityLayer,
+        SaslQop, SecurityLayer, load_gssapi_library_by_name_for_test, select_security_layer,
     };
 
     fn build_error_message(name: &str) -> String {

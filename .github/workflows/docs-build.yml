@@ -25,17 +25,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.stage != 'test' && format('docs/{0}', inputs.stage) || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
 
       - name: Install Hatch
         uses: pypa/hatch@install
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: pnpm
@@ -52,7 +52,7 @@ jobs:
         run: pnpm run lint
 
       - name: Download Python Package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: python-package
           path: target/wheels
@@ -83,7 +83,7 @@ jobs:
         shell: bash
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
           path: docs/.vitepress/dist

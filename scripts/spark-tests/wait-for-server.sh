@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 for _ in {1..24}; do
   if grpc_health_probe -addr localhost:50051 -connect-timeout 1000ms -rpc-timeout 1000ms; then

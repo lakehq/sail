@@ -10,7 +10,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_basic
         """
 
-    @sail-only
     Scenario: Create table with generated column and insert without specifying generated column
       Given statement template
         """
@@ -36,7 +35,6 @@ Feature: Delta Lake Generated Columns
         | 1  | 2024-10-15 10:30:00 | 2024-10-15 |
         | 2  | 2024-10-16 14:00:00 | 2024-10-16 |
 
-    @sail-only
     Scenario: Create table with generated column and insert with explicit correct values
       Given statement template
         """
@@ -71,7 +69,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_meta
         """
 
-    @sail-only
     Scenario: Delta log metadata contains generation expression for generated columns
       Given statement template
         """
@@ -92,7 +89,6 @@ Feature: Delta Lake Generated Columns
         | path                                                   | value                |
         | protocol.minWriterVersion                              | 7                    |
 
-    @sail-only
     Scenario: Delta log first commit snapshot records generation expression and writerFeatures
       Given statement template
         """
@@ -120,7 +116,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_year
         """
 
-    @sail-only
     Scenario: Generated column using YEAR expression
       Given statement template
         """
@@ -155,7 +150,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_partition
         """
 
-    @sail-only
     Scenario: Partitioned table with generated column
       Given statement template
         """
@@ -194,7 +188,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_multi
         """
 
-    @sail-only
     Scenario: Table with multiple generated columns
       Given statement template
         """
@@ -230,7 +223,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_coerce
         """
 
-    @sail-only
     Scenario: Insert with BIGINT generated column using arithmetic on BIGINT dependency coerces INT input
       Given statement template
         """
@@ -256,7 +248,6 @@ Feature: Delta Lake Generated Columns
         | 1  | 100   | 200     |
         | 2  | 200   | 400     |
 
-    @sail-only
     Scenario: Insert with explicit BIGINT generated column value of compatible type succeeds
       Given statement template
         """
@@ -281,7 +272,6 @@ Feature: Delta Lake Generated Columns
         | id | value | doubled |
         | 1  | 100   | 200     |
 
-    @sail-only
     Scenario: Insert with incorrect BIGINT generated column value raises mismatch error
       Given statement template
         """
@@ -308,7 +298,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_enforce
         """
 
-    @sail-only
     Scenario: Insert with correct explicit generated column value succeeds
       Given statement template
         """
@@ -333,7 +322,6 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-05-10 12:00:00 | 2024-05-10 |
 
-    @sail-only
     Scenario: Insert with NULL explicit generated column value is replaced by the expression
       Given statement template
         """
@@ -358,7 +346,6 @@ Feature: Delta Lake Generated Columns
         | id | event_date |
         | 1  | 2024-05-10 |
 
-    @sail-only
     Scenario: Insert with incorrect explicit generated column value fails
       Given statement template
         """
@@ -390,7 +377,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_merge_src
         """
 
-    @sail-only
     Scenario: MERGE matched update recomputes generated column
       Given statement template
         """
@@ -435,7 +421,6 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
 
-    @sail-only
     Scenario: MERGE not-matched insert computes generated column
       Given statement template
         """
@@ -481,7 +466,6 @@ Feature: Delta Lake Generated Columns
         | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
         | 2  | 2024-09-01 00:00:00 | 2024-09-01 |
 
-    @sail-only
     Scenario: MERGE insert with explicit correct generated column value succeeds
       Given statement template
         """
@@ -528,7 +512,6 @@ Feature: Delta Lake Generated Columns
         | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
         | 2  | 2024-09-01 00:00:00 | 2024-09-01 |
 
-    @sail-only
     Scenario: MERGE insert with incorrect explicit generated column value fails
       Given statement template
         """
@@ -576,7 +559,6 @@ Feature: Delta Lake Generated Columns
         DROP TABLE IF EXISTS delta_gen_col_recovery
         """
 
-    @sail-only
     Scenario: INSERT into a schema-only registered table recovers generation expression from delta log
       Given statement template
         """

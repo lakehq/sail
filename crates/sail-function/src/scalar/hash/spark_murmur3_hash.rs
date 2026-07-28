@@ -1,11 +1,10 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, ScalarValue, internal_err};
 use datafusion_expr::ScalarFunctionArgs;
 
 use crate::scalar::hash::utils::create_murmur3_hashes;
@@ -30,10 +29,6 @@ impl SparkMurmur3Hash {
 }
 
 impl ScalarUDFImpl for SparkMurmur3Hash {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_murmur3_hash"
     }

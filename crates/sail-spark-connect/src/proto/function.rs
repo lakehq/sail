@@ -2,6 +2,7 @@
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::thread;
 
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
@@ -60,48 +61,57 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
-        // We create the session manager inside an async context, even though the
-        // `SessionManager::try_new()` function itself is sync. This is because the actor system
-        // may need to spawn actors when the session runs in cluster mode.
+        // The driver gateway is initialized before the session manager in cluster mode, so the
+        // manager must be created inside an async context.
         let manager = handle
             .primary()
-            .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
+            .block_on(create_spark_session_manager(config, handle.clone()))?;
         let context = handle
             .primary()
             .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;
-        test_gold_set(
-            "tests/gold_data/function/*.json",
-            |example: FunctionExample| -> SparkResult<String> {
-                let relation = Relation {
-                    common: None,
-                    #[expect(deprecated)]
-                    rel_type: Some(RelType::Sql(Sql {
-                        query: example.query,
-                        args: HashMap::new(),
-                        pos_args: vec![],
-                        named_arguments: HashMap::new(),
-                        pos_arguments: vec![],
-                    })),
-                };
-                let plan = relation.try_into()?;
-                let result = handle.primary().block_on(async {
-                    let spark = context.extension::<SparkSession>()?;
-                    let service = context.extension::<JobService>()?;
-                    let (plan, _) =
-                        resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
-                    let stream = service.runner().execute(&context, plan).await?;
-                    read_stream(stream).await
-                });
-                // TODO: validate the result against the expected output
-                // TODO: handle non-deterministic results and error messages
-                match result {
-                    // FIXME: the output can be non-deterministic
-                    Ok(_) => Ok("ok".to_string()),
-                    Err(x) => Err(x),
-                }
-            },
-            SparkError::internal,
-        )
-        .map_err(|e| e.into())
+        let test = move || {
+            test_gold_set(
+                "tests/gold_data/function/*.json",
+                |example: FunctionExample| -> SparkResult<String> {
+                    let relation = Relation {
+                        common: None,
+                        #[expect(deprecated)]
+                        rel_type: Some(RelType::Sql(Sql {
+                            query: example.query,
+                            args: HashMap::new(),
+                            pos_args: vec![],
+                            named_arguments: HashMap::new(),
+                            pos_arguments: vec![],
+                        })),
+                    };
+                    let plan = relation.try_into()?;
+                    let result = handle.primary().block_on(async {
+                        let spark = context.extension::<SparkSession>()?;
+                        let service = context.extension::<JobService>()?;
+                        let (plan, _) =
+                            resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
+                        let stream = service.runner().execute(&context, plan).await?;
+                        read_stream(stream).await
+                    });
+                    // TODO: validate the result against the expected output
+                    // TODO: handle non-deterministic results and error messages
+                    match result {
+                        // FIXME: the output can be non-deterministic
+                        Ok(_) => Ok("ok".to_string()),
+                        Err(x) => Err(x),
+                    }
+                },
+                SparkError::internal,
+            )
+        };
+        // `Handle::block_on` polls futures on the calling thread, so use a larger stack than the
+        // default to avoid stack overflow.
+        // Note that increasing the Tokio runtime stack size does not have an effect here.
+        thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(test)?
+            .join()
+            .map_err(|_| SparkError::internal("test thread panicked"))?
+            .map_err(|e| e.into())
     }
 }

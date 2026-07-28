@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
+use apache_avro::{Reader as AvroReader, from_value as avro_from_value};
 
 mod _serde;
 mod data_file;
@@ -29,15 +29,15 @@ mod schema;
 mod writer;
 
 // Provide data file avro helpers API surface
-use apache_avro::{to_value, Writer as AvroWriter};
+use apache_avro::{Writer as AvroWriter, to_value};
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
 
+use crate::spec::Schema as IcebergSchema;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::StructType;
-use crate::spec::Schema as IcebergSchema;
 
 /// Convert data files to avro bytes and write to writer. Return the bytes written.
 pub fn write_data_files_to_avro<W: std::io::Write>(
@@ -49,6 +49,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     let avro_schema = match version {
         FormatVersion::V1 => schema::data_file_schema_v2(partition_type),
         FormatVersion::V2 => schema::data_file_schema_v2(partition_type),
+        FormatVersion::V3 => schema::data_file_schema_v2(partition_type),
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
@@ -69,21 +70,19 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
 /// Parse data files from avro bytes.
 pub fn read_data_files_from_avro<R: std::io::Read>(
     reader: &mut R,
-    _schema: &IcebergSchema,
+    schema: &IcebergSchema,
     partition_spec_id: i32,
     partition_type: &StructType,
     _version: FormatVersion,
 ) -> Result<Vec<DataFile>, String> {
-    let avro_schema = schema::data_file_schema_v2(partition_type);
-    let reader = AvroReader::with_schema(&avro_schema, reader)
-        .map_err(|e| format!("Avro reader error: {e}"))?;
+    let reader = AvroReader::new(reader).map_err(|e| format!("Avro reader error: {e}"))?;
     reader
         .into_iter()
         .map(|value| {
             let value = value.map_err(|e| format!("Avro read error: {e}"))?;
             let serde_df: _serde::DataFileSerde =
                 avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
-            Ok(serde_df.into_data_file(partition_spec_id, partition_type))
+            serde_df.into_data_file(partition_spec_id, partition_type, Some(schema))
         })
         .collect::<Result<Vec<_>, String>>()
 }
@@ -137,20 +136,20 @@ impl Manifest {
 
         // For entries, use typed serde model
         let mut entries = Vec::new();
-        // Build partition type and schema for deterministic resolution of unions
         let partition_type = metadata
             .partition_spec
             .partition_type(&metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let avro_schema = schema::manifest_entry_schema_v2(&partition_type);
-        let mut cursor = std::io::Cursor::new(bs);
-        let reader = AvroReader::with_schema(&avro_schema, &mut cursor)
-            .map_err(|e| format!("Avro read error: {e}"))?;
+        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
         for value in reader {
             let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
             let entry: _serde::ManifestEntryV2 =
                 avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
-            entries.push(entry.into_entry(metadata.partition_spec.spec_id(), &partition_type));
+            entries.push(entry.into_entry(
+                metadata.partition_spec.spec_id(),
+                &partition_type,
+                Some(&metadata.schema),
+            )?);
         }
 
         Ok((metadata, entries))

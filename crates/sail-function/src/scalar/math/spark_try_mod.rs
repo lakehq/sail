@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};
@@ -44,10 +42,6 @@ impl SparkTryMod {
 }
 
 impl ScalarUDFImpl for SparkTryMod {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_mod"
     }

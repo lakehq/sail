@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -31,10 +30,6 @@ impl StAsBinary {
 }
 
 impl ScalarUDFImpl for StAsBinary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "st_asbinary"
     }

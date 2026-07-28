@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
@@ -125,7 +125,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_tuple"
+        "success": "ok"
       }
     },
     {
@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: `schema_of_json` currently doesn't support option allowNumericLeadingZeros"
+        "success": "ok"
       }
     },
     {
@@ -531,6 +531,28 @@
           "fields": [
             {
               "name": "to_json(named_struct(a, 1, b, 2))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_json(named_struct('b', 1, 'a', 2), map('sortKeys', 'true'));",
+        "result": [
+          "{\"a\":2,\"b\":1}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_json(named_struct(b, 1, a, 2))",
               "nullable": true,
               "type": "string",
               "metadata": {}

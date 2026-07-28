@@ -1,5 +1,5 @@
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::LogicalPlan;
 
 /// A trait for rewriting logical plans after logical optimization.

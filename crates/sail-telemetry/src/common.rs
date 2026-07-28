@@ -41,6 +41,7 @@ impl SpanAttribute {
     pub const EXCEPTION_MESSAGE: &'static str = "exception.message";
     pub const EXCEPTION_TYPE: &'static str = "exception.type";
     pub const RETRY_ATTEMPT: &'static str = "retry.attempt";
+    pub const CLUSTER_DRIVER_ID: &'static str = "cluster.driver.id";
     pub const CLUSTER_DRIVER_PORT: &'static str = "cluster.driver.port";
     pub const CLUSTER_WORKER_ID: &'static str = "cluster.worker.id";
     pub const CLUSTER_WORKER_HOST: &'static str = "cluster.worker.host";

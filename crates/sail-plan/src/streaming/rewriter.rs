@@ -1,21 +1,23 @@
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNode;
-use datafusion::datasource::{source_as_provider, TableProvider};
+use datafusion::datasource::{TableProvider, source_as_provider};
 use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use datafusion_expr::{
-    col, or, Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
-    UserDefinedLogicalNode,
+    Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
+    UserDefinedLogicalNode, col, or,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::streaming::event::schema::{
-    is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
+    MARKER_FIELD_NAME, RETRACTED_FIELD_NAME, is_flow_event_schema,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_data_source::formats::console::ConsoleWriteNode;
+use sail_data_source::formats::noop::NoopWriteNode;
+use sail_data_source::listing::write::FileWriteNode;
 use sail_logical_plan::barrier::BarrierNode;
-use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
@@ -46,7 +48,10 @@ impl StreamingRewriter {
             Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: show.with_exprs_and_inputs(vec![], vec![input])?,
             })))
-        } else if node.as_any().is::<FileWriteNode>() {
+        } else if node.as_any().is::<ConsoleWriteNode>()
+            || node.as_any().is::<FileWriteNode>()
+            || node.as_any().is::<NoopWriteNode>()
+        {
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
         } else if node.as_any().is::<BarrierNode>() {
             // TODO: support BarrierNode for streaming properly.
@@ -97,9 +102,9 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Repartition(_) => {
                 not_impl_err!("streaming repartition: {plan:?}")
             }
-            LogicalPlan::TableScan(ref scan) => {
-                if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(source) = get_stream_source_opt(provider.as_ref()) {
+            LogicalPlan::TableScan(ref scan) => match source_as_provider(&scan.source) {
+                Ok(provider) => match get_stream_source_opt(provider.as_ref()) {
+                    Some(source) => {
                         let NamedStreamSource { source, names } = source;
                         let TableScan {
                             table_name,
@@ -119,17 +124,15 @@ impl TreeNodeRewriter for StreamingRewriter {
                                 *fetch,
                             )?),
                         })))
-                    } else {
-                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                            node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
-                        })))
                     }
-                } else {
-                    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    _ => Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
-                    })))
-                }
-            }
+                    }))),
+                },
+                _ => Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
+                }))),
+            },
             LogicalPlan::Union(union) => Ok(Transformed::yes(LogicalPlan::Union(
                 Union::try_new_with_loose_types(union.inputs)?,
             ))),
@@ -186,9 +189,9 @@ impl TreeNodeRewriter for StreamingRewriter {
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {
-    if provider.as_any().is::<StreamSourceTableProvider>() {
+    if provider.is::<StreamSourceTableProvider>() {
         true
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
+    } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
         is_streaming_table_provider(rename.inner().as_ref())
     } else {
         false
@@ -201,17 +204,14 @@ struct NamedStreamSource {
 }
 
 fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSource> {
-    if let Some(stream) = provider
-        .as_any()
-        .downcast_ref::<StreamSourceTableProvider>()
-    {
+    if let Some(stream) = provider.downcast_ref::<StreamSourceTableProvider>() {
         Some(NamedStreamSource {
             source: stream.source().clone(),
             names: None,
         })
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
-        if let Some(stream) = get_stream_source_opt(rename.inner().as_ref()) {
-            Some(NamedStreamSource {
+    } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
+        match get_stream_source_opt(rename.inner().as_ref()) {
+            Some(stream) => Some(NamedStreamSource {
                 source: stream.source,
                 names: Some(
                     rename
@@ -221,9 +221,8 @@ fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSour
                         .map(|f| f.name().clone())
                         .collect(),
                 ),
-            })
-        } else {
-            None
+            }),
+            _ => None,
         }
     } else {
         None

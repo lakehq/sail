@@ -12,9 +12,9 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
+use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
 use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
-use crate::worker::WorkerEvent;
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(

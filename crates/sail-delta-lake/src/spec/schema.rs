@@ -87,6 +87,7 @@ pub enum ColumnMetadataKey {
     ColumnMappingPhysicalName,
     ParquetFieldId,
     GenerationExpression,
+    CurrentDefault,
     IdentityStart,
     IdentityStep,
     IdentityHighWaterMark,
@@ -94,6 +95,7 @@ pub enum ColumnMetadataKey {
     InternalColumn,
     Invariants,
     MetadataSpec,
+    TypeChanges,
 }
 
 impl AsRef<str> for ColumnMetadataKey {
@@ -103,6 +105,7 @@ impl AsRef<str> for ColumnMetadataKey {
             Self::ColumnMappingPhysicalName => "delta.columnMapping.physicalName",
             Self::ParquetFieldId => "parquet.field.id",
             Self::GenerationExpression => "delta.generationExpression",
+            Self::CurrentDefault => "CURRENT_DEFAULT",
             Self::IdentityAllowExplicitInsert => "delta.identity.allowExplicitInsert",
             Self::IdentityHighWaterMark => "delta.identity.highWaterMark",
             Self::IdentityStart => "delta.identity.start",
@@ -110,6 +113,7 @@ impl AsRef<str> for ColumnMetadataKey {
             Self::InternalColumn => "delta.isInternalColumn",
             Self::Invariants => "delta.invariants",
             Self::MetadataSpec => "delta.metadataSpec",
+            Self::TypeChanges => "delta.typeChanges",
         }
     }
 }
@@ -456,10 +460,7 @@ impl Display for StructField {
 }
 
 fn make_physical_field(field: &StructField, column_mapping_mode: ColumnMappingMode) -> StructField {
-    let data_type = match &field.data_type {
-        DataType::Struct(inner) => DataType::from(inner.make_physical(column_mapping_mode)),
-        other => other.clone(),
-    };
+    let data_type = make_physical_data_type(&field.data_type, column_mapping_mode);
 
     let mut metadata = field.metadata().clone();
     let physical_name_key = ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
@@ -496,6 +497,25 @@ fn make_physical_field(field: &StructField, column_mapping_mode: ColumnMappingMo
         data_type,
         nullable: field.nullable,
         metadata,
+    }
+}
+
+fn make_physical_data_type(
+    data_type: &DataType,
+    column_mapping_mode: ColumnMappingMode,
+) -> DataType {
+    match data_type {
+        DataType::Struct(inner) => DataType::from(inner.make_physical(column_mapping_mode)),
+        DataType::Array(array) => DataType::Array(Box::new(ArrayType::new(
+            make_physical_data_type(array.element_type(), column_mapping_mode),
+            array.contains_null(),
+        ))),
+        DataType::Map(map) => DataType::Map(Box::new(MapType::new(
+            make_physical_data_type(map.key_type(), column_mapping_mode),
+            make_physical_data_type(map.value_type(), column_mapping_mode),
+            map.value_contains_null(),
+        ))),
+        other => other.clone(),
     }
 }
 

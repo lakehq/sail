@@ -31,7 +31,7 @@ fn derive_fields(spanned: impl Spanned, fields: &Fields) -> syn::Result<SyntaxFi
             return Err(syn::Error::new(
                 spanned.span(),
                 format!("cannot derive `{TRAIT}` for unit fields"),
-            ))
+            ));
         }
     };
     let field_types: Vec<_> = fields

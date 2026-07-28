@@ -88,6 +88,15 @@ pub struct Snapshot {
     /// ID of the table's current schema when the snapshot was created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_id: Option<SchemaId>,
+    /// First row ID assigned to rows added in this snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_row_id: Option<i64>,
+    /// Number of rows added in this snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_rows: Option<i64>,
+    /// ID of the encrypted key used for this snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -231,6 +240,9 @@ pub struct SnapshotBuilder {
     manifest_list: Option<String>,
     summary: Option<Summary>,
     schema_id: Option<SchemaId>,
+    first_row_id: Option<i64>,
+    added_rows: Option<i64>,
+    key_id: Option<String>,
 }
 
 impl SnapshotBuilder {
@@ -244,6 +256,9 @@ impl SnapshotBuilder {
             manifest_list: None,
             summary: None,
             schema_id: None,
+            first_row_id: None,
+            added_rows: None,
+            key_id: None,
         }
     }
 
@@ -289,6 +304,24 @@ impl SnapshotBuilder {
         self
     }
 
+    /// Set the first row ID for row lineage.
+    pub fn with_first_row_id(mut self, first_row_id: i64) -> Self {
+        self.first_row_id = Some(first_row_id);
+        self
+    }
+
+    /// Set the number of rows added by this snapshot for row lineage.
+    pub fn with_added_rows(mut self, added_rows: i64) -> Self {
+        self.added_rows = Some(added_rows);
+        self
+    }
+
+    /// Set the encrypted key id used by this snapshot.
+    pub fn with_key_id(mut self, key_id: impl ToString) -> Self {
+        self.key_id = Some(key_id.to_string());
+        self
+    }
+
     /// Build the snapshot.
     pub fn build(self) -> Result<Snapshot, String> {
         // For V1 compatibility allow manifest_list to be missing when manifests provided
@@ -306,6 +339,9 @@ impl SnapshotBuilder {
             manifests: None,
             summary,
             schema_id: self.schema_id,
+            first_row_id: self.first_row_id,
+            added_rows: self.added_rows,
+            key_id: self.key_id,
         })
     }
 }

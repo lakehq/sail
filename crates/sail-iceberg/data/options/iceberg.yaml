@@ -1,0 +1,1288 @@
+# References:
+#   TableProperties:    https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/TableProperties.java
+#   SparkReadOptions:   https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkReadOptions.java
+#   SparkWriteOptions:  https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkWriteOptions.java
+
+### Read-Only Options ###
+
+- key: use_ref
+  description: |
+    Select a snapshot reference (tag or branch) to time-travel when reading.
+    If unset, the current snapshot is used.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - use_ref
+        - ref
+        - branch
+        - tag
+        - iceberg.ref
+      parser: crate::options::parsers::parse_optional_string
+
+- key: snapshot_id
+  description: |
+    Select a specific snapshot id to time-travel when reading.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_i64
+  supported: true
+  rust_type: "Option<i64>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - snapshot_id
+        - snapshot-id
+        - snapshotId
+        - version_as_of
+        - versionAsOf
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: timestamp_as_of
+  description: |
+    Select snapshot as of the given timestamp. Accepts RFC3339 or 'yyyy-MM-dd HH:mm:ss.SSS'.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - timestamp_as_of
+        - timestampAsOf
+      parser: crate::options::parsers::parse_optional_string
+
+- key: metadata_as_data_read
+  description: |
+    Enable the metadata-as-data read path: avoid eagerly loading file metadata on the driver;
+    use manifest scanning in the physical plan instead. When false (default), use the
+    driver path with pre-loaded file list.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - metadata_as_data_read
+        - metadataAsDataRead
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.metadata_as_data_read
+        - option.metadataAsDataRead
+      parser: crate::options::parsers::parse_bool
+
+### Write-Only Options ###
+
+- key: overwrite_schema
+  description: |
+    If `true`, allows overwriting the schema of the table when using overwrite mode.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - overwrite_schema
+        - overwriteSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: merge_schema
+  description: |
+    If `true`, allows automatic schema merging during an append or overwrite operation.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - merge_schema
+        - merge-schema
+        - mergeSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: shred_variants
+  description: |
+    If `true`, write Iceberg Variant columns using Parquet variant shredding when
+    a shredding schema can be inferred from buffered rows.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - shred-variants
+        - shred_variants
+        - shredVariants
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - write.parquet.shred-variants
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: variant_inference_buffer_size
+  description: |
+    Number of rows to buffer before inferring the Parquet variant shredding schema.
+  default:
+    value: "100"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - variant-inference-buffer-size
+        - variant_inference_buffer_size
+        - variantInferenceBufferSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - write.parquet.variant-inference-buffer-size
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
+### Iceberg Read Options Not Yet Implemented ###
+
+- key: start_snapshot_id
+  description: Start snapshot id for incremental scans.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [start-snapshot-id]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: end_snapshot_id
+  description: End snapshot id for incremental scans.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [end-snapshot-id]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: start_timestamp
+  description: Start timestamp for incremental scans.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [start-timestamp]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: end_timestamp
+  description: End timestamp for incremental scans.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [end-timestamp]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: as_of_timestamp
+  description: Timestamp in milliseconds for time travel.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [as-of-timestamp]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: split_size
+  description: Override the read split target size.
+  supported: false
+  rust_type: "Option<u64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [split-size]
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: lookback
+  description: Override split planning lookback.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [lookback]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: file_open_cost
+  description: Override split open file cost.
+  supported: false
+  rust_type: "Option<u64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [file-open-cost]
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: vectorization_enabled
+  description: Control vectorized reads.
+  supported: false
+  rust_type: "Option<bool>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [vectorization-enabled]
+      parser: crate::options::parsers::parse_optional_bool
+
+- key: vectorization_batch_size
+  description: Override vectorized reader batch size.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [batch-size]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: scan_task_set_id
+  description: Fetch a planned scan task set by id.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [scan-task-set-id]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: streaming_skip_delete_snapshots
+  description: Skip delete snapshots in streaming reads.
+  supported: false
+  rust_type: bool
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [streaming-skip-delete-snapshots]
+      parser: crate::options::parsers::parse_bool
+
+- key: streaming_skip_overwrite_snapshots
+  description: Skip overwrite snapshots in streaming reads.
+  supported: false
+  rust_type: bool
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [streaming-skip-overwrite-snapshots]
+      parser: crate::options::parsers::parse_bool
+
+- key: locality
+  description: Control locality reporting.
+  supported: false
+  rust_type: "Option<bool>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [locality]
+      parser: crate::options::parsers::parse_optional_bool
+
+- key: stream_from_timestamp
+  description: Starting timestamp for streaming reads.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [stream-from-timestamp]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: streaming_max_files_per_micro_batch
+  description: Limit files per streaming micro-batch.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [streaming-max-files-per-micro-batch]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: streaming_max_rows_per_micro_batch
+  description: Limit rows per streaming micro-batch.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [streaming-max-rows-per-micro-batch]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: async_micro_batch_planning_enabled
+  description: Enable async streaming micro-batch planning.
+  supported: false
+  rust_type: bool
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [async-micro-batch-planning-enabled]
+      parser: crate::options::parsers::parse_bool
+
+- key: streaming_snapshot_polling_interval_ms
+  description: Snapshot polling interval for streaming reads.
+  supported: false
+  rust_type: "Option<u64>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [streaming-snapshot-polling-interval-ms]
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: async_queue_preload_file_limit
+  description: Limit async preload files for streaming reads.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [async-queue-preload-file-limit]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: async_queue_preload_row_limit
+  description: Limit async preload rows for streaming reads.
+  supported: false
+  rust_type: "Option<usize>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [async-queue-preload-row-limit]
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: aggregate_push_down_enabled
+  description: Control aggregate pushdown.
+  supported: false
+  rust_type: bool
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [aggregate-push-down-enabled]
+      parser: crate::options::parsers::parse_bool
+
+### Iceberg Write Options Not Yet Implemented ###
+
+- key: write_branch
+  description: Select a branch for writes.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [branch]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: write_format
+  description: Override the write file format.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [write-format]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: target_file_size_bytes
+  description: Override data file target size.
+  supported: false
+  rust_type: "Option<u64>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [target-file-size-bytes]
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: delete_format
+  description: Override delete file format.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [delete-format]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: target_delete_file_size_bytes
+  description: Override delete file target size.
+  supported: false
+  rust_type: "Option<u64>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [target-delete-file-size-bytes]
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: check_nullability
+  description: Control nullability checks.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [check-nullability]
+      parser: crate::options::parsers::parse_bool
+
+- key: snapshot_property
+  description: Prefix for custom snapshot summary properties.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [snapshot-property]
+      parser: crate::options::parsers::parse_string
+
+- key: fanout_enabled
+  description: Override partitioned fanout behavior.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [fanout-enabled]
+      parser: crate::options::parsers::parse_bool
+
+- key: check_ordering
+  description: Control field order checks.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [check-ordering]
+      parser: crate::options::parsers::parse_bool
+
+- key: rewritten_file_scan_task_set_id
+  description: Identify files to replace.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [rewritten-file-scan-task-set-id]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: output_spec_id
+  description: Override output partition spec id.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [output-spec-id]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: output_sort_order_id
+  description: Override output sort order id.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [output-sort-order-id]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: overwrite_mode
+  description: Select overwrite mode.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [overwrite-mode]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: distribution_mode
+  description: Override write distribution mode.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [distribution-mode]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: use_table_distribution_and_ordering
+  description: Control whether table distribution and ordering are used for writes.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [use-table-distribution-and-ordering]
+      parser: crate::options::parsers::parse_bool
+
+- key: validate_from_snapshot_id
+  description: Select the snapshot validation start point.
+  supported: false
+  rust_type: "Option<i64>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [validate-from-snapshot-id]
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: isolation_level
+  description: Select isolation level.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [isolation-level]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: compression_codec
+  description: Override compression codec.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [compression-codec]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: compression_level
+  description: Override compression level.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [compression-level]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: compression_strategy
+  description: Override compression strategy.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [compression-strategy]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: advisory_partition_size
+  description: Override advisory partition size.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [advisory-partition-size]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: delete_granularity
+  description: Override delete granularity.
+  supported: false
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [delete-granularity]
+      parser: crate::options::parsers::parse_optional_string
+
+### Iceberg Table Properties ###
+
+- key: table_format_version
+  description: Iceberg reserved table property for metadata format version.
+  supported: false
+  rust_type: String
+  scopes: [read, write]
+  origins:
+    - type: table_property
+      keys: [format-version]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: table_uuid
+  description: Iceberg reserved table property for table UUID.
+  supported: false
+  rust_type: String
+  scopes: [read, write]
+  origins:
+    - type: table_property
+      keys: [uuid]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: snapshot_count
+  description: Iceberg reserved table property exposing the snapshot count.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [snapshot-count]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: current_snapshot_summary
+  description: Iceberg reserved table property exposing the current snapshot summary.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [current-snapshot-summary]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: current_snapshot_id_property
+  description: Iceberg reserved table property exposing the current snapshot id.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [current-snapshot-id]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: current_snapshot_timestamp_ms
+  description: Iceberg reserved table property exposing the current snapshot timestamp.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [current-snapshot-timestamp-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: current_schema_property
+  description: Iceberg reserved table property exposing the current schema JSON.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [current-schema]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: default_partition_spec_property
+  description: Iceberg reserved table property exposing the default partition spec JSON.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [default-partition-spec]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: default_sort_order_property
+  description: Iceberg reserved table property exposing the default sort order JSON.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [default-sort-order]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: comment
+  description: Iceberg table property documenting table usage.
+  supported: false
+  rust_type: String
+  scopes: [read, write]
+  origins:
+    - type: table_property
+      keys: [comment]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: commit_retry_num_retries
+  description: Iceberg table property controlling commit retry count.
+  supported: false
+  rust_type: usize
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.retry.num-retries]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
+- key: commit_retry_min_wait_ms
+  description: Iceberg table property controlling minimum commit retry wait.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.retry.min-wait-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_retry_max_wait_ms
+  description: Iceberg table property controlling maximum commit retry wait.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.retry.max-wait-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_retry_total_timeout_ms
+  description: Iceberg table property controlling total commit retry timeout.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.retry.total-timeout-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_status_check_num_retries
+  description: Iceberg table property controlling commit status-check retries.
+  supported: false
+  rust_type: usize
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.status-check.num-retries]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
+- key: commit_status_check_min_wait_ms
+  description: Iceberg table property controlling minimum status-check wait.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.status-check.min-wait-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_status_check_max_wait_ms
+  description: Iceberg table property controlling maximum status-check wait.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.status-check.max-wait-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_status_check_total_timeout_ms
+  description: Iceberg table property controlling total status-check timeout.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.status-check.total-timeout-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_manifest_target_size_bytes
+  description: Iceberg table property controlling manifest target size.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.manifest.target-size-bytes]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: commit_manifest_min_count_to_merge
+  description: Iceberg table property controlling manifest merge threshold.
+  supported: false
+  rust_type: usize
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.manifest.min-count-to-merge]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
+- key: commit_manifest_merge_enabled
+  description: Iceberg table property controlling manifest merge.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [commit.manifest-merge.enabled]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: write_format_default
+  description: Iceberg table property for the default data file format.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.format.default]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_delete_format_default
+  description: Iceberg table property for the default delete file format.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.delete.format.default]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_parquet_properties
+  description: Iceberg table properties controlling Parquet data and delete file writes.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.parquet.row-group-size-bytes
+        - write.delete.parquet.row-group-size-bytes
+        - write.parquet.page-size-bytes
+        - write.delete.parquet.page-size-bytes
+        - write.parquet.page-row-limit
+        - write.delete.parquet.page-row-limit
+        - write.parquet.dict-size-bytes
+        - write.delete.parquet.dict-size-bytes
+        - write.parquet.compression-codec
+        - write.delete.parquet.compression-codec
+        - write.parquet.compression-level
+        - write.delete.parquet.compression-level
+        - write.parquet.row-group-check-min-record-count
+        - write.delete.parquet.row-group-check-min-record-count
+        - write.parquet.row-group-check-max-record-count
+        - write.delete.parquet.row-group-check-max-record-count
+        - write.parquet.bloom-filter-max-bytes
+        - write.parquet.bloom-filter-fpp.column.
+        - write.parquet.bloom-filter-ndv.column.
+        - write.parquet.bloom-filter-enabled.column.
+        - write.parquet.stats-enabled.column.
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_avro_properties
+  description: Iceberg table properties controlling Avro data and delete file writes.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.avro.compression-codec
+        - write.delete.avro.compression-codec
+        - write.avro.compression-level
+        - write.delete.avro.compression-level
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_manifest_properties
+  description: Iceberg table properties controlling manifest writes.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.manifest.compression-codec
+        - write.manifest.compression-level
+        - write.manifest-lists.enabled
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_orc_properties
+  description: Iceberg table properties controlling ORC data and delete file writes.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.orc.stripe-size-bytes
+        - write.delete.orc.stripe-size-bytes
+        - write.orc.block-size-bytes
+        - write.delete.orc.block-size-bytes
+        - write.orc.vectorized.batch-size
+        - write.delete.orc.vectorized.batch-size
+        - write.orc.compression-codec
+        - write.delete.orc.compression-codec
+        - write.orc.compression-strategy
+        - write.delete.orc.compression-strategy
+        - write.orc.bloom.filter.columns
+        - write.orc.bloom.filter.fpp
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: read_split_properties
+  description: Iceberg table properties controlling scan split planning.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys:
+        - read.split.target-size
+        - read.split.metadata-target-size
+        - read.split.planning-lookback
+        - read.split.open-file-cost
+        - read.split.adaptive-size.enabled
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: read_vectorization_properties
+  description: Iceberg table properties controlling vectorized reads.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys:
+        - read.parquet.vectorization.enabled
+        - read.parquet.vectorization.batch-size
+        - read.orc.vectorization.enabled
+        - read.orc.vectorization.batch-size
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: read_planning_mode_properties
+  description: Iceberg table properties controlling data and delete planning mode.
+  supported: false
+  rust_type: String
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys:
+        - read.data-planning-mode
+        - read.delete-planning-mode
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: identifier_fields_rely
+  description: Iceberg table property marking identifier fields as reliable for optimization.
+  supported: false
+  rust_type: bool
+  scopes: [read]
+  origins:
+    - type: table_property
+      keys: [identifier-fields.rely]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: write_object_storage_properties
+  description: Iceberg table properties controlling object-storage write layout.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.object-storage.enabled
+        - write.object-storage.partitioned-paths
+        - write.object-storage.path
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_location_provider_impl
+  description: Iceberg table property selecting a write location provider implementation.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.location-provider.impl]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_data_path
+  description: Iceberg table property overriding the data file write location.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.data.path]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_optional_string
+
+- key: write_folder_storage_path
+  description: Legacy Iceberg table property alias for the data file write location.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.folder-storage.path]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_optional_string
+
+- key: write_metadata_path
+  description: Iceberg table property overriding the metadata file write location.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.metadata.path]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_summary_partition_limit
+  description: Iceberg table property limiting partition summaries in snapshot metadata.
+  supported: false
+  rust_type: usize
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.summary.partition-limit]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
+- key: write_metadata_properties
+  description: Iceberg table properties controlling metadata files and metrics collection.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.metadata.compression-codec
+        - write.metadata.previous-versions-max
+        - write.metadata.delete-after-commit.enabled
+        - write.metadata.metrics.max-inferred-column-defaults
+        - write.metadata.metrics.column.
+        - write.metadata.metrics.default
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: schema_name_mapping_default
+  description: Iceberg table property containing the default schema name mapping JSON.
+  supported: false
+  rust_type: String
+  scopes: [read, write]
+  origins:
+    - type: table_property
+      keys: [schema.name-mapping.default]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_wap_enabled
+  description: Iceberg table property enabling write-audit-publish behavior.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.wap.enabled]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: write_target_file_size_bytes_property
+  description: Iceberg table property controlling data file target size.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.target-file-size-bytes]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: write_delete_target_file_size_bytes
+  description: Iceberg table property controlling delete file target size.
+  supported: false
+  rust_type: u64
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.delete.target-file-size-bytes]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_u64
+
+- key: write_engine_properties
+  description: Iceberg table properties controlling engine-specific write behavior.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.spark.fanout.enabled
+        - write.spark.accept-any-schema
+        - write.spark.auto-schema-evolution.enabled
+        - write.spark.advisory-partition-size-bytes
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: compatibility_snapshot_id_inheritance_enabled
+  description: Iceberg compatibility property enabling snapshot id inheritance.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [compatibility.snapshot-id-inheritance.enabled]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: engine_hive_properties
+  description: Iceberg table properties controlling Hive engine integration.
+  supported: false
+  rust_type: String
+  scopes: [read, write]
+  origins:
+    - type: table_property
+      keys:
+        - engine.hive.enabled
+        - engine.hive.lock-enabled
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_distribution_mode
+  description: Iceberg table property controlling write distribution mode.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.distribution-mode]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: gc_enabled
+  description: Iceberg table property controlling garbage collection behavior.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [gc.enabled]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: history_expire_properties
+  description: Iceberg table properties controlling snapshot and ref retention.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - history.expire.max-snapshot-age-ms
+        - history.expire.min-snapshots-to-keep
+        - history.expire.max-ref-age-ms
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: row_level_delete_properties
+  description: Iceberg table properties controlling row-level delete behavior.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.delete.granularity
+        - write.delete.isolation-level
+        - write.delete.mode
+        - write.delete.distribution-mode
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: row_level_update_properties
+  description: Iceberg table properties controlling row-level update behavior.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.update.isolation-level
+        - write.update.mode
+        - write.update.distribution-mode
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: row_level_merge_properties
+  description: Iceberg table properties controlling row-level merge behavior.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - write.merge.isolation-level
+        - write.merge.mode
+        - write.merge.distribution-mode
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: write_upsert_enabled
+  description: Iceberg table property enabling upsert behavior.
+  supported: false
+  rust_type: bool
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.upsert.enabled]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: encryption_properties
+  description: Iceberg table properties controlling file encryption.
+  supported: false
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys:
+        - encryption.key-id
+        - encryption.data-key-length
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string

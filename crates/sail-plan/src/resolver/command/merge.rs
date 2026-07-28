@@ -2,22 +2,23 @@ use std::sync::Arc;
 
 use datafusion_common::{JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
-use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, build_join_schema};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
+use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
-    MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
+    MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
     MergeNotMatchedByTargetClause, MergeTargetInfo,
 };
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 // When we receive an unqualified attribute with `plan_id=None`, we need:
 // - if it exists only in target -> treat as target
@@ -62,6 +63,15 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+        if target_schema.fields().iter().any(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .is_some()
+        }) {
+            return Err(PlanError::unsupported(
+                "MERGE INTO tables with Delta identity columns is not yet supported",
+            ));
+        }
 
         // Capture the user-facing field names before further resolution pollutes the state.
         let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
@@ -105,41 +115,24 @@ impl PlanResolver<'_> {
             )
             .await?;
 
-        // Resolve generation expressions for generated columns in the target table.
-        // After `expand_merge` rewrites column references to actual names, these expressions
-        // are applied as a post-processing projection to ensure generated column values
-        // are always computed from the generation expression, regardless of whether the
-        // user provided an explicit value or not.
-        let generated_column_exprs: Vec<(String, Expr)> = {
-            let mut out = Vec::new();
-            for field in target_schema.fields() {
-                let Some(expr_str) = ColumnFeatures::from_field(field).generation_expression()
-                else {
-                    continue;
-                };
-                // Convert the field_id back to the actual human-readable column name.
-                let actual_name = state
-                    .get_field_info(field.name())
-                    .map(|info| info.name().to_string())
-                    .unwrap_or_else(|_| field.name().clone());
-                let spec_expr = parse_gen_expr(&expr_str)?;
-                // Generation expressions reference non-generated (target) column names.
-                // Disambiguate to target plan_id so the expression references the merged
-                // output values (not the source-prefixed column names).
-                let disambiguated = merge_disambiguate_unqualified_plan_ids(
-                    spec_expr,
-                    state,
-                    target_schema,
-                    source_schema,
-                );
-                let resolved = self
-                    .resolve_expression(disambiguated, &merge_schema, state)
-                    .await?;
-                out.push((actual_name, resolved));
-            }
-            out
-        };
+        let generated_column_exprs = self
+            .resolve_delta_merge_generated_column_exprs(
+                target_schema,
+                source_schema,
+                &merge_schema,
+                state,
+            )
+            .await?;
+        let check_constraint_exprs = self
+            .resolve_delta_merge_check_constraints(
+                &target_metadata.format,
+                &target_metadata.options,
+                target_schema,
+                state,
+            )
+            .await?;
 
+        let target_format = target_metadata.format.clone();
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
@@ -157,16 +150,23 @@ impl PlanResolver<'_> {
             residual_predicates,
             target_only_predicates,
             generated_column_exprs,
+            check_constraint_exprs,
         };
 
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(MergeIntoNode::new(
-                Arc::new(target_plan),
-                Arc::new(source_plan),
-                options,
-                merge_schema,
-            )),
-        }))
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let format = registry.get(&target_format)?;
+        let session_state = self.ctx.state();
+        Ok(format
+            .create_merger(
+                &session_state,
+                MergeInfo {
+                    target: Arc::new(target_plan),
+                    source: Arc::new(source_plan),
+                    options,
+                    input_schema: merge_schema,
+                },
+            )
+            .await?)
     }
 
     async fn resolve_merge_source(
@@ -501,6 +501,41 @@ impl PlanResolver<'_> {
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+        // Handle path-based table access like `delta.`/path/to/table``
+        // where the first part is a registered table format name.
+        if let [format, path] = table.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if let Ok(table_format) = registry.get(&format) {
+                let location = path.as_ref().to_string();
+                let metadata = table_format
+                    .infer_metadata(
+                        &self.ctx.state(),
+                        SourceInfo {
+                            paths: vec![location.clone()],
+                            lakehouse_table: None,
+                            schema: None,
+                            constraints: Default::default(),
+                            partition_by: vec![],
+                            bucket_by: None,
+                            sort_order: vec![],
+                            options: vec![],
+                            read_case_sensitive: self.config.case_sensitive,
+                        },
+                    )
+                    .await?;
+                return Ok(MergeTargetInfo {
+                    table_name: table.clone().into(),
+                    format,
+                    location,
+                    partition_by: vec![],
+                    options: vec![OptionLayer::TablePropertyList {
+                        items: metadata.properties,
+                    }],
+                    lakehouse_table: None,
+                });
+            }
+        }
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager
             .get_table_or_view(table.parts())
@@ -511,18 +546,28 @@ impl PlanResolver<'_> {
                 location,
                 format,
                 partition_by,
-                options,
+                properties,
                 ..
             } => {
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
+                let table_name: Vec<String> = table.clone().into();
+                let lakehouse_table = self
+                    .resolve_lakehouse_table_context(
+                        &table_name,
+                        LakehouseOperation::Write,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?;
                 Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
+                    table_name,
                     format,
                     location,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-                    options: vec![options],
+                    options: vec![OptionLayer::TablePropertyList { items: properties }],
+                    lakehouse_table: Some(lakehouse_table),
                 })
             }
             _ => Err(PlanError::unsupported(
@@ -544,22 +589,8 @@ fn merge_schema_has_column_name(
     })
 }
 
-/// Parse and analyze a single generation expression string into a `spec::Expr`.
-fn parse_gen_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
-    let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
-        PlanError::invalid(format!(
-            "failed to parse generation expression `{gen_expr_str}`: {e}"
-        ))
-    })?;
-    sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
-        PlanError::invalid(format!(
-            "failed to analyze generation expression `{gen_expr_str}`: {e}"
-        ))
-    })
-}
-
 /// Disambiguate column references in a generation expression for MERGE INSERT/UPDATE context.
-fn merge_disambiguate_unqualified_plan_ids(
+pub(super) fn merge_disambiguate_unqualified_plan_ids(
     expr: spec::Expr,
     state: &PlanResolverState,
     target_schema: &datafusion_common::DFSchemaRef,
@@ -741,7 +772,7 @@ fn merge_disambiguate_unqualified_plan_ids(
                 })
                 .collect(),
         },
-        Expr::Placeholder(_) => expr,
+        Expr::DefaultColumnValue | Expr::Placeholder(_) => expr,
         Expr::Rollup(exprs) => Expr::Rollup(
             exprs
                 .into_iter()
@@ -1005,14 +1036,17 @@ fn classify_expr_domain(
         return ExprColumnDomain::Mixed;
     }
     for col in cols.into_iter() {
-        if let Ok(idx) = merge_schema.index_of_column(&col) {
-            if idx < target_len {
-                seen_target = true;
-            } else {
-                seen_source = true;
+        match merge_schema.index_of_column(&col) {
+            Ok(idx) => {
+                if idx < target_len {
+                    seen_target = true;
+                } else {
+                    seen_source = true;
+                }
             }
-        } else {
-            return ExprColumnDomain::Mixed;
+            _ => {
+                return ExprColumnDomain::Mixed;
+            }
         }
     }
     match (seen_target, seen_source) {
@@ -1037,21 +1071,21 @@ fn analyze_merge_join(
     let target_len = target_schema.fields().len();
 
     for predicate in split_conjunction(on_condition) {
-        if let Expr::BinaryExpr(be) = predicate {
-            if be.op == datafusion_expr::Operator::Eq {
-                let left_domain = classify_expr_domain(&be.left, merge_schema, target_len);
-                let right_domain = classify_expr_domain(&be.right, merge_schema, target_len);
-                match (left_domain, right_domain) {
-                    (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
-                        join_key_pairs.push(((*be.left).clone(), (*be.right).clone()));
-                        continue;
-                    }
-                    (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
-                        join_key_pairs.push(((*be.right).clone(), (*be.left).clone()));
-                        continue;
-                    }
-                    _ => {}
+        if let Expr::BinaryExpr(be) = predicate
+            && be.op == datafusion_expr::Operator::Eq
+        {
+            let left_domain = classify_expr_domain(&be.left, merge_schema, target_len);
+            let right_domain = classify_expr_domain(&be.right, merge_schema, target_len);
+            match (left_domain, right_domain) {
+                (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
+                    join_key_pairs.push(((*be.left).clone(), (*be.right).clone()));
+                    continue;
                 }
+                (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
+                    join_key_pairs.push(((*be.right).clone(), (*be.left).clone()));
+                    continue;
+                }
+                _ => {}
             }
         }
 

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
@@ -9,7 +8,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use sail_logical_plan::range::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;
@@ -80,10 +79,6 @@ impl DisplayAs for RangeExec {
 impl ExecutionPlan for RangeExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
@@ -9,8 +8,9 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::StreamExt;
+use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::{
     DecodedFlowEventStream, EncodedFlowEventStream,
 };
@@ -18,7 +18,6 @@ use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema
 use sail_common_datafusion::streaming::event::stream::{
     FlowEventStreamAdapter, SendableFlowEventStream,
 };
-use sail_common_datafusion::streaming::event::FlowEvent;
 
 /// A physical plan node that limits the number of retractable rows during
 /// streaming query execution.
@@ -86,10 +85,6 @@ impl ExecutionPlan for StreamLimitExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -153,10 +148,9 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, self.skip, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -227,17 +221,21 @@ impl StreamLimitState {
         match event {
             Some(m @ Ok(FlowEvent::Marker(_))) => Some((Some(m), this)),
             Some(Ok(FlowEvent::Data { batch, retracted })) => {
-                if let Some((batch, retracted)) = this.skip_batch_if_needed(batch, retracted) {
-                    if let Some((batch, retracted)) = this.fetch_batch(batch, retracted) {
-                        Some((Some(Ok(FlowEvent::Data { batch, retracted })), this))
-                    } else {
-                        // TODO: Here we close the stream when fetch limit is reached.
-                        //   But we need to send the end-of-data marker and propagate
-                        //   future markers until the next checkpoint has completed.
-                        None
+                match this.skip_batch_if_needed(batch, retracted) {
+                    Some((batch, retracted)) => {
+                        match this.fetch_batch(batch, retracted) {
+                            Some((batch, retracted)) => {
+                                Some((Some(Ok(FlowEvent::Data { batch, retracted })), this))
+                            }
+                            _ => {
+                                // TODO: Here we close the stream when fetch limit is reached.
+                                //   But we need to send the end-of-data marker and propagate
+                                //   future markers until the next checkpoint has completed.
+                                None
+                            }
+                        }
                     }
-                } else {
-                    Some((None, this))
+                    _ => Some((None, this)),
                 }
             }
             Some(Err(e)) => Some((Some(Err(e)), this)),

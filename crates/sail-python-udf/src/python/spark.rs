@@ -3,7 +3,7 @@ use std::ffi::CString;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
-use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
+use pyo3::{Bound, Py, PyAny, PyResult, Python, intern};
 
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
@@ -140,12 +140,13 @@ impl PySpark {
         udf: Bound<'py, PyAny>,
         input_names: Vec<String>,
         is_pandas: bool,
+        is_iter: bool,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupMapUdf"),
-            (udf, input_names, is_pandas, config.clone()),
+            (udf, input_names, is_pandas, is_iter, config.clone()),
         )
     }
 

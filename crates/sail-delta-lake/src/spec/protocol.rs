@@ -43,16 +43,24 @@ pub enum TableFeature {
     InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
-    // TODO: Implement reader/writer support for these newer protocol features.
-    // For now we only register the official names so protocol parsing succeeds and
-    // ProtocolChecker can reject unsupported tables explicitly.
+    // Keep official names for newer protocol features so parsing succeeds and
+    // ProtocolChecker can decide support explicitly.
     #[serde(rename = "icebergCompatV1")]
     IcebergCompatV1,
     #[serde(rename = "icebergCompatV2")]
     IcebergCompatV2,
     Clustering,
     VacuumProtocolCheck,
+    #[serde(rename = "variantType")]
     VariantType,
+    #[serde(rename = "variantType-preview")]
+    VariantTypePreview,
+    #[serde(rename = "variantShredding")]
+    VariantShredding,
+    #[serde(rename = "variantShredding-preview")]
+    VariantShreddingPreview,
+    #[serde(rename = "typeWidening-preview")]
+    TypeWideningPreview,
     TypeWidening,
     CatalogManaged,
     #[serde(other)]
@@ -81,6 +89,10 @@ impl TableFeature {
             Self::Clustering => "clustering",
             Self::VacuumProtocolCheck => "vacuumProtocolCheck",
             Self::VariantType => "variantType",
+            Self::VariantTypePreview => "variantType-preview",
+            Self::VariantShredding => "variantShredding",
+            Self::VariantShreddingPreview => "variantShredding-preview",
+            Self::TypeWideningPreview => "typeWidening-preview",
             Self::TypeWidening => "typeWidening",
             Self::CatalogManaged => "catalogManaged",
             Self::Unknown => "unknown",
@@ -108,6 +120,10 @@ impl TableFeature {
             "clustering" => Ok(Self::Clustering),
             "vacuumProtocolCheck" => Ok(Self::VacuumProtocolCheck),
             "variantType" => Ok(Self::VariantType),
+            "variantType-preview" => Ok(Self::VariantTypePreview),
+            "variantShredding" => Ok(Self::VariantShredding),
+            "variantShredding-preview" => Ok(Self::VariantShreddingPreview),
+            "typeWidening-preview" => Ok(Self::TypeWideningPreview),
             "typeWidening" => Ok(Self::TypeWidening),
             "catalogManaged" => Ok(Self::CatalogManaged),
             _ => Err(DeltaTableError::generic(format!(
@@ -127,8 +143,20 @@ impl TableFeature {
                 | Self::VacuumProtocolCheck
                 | Self::CatalogManaged
                 | Self::VariantType
+                | Self::VariantTypePreview
+                | Self::VariantShredding
+                | Self::VariantShreddingPreview
+                | Self::TypeWideningPreview
                 | Self::TypeWidening
         )
+    }
+
+    pub fn is_variant_type_feature(&self) -> bool {
+        matches!(self, Self::VariantType | Self::VariantTypePreview)
+    }
+
+    pub fn is_variant_shredding_feature(&self) -> bool {
+        matches!(self, Self::VariantShredding | Self::VariantShreddingPreview)
     }
 }
 
@@ -145,6 +173,13 @@ mod tests {
             (TableFeature::Clustering, "clustering"),
             (TableFeature::VacuumProtocolCheck, "vacuumProtocolCheck"),
             (TableFeature::VariantType, "variantType"),
+            (TableFeature::VariantTypePreview, "variantType-preview"),
+            (TableFeature::VariantShredding, "variantShredding"),
+            (
+                TableFeature::VariantShreddingPreview,
+                "variantShredding-preview",
+            ),
+            (TableFeature::TypeWideningPreview, "typeWidening-preview"),
             (TableFeature::TypeWidening, "typeWidening"),
             (TableFeature::CatalogManaged, "catalogManaged"),
         ];

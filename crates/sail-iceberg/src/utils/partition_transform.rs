@@ -57,7 +57,7 @@ pub fn catalog_partition_field_from_iceberg(
         other => {
             return Err(format!(
                 "unsupported Iceberg partition transform '{other}' for column '{source_column}'"
-            ))
+            ));
         }
     };
     Ok(CatalogPartitionField {

@@ -6,6 +6,7 @@ struct ProtoBuilder<'a> {
     package: &'a str,
     files: &'a [&'a str],
     skip_debug: Option<&'a [&'a str]>,
+    boxed_fields: &'a [&'a str],
     with_service: bool,
 }
 
@@ -15,12 +16,18 @@ impl<'a> ProtoBuilder<'a> {
             package,
             files,
             skip_debug: None,
+            boxed_fields: &[],
             with_service: false,
         }
     }
 
     fn skip_debug(mut self, skip_debug: &'a [&'a str]) -> Self {
         self.skip_debug = Some(skip_debug);
+        self
+    }
+
+    fn boxed_fields(mut self, boxed_fields: &'a [&'a str]) -> Self {
+        self.boxed_fields = boxed_fields;
         self
     }
 
@@ -59,6 +66,9 @@ impl<'a> ProtoBuilder<'a> {
         if let Some(skip_debug) = self.skip_debug {
             config.skip_debug(skip_debug);
         }
+        for field in self.boxed_fields {
+            config.boxed(field);
+        }
 
         builder
             .protoc_arg("--experimental_allow_proto3_optional")
@@ -71,7 +81,9 @@ impl<'a> ProtoBuilder<'a> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
-    ProtoBuilder::new("plan", &["physical.proto"]).build()?;
+    ProtoBuilder::new("plan", &["physical.proto"])
+        .boxed_fields(&[".sail.plan.ExtendedPhysicalPlanNode.NodeKind.delta_writer"])
+        .build()?;
     ProtoBuilder::new("stream", &["common.proto"]).build()?;
     ProtoBuilder::new("task", &["common.proto"]).build()?;
     ProtoBuilder::new("driver", &["service.proto"])

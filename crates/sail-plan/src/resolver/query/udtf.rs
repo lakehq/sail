@@ -1,22 +1,25 @@
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{ScalarValue, TableReference};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::table_input::TableInput;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::table_input::TableInputRewriter;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_common_inline_udtf(
@@ -71,6 +74,31 @@ impl PlanResolver<'_> {
         state.config_mut().arrow_allow_large_var_types = true;
 
         let arguments_len = arguments.len();
+        let argument_is_tables = arguments
+            .iter()
+            .map(|e| {
+                e.expr.exists(|e| {
+                    Ok(matches!(
+                        e,
+                        Expr::ScalarFunction(ScalarFunction { func, .. })
+                            if func.inner().is::<TableInput>()
+                    ))
+                })
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+
+        let table_argument_count = argument_is_tables
+            .iter()
+            .filter(|is_table| **is_table)
+            .count();
+        if table_argument_count > 1 && !self.config.tvf_allow_multiple_table_arguments {
+            return Err(PlanError::analysis(format!(
+                "[TABLE_VALUED_FUNCTION_TOO_MANY_TABLE_ARGUMENTS] There are too many table \
+                 arguments for table-valued function. It allows one table argument, but got: \
+                 {table_argument_count}. If you want to allow it, please set \
+                 \"spark.sql.tvf.allowMultipleTableArguments.enabled\" to \"true\""
+            )));
+        }
 
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
@@ -81,7 +109,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid(format!(
                     "PySpark UDTF type: {:?}",
                     function.eval_type,
-                )))
+                )));
             }
         };
         // Determine the number of passthrough columns before rewriting the plan
@@ -142,6 +170,7 @@ impl PlanResolver<'_> {
                     arg_types,
                     &arg_literals,
                     kwargs,
+                    &argument_is_tables,
                 )?
             }
         };
@@ -152,6 +181,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             arguments_len,
             &input_types,
+            passthrough_columns,
             kwargs,
             &return_type,
             &self.config.pyspark_udf_config,

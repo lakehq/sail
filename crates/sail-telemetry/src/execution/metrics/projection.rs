@@ -63,9 +63,9 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Result;
     use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_plan::PhysicalExpr;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::projection::ProjectionExec;
-    use datafusion::physical_plan::PhysicalExpr;
 
     use crate::execution::metrics::testing::MetricEmitterTester;
 

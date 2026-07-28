@@ -75,7 +75,7 @@ SELECT * FROM metrics WHERE year > 2024;
 
 ## Schema Evolution
 
-Delta Lake handles schema evolution gracefully.
+Delta Lake supports schema evolution.
 By default, if you try to write data with a different schema than the one of the existing Delta table, an error will occur.
 You can enable schema evolution by setting the `mergeSchema` option to `true` when writing data.
 In this case, if you change the data type of an existing column to a compatible type, or add a new column, Delta Lake will automatically update the schema of the table.
@@ -116,4 +116,4 @@ Existing Delta tables with column mapping can be read as usual.
 ## More Features
 
 We will continue adding more examples for advanced Delta Lake features as they become available in Sail.
-In the meantime, feel free to reach out to us on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions) if you have questions!
+For questions, reach out on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions).

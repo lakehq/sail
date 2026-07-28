@@ -6,9 +6,9 @@
 //! - Data source validation for security
 use std::ffi::CString;
 
-use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, Result};
+use dashmap::mapref::entry::Entry;
+use datafusion_common::{Result, exec_err};
 use once_cell::sync::Lazy;
 use pyo3::prelude::PyModule;
 use pyo3::sync::PyOnceLock;

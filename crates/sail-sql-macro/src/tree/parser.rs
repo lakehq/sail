@@ -203,7 +203,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
             return Err(syn::Error::new(
                 input.span(),
                 format!("`{TRAIT}` can only be derived for enums or structs"),
-            ))
+            ));
         }
     };
 

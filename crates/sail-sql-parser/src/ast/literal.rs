@@ -1,9 +1,9 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Checkpoint, InputRef, ValueInput};
 use chumsky::inspector::Inspector;
 use chumsky::label::LabelError;
-use chumsky::prelude::{custom, Input};
-use chumsky::Parser;
+use chumsky::prelude::{Input, custom};
 
 use crate::ast::identifier::is_identifier_string;
 use crate::options::ParserOptions;

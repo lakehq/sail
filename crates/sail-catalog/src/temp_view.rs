@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
-use sail_common_datafusion::catalog::TableColumnStatus;
+use sail_common_datafusion::catalog::{TableColumnStatus, TemporaryViewSource};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::provider::{CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions};
@@ -20,6 +20,7 @@ pub struct TemporaryView {
     columns: Vec<TableColumnStatus>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
+    source: Option<TemporaryViewSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,10 @@ impl TemporaryView {
 
     pub fn properties(&self) -> &[(String, String)] {
         &self.properties
+    }
+
+    pub fn source(&self) -> &Option<TemporaryViewSource> {
+        &self.source
     }
 }
 
@@ -87,6 +92,7 @@ impl TemporaryViewManager {
             replace,
             comment,
             properties,
+            source,
         } = options;
         let mut views = self.write()?;
         if views.contains_key(&name) {
@@ -127,6 +133,7 @@ impl TemporaryViewManager {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -138,6 +145,7 @@ impl TemporaryViewManager {
             columns,
             comment,
             properties,
+            source,
         };
         views.insert(name, Arc::new(view));
         Ok(())

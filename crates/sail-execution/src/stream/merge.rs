@@ -6,8 +6,8 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::error::DataFusionError;
 use datafusion::execution::RecordBatchStream;
-use futures::stream::{select_all, SelectAll};
 use futures::Stream;
+use futures::stream::{SelectAll, select_all};
 
 use crate::stream::reader::TaskStreamSource;
 

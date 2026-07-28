@@ -2,8 +2,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use sail_common::spec;
 use sail_common::spec::{
-    i256, ARROW_DECIMAL128_MAX_PRECISION, ARROW_DECIMAL256_MAX_PRECISION,
-    ARROW_DECIMAL256_MAX_SCALE,
+    ARROW_DECIMAL128_MAX_PRECISION, ARROW_DECIMAL256_MAX_PRECISION, ARROW_DECIMAL256_MAX_SCALE,
+    i256,
 };
 
 use crate::error::{SqlError, SqlResult};
@@ -303,14 +303,14 @@ mod tests {
             }
         );
         assert!(parse("123456789012345678901234567890123456789").is_ok());
-        assert!(parse(
-            "1234567890123456789012345678901234567891234567890123456789012345678901234567"
-        )
-        .is_ok());
-        assert!(parse(
-            "12345678901234567890123456789012345678912345678901234567890123456789012345677"
-        )
-        .is_err());
+        assert!(
+            parse("1234567890123456789012345678901234567891234567890123456789012345678901234567")
+                .is_ok()
+        );
+        assert!(
+            parse("12345678901234567890123456789012345678912345678901234567890123456789012345677")
+                .is_err()
+        );
         Ok(())
     }
 }

@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_common::internal_err;
@@ -64,10 +62,6 @@ impl PySparkUnresolvedUDF {
 }
 
 impl ScalarUDFImpl for PySparkUnresolvedUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

@@ -270,6 +270,12 @@ pub(super) mod _serde {
         summary: super::super::snapshot::Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
         schema_id: Option<SchemaId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        first_row_id: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        added_rows: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_id: Option<String>,
     }
     impl TryFrom<CatalogSnapshot> for Snapshot {
         type Error = String;
@@ -285,6 +291,15 @@ pub(super) mod _serde {
             }
             if let Some(schema_id) = snapshot.schema_id {
                 builder = builder.with_schema_id(schema_id);
+            }
+            if let Some(first_row_id) = snapshot.first_row_id {
+                builder = builder.with_first_row_id(first_row_id);
+            }
+            if let Some(added_rows) = snapshot.added_rows {
+                builder = builder.with_added_rows(added_rows);
+            }
+            if let Some(key_id) = snapshot.key_id {
+                builder = builder.with_key_id(key_id);
             }
             builder.build()
         }
@@ -361,10 +376,13 @@ mod _serde_set_statistics {
             snapshot_id,
             statistics,
         } = SetStatistics::deserialize(deserializer)?;
-        if let Some(snapshot_id) = snapshot_id {
-            if snapshot_id != statistics.snapshot_id {
-                return Err(serde::de::Error::custom(format!("Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}", statistics.snapshot_id)));
-            }
+        if let Some(snapshot_id) = snapshot_id
+            && snapshot_id != statistics.snapshot_id
+        {
+            return Err(serde::de::Error::custom(format!(
+                "Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}",
+                statistics.snapshot_id
+            )));
         }
         Ok(statistics)
     }

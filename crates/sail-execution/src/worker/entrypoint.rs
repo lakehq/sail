@@ -1,6 +1,6 @@
 use datafusion::prelude::SessionContext;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::ActorSystem;

@@ -67,7 +67,6 @@ Feature: Delta Lake checkpoint properties
         | path                                                   | value |
         | metaData.configuration['delta.checkpointInterval']     | "3"   |
 
-  @sail-only
   Rule: delta.checkpointPolicy controls whether V2 or classic checkpoints are written
 
     Scenario: Setting delta.checkpointPolicy to classic writes classic checkpoint without sidecar files
@@ -110,5 +109,8 @@ Feature: Delta Lake checkpoint properties
         📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         📄 _last_checkpoint
         """

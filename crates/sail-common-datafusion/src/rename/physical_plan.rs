@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion_common::exec_err;
 
 pub fn rename_physical_plan(

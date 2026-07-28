@@ -1,16 +1,16 @@
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::event::TaskStatus;
-use crate::driver::gen;
-use crate::driver::gen::driver_service_client::DriverServiceClient;
-use crate::driver::gen::{
+use crate::driver::r#gen;
+use crate::driver::r#gen::driver_service_client::DriverServiceClient;
+use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse,
 };
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskKey, WorkerId};
+use crate::id::{DriverId, TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
-use crate::stream_service::TaskStreamFlightClient;
+use crate::stream_service::{TaskStreamFlightClient, TaskStreamOwner};
 
 #[derive(Clone)]
 pub struct DriverClientSet {
@@ -19,10 +19,10 @@ pub struct DriverClientSet {
 }
 
 impl DriverClientSet {
-    pub fn new(options: ClientOptions) -> Self {
+    pub fn new(driver_id: DriverId, options: ClientOptions) -> Self {
         Self {
-            core: DriverClient::new(options.clone()),
-            flight: TaskStreamFlightClient::new(options),
+            core: DriverClient::new(driver_id, options.clone()),
+            flight: TaskStreamFlightClient::new(options, TaskStreamOwner::Driver { driver_id }),
         }
     }
 }
@@ -30,12 +30,14 @@ impl DriverClientSet {
 #[derive(Clone)]
 pub struct DriverClient {
     inner: ClientHandle<DriverServiceClient<ClientService>>,
+    driver_id: DriverId,
 }
 
 impl DriverClient {
-    pub fn new(options: ClientOptions) -> Self {
+    pub fn new(driver_id: DriverId, options: ClientOptions) -> Self {
         Self {
             inner: ClientHandle::new(options.clone()),
+            driver_id,
         }
     }
 
@@ -46,6 +48,7 @@ impl DriverClient {
         port: u16,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(RegisterWorkerRequest {
+            driver_id: self.driver_id.into(),
             worker_id: worker_id.into(),
             host,
             port: port as u32,
@@ -56,7 +59,8 @@ impl DriverClient {
     }
 
     pub async fn report_worker_heartbeat(&self, worker_id: WorkerId) -> ExecutionResult<()> {
-        let request = tonic::Request::new(gen::ReportWorkerHeartbeatRequest {
+        let request = tonic::Request::new(r#gen::ReportWorkerHeartbeatRequest {
+            driver_id: self.driver_id.into(),
             worker_id: worker_id.into(),
         });
         let response = self
@@ -65,7 +69,7 @@ impl DriverClient {
             .await?
             .report_worker_heartbeat(request)
             .await?;
-        let gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
+        let r#gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
         Ok(())
     }
 
@@ -74,7 +78,8 @@ impl DriverClient {
         worker_id: WorkerId,
         peer_worker_ids: Vec<WorkerId>,
     ) -> ExecutionResult<()> {
-        let request = tonic::Request::new(gen::ReportWorkerKnownPeersRequest {
+        let request = tonic::Request::new(r#gen::ReportWorkerKnownPeersRequest {
+            driver_id: self.driver_id.into(),
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|id| id.into()).collect(),
         });
@@ -84,7 +89,7 @@ impl DriverClient {
             .await?
             .report_worker_known_peers(request)
             .await?;
-        let gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
+        let r#gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
         Ok(())
     }
 
@@ -104,11 +109,12 @@ impl DriverClient {
             })
             .transpose()?;
         let request = tonic::Request::new(ReportTaskStatusRequest {
+            driver_id: self.driver_id.into(),
             job_id: key.job_id.into(),
             stage: key.stage as u64,
             partition: key.partition as u64,
             attempt: key.attempt as u64,
-            status: gen::TaskStatus::from(status) as i32,
+            status: r#gen::TaskStatus::from(status) as i32,
             message,
             cause,
             sequence,

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use sail_common::config::{AppConfig, SAIL_ENV_VAR_PREFIX};
 use sail_common::runtime::RuntimeManager;
-use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
+use sail_telemetry::telemetry::{ResourceOptions, init_telemetry};
 
 static GLOBALS: PyOnceLock<GlobalState> = PyOnceLock::new();
 

@@ -176,10 +176,9 @@ impl JobTopology {
                         if let Some(&d) = task_to_region.get(&TaskTopology {
                             stage: input.stage,
                             partition: task.partition,
-                        }) {
-                            if d != r {
-                                region.dependencies.insert(d);
-                            }
+                        }) && d != r
+                        {
+                            region.dependencies.insert(d);
                         }
                     } else {
                         let partitions = graph.stages()[input.stage]
@@ -190,10 +189,9 @@ impl JobTopology {
                             if let Some(&d) = task_to_region.get(&TaskTopology {
                                 stage: input.stage,
                                 partition: p,
-                            }) {
-                                if d != r {
-                                    region.dependencies.insert(d);
-                                }
+                            }) && d != r
+                            {
+                                region.dependencies.insert(d);
                             }
                         }
                     }

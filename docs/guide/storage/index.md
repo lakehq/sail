@@ -5,7 +5,7 @@ rank: 6
 
 # Data Storage
 
-Sail provides a unified interface for reading and writing data across various storage systems, from local file systems to cloud object stores and distributed file systems. This abstraction allows you to seamlessly work with data regardless of where it's stored, using the same familiar Spark APIs.
+Sail provides a unified interface for reading and writing data across storage systems, including local file systems, cloud object stores, and distributed file systems. You can work with data regardless of where it's stored, using the same Spark APIs.
 
 ## Quick Examples
 

@@ -1,13 +1,11 @@
-use core::any::type_name;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -22,7 +20,7 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -43,11 +41,13 @@ pub struct SparkFromCSV {
 }
 
 /// Configuration options for the `from_csv` function.
-/// These include the CSV field separator and timestamp format string.
+/// These include the CSV field separator, timestamp format, date format strings, and timezone.
 #[derive(Debug)]
 struct SparkFromCSVOptions {
     sep: String,
-    timestamp_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
+    timezone: Option<String>,
 }
 
 impl SparkFromCSVOptions {
@@ -55,9 +55,11 @@ impl SparkFromCSVOptions {
     pub const DELIMITER_OPTION: &'static str = "delimiter";
     pub const SEP_DEFAULT: &'static str = ",";
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
+    pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
+    pub const TIMEZONE_OPTION: &'static str = "timeZone";
 
-    // ISO 8601. // This format is the Rust chrono crate format equivalent of the Scala/Java Spark format
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd HH:mm:ss";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
@@ -67,23 +69,46 @@ impl SparkFromCSVOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                    .expect("default timestamp format should be valid")
+            });
+
+        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
+            .as_deref()
+            .map(DateTimeFormat::parse)
+            .transpose()?
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
+
+        let timezone = find_key_value(map, Self::TIMEZONE_OPTION);
 
         Ok(Self {
             sep,
             timestamp_format,
+            date_format,
+            timezone,
         })
     }
 }
 
 impl Default for SparkFromCSVOptions {
-    /// Returns the default parsing options (comma separator, ISO timestamp format).
+    /// Returns the default parsing options (comma separator, ISO timestamp/date formats, no timezone).
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             sep: Self::SEP_DEFAULT.to_string(),
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
+            timezone: None,
         }
     }
 }
@@ -111,10 +136,6 @@ impl SparkFromCSV {
 }
 
 impl ScalarUDFImpl for SparkFromCSV {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::FROM_CSV_NAME
     }
@@ -134,13 +155,18 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
             match schema {
-                Some(ScalarValue::Utf8(Some(schema)))
-                | Some(ScalarValue::LargeUtf8(Some(schema)))
-                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-                _ => internal_err!("Expected UTF-8 schema string"),
-            }?
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_CSV_NAME
+                    );
+                }
+            }
         } else {
             return plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
@@ -149,7 +175,7 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt: DataType = DataType::Struct(parse_fields(schema, &self.session_timezone)?);
+        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -168,13 +194,15 @@ impl ScalarUDFImpl for SparkFromCSV {
             [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
             }
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
-                Ok(vec![
-                    arg_types[0].clone(),
-                    arg_types[1].clone(),
-                    arg_types[2].clone(),
-                ])
-            }
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![
+                arg_types[0].clone(),
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
             _ => plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
                 Self::FROM_CSV_NAME,
@@ -309,6 +337,9 @@ fn parse_csv_line_to_scalar_values(
             } else {
                 match field.data_type() {
                     DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
+                    DataType::Date32 | DataType::Date64 => {
+                        parse_date(field.data_type(), value, options)
+                    }
                     _ => ScalarValue::try_from_string(value.to_string(), field.data_type()),
                 }
             }
@@ -319,9 +350,7 @@ fn parse_csv_line_to_scalar_values(
 /// Parses a timestamp from a string value using a specified format.
 ///
 /// This function attempts to parse the input string `value` into a timestamp,
-/// using the format specified in `options`. If the input contains both date
-/// and time, `NaiveDateTime::parse_from_str` is used. If the input contains
-/// only a date, `NaiveDate::parse_from_str` is used instead.
+/// using the Java-compatible format specified in `options`.
 ///
 /// # Parameters
 /// - `data_type`: The data type of the timestamp, used to ensure proper conversion.
@@ -352,26 +381,37 @@ fn parse_timestamp(
         }
     };
 
-    let format = options.timestamp_format.as_str();
-    let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(value, format) {
-        datetime
-    } else if let Ok(date) = NaiveDate::parse_from_str(value, format) {
-        // `from_csv` accepts date-only inputs for timestamp columns.
-        let Some(datetime) = date.and_hms_opt(0, 0, 0) else {
-            return exec_err!("Failed to parse timestamp '{value}': invalid date");
-        };
-        datetime
-    } else {
-        return exec_err!("Failed to parse timestamp '{value}' with format '{format}'");
-    };
+    let parsed = options
+        .timestamp_format
+        .parse_datetime_value(value)
+        .map_err(|e| {
+            DataFusionError::Execution(format!("Failed to parse timestamp '{value}': {e}"))
+        })?;
+    let naive_datetime = parsed.datetime;
 
-    let utc_datetime = if let Some(tz) = timezone.as_ref() {
+    let utc_datetime = if let Some(offset) = parsed.offset {
+        // Use explicit offset from the parsed value
+        parsed
+            .datetime
+            .and_local_timezone(offset)
+            .single()
+            .map(|x| x.to_utc())
+            .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
+    } else if let Some(ref tz_str) = options.timezone {
+        // Use user-provided timezone from options
+        let tz: Tz = tz_str
+            .parse()
+            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}")))?;
+        localize_with_fallback(&tz, &naive_datetime)?
+    } else if let Some(tz) = timezone.as_ref() {
+        // Use timezone from the schema (session timezone)
         let tz: Tz = tz
             .as_ref()
             .parse()
             .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz}': {e}")))?;
         localize_with_fallback(&tz, &naive_datetime)?
     } else {
+        // No timezone, treat as UTC
         naive_datetime.and_utc()
     };
 
@@ -396,6 +436,58 @@ fn parse_timestamp(
             })?;
             Ok(ScalarValue::TimestampNanosecond(Some(nanos), timezone))
         }
+    }
+}
+
+/// Parses a date from a string value using a specified format.
+///
+/// This function attempts to parse the input string `value` into a date,
+/// using the Java-compatible format specified in `options`.
+///
+/// # Parameters
+/// - `data_type`: The data type of the date (Date32 or Date64).
+/// - `value`: The string representation of the date to be parsed.
+/// - `options`: An instance of `SparkFromCSVOptions` that contains the format
+///   to use when parsing the date.
+///
+/// # Returns
+/// A `ScalarValue` representing the parsed date, or an error message if
+/// parsing fails due to incompatible formats or input.
+///
+/// # Errors
+/// Returns an error if the input `value` doesn't match the expected `format`,
+/// or if parsing the date fails.
+fn parse_date(
+    data_type: &DataType,
+    value: &str,
+    options: &SparkFromCSVOptions,
+) -> Result<ScalarValue> {
+    let parsed = options
+        .date_format
+        .parse_datetime_value(value)
+        .map_err(|e| DataFusionError::Execution(format!("Failed to parse date '{value}': {e}")))?;
+    let naive_date = parsed.datetime.date();
+
+    match data_type {
+        DataType::Date32 => {
+            let days = naive_date
+                .signed_duration_since(
+                    #[expect(clippy::unwrap_used)]
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                )
+                .num_days() as i32;
+            Ok(ScalarValue::Date32(Some(days)))
+        }
+        DataType::Date64 => {
+            let millis = naive_date
+                .signed_duration_since(
+                    #[expect(clippy::unwrap_used)]
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                )
+                .num_milliseconds();
+            Ok(ScalarValue::Date64(Some(millis)))
+        }
+        _ => exec_err!("Expected date data type for CSV date parsing, got {data_type:?}"),
     }
 }
 
@@ -637,6 +729,8 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion_common::internal_err;
+
     use super::*;
 
     /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray`.
@@ -724,7 +818,7 @@ mod tests {
     }
 
     macro_rules! downcast_option {
-        ($opt:expr, $typ:ty, $err_msg:expr) => {{
+        ($opt:expr_2021, $typ:ty, $err_msg:expr_2021) => {{
             let some_value = $opt;
             let some_value = match some_value {
                 Some(value) => value,

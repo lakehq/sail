@@ -6,7 +6,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::{
-    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, with_new_children_if_necessary,
 };
 
 /// Safety-net rule that ensures the build side (left child) of every
@@ -33,7 +33,7 @@ impl PhysicalOptimizerRule for RewriteCollectLeftHashJoin {
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|node| {
-            let Some(join) = node.as_any().downcast_ref::<HashJoinExec>() else {
+            let Some(join) = node.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(node));
             };
 
@@ -124,17 +124,18 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
+        let new_join = result.downcast_ref::<HashJoinExec>().unwrap();
         assert_eq!(
             new_join.children()[0]
                 .output_partitioning()
                 .partition_count(),
             1
         );
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_some());
+        assert!(
+            new_join.children()[0]
+                .downcast_ref::<CoalescePartitionsExec>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -167,11 +168,12 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_none());
+        let new_join = result.downcast_ref::<HashJoinExec>().unwrap();
+        assert!(
+            new_join.children()[0]
+                .downcast_ref::<CoalescePartitionsExec>()
+                .is_none()
+        );
     }
 
     #[test]
@@ -202,10 +204,11 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_none());
+        let new_join = result.downcast_ref::<HashJoinExec>().unwrap();
+        assert!(
+            new_join.children()[0]
+                .downcast_ref::<CoalescePartitionsExec>()
+                .is_none()
+        );
     }
 }

@@ -502,35 +502,118 @@
       "output": {
         "success": {
           "query": {
-            "project": {
+            "namedWindows": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "t"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
                   },
-                  "isStreaming": false
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
                 },
                 "planId": null
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
+              "windows": [
+                [
+                  "w1",
+                  {
+                    "unnamed": {
+                      "clusterBy": [],
+                      "partitionBy": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "a"
+                            ],
+                            "planId": null,
+                            "isMetadataColumn": false
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "b"
+                            ],
+                            "planId": null,
+                            "isMetadataColumn": false
+                          }
+                        }
+                      ],
+                      "orderBy": [
+                        {
+                          "child": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          "direction": "unspecified",
+                          "nullOrdering": "unspecified"
+                        }
+                      ],
+                      "frame": {
+                        "frameType": "row",
+                        "lower": {
+                          "preceding": {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        },
+                        "upper": {
+                          "following": {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
-                }
+                ],
+                [
+                  "w2",
+                  {
+                    "named": "w1"
+                  }
+                ],
+                [
+                  "w3",
+                  {
+                    "named": "w1"
+                  }
+                ]
               ]
             },
             "planId": null
@@ -804,82 +887,7 @@
       "output": {
         "success": {
           "query": {
-            "sort": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "order": [
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "a"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  "direction": "unspecified",
-                  "nullOrdering": "unspecified"
-                },
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "b"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  "direction": "descending",
-                  "nullOrdering": "unspecified"
-                }
-              ],
-              "isGlobal": true
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "select * from t order by a, b desc window w1 as () limit 10",
-      "output": {
-        "success": {
-          "query": {
-            "limit": {
+            "namedWindows": {
               "input": {
                 "sort": {
                   "input": {
@@ -948,14 +956,125 @@
                 },
                 "planId": null
               },
-              "skip": null,
-              "limit": {
-                "literal": {
-                  "int32": {
-                    "value": 10
+              "windows": [
+                [
+                  "w1",
+                  {
+                    "unnamed": {
+                      "clusterBy": [],
+                      "partitionBy": [],
+                      "orderBy": [],
+                      "frame": null
+                    }
                   }
-                }
-              }
+                ]
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t order by a, b desc window w1 as () limit 10",
+      "output": {
+        "success": {
+          "query": {
+            "namedWindows": {
+              "input": {
+                "limit": {
+                  "input": {
+                    "sort": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "t"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "order": [
+                        {
+                          "child": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          "direction": "unspecified",
+                          "nullOrdering": "unspecified"
+                        },
+                        {
+                          "child": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          "direction": "descending",
+                          "nullOrdering": "unspecified"
+                        }
+                      ],
+                      "isGlobal": true
+                    },
+                    "planId": null
+                  },
+                  "skip": null,
+                  "limit": {
+                    "literal": {
+                      "int32": {
+                        "value": 10
+                      }
+                    }
+                  }
+                },
+                "planId": null
+              },
+              "windows": [
+                [
+                  "w1",
+                  {
+                    "unnamed": {
+                      "clusterBy": [],
+                      "partitionBy": [],
+                      "orderBy": [],
+                      "frame": null
+                    }
+                  }
+                ]
+              ]
             },
             "planId": null
           }
@@ -1130,82 +1249,7 @@
       "output": {
         "success": {
           "query": {
-            "sort": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "order": [
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "a"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  "direction": "unspecified",
-                  "nullOrdering": "unspecified"
-                },
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "name": [
-                        "b"
-                      ],
-                      "planId": null,
-                      "isMetadataColumn": false
-                    }
-                  },
-                  "direction": "descending",
-                  "nullOrdering": "unspecified"
-                }
-              ],
-              "isGlobal": false
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "select * from t sort by a, b desc window w1 as () limit 10",
-      "output": {
-        "success": {
-          "query": {
-            "limit": {
+            "namedWindows": {
               "input": {
                 "sort": {
                   "input": {
@@ -1274,14 +1318,125 @@
                 },
                 "planId": null
               },
-              "skip": null,
-              "limit": {
-                "literal": {
-                  "int32": {
-                    "value": 10
+              "windows": [
+                [
+                  "w1",
+                  {
+                    "unnamed": {
+                      "clusterBy": [],
+                      "partitionBy": [],
+                      "orderBy": [],
+                      "frame": null
+                    }
                   }
-                }
-              }
+                ]
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t sort by a, b desc window w1 as () limit 10",
+      "output": {
+        "success": {
+          "query": {
+            "namedWindows": {
+              "input": {
+                "limit": {
+                  "input": {
+                    "sort": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "t"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "order": [
+                        {
+                          "child": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          "direction": "unspecified",
+                          "nullOrdering": "unspecified"
+                        },
+                        {
+                          "child": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          "direction": "descending",
+                          "nullOrdering": "unspecified"
+                        }
+                      ],
+                      "isGlobal": false
+                    },
+                    "planId": null
+                  },
+                  "skip": null,
+                  "limit": {
+                    "literal": {
+                      "int32": {
+                        "value": 10
+                      }
+                    }
+                  }
+                },
+                "planId": null
+              },
+              "windows": [
+                [
+                  "w1",
+                  {
+                    "unnamed": {
+                      "clusterBy": [],
+                      "partitionBy": [],
+                      "orderBy": [],
+                      "frame": null
+                    }
+                  }
+                ]
+              ]
             },
             "planId": null
           }

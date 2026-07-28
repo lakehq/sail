@@ -13,9 +13,7 @@ from testcontainers.postgres import PostgresContainer
 
 from pysail.testing.spark.utils.common import pyspark_version
 
-# We skip all the tests in this module for now since testcontainers have some issues
-# on macOS and Windows.
-pytest.skip("not working", allow_module_level=True)
+pytestmark = pytest.mark.integration
 
 if pyspark_version() < (4, 1):
     pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)

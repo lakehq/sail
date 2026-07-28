@@ -17,7 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Source: https://github.com/unitycatalog/unitycatalog/blob/b4369440ab250f4d6fbacf2d0e1b25273c4ff0d6/api/all.yaml
+# Source: https://github.com/unitycatalog/unitycatalog/blob/4fa81306825341728580f0ecd2733b58a029e53a/api/all.yaml
 
 openapi: 3.0.0
 servers:
@@ -32,7 +32,7 @@ tags:
       A schema (also called a database) is the second layer of Unity Catalog’s three-level namespace. A schema organizes tables, volumes and functions.
   - name: Tables
     description: |
-      A table resides in the third layer of Unity Catalog’s three-level namespace. It contains rows of data. 
+      A table resides in the third layer of Unity Catalog’s three-level namespace. It contains rows of data.
       A table can be managed or external.
   - name: Volumes
     description: |
@@ -59,6 +59,9 @@ tags:
   - name: Metastores
     description: |
       A metastore is the top-level container of objects in Unity Catalog that stores all UC assets.
+  - name: DeltaCommits
+    description: |
+      "Delta commits" is a Delta tables feature that allows Delta tables to designate a coordinator to coordinate commits. This is Unity Catalog's API to allow Unity Catalog be the commit coordinator for managed tables. (See https://github.com/delta-io/delta/blob/master/protocol_rfcs/catalog-managed.md for more details)
 paths:
   /catalogs:
     post:
@@ -317,7 +320,7 @@ paths:
         creation of a managed table that already has full data written to its storage location. Note: the name provided
         must match the name used to initialize the staging table originally.
 
-        WARNING: This API is experimental and will change in future versions.
+        WARNING: This API is experimental and may change in future versions.
       requestBody:
         content:
           application/json:
@@ -414,6 +417,23 @@ paths:
       summary: Get a table
       description: |
         Gets a table for a specific catalog and schema.
+      parameters:
+        - name: read_streaming_table_as_managed
+          in: query
+          description: |
+            Whether to read Streaming Tables as Managed tables.
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: read_materialized_view_as_managed
+          in: query
+          description: |
+            Whether to read Materialized Views as Managed tables.
+          required: false
+          schema:
+            type: boolean
+            default: true
       responses:
         '200':
           description: The table was successfully retrieved.
@@ -512,12 +532,12 @@ paths:
           in: query
           description: |+
             Maximum number of volumes to return (page length).
-            
+
             If not set, the page length is set to a server configured value.
             - when set to a value greater than 0, the page length is the minimum of this value and a server configured value;
             - when set to 0, the page length is set to a server configured value;
             - when set to a value less than 0, an invalid parameter error is returned;
-            
+
             Note: this parameter controls only the maximum number of volumes to return. The actual number of volumes returned in a page may be smaller than this value, including 0, even if there are more pages.
 
           required: false
@@ -603,7 +623,7 @@ paths:
       summary: Update a Volume
       description: |
         Updates the specified volume under the specified parent catalog and schema.
-        
+
         Currently only the name or the comment of the volume could be updated.
       requestBody:
         content:
@@ -1419,7 +1439,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ExternalLocationInfo"
-
+  /delta/preview/commits:
+    get:
+      operationId: getCommits
+      tags:
+        - DeltaCommits
+      summary: |
+        List unbackfilled Delta table commits.
+        WARNING: This API is experimental and may change in future versions.
+      description: |
+        List all the unbackfilled Delta commits that are currently being tracked by the UC coordinator.
+        If no commits are being tracked in the specific version range (from start_version to an optional end_version),
+        it will return an empty list.
+        WARNING: This API is experimental and may change in future versions.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeltaGetCommits'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeltaGetCommitsResponse'
+        '400':
+          description: |
+            Bad request or Invalid Argument. Example: table_uri in the request doesn't match the existing table_uri for the table.
+        '401':
+          description: Unauthorized. Authentication credentials are missing or incorrect.
+        '403':
+          description: Forbidden. The user does not have the necessary permissions to perform this action.
+        '404':
+          description: Not Found. The specified table does not exist.
+        '500':
+          description: Internal Server Error. An unexpected error occurred on the server.
+    post:
+      tags:
+        - DeltaCommits
+      summary: |
+        Commit changes to a specified Delta table.
+        The server has a limit defined in config on how many unbackfilled commits it can hold.
+        Clients are expected to do active backfill of the commit after committing to UC. So in
+        most cases the number of unbackfilled commits should be close to zero or one. But if
+        clients misbehave and unbackfilled commits accumulate beyond the limit, server will
+        reject further commits until more backfill is done.
+        WARNING: This API is experimental and may change in future versions.
+      operationId: commit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeltaCommit'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeltaCommitResponse'
+        '400':
+          description: |
+            Bad request or Invalid Argument. Example: Commit version is not expected (e.g., latest_table_version +1)
+            or Latest backfilled version exceeds the last commit version or table_uri in the request doesn't match the
+            existing table_uri for the table.
+        '401':
+          description: Unauthorized. Authentication credentials are missing or incorrect.
+        '403':
+          description: Forbidden. The user does not have the necessary permissions to perform this action.
+        '404':
+          description: Not Found. The specified table does not exist.
+        '409':
+          description: Conflict. Indicates that a commit with the same version already exists.
+        '429':
+          description: The maximum number of unbackfilled commits per table has been reached. Please backfill some commits before retrying.
+        '500':
+          description: Internal Server Error. An unexpected error occurred on the server.
+        '501':
+          description: Not Implemented. The requested functionality is not supported.
 components:
   schemas:
     SecurablePropertiesMap:
@@ -1445,7 +1544,7 @@ components:
         name:
           type: string
           description: The name of the volume
-        "volume_type":
+        volume_type:
           "$ref": "#/components/schemas/VolumeType"
         comment:
           type: string
@@ -1460,7 +1559,6 @@ components:
         - schema_name
         - name
         - volume_type
-        - storage_location
     ListVolumesResponseContent:
       type: object
       properties:
@@ -1521,7 +1619,7 @@ components:
         volume_id:
           type: string
           description: Unique identifier of the volume
-        "volume_type":
+        volume_type:
           "$ref": "#/components/schemas/VolumeType"
         storage_location:
           type: string
@@ -1814,6 +1912,18 @@ components:
         schema_id:
           description: Unique identifier for the schema.
           type: string
+        storage_root:
+          description: |
+            Storage root URL for managed storage location of schema. This can be set when creating a
+            schema. Example: s3://bucket/ucroot
+          type: string
+        storage_location:
+          description: |
+            Storage Location URL (full path) for managed storage location of schema. This is an
+            automatically generated unique path under storage_root. If it is absent, managed
+            securables under this schema will try to use storage_location of the parent catalog
+            instead. Example: s3://bucket/ucroot/__unitystorage/schemas/{schema_id}
+          type: string
     CreateSchema:
       type: object
       properties:
@@ -1828,6 +1938,12 @@ components:
           type: string
         properties:
           $ref: '#/components/schemas/SecurablePropertiesMap'
+        storage_root:
+          description: |
+            Storage root URL for managed storage location of schema. If not set, managed securables
+            under this schema will try to use the storage_location of the parent catalog instead.
+            Example: s3://bucket/ucroot
+          type: string
       required:
         - name
         - catalog_name
@@ -1886,6 +2002,17 @@ components:
         id:
           description: Unique identifier for the catalog.
           type: string
+        storage_root:
+          description: |
+            Storage root URL for managed storage location of catalog. This can be set when creating
+            a catalog. Example: s3://bucket/ucroot
+          type: string
+        storage_location:
+          description: |
+            Storage Location URL (full path) for managed storage location of catalog. This is an
+            automatically generated unique path under storage_root.
+            Example: s3://bucket/ucroot/__unitystorage/catalogs/{catalog_id}
+          type: string
     CreateCatalog:
       type: object
       properties:
@@ -1897,6 +2024,10 @@ components:
           type: string
         properties:
           $ref: '#/components/schemas/SecurablePropertiesMap'
+        storage_root:
+          description: |
+            Storage root URL for managed storage location of catalog. Example: s3://bucket/ucroot
+          type: string
       required:
         - name
     UpdateCatalog:
@@ -2235,17 +2366,17 @@ components:
       properties:
         catalog_name:
           description: |
-            Catalog name for which temporary credentials are generated. 
+            Catalog name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         schema_name:
           description: |
-            Schema name for which temporary credentials are generated. 
+            Schema name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         model_name:
           description: |
-            Model name for which temporary credentials are generated. 
+            Model name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         version:
@@ -2275,7 +2406,7 @@ components:
       properties:
         table_id:
           description: |
-            Table id for which temporary credentials are generated. 
+            Table id for which temporary credentials are generated.
             Can be obtained from tables/{full_name} (get table info) API.
           type: string
         operation:
@@ -2319,7 +2450,7 @@ components:
       properties:
         volume_id:
           description: |
-            Volume id for which temporary credentials are generated. 
+            Volume id for which temporary credentials are generated.
             Can be obtained from volumes/{full_name} (get volume info) API.
           type: string
         operation:
@@ -2423,17 +2554,21 @@ components:
           description: Unique identifier for the model version.
           type: string
     ModelVersionStatus:
-      description: |
-        All possible model version statuses (MODEL_VERSION_STATUS_UNKNOWN, PENDING_REGISTRATION, FAILED_REGISTRATION, READY).
-        PENDING_REGISTRATION status indicates that the client has not completely written all model artifacts to external storage.
-        FAILED_REGISTRATION status indicates that the client has failed to write all model artifacts to external storage.
-        READY status indicates that the client has successfully written all model artifacts to external storage.
+      description: All possible model version statuses.
       type: string
       enum:
         - MODEL_VERSION_STATUS_UNKNOWN
         - PENDING_REGISTRATION
         - FAILED_REGISTRATION
         - READY
+      # NOTE: When adding a new enum, always add a new enum to the end of enum list, and
+      #  corresponding description at the end of the description list. Both list must have the same
+      #  order.
+      x-enum-descriptions:
+        - 'MODEL_VERSION_STATUS_UNKNOWN: Unknown'
+        - 'PENDING_REGISTRATION: Indicates that the client has not completely written all model artifacts to external storage.'
+        - 'FAILED_REGISTRATION: Indicates that the client has failed to write all model artifacts to external storage.'
+        - 'READY: Indicates that the client has successfully written all model artifacts to external storage.'
     CreateRegisteredModel:
       type: object
       properties:
@@ -2529,7 +2664,7 @@ components:
         version:
           description: Version number of the version to finalize.
           type: integer
-          format: int64
+          format:  int64
       required:
         - full_name
         - version
@@ -2582,8 +2717,11 @@ components:
         - function
         - volume
         - registered_model
+        - external_location
+        - credential
       description: The type of the resource.
     Privilege:
+      description: The privilege to grant.
       type: string
       enum:
         - CREATE CATALOG
@@ -2598,7 +2736,36 @@ components:
         - CREATE VOLUME
         - READ VOLUME
         - CREATE MODEL
-      description: The privilege to grant.
+        - CREATE EXTERNAL LOCATION
+        - READ FILES
+        - WRITE FILES
+        - CREATE EXTERNAL TABLE
+        - CREATE EXTERNAL VOLUME
+        - CREATE MANAGED STORAGE
+        - CREATE STORAGE CREDENTIAL
+      # NOTE: When adding a new enum, always add a new enum to the end of enum list, and
+      #  corresponding description at the end of the description list. Both list must have the same
+      #  order.
+      x-enum-descriptions:
+        - 'CREATE CATALOG: Enables users to create new catalogs in a metastore.'
+        - 'USE CATALOG: Required to interact with any object within a catalog.'
+        - 'CREATE SCHEMA: Enables users to create new schemas in a catalog.'
+        - 'USE SCHEMA: Required to interact with any object within a schema.'
+        - 'CREATE TABLE: Allows creating tables or views in a schema.'
+        - 'SELECT: Enables querying tables, views, materialized views.'
+        - 'MODIFY: Enables adding, updating, and deleting data within tables (requires SELECT privilege also).'
+        - 'CREATE FUNCTION: Allows users to create functions or procedures within a schema.'
+        - 'EXECUTE: Permits invoking user-defined functions or loading models for inference.'
+        - 'CREATE VOLUME: Enables creating volumes in a schema.'
+        - 'READ VOLUME: Permits reading files and directories within volumes.'
+        - 'CREATE MODEL: Permits establishing MLflow registered models in a schema.'
+        - 'CREATE EXTERNAL LOCATION: Required privilege on both the metastore and referenced storage credential to create external locations.'
+        - 'READ FILES: Grants direct read access to files in cloud storage configured as external locations.'
+        - 'WRITE FILES: Grants direct write access to files in cloud storage configured as external locations.'
+        - 'CREATE EXTERNAL TABLE: Enables creating external tables through external locations.'
+        - 'CREATE EXTERNAL VOLUME: Enables creating external volumes through external locations.'
+        - 'CREATE MANAGED STORAGE: Allows designating managed storage locations at catalog or schema levels.'
+        - 'CREATE STORAGE CREDENTIAL: Required privilege on the metastore to create storage credentials.'
     UpdatePermissions:
       type: object
       properties:
@@ -2770,6 +2937,9 @@ components:
         name:
           description: Name of the external location.
           type: string
+        id:
+          description: Unique identifier for the external location.
+          type: string
         url:
           description: Path URL of the external location.
           type: string
@@ -2847,6 +3017,201 @@ components:
         next_page_token:
           type: string
           description: Opaque token to retrieve the next page of results. Absent if there are no more pages. __page_token__ should be set to this value for the next request (for the next page of results).
+    DeltaCommit:
+      type: object
+      description: Request body for committing changes to a specified Delta table. At least one of commit_info and latest_backfilled_version must be present.
+      properties:
+        table_id:
+          type: string
+          description: The ID of the table to commit to. This ID uniquely identifies a table.
+        table_uri:
+          type: string
+          description: |
+            The URI of the storage location of the table. If the table_id exists but the table_uri is
+            different from the one previously registered (e.g., if the client moved the table), the request will fail.
+            Example: s3://bucket-name/tables/some-table-id
+        commit_info:
+          $ref: '#/components/schemas/DeltaCommitInfo'
+        latest_backfilled_version:
+          type: integer
+          format: int64
+          description: |
+            The highest version of the commits that have been backfilled for this table; meaning UC no longer
+            needs to keep track of commits of versions <= this version.
+        metadata:
+          $ref: '#/components/schemas/DeltaMetadata'
+        uniform:
+          $ref: '#/components/schemas/DeltaUniform'
+          description: |
+            Optional UniForm metadata to be committed alongside this Delta commit. Whether this field is
+            strictly required by a UC API compatible implementation is left up to the implementation.
+            It is set by UniForm conversion processes after converting a Delta commit. When set,
+            UC will atomically update the table's format-specific metadata (e.g. DeltaUniformIceberg),
+            keeping the conversion state synchronized with the Delta version.
+            Uniform enables Delta tables to be read by other table formats (e.g., Iceberg) without data conversion.
+            Independent of the `metadata` field, both can be provided together or separately.
+      required:
+        - table_id
+        - table_uri
+    DeltaMetadata:
+      description: Represents a Delta metadata action (see https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata for more information).
+      properties:
+        description:
+          type: string
+          description: The table comment.
+        schema:
+          $ref: '#/components/schemas/ColumnInfos'
+        properties:
+          $ref: '#/components/schemas/DeltaCommitMetadataProperties'
+    DeltaCommitMetadataProperties:
+      description: The properties of the Delta table. Updated by UC if set.
+      type: object
+      properties:
+        properties:
+          $ref: '#/components/schemas/SecurablePropertiesMap'
+    ColumnInfos:
+      type: object
+      description: The schema of the table.
+      properties:
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/ColumnInfo'
+          maxItems: 32768
+          description: The array of column descriptions.
+    DeltaCommitInfo:
+      type: object
+      description: Represents a Delta commit version.
+      properties:
+        version:
+          type: integer
+          format: int64
+          description: The version of this commit.
+        timestamp:
+          type: integer
+          format: int64
+          description: The timestamp for when the commit was made. This is the in-commit timestamp as produced by the Delta client writing to the table.
+        file_name:
+          type: string
+          description: The filename of the UUID-based commit file.
+        file_size:
+          type: integer
+          format: int64
+          description: The size of the commit file in bytes.
+        file_modification_timestamp:
+          type: integer
+          format: int64
+          description: The modification time of the commit file. This is the mod time of the file as written to the file system.
+      required:
+        - version
+        - timestamp
+        - file_name
+        - file_size
+        - file_modification_timestamp
+    DeltaCommitResponse:
+      type: object
+      description: The response for the Delta commit action
+    DeltaUniform:
+      type: object
+      description: |
+        Uniform metadata that can be atomically committed alongside a Delta commit.
+        Uniform enables Delta tables to be read by other table formats (e.g. Iceberg)
+        without data conversion. When this message is provided in a Commit request,
+        UC will atomically update the table's format-specific metadata during the commit.
+      properties:
+        iceberg:
+          $ref: '#/components/schemas/DeltaUniformIceberg'
+          description: Metadata for Delta UniForm Iceberg conversion.
+      required:
+        - iceberg
+    DeltaUniformIceberg:
+      type: object
+      description: |
+        Iceberg conversion metadata tracking the Delta-to-Iceberg conversion state.
+        It contains the metadata location pointer, converted Delta version, timestamp, and
+        optional base converted Delta version of the corresponding conversion.
+      properties:
+        metadata_location:
+          type: string
+          format: uri
+          description: |
+            The latest Iceberg metadata location.
+            Example: s3://abc/def/metadata/v1.json
+        converted_delta_version:
+          type: integer
+          format: int64
+          description: |
+            The Delta version that was converted to Iceberg to produce the Iceberg metadata location.
+            It should match the Delta version in the commit info.
+            Example: 1044
+        converted_delta_timestamp:
+          type: string
+          description: |
+            The timestamp that Delta finished conversion to produce the Iceberg metadata location.
+            The string must represent a valid instant in UTC with ISO 8601 format.
+            Example: 2025-01-04T03:13:11.423Z
+        base_converted_delta_version:
+          type: integer
+          format: int64
+          description: |
+            Optional Delta version used to incrementally convert Delta changes to Iceberg changes to
+            produce the latest Iceberg metadata at the metadata_location.
+            Example: 1042
+      required:
+        - metadata_location
+        - converted_delta_version
+        - converted_delta_timestamp
+    DeltaGetCommits:
+      type: object
+      properties:
+        table_id:
+          type: string
+          description: The ID of the table to get the commits for. This ID uniquely identifies a table.
+        table_uri:
+          type: string
+          description: |
+            The URI of the storage location of the table. If the table_id exists but the table_uri is
+            different from the one previously registered (e.g., if the client moved the table), the request will fail.
+            Example: s3://bucket-name/tables/some-table-id
+        start_version:
+          type: integer
+          format: int64
+          description: |
+            The start version from which to retrieve commits (inclusive). This along with the
+            optional end_version specifies the range of commit versions that this request wants.
+        end_version:
+          type: integer
+          format: int64
+          description: |
+            The end version upto which to retrieve commits (inclusive).
+            If not set, the latest version will be used as the end version. This does not affect the
+            latest_table_version in the response.
+            If num of commits that meet this criteria is larger than a limit set by server config,
+            the response will be limited to the first X commits. Call can send request again with a
+            larger start_version according to the response to get the remaining commits.
+      required:
+        - table_id
+        - table_uri
+        - start_version
+    DeltaGetCommitsResponse:
+      type: object
+      properties:
+        commits:
+          type: array
+          description: The list of unbackfilled Delta table commits. Can be in arbitrary order.
+          items:
+            $ref: '#/components/schemas/DeltaCommitInfo'
+        latest_table_version:
+          type: integer
+          format: int64
+          description: |
+            Represents the latest version of the table tracked by UC. If no commits have occurred via UC yet,
+            then UC cannot determine the latest version and returns -1. Use this field to manage pagination —
+            if the returned commits don't cover the range up to latest_table_version or end_version (whichever is smaller),
+            it indicates that more unbackfilled commits may be available.
+      required:
+        - commits
+        - latest_table_version
 info:
   title: Unity Catalog API
   version: '0.1'

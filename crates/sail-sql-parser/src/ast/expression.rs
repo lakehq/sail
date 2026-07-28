@@ -1,9 +1,9 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, MapExtra, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::pratt::{infix, left, postfix, prefix, Operator};
+use chumsky::pratt::{Operator, infix, left, postfix, prefix};
 use chumsky::prelude::{any, choice};
-use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 

@@ -24,68 +24,69 @@ def _read_latest_commit_info(table_path: Path) -> dict:
     raise AssertionError(msg)
 
 
-class TestDeltaUserMetadata:
-    """`userMetadata` writer option populates `commitInfo.userMetadata` per-commit."""
+def test_append_with_user_metadata_records_value(spark, tmp_path):
+    delta_path = tmp_path / "delta_user_metadata_append"
+    df = spark.createDataFrame([Row(id=1), Row(id=2)])
 
-    def test_append_with_user_metadata_records_value(self, spark, tmp_path):
-        delta_path = tmp_path / "delta_user_metadata_append"
-        df = spark.createDataFrame([Row(id=1), Row(id=2)])
+    df.write.format("delta").mode("append").option("userMetadata", "job=daily-load run=42").save(str(delta_path))
 
-        df.write.format("delta").mode("append").option("userMetadata", "job=daily-load run=42").save(str(delta_path))
+    commit_info = _read_latest_commit_info(delta_path)
+    assert commit_info.get("userMetadata") == "job=daily-load run=42"
+    # First write to a non-existing path is a CREATE TABLE commit.
+    assert commit_info.get("operation") == "CREATE TABLE"
 
-        commit_info = _read_latest_commit_info(delta_path)
-        assert commit_info.get("userMetadata") == "job=daily-load run=42"
-        # First write to a non-existing path is a CREATE TABLE commit.
-        assert commit_info.get("operation") == "CREATE TABLE"
 
-    def test_overwrite_with_user_metadata_records_value(self, spark, tmp_path):
-        delta_path = tmp_path / "delta_user_metadata_overwrite"
-        spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").save(str(delta_path))
+def test_overwrite_with_user_metadata_records_value(spark, tmp_path):
+    delta_path = tmp_path / "delta_user_metadata_overwrite"
+    spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").save(str(delta_path))
 
-        spark.createDataFrame([Row(id=2), Row(id=3)]).write.format("delta").mode("overwrite").option(
-            "userMetadata", "audit=overwrite-v2"
-        ).save(str(delta_path))
+    spark.createDataFrame([Row(id=2), Row(id=3)]).write.format("delta").mode("overwrite").option(
+        "userMetadata", "audit=overwrite-v2"
+    ).save(str(delta_path))
 
-        commit_info = _read_latest_commit_info(delta_path)
-        assert commit_info.get("userMetadata") == "audit=overwrite-v2"
-        assert commit_info.get("operation") == "WRITE"
+    commit_info = _read_latest_commit_info(delta_path)
+    assert commit_info.get("userMetadata") == "audit=overwrite-v2"
+    assert commit_info.get("operation") == "WRITE"
 
-    def test_user_metadata_is_per_commit(self, spark, tmp_path):
-        """A subsequent write without `userMetadata` must not inherit the previous value."""
-        delta_path = tmp_path / "delta_user_metadata_per_commit"
 
-        spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option(
-            "userMetadata", "first-commit"
-        ).save(str(delta_path))
-        first_commit = _read_latest_commit_info(delta_path)
-        assert first_commit.get("userMetadata") == "first-commit"
+def test_user_metadata_is_per_commit(spark, tmp_path):
+    """A subsequent write without `userMetadata` must not inherit the previous value."""
+    delta_path = tmp_path / "delta_user_metadata_per_commit"
 
-        spark.createDataFrame([Row(id=2)]).write.format("delta").mode("append").save(str(delta_path))
-        second_commit = _read_latest_commit_info(delta_path)
-        assert "userMetadata" not in second_commit
-
-    def test_empty_user_metadata_is_omitted(self, spark, tmp_path):
-        """An empty option value parses to `None`, so `userMetadata` is not written."""
-        delta_path = tmp_path / "delta_user_metadata_empty"
-
-        spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option("userMetadata", "").save(
-            str(delta_path)
-        )
-
-        commit_info = _read_latest_commit_info(delta_path)
-        assert "userMetadata" not in commit_info
-
-    @pytest.mark.parametrize(
-        "alias_key",
-        ["userMetadata", "user_metadata"],
+    spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option("userMetadata", "first-commit").save(
+        str(delta_path)
     )
-    def test_user_metadata_alias_keys(self, spark, tmp_path, alias_key):
-        """Both the camelCase and snake_case option keys are accepted."""
-        delta_path = tmp_path / f"delta_user_metadata_alias_{alias_key}"
+    first_commit = _read_latest_commit_info(delta_path)
+    assert first_commit.get("userMetadata") == "first-commit"
 
-        spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option(
-            alias_key, f"label-via-{alias_key}"
-        ).save(str(delta_path))
+    spark.createDataFrame([Row(id=2)]).write.format("delta").mode("append").save(str(delta_path))
+    second_commit = _read_latest_commit_info(delta_path)
+    assert "userMetadata" not in second_commit
 
-        commit_info = _read_latest_commit_info(delta_path)
-        assert commit_info.get("userMetadata") == f"label-via-{alias_key}"
+
+def test_empty_user_metadata_is_omitted(spark, tmp_path):
+    """An empty option value parses to `None`, so `userMetadata` is not written."""
+    delta_path = tmp_path / "delta_user_metadata_empty"
+
+    spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option("userMetadata", "").save(
+        str(delta_path)
+    )
+
+    commit_info = _read_latest_commit_info(delta_path)
+    assert "userMetadata" not in commit_info
+
+
+@pytest.mark.parametrize(
+    "alias_key",
+    ["userMetadata", "user_metadata"],
+)
+def test_user_metadata_alias_keys(spark, tmp_path, alias_key):
+    """Both the camelCase and snake_case option keys are accepted."""
+    delta_path = tmp_path / f"delta_user_metadata_alias_{alias_key}"
+
+    spark.createDataFrame([Row(id=1)]).write.format("delta").mode("append").option(
+        alias_key, f"label-via-{alias_key}"
+    ).save(str(delta_path))
+
+    commit_info = _read_latest_commit_info(delta_path)
+    assert commit_info.get("userMetadata") == f"label-via-{alias_key}"

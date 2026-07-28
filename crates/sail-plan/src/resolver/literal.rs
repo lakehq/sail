@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, new_null_array, ArrayData, AsArray, FixedSizeListArray, LargeListArray,
-    MapArray, StructArray,
+    ArrayData, AsArray, FixedSizeListArray, LargeListArray, MapArray, StructArray, new_empty_array,
+    new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes as adt;
+use datafusion_common::ScalarValue;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::ScalarValue;
 use sail_common::spec::{
     self, Literal, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_literal(

@@ -1,0 +1,73 @@
+# serializer version: 1
+---
+name: "test_explain_allliteral_concat_has_no_spark_concat_in_the_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as result]
+      ProjectionExec: expr=[abcdef as #0]
+        PlaceholderRowExec
+---
+name: "test_explain_concat_of_single_integer_column__spark_concat_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_concat_of_single_string_column__no_spark_concat_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[column1@0 as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_concat_of_two_array_columns__spark_concat_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0, column2@1) as #4]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_concat_with_a_null_literal_drops_an_expensive_argument"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[NULL as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_deeply_nested_concat_over_columns_flattens_to_one_spark_concat"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#8@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0, column2@1, column3@2, column4@3) as #8]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_inner_null_folds_the_flattened_concat_and_drops_abs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as result]
+      ProjectionExec: expr=[NULL as #6]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_nested_concat_flattens_and_keeps_the_abs_argument"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0, column2@1, CAST(spark_abs(column3@2) AS Utf8)) as #6]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_nested_concat_over_columns_flattens_to_one_spark_concat"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0, column2@1, column3@2) as #6]
+        DataSourceExec: partitions=1, partition_sizes=[1]

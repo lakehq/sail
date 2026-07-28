@@ -4,7 +4,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 
 pub trait SessionExtension: Send + Sync + 'static {
     fn name() -> &'static str;

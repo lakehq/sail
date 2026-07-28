@@ -29,9 +29,11 @@ async fn test_create_get_drop_database() {
     );
 
     let databases = catalog.list_databases(None).await.unwrap();
-    assert!(databases
-        .iter()
-        .any(|db| db.database == vec!["test_create_get_drop_database".to_string()]));
+    assert!(
+        databases
+            .iter()
+            .any(|db| db.database == vec!["test_create_get_drop_database".to_string()])
+    );
 
     catalog
         .drop_database(

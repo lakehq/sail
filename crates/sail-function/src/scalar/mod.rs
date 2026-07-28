@@ -1,4 +1,5 @@
 pub mod array;
+pub mod array_struct_field;
 pub mod collection;
 pub mod csv;
 pub mod datetime;
@@ -12,6 +13,7 @@ pub mod math;
 pub mod misc;
 pub mod multi_expr;
 pub mod predicate;
+pub mod spark_struct_rename;
 pub mod spark_to_string;
 pub mod string;
 pub mod struct_function;

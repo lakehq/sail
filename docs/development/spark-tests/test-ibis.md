@@ -7,10 +7,7 @@ rank: 25
 
 You can run Ibis unit tests with the Spark backend connected to the Sail server.
 
-::: info
-The Ibis tests are not run in GitHub pull requests yet since the setup is not fully working.
-But you can run them locally to work on missing Ibis features in Sail.
-:::
+<!--@include: ../_common/server-issue.md-->
 
 ## Running the Spark Connect Server
 

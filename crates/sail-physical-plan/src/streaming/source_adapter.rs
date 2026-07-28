@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -6,13 +5,13 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{plan_err, Result};
-use futures::{stream, StreamExt};
+use datafusion_common::{Result, plan_err};
+use futures::{StreamExt, stream};
+use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::marker::FlowMarker;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
-use sail_common_datafusion::streaming::event::FlowEvent;
 
 /// A physical plan node that adapts a non-streaming source to a streaming source.
 /// The input schema is the original data schema, while the output schema is the
@@ -53,10 +52,6 @@ impl DisplayAs for StreamSourceAdapterExec {
 impl ExecutionPlan for StreamSourceAdapterExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

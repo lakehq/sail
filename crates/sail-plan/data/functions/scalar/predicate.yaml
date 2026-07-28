@@ -1,0 +1,728 @@
+- name: "!"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Not"
+  signatures:
+    - "! expr"
+  usage: "! expr - Logical not."
+  examples: |2-
+    
+        Examples:
+          > SELECT ! true;
+           false
+          > SELECT ! false;
+           true
+          > SELECT ! NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "!="
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  signatures:
+    - "expr1 != expr2"
+  usage: "expr1 != expr2 - Returns true if `expr1` is not equal to `expr2`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to
+                           a common type, and must be a type that can be used in equality comparison.
+                           Map type is not supported. For complex types such array/struct,
+                           the data types of fields must be orderable.
+  examples: |2-
+    
+        Examples:
+          > SELECT 1 != 2;
+           true
+          > SELECT 1 != '2';
+           true
+          > SELECT true != NULL;
+           NULL
+          > SELECT NULL != NULL;
+           NULL
+  since: "1.0.0"
+
+- name: "<"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.LessThan"
+  signatures:
+    - "expr1 < expr2"
+  usage: "expr1 < expr2 - Returns true if `expr1` is less than `expr2`."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be ordered. For example, map type is not orderable, so it
+              is not supported. For complex types such array/struct, the data types of fields must
+              be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 1 < 2;
+           true
+          > SELECT 1.1 < '1';
+           false
+          > SELECT to_date('2009-07-30 04:17:52') < to_date('2009-07-30 04:17:52');
+           false
+          > SELECT to_date('2009-07-30 04:17:52') < to_date('2009-08-01 04:17:52');
+           true
+          > SELECT 1 < NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "<="
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.LessThanOrEqual"
+  signatures:
+    - "expr1 <= expr2"
+  usage: "expr1 <= expr2 - Returns true if `expr1` is less than or equal to `expr2`."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be ordered. For example, map type is not orderable, so it
+              is not supported. For complex types such array/struct, the data types of fields must
+              be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 <= 2;
+           true
+          > SELECT 1.0 <= '1';
+           true
+          > SELECT to_date('2009-07-30 04:17:52') <= to_date('2009-07-30 04:17:52');
+           true
+          > SELECT to_date('2009-07-30 04:17:52') <= to_date('2009-08-01 04:17:52');
+           true
+          > SELECT 1 <= NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "<=>"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.EqualNullSafe"
+  signatures:
+    - "expr1 <=> expr2"
+  usage: |2-
+    
+        expr1 <=> expr2 - Returns same result as the EQUAL(=) operator for non-null operands,
+          but returns true if both are null, false if one of the them is null.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be used in equality comparison. Map type is not supported.
+              For complex types such array/struct, the data types of fields must be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 <=> 2;
+           true
+          > SELECT 1 <=> '1';
+           true
+          > SELECT true <=> NULL;
+           false
+          > SELECT NULL <=> NULL;
+           true
+      
+  since: "1.1.0"
+
+- name: "<>"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  signatures:
+    - "expr1 != expr2"
+  usage: "expr1 != expr2 - Returns true if `expr1` is not equal to `expr2`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to
+                           a common type, and must be a type that can be used in equality comparison.
+                           Map type is not supported. For complex types such array/struct,
+                           the data types of fields must be orderable.
+  examples: |2-
+    
+        Examples:
+          > SELECT 1 != 2;
+           true
+          > SELECT 1 != '2';
+           true
+          > SELECT true != NULL;
+           NULL
+          > SELECT NULL != NULL;
+           NULL
+  since: "1.0.0"
+
+- name: "="
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.EqualTo"
+  signatures:
+    - "expr1 = expr2"
+  usage: "expr1 = expr2 - Returns true if `expr1` equals `expr2`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be used in equality comparison. Map type is not supported.
+              For complex types such array/struct, the data types of fields must be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 = 2;
+           true
+          > SELECT 1 = '1';
+           true
+          > SELECT true = NULL;
+           NULL
+          > SELECT NULL = NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "=="
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.EqualTo"
+  signatures:
+    - "expr1 == expr2"
+  usage: "expr1 == expr2 - Returns true if `expr1` equals `expr2`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be used in equality comparison. Map type is not supported.
+              For complex types such array/struct, the data types of fields must be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 == 2;
+           true
+          > SELECT 1 == '1';
+           true
+          > SELECT true == NULL;
+           NULL
+          > SELECT NULL == NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: ">"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.GreaterThan"
+  signatures:
+    - "expr1 > expr2"
+  usage: "expr1 > expr2 - Returns true if `expr1` is greater than `expr2`."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be ordered. For example, map type is not orderable, so it
+              is not supported. For complex types such array/struct, the data types of fields must
+              be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 > 1;
+           true
+          > SELECT 2 > 1.1;
+           true
+          > SELECT to_date('2009-07-30 04:17:52') > to_date('2009-07-30 04:17:52');
+           false
+          > SELECT to_date('2009-07-30 04:17:52') > to_date('2009-08-01 04:17:52');
+           false
+          > SELECT 1 > NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: ">="
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual"
+  signatures:
+    - "expr1 >= expr2"
+  usage: "expr1 >= expr2 - Returns true if `expr1` is greater than or equal to `expr2`."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be ordered. For example, map type is not orderable, so it
+              is not supported. For complex types such array/struct, the data types of fields must
+              be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 >= 1;
+           true
+          > SELECT 2.0 >= '2.1';
+           false
+          > SELECT to_date('2009-07-30 04:17:52') >= to_date('2009-07-30 04:17:52');
+           true
+          > SELECT to_date('2009-07-30 04:17:52') >= to_date('2009-08-01 04:17:52');
+           false
+          > SELECT 1 >= NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "and"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.And"
+  signatures:
+    - "expr1 and expr2"
+  usage: "expr1 and expr2 - Logical AND."
+  examples: |2-
+    
+        Examples:
+          > SELECT true and true;
+           true
+          > SELECT true and false;
+           false
+          > SELECT true and NULL;
+           NULL
+          > SELECT false and NULL;
+           false
+      
+  since: "1.0.0"
+
+- name: "between"
+  scope: "sql_builtin"
+  group: "conditional_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Between"
+  signatures:
+    - "input [NOT] between lower AND upper"
+  usage: "input [NOT] between lower AND upper - evaluate if `input` is [not] in between `lower` and `upper`"
+  arguments: |2-
+    
+        Arguments:
+          * input - An expression that is being compared with lower and upper bound.
+          * lower - Lower bound of the between check.
+          * upper - Upper bound of the between check.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 0.5 between 0.1 AND 1.0;
+            true
+      
+  since: "1.0.0"
+
+- name: "equal_null"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.EqualNull"
+  signatures:
+    - "equal_null(expr1, expr2)"
+  usage: |2-
+    
+        equal_null(expr1, expr2) - Returns same result as the EQUAL(=) operator for non-null operands,
+          but returns true if both are null, false if one of the them is null.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2 - the two expressions must be same type or can be casted to a common type,
+              and must be a type that can be used in equality comparison. Map type is not supported.
+              For complex types such array/struct, the data types of fields must be orderable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT equal_null(3, 3);
+           true
+          > SELECT equal_null(1, '11');
+           false
+          > SELECT equal_null(true, NULL);
+           false
+          > SELECT equal_null(NULL, 'abc');
+           false
+          > SELECT equal_null(NULL, NULL);
+           true
+      
+  since: "3.4.0"
+
+- name: "ilike"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ILike"
+  signatures:
+    - "str ilike pattern[ ESCAPE escape]"
+  usage: "str ilike pattern[ ESCAPE escape] - Returns true if str matches `pattern` with `escape` case-insensitively, null if any arguments are null, false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * pattern - a string expression. The pattern is a string which is matched literally and
+              case-insensitively, with exception to the following special symbols:<br><br>
+              _ matches any one character in the input (similar to . in posix regular expressions)<br><br>
+              % matches zero or more characters in the input (similar to .* in posix regular
+              expressions)<br><br>
+              Since Spark 2.0, string literals are unescaped in our SQL parser, see the unescaping
+              rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, in order to match "\abc", the pattern should be "\\abc".<br><br>
+              When SQL config 'spark.sql.parser.escapedStringLiterals' is enabled, it falls back
+              to Spark 1.6 behavior regarding string literal parsing. For example, if the config is
+              enabled, the pattern to match "\abc" should be "\abc".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+          * escape - an character added since Spark 3.0. The default escape character is the '\'.
+              If an escape character precedes a special symbol or another escape character, the
+              following character is matched literally. It is invalid to escape any other character.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT ilike('Spark', '_Park');
+          true
+          > SELECT '\\abc' AS S, S ilike r'\\abc', S ilike '\\\\abc';
+          \abc	true	true
+          > SET spark.sql.parser.escapedStringLiterals=true;
+          spark.sql.parser.escapedStringLiterals	true
+          > SELECT '%SystemDrive%\Users\John' ilike '\%SystemDrive\%\\users%';
+          true
+          > SET spark.sql.parser.escapedStringLiterals=false;
+          spark.sql.parser.escapedStringLiterals	false
+          > SELECT '%SystemDrive%\\USERS\\John' ilike r'%SystemDrive%\\Users%';
+          true
+          > SELECT '%SystemDrive%/Users/John' ilike '/%SYSTEMDrive/%//Users%' ESCAPE '/';
+          true
+      
+  note: |2-
+    
+        Use RLIKE to match with standard regular expressions.
+      
+  since: "3.3.0"
+
+- name: "in"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.In"
+  signatures:
+    - "expr1 in(expr2, expr3, ...)"
+  usage: "expr1 in(expr2, expr3, ...) - Returns true if `expr` equals to any valN."
+  arguments: |2-
+    
+        Arguments:
+          * expr1, expr2, expr3, ... - the arguments must be same type.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT 1 in(1, 2, 3);
+           true
+          > SELECT 1 in(2, 3, 4);
+           false
+          > SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 1), named_struct('a', 1, 'b', 3));
+           false
+          > SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 2), named_struct('a', 1, 'b', 3));
+           true
+      
+  since: "1.0.0"
+
+- name: "isnan"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.IsNaN"
+  signatures:
+    - "isnan(expr)"
+  usage: "isnan(expr) - Returns true if `expr` is NaN, or false otherwise."
+  examples: |2-
+    
+        Examples:
+          > SELECT isnan(cast('NaN' as double));
+           true
+      
+  since: "1.5.0"
+
+- name: "isnotnull"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.IsNotNull"
+  signatures:
+    - "isnotnull(expr)"
+  usage: "isnotnull(expr) - Returns true if `expr` is not null, or false otherwise."
+  examples: |2-
+    
+        Examples:
+          > SELECT isnotnull(1);
+           true
+      
+  since: "1.0.0"
+
+- name: "isnull"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.IsNull"
+  signatures:
+    - "isnull(expr)"
+  usage: "isnull(expr) - Returns true if `expr` is null, or false otherwise."
+  examples: |2-
+    
+        Examples:
+          > SELECT isnull(1);
+           false
+      
+  since: "1.0.0"
+
+- name: "like"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Like"
+  signatures:
+    - "str like pattern[ ESCAPE escape]"
+  usage: "str like pattern[ ESCAPE escape] - Returns true if str matches `pattern` with `escape`, null if any arguments are null, false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * pattern - a string expression. The pattern is a string which is matched literally, with
+              exception to the following special symbols:<br><br>
+              _ matches any one character in the input (similar to . in posix regular expressions)\
+              % matches zero or more characters in the input (similar to .* in posix regular
+              expressions)<br><br>
+              Since Spark 2.0, string literals are unescaped in our SQL parser, see the unescaping
+              rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, in order to match "\abc", the pattern should be "\\abc".<br><br>
+              When SQL config 'spark.sql.parser.escapedStringLiterals' is enabled, it falls back
+              to Spark 1.6 behavior regarding string literal parsing. For example, if the config is
+              enabled, the pattern to match "\abc" should be "\abc".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+          * escape - an character added since Spark 3.0. The default escape character is the '\'.
+              If an escape character precedes a special symbol or another escape character, the
+              following character is matched literally. It is invalid to escape any other character.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT like('Spark', '_park');
+          true
+          > SELECT '\\abc' AS S, S like r'\\abc', S like '\\\\abc';
+          \abc	true	true
+          > SET spark.sql.parser.escapedStringLiterals=true;
+          spark.sql.parser.escapedStringLiterals	true
+          > SELECT '%SystemDrive%\Users\John' like '\%SystemDrive\%\\Users%';
+          true
+          > SET spark.sql.parser.escapedStringLiterals=false;
+          spark.sql.parser.escapedStringLiterals	false
+          > SELECT '%SystemDrive%\\Users\\John' like r'%SystemDrive%\\Users%';
+          true
+          > SELECT '%SystemDrive%/Users/John' like '/%SystemDrive/%//Users%' ESCAPE '/';
+          true
+      
+  note: |2-
+    
+        Use RLIKE to match with standard regular expressions.
+      
+  since: "1.0.0"
+
+- name: "not"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Not"
+  signatures:
+    - "not expr"
+  usage: "not expr - Logical not."
+  examples: |2-
+    
+        Examples:
+          > SELECT not true;
+           false
+          > SELECT not false;
+           true
+          > SELECT not NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "or"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.Or"
+  signatures:
+    - "expr1 or expr2"
+  usage: "expr1 or expr2 - Logical OR."
+  examples: |2-
+    
+        Examples:
+          > SELECT true or false;
+           true
+          > SELECT false or false;
+           false
+          > SELECT true or NULL;
+           true
+          > SELECT false or NULL;
+           NULL
+      
+  since: "1.0.0"
+
+- name: "regexp"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RLike"
+  signatures:
+    - "regexp(str, regexp)"
+  usage: "regexp(str, regexp) - Returns true if `str` matches `regexp`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * regexp - a string expression. The regex string should be a Java regular expression.
+    
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".
+    
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+      
+  examples: |2-
+    
+        Examples:
+          > SET spark.sql.parser.escapedStringLiterals=true;
+          spark.sql.parser.escapedStringLiterals	true
+          > SELECT regexp('%SystemDrive%\Users\John', '%SystemDrive%\\Users.*');
+          true
+          > SET spark.sql.parser.escapedStringLiterals=false;
+          spark.sql.parser.escapedStringLiterals	false
+          > SELECT regexp('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');
+          true
+          > SELECT regexp('%SystemDrive%\\Users\\John', r'%SystemDrive%\\Users.*');
+          true
+      
+  note: |2-
+    
+        Use LIKE to match with simple string pattern.
+      
+  since: "3.2.0"
+
+- name: "regexp_like"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RLike"
+  signatures:
+    - "regexp_like(str, regexp)"
+  usage: "regexp_like(str, regexp) - Returns true if `str` matches `regexp`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * regexp - a string expression. The regex string should be a Java regular expression.
+    
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".
+    
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+      
+  examples: |2-
+    
+        Examples:
+          > SET spark.sql.parser.escapedStringLiterals=true;
+          spark.sql.parser.escapedStringLiterals	true
+          > SELECT regexp_like('%SystemDrive%\Users\John', '%SystemDrive%\\Users.*');
+          true
+          > SET spark.sql.parser.escapedStringLiterals=false;
+          spark.sql.parser.escapedStringLiterals	false
+          > SELECT regexp_like('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');
+          true
+          > SELECT regexp_like('%SystemDrive%\\Users\\John', r'%SystemDrive%\\Users.*');
+          true
+      
+  note: |2-
+    
+        Use LIKE to match with simple string pattern.
+      
+  since: "3.2.0"
+
+- name: "rlike"
+  scope: "sql_builtin"
+  group: "predicate_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.RLike"
+  signatures:
+    - "rlike(str, regexp)"
+  usage: "rlike(str, regexp) - Returns true if `str` matches `regexp`, or false otherwise."
+  arguments: |2-
+    
+        Arguments:
+          * str - a string expression
+          * regexp - a string expression. The regex string should be a Java regular expression.
+    
+              Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
+              parser, see the unescaping rules at <a href="https://spark.apache.org/docs/latest/sql-ref-literals.html#string-literal">String Literal</a>.
+              For example, to match "\abc", a regular expression for `regexp` can be "^\\abc$".
+    
+              There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
+              fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
+              if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".<br><br>
+              It's recommended to use a raw string literal (with the `r` prefix) to avoid escaping
+              special characters in the pattern string if exists.
+      
+  examples: |2-
+    
+        Examples:
+          > SET spark.sql.parser.escapedStringLiterals=true;
+          spark.sql.parser.escapedStringLiterals	true
+          > SELECT rlike('%SystemDrive%\Users\John', '%SystemDrive%\\Users.*');
+          true
+          > SET spark.sql.parser.escapedStringLiterals=false;
+          spark.sql.parser.escapedStringLiterals	false
+          > SELECT rlike('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');
+          true
+          > SELECT rlike('%SystemDrive%\\Users\\John', r'%SystemDrive%\\Users.*');
+          true
+      
+  note: |2-
+    
+        Use LIKE to match with simple string pattern.
+      
+  since: "1.0.0"
+

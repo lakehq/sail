@@ -1,41 +1,36 @@
-use std::sync::Arc;
-
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::Result;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
 
-pub type AvroTableFormat = ListingTableFormat<AvroListingFormat>;
+// Some of the code in the `read` and `write` modules is adapted from the DataFusion `AvroFormat` implementation.
+// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-avro/src/file_format.rs
+
+mod read;
+mod write;
+
+pub use read::AvroReadFormat;
+pub use write::AvroWriteFormat;
+
+pub type AvroTableFormat = ListingTableFormat<AvroFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct AvroListingFormat;
+pub struct AvroFormatFactory;
 
-impl ListingFormat for AvroListingFormat {
-    fn name(&self) -> &'static str {
+impl FormatFactory for AvroFormatFactory {
+    type Read = AvroReadFormat;
+    type Write = AvroWriteFormat;
+
+    fn name() -> &'static str {
         "avro"
     }
 
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
+    fn read(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Read> {
+        Ok(AvroReadFormat)
     }
 
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((Arc::new(AvroFormat), None))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
+    fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
+        Ok(AvroWriteFormat)
     }
 }

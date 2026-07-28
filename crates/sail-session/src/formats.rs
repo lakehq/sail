@@ -8,8 +8,9 @@ use sail_data_source::formats::binary::BinaryTableFormat;
 use sail_data_source::formats::console::ConsoleTableFormat;
 use sail_data_source::formats::csv::CsvTableFormat;
 use sail_data_source::formats::json::JsonTableFormat;
+use sail_data_source::formats::noop::NoopTableFormat;
 use sail_data_source::formats::parquet::ParquetTableFormat;
-use sail_data_source::formats::python::{discover_data_sources, PythonTableFormat};
+use sail_data_source::formats::python::{PythonTableFormat, discover_data_sources};
 use sail_data_source::formats::rate::RateTableFormat;
 use sail_data_source::formats::socket::SocketTableFormat;
 use sail_data_source::formats::text::TextTableFormat;
@@ -34,6 +35,7 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     registry.register(Arc::new(SocketTableFormat))?;
     registry.register(Arc::new(RateTableFormat))?;
     registry.register(Arc::new(ConsoleTableFormat))?;
+    registry.register(Arc::new(NoopTableFormat))?;
     Ok(())
 }
 

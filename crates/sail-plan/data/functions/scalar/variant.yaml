@@ -1,0 +1,174 @@
+- name: "is_variant_null"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.IsVariantNull"
+  signatures:
+    - "is_variant_null(expr)"
+  usage: "is_variant_null(expr) - Check if a variant value is a variant null. Returns true if and only if the input is a variant null and false otherwise (including in the case of SQL NULL)."
+  examples: |2-
+    
+        Examples:
+          > SELECT is_variant_null(parse_json('null'));
+           true
+          > SELECT is_variant_null(parse_json('"null"'));
+           false
+          > SELECT is_variant_null(parse_json('13'));
+           false
+          > SELECT is_variant_null(parse_json(null));
+           false
+          > SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.c"));
+           false
+          > SELECT is_variant_null(variant_get(parse_json('{"a":null, "b":"spark"}'), "$.a"));
+           true
+      
+  since: "4.0.0"
+
+- name: "parse_json"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.ParseJsonExpressionBuilder"
+  signatures:
+    - "parse_json(jsonStr)"
+  usage: "parse_json(jsonStr) - Parse a JSON string as a Variant value. Throw an exception when the string is not valid JSON value."
+  examples: |2-
+    
+        Examples:
+          > SELECT parse_json('{"a":1,"b":0.8}');
+           {"a":1,"b":0.8}
+      
+  since: "4.0.0"
+
+- name: "schema_of_variant"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.SchemaOfVariant"
+  signatures:
+    - "schema_of_variant(v)"
+  usage: "schema_of_variant(v) - Returns schema in the SQL format of a variant."
+  examples: |2-
+    
+        Examples:
+          > SELECT schema_of_variant(parse_json('null'));
+           VOID
+          > SELECT schema_of_variant(parse_json('[{"b":true,"a":0}]'));
+           ARRAY<OBJECT<a: BIGINT, b: BOOLEAN>>
+      
+  since: "4.0.0"
+
+- name: "schema_of_variant_agg"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.SchemaOfVariantAgg"
+  signatures:
+    - "schema_of_variant_agg(v)"
+  usage: "schema_of_variant_agg(v) - Returns the merged schema in the SQL format of a variant column."
+  examples: |2-
+    
+        Examples:
+          > SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('1'), ('2'), ('3') AS tab(j);
+           BIGINT
+          > SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('{"a": 1}'), ('{"b": true}'), ('{"c": 1.23}') AS tab(j);
+           OBJECT<a: BIGINT, b: BOOLEAN, c: DECIMAL(3,2)>
+      
+  since: "4.0.0"
+
+- name: "to_variant_object"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.ToVariantObject"
+  signatures:
+    - "to_variant_object(expr)"
+  usage: "to_variant_object(expr) - Convert a nested input (array/map/struct) into a variant where maps and structs are converted to variant objects which are unordered unlike SQL structs. Input maps can only have string keys."
+  examples: |2-
+    
+        Examples:
+          > SELECT to_variant_object(named_struct('a', 1, 'b', 2));
+           {"a":1,"b":2}
+          > SELECT to_variant_object(array(1, 2, 3));
+           [1,2,3]
+          > SELECT to_variant_object(array(named_struct('a', 1)));
+           [{"a":1}]
+          > SELECT to_variant_object(array(map("a", 2)));
+           [{"a":2}]
+      
+  since: "4.0.0"
+
+- name: "try_parse_json"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.TryParseJsonExpressionBuilder"
+  signatures:
+    - "try_parse_json(jsonStr)"
+  usage: "try_parse_json(jsonStr) - Parse a JSON string as a Variant value. Return NULL when the string is not valid JSON value."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_parse_json('{"a":1,"b":0.8}');
+           {"a":1,"b":0.8}
+          > SELECT try_parse_json('{"a":1,');
+           NULL
+      
+  since: "4.0.0"
+
+- name: "try_variant_get"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.TryVariantGetExpressionBuilder"
+  signatures:
+    - "try_variant_get(v, path[, type])"
+  usage: "try_variant_get(v, path[, type]) - Extracts a sub-variant from `v` according to `path`, and then cast the sub-variant to `type`. When `type` is omitted, it is default to `variant`. Returns null if the path does not exist or the cast fails."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_variant_get(parse_json('{"a": 1}'), '$.a', 'int');
+           1
+          > SELECT try_variant_get(parse_json('{"a": 1}'), '$.b', 'int');
+           NULL
+          > SELECT try_variant_get(parse_json('[1, "2"]'), '$[1]', 'string');
+           2
+          > SELECT try_variant_get(parse_json('[1, "2"]'), '$[2]', 'string');
+           NULL
+          > SELECT try_variant_get(parse_json('[1, "hello"]'), '$[1]');
+           "hello"
+          > SELECT try_variant_get(parse_json('[1, "hello"]'), '$[1]', 'int');
+           NULL
+      
+  since: "4.0.0"
+
+- name: "variant_get"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.VariantGetExpressionBuilder"
+  signatures:
+    - "variant_get(v, path[, type])"
+  usage: "variant_get(v, path[, type]) - Extracts a sub-variant from `v` according to `path`, and then cast the sub-variant to `type`. When `type` is omitted, it is default to `variant`. Returns null if the path does not exist. Throws an exception if the cast fails."
+  examples: |2-
+    
+        Examples:
+          > SELECT variant_get(parse_json('{"a": 1}'), '$.a', 'int');
+           1
+          > SELECT variant_get(parse_json('{"a": 1}'), '$.b', 'int');
+           NULL
+          > SELECT variant_get(parse_json('[1, "2"]'), '$[1]', 'string');
+           2
+          > SELECT variant_get(parse_json('[1, "2"]'), '$[2]', 'string');
+           NULL
+          > SELECT variant_get(parse_json('[1, "hello"]'), '$[1]');
+           "hello"
+      
+  since: "4.0.0"
+
+- name: "variant_to_json"
+  scope: "sail_extension"
+  signatures:
+    - "variant_to_json(expr), variant_to_json(expr, options)"
+  usage: "variant_to_json(expr), variant_to_json(expr, options) - Returns a JSON string representation of a VARIANT expression."
+

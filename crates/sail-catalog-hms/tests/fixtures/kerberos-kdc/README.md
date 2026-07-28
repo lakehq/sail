@@ -10,7 +10,7 @@ Three containers run on a shared Docker network:
 | Container      | Hostname            | Role                                       |
 |----------------|---------------------|--------------------------------------------|
 | `sail-kerberos-kdc` | `sail-kerberos-kdc` | MIT KDC + admin server, creates principals and keytabs |
-| `sail-krb-hms-*`    | `sail-kerberos-hms` | Apache Hive Metastore 3.1.3 with Kerberos SASL enabled  |
+| `sail-krb-hms-*`    | `sail-kerberos-hms` | Apache Hive Metastore 4.0.0 with Kerberos SASL enabled  |
 | *(test runner)*      | *(CI host)*         | Rust test process, acts as the GSSAPI client             |
 
 The test runner (on the CI host) connects to HMS over Thrift using Kerberos

@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{as_primitive_array, ArrayRef, StringArray};
+use datafusion::arrow::array::{ArrayRef, StringArray, as_primitive_array};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{
@@ -31,10 +30,6 @@ impl SparkConv {
 }
 
 impl ScalarUDFImpl for SparkConv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_conv"
     }
@@ -70,7 +65,7 @@ impl ScalarUDFImpl for SparkConv {
                     "spark_conv",
                     "Scalar String or Int",
                     &num.data_type(),
-                ))
+                ));
             }
         };
 

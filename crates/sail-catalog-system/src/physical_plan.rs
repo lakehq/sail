@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::common::{exec_err, plan_err, Result};
+use datafusion::common::{Result, exec_err, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -84,10 +83,6 @@ impl DisplayAs for SystemTableExec {
 impl ExecutionPlan for SystemTableExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

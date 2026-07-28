@@ -2,7 +2,6 @@
 //
 // [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_length.rs
 
-use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, UInt64Array, UInt64Builder};
@@ -14,7 +13,7 @@ use datafusion_expr::{
 use jiter::Peek;
 
 use crate::scalar::json::common::{
-    get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
+    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -39,10 +38,6 @@ impl JsonLength {
 }
 
 impl ScalarUDFImpl for JsonLength {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.aliases[0].as_str()
     }

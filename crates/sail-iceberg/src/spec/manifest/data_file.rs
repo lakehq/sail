@@ -21,8 +21,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::spec::types::values::Literal;
 use crate::spec::Datum;
+use crate::spec::types::values::Literal;
 
 /// Content type of a data file.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]

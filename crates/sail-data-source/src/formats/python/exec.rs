@@ -26,7 +26,6 @@
 //! - Programmatic access via `ctx.collect_metrics()`
 //! - UI dashboards for execution bottleneck visualization
 //!
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -36,7 +35,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 
 use super::executor::InputPartition;
 
@@ -116,10 +115,6 @@ impl DisplayAs for PythonDataSourceExec {
 impl ExecutionPlan for PythonDataSourceExec {
     fn name(&self) -> &'static str {
         "PythonDataSourceExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

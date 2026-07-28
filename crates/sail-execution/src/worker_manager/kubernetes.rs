@@ -8,8 +8,9 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::{DeepMerge, Resource};
 use kube::Api;
-use rand::distr::Uniform;
+use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
+use rand::distr::Uniform;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;
@@ -102,12 +103,17 @@ impl KubernetesWorkerManager {
                 "app.kubernetes.io/instance".to_string(),
                 format!("{}-{}", self.name, id),
             ),
+            (
+                "sail.lakesail.com/worker-manager".to_string(),
+                self.name.clone(),
+            ),
         ])
     }
 
     fn build_pod_env(&self, id: WorkerId, options: WorkerLaunchOptions) -> Vec<EnvVar> {
         let WorkerLaunchOptions {
             enable_tls,
+            driver_id,
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
@@ -162,6 +168,11 @@ impl KubernetesWorkerManager {
             EnvVar {
                 name: ClusterConfigEnv::DRIVER_EXTERNAL_PORT.to_string(),
                 value: Some(driver_external_port.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::DRIVER_ID.to_string(),
+                value: Some(u64::from(driver_id).to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -250,10 +261,10 @@ impl WorkerManager for KubernetesWorkerManager {
                         "failed to parse worker pod template: {e}",
                     ))
                 })?;
-            if let Some(metadata) = &template.metadata {
-                if let Some(template_labels) = &metadata.labels {
-                    labels.extend(template_labels.clone());
-                }
+            if let Some(metadata) = &template.metadata
+                && let Some(template_labels) = &metadata.labels
+            {
+                labels.extend(template_labels.clone());
             }
             if let Some(s) = template.spec {
                 spec.merge_from(s);
@@ -276,6 +287,14 @@ impl WorkerManager for KubernetesWorkerManager {
     }
 
     async fn stop(&self) -> ExecutionResult<()> {
+        self.pods()
+            .await?
+            .delete_collection(
+                &DeleteParams::default(),
+                &ListParams::default()
+                    .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
+            )
+            .await?;
         Ok(())
     }
 }
@@ -311,10 +330,10 @@ mod tests {
         let mut labels = BTreeMap::new();
         let parsed_template: PodTemplateSpec = serde_json::from_str(&template_json).unwrap();
 
-        if let Some(metadata) = &parsed_template.metadata {
-            if let Some(template_labels) = &metadata.labels {
-                labels.extend(template_labels.clone());
-            }
+        if let Some(metadata) = &parsed_template.metadata
+            && let Some(template_labels) = &metadata.labels
+        {
+            labels.extend(template_labels.clone());
         }
 
         // Add default labels (simulating build_pod_labels)
@@ -327,6 +346,10 @@ mod tests {
             (
                 "app.kubernetes.io/instance".to_string(),
                 "test-instance".to_string(),
+            ),
+            (
+                "sail.lakesail.com/worker-manager".to_string(),
+                "test-manager".to_string(),
             ),
         ]);
         labels.extend(default_labels.clone());
@@ -355,6 +378,10 @@ mod tests {
         assert_eq!(
             labels.get("app.kubernetes.io/instance"),
             Some(&"test-instance".to_string())
+        );
+        assert_eq!(
+            labels.get("sail.lakesail.com/worker-manager"),
+            Some(&"test-manager".to_string())
         );
     }
 }

@@ -1,5 +1,5 @@
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::Metric;
+use datafusion::physical_plan::metrics::MetricValue;
 
 use crate::common::KeyValue;
 use crate::execution::metrics::{MetricEmitter, MetricHandled};
@@ -361,6 +361,9 @@ mod tests {
         vec![
             registry.execution_join_candidate_count.name(),
             registry.execution_join_output_row_count.name(),
+            registry.execution_spill_count.name(),
+            registry.execution_spill_size.name(),
+            registry.execution_spill_row_count.name(),
         ]
     }
 

@@ -3,17 +3,18 @@ use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!("could not cast to {}", type_name::<$ARRAY_TYPE>()))
+            ::datafusion_common::DataFusionError::Internal(format!(
+                "could not cast to {}",
+                ::std::any::type_name::<$ARRAY_TYPE>()
+            ))
         })?
     }};
 }
 
 macro_rules! opt_downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>()
-    }};
+    ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{ $ARG.as_any().downcast_ref::<$ARRAY_TYPE>() }};
 }
 
 pub(crate) use downcast_arg;

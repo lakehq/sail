@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -38,10 +37,6 @@ impl SparkSplit {
 }
 
 impl ScalarUDFImpl for SparkSplit {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::NAME
     }
@@ -60,10 +55,10 @@ impl ScalarUDFImpl for SparkSplit {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let err = || {
             Err(unsupported_data_types_exec_err(
-            Self::NAME,
-            "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
-            arg_types,
-        ))
+                Self::NAME,
+                "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
+                arg_types,
+            ))
         };
 
         let mut res_types = vec![];

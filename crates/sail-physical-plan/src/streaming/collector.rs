@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -8,11 +7,11 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use futures::StreamExt;
+use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::DecodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
-use sail_common_datafusion::streaming::event::FlowEvent;
 
 /// A physical plan node that collects a stream of retractable data batches
 /// into final data batches.
@@ -58,10 +57,6 @@ impl DisplayAs for StreamCollectorExec {
 impl ExecutionPlan for StreamCollectorExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
-use sail_catalog::utils::quote_name_if_needed;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::credential::{
@@ -221,7 +220,6 @@ impl AsRef<str> for UnityCatalogConfigKey {
 
 #[derive(Debug)]
 pub struct UnityCatalogConfig {
-    pub default_catalog: String,
     pub uri: String,
     pub bearer_token: Option<SecretString>,
     pub client_id: Option<String>,
@@ -234,7 +232,6 @@ pub struct UnityCatalogConfig {
     pub federated_token_file: Option<String>,
     pub use_azure_cli: bool,
     pub allow_http_url: bool,
-    pub credential_provider: Option<CredentialProvider>,
 }
 
 fn str_is_truthy(value: &str) -> bool {
@@ -248,15 +245,11 @@ fn str_is_truthy(value: &str) -> bool {
 
 impl UnityCatalogConfig {
     pub fn new(
-        default_catalog: Option<String>,
         uri: Option<String>,
         token: &Option<SecretString>,
         options: Option<HashMap<String, String>>,
     ) -> CatalogResult<Self> {
         let mut config = Self {
-            default_catalog: quote_name_if_needed(
-                &default_catalog.unwrap_or_else(|| "unity".to_string()),
-            ),
             uri: uri.unwrap_or_else(|| DEFAULT_URI.to_string()),
             bearer_token: None,
             client_id: None,
@@ -269,7 +262,6 @@ impl UnityCatalogConfig {
             federated_token_file: None,
             use_azure_cli: false,
             allow_http_url: false,
-            credential_provider: None,
         };
 
         if let Some(token) = token {
@@ -283,8 +275,6 @@ impl UnityCatalogConfig {
 
         config.apply_env()?;
 
-        config.credential_provider = config.get_credential_provider();
-
         Ok(config)
     }
 
@@ -292,15 +282,13 @@ impl UnityCatalogConfig {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 let key = key.trim();
-                if key.to_ascii_uppercase().starts_with("UNITY_")
+                if (key.to_ascii_uppercase().starts_with("UNITY_")
                     || key.to_ascii_uppercase().starts_with("DATABRICKS_")
-                    || key.to_ascii_uppercase().starts_with("UC_")
-                {
-                    if let Ok(config_key) =
+                    || key.to_ascii_uppercase().starts_with("UC_"))
+                    && let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        self.set_option(config_key, value.to_string())?;
-                    }
+                {
+                    self.set_option(config_key, value.to_string())?;
                 }
             }
         }
@@ -364,19 +352,21 @@ impl UnityCatalogConfig {
             ));
         }
 
-        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
-            if let Some(authority_id) = &self.authority_id {
-                return Some(CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(ClientSecretOAuthProvider::new(
-                        client_id,
-                        client_secret.expose_secret(),
-                        authority_id,
-                        self.authority_host.as_ref(),
-                    )),
-                ));
-            }
+        if let (Some(client_id), Some(client_secret), Some(authority_id)) =
+            (&self.client_id, &self.client_secret, &self.authority_id)
+        {
+            return Some(CredentialProvider::TokenCredential(
+                TokenCache::default(),
+                Box::new(ClientSecretOAuthProvider::new(
+                    client_id,
+                    client_secret.expose_secret(),
+                    authority_id,
+                    self.authority_host.as_ref(),
+                )),
+            ));
+        }
 
+        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
                 Box::new(WorkspaceOAuthProvider::new(

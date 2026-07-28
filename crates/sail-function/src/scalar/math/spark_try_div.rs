@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
@@ -35,10 +33,6 @@ impl SparkTryDiv {
 }
 
 impl ScalarUDFImpl for SparkTryDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_divide"
     }

@@ -1,11 +1,11 @@
 use std::task::{Context, Poll};
 
 use datafusion::object_store::HeaderValue;
+use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::{FutureExt, InSpan};
-use fastrace::Span;
-use tonic::codegen::http::Request;
 use tonic::codegen::Service;
+use tonic::codegen::http::Request;
 use tower::Layer;
 
 use crate::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
@@ -41,11 +41,11 @@ where
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
         let span = Span::enter_with_local_parent(format!("{} {}", req.method(), req.uri().path()))
             .with_properties(|| [(SpanAttribute::SPAN_KIND, SpanKind::CLIENT)]);
-        if let Some(current) = SpanContext::from_span(&span) {
-            if let Ok(value) = HeaderValue::from_str(&current.encode_w3c_traceparent()) {
-                req.headers_mut()
-                    .insert(ContextPropagationHeader::TRACEPARENT, value);
-            }
+        if let Some(current) = SpanContext::from_span(&span)
+            && let Ok(value) = HeaderValue::from_str(&current.encode_w3c_traceparent())
+        {
+            req.headers_mut()
+                .insert(ContextPropagationHeader::TRACEPARENT, value);
         }
 
         self.inner.call(req).in_span(span)

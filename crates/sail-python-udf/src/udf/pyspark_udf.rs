@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -118,10 +117,6 @@ impl PySparkUDF {
 }
 
 impl ScalarUDFImpl for PySparkUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

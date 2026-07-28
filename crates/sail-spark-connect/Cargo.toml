@@ -29,6 +29,8 @@ pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 uuid = { workspace = true }
 datafusion = { workspace = true }
+arrow-schema = { workspace = true }
+parquet-variant-compute = { workspace = true }
 async-stream = { workspace = true }
 lazy_static = { workspace = true }
 serde = { workspace = true }

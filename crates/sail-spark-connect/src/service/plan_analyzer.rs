@@ -3,10 +3,11 @@ use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_plan::explain::{explain_string, ExplainOptions};
-use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
+use sail_plan::resolver::plan::NamedPlan;
 
+use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::proto::data_type_json::parse_spark_json_data_type;
@@ -30,7 +31,7 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::{plan, StorageLevel};
+use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
@@ -113,10 +114,18 @@ pub(crate) async fn handle_analyze_is_streaming(
 }
 
 pub(crate) async fn handle_analyze_input_files(
-    _ctx: &SessionContext,
-    _request: InputFilesRequest,
+    ctx: &SessionContext,
+    request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    Err(SparkError::todo("handle analyze input files"))
+    let InputFilesRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let spark = ctx.extension::<SparkSession>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, .. } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
+    let files = sail_data_source::listing::input_files::input_files(ctx, plan).await?;
+    Ok(InputFilesResponse { files })
 }
 
 pub(crate) async fn handle_analyze_spark_version(
@@ -125,19 +134,6 @@ pub(crate) async fn handle_analyze_spark_version(
 ) -> SparkResult<SparkVersionResponse> {
     let version = get_pyspark_version()?;
     Ok(SparkVersionResponse { version })
-}
-
-fn get_pyspark_version() -> SparkResult<String> {
-    use pyo3::prelude::PyAnyMethods;
-    use pyo3::types::PyModule;
-    use pyo3::Python;
-
-    Python::attach(|py| {
-        let module = PyModule::import(py, "pyspark")?;
-        let version: String = module.getattr("__version__")?.extract()?;
-        Ok(version)
-    })
-    .map_err(|e: pyo3::PyErr| SparkError::invalid(format!("failed to get PySpark version: {e}")))
 }
 
 pub(crate) async fn handle_analyze_ddl_parse(
@@ -306,6 +302,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         spec::QueryNode::Parse(p) => is_streaming_query_plan(&p.input),
         spec::QueryNode::WithWatermark(w) => is_streaming_query_plan(&w.input),
         spec::QueryNode::ApplyInPandasWithState(a) => is_streaming_query_plan(&a.input),
+        spec::QueryNode::NamedWindows { input, windows: _ } => is_streaming_query_plan(input),
         // multiple inputs
         spec::QueryNode::Join(j) => {
             is_streaming_query_plan(&j.left) || is_streaming_query_plan(&j.right)

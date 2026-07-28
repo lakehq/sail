@@ -1,15 +1,15 @@
 use std::mem;
 
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::table_input::TableInput;
 
-use crate::resolver::state::PlanResolverState;
-use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 /// Rewrites table input expression as cross join in UDTF lateral view.
 pub(crate) struct TableInputRewriter<'s> {
@@ -34,7 +34,7 @@ impl TreeNodeRewriter for TableInputRewriter<'_> {
         let Expr::ScalarFunction(ScalarFunction { func, .. }) = &node else {
             return Ok(Transformed::no(node));
         };
-        let Some(table) = func.inner().as_any().downcast_ref::<TableInput>() else {
+        let Some(table) = func.inner().downcast_ref::<TableInput>() else {
             return Ok(Transformed::no(node));
         };
         let plan = mem::replace(&mut self.plan, empty_logical_plan());

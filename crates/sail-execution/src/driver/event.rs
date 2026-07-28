@@ -13,19 +13,14 @@ use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use crate::driver::gen;
+use crate::driver::r#gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
 pub enum DriverEvent {
-    ServerReady {
-        /// The local port that the driver server listens on.
-        /// This may be different from the port accessible from other nodes.
-        port: u16,
-        signal: oneshot::Sender<()>,
-    },
+    Activate,
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
@@ -129,24 +124,24 @@ impl fmt::Display for TaskStatus {
     }
 }
 
-impl From<gen::TaskStatus> for TaskStatus {
-    fn from(value: gen::TaskStatus) -> Self {
+impl From<r#gen::TaskStatus> for TaskStatus {
+    fn from(value: r#gen::TaskStatus) -> Self {
         match value {
-            gen::TaskStatus::Running => Self::Running,
-            gen::TaskStatus::Succeeded => Self::Succeeded,
-            gen::TaskStatus::Failed => Self::Failed,
-            gen::TaskStatus::Canceled => Self::Canceled,
+            r#gen::TaskStatus::Running => Self::Running,
+            r#gen::TaskStatus::Succeeded => Self::Succeeded,
+            r#gen::TaskStatus::Failed => Self::Failed,
+            r#gen::TaskStatus::Canceled => Self::Canceled,
         }
     }
 }
 
-impl From<TaskStatus> for gen::TaskStatus {
+impl From<TaskStatus> for r#gen::TaskStatus {
     fn from(value: TaskStatus) -> Self {
         match value {
-            TaskStatus::Running => gen::TaskStatus::Running,
-            TaskStatus::Succeeded => gen::TaskStatus::Succeeded,
-            TaskStatus::Failed => gen::TaskStatus::Failed,
-            TaskStatus::Canceled => gen::TaskStatus::Canceled,
+            TaskStatus::Running => r#gen::TaskStatus::Running,
+            TaskStatus::Succeeded => r#gen::TaskStatus::Succeeded,
+            TaskStatus::Failed => r#gen::TaskStatus::Failed,
+            TaskStatus::Canceled => r#gen::TaskStatus::Canceled,
         }
     }
 }
@@ -154,7 +149,7 @@ impl From<TaskStatus> for gen::TaskStatus {
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverEvent::ServerReady { .. } => "ServerReady",
+            DriverEvent::Activate => "Activate",
             DriverEvent::RegisterWorker { .. } => "RegisterWorker",
             DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
             DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
@@ -180,9 +175,7 @@ impl SpanAssociation for DriverEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverEvent::ServerReady { port, signal: _ } => {
-                p.push((SpanAttribute::CLUSTER_DRIVER_PORT, port.to_string()));
-            }
+            DriverEvent::Activate => {}
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,

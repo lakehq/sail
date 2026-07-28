@@ -16,6 +16,7 @@ pub mod config;
 pub mod file_writer;
 pub mod partition;
 pub mod table_writer;
+pub mod variant_shredding;
 
 use crate::spec::DataFile;
 

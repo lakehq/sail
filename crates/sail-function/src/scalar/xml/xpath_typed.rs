@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -7,7 +6,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use xee_xpath::{Documents, Queries, Query};
 
@@ -83,10 +82,6 @@ impl XpathTyped {
 }
 
 impl ScalarUDFImpl for XpathTyped {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }

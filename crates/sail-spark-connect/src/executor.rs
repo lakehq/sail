@@ -9,10 +9,10 @@ use std::time::Duration;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
-use fastrace::future::FutureExt;
 use fastrace::Span;
-use futures::stream::{StreamExt, TryStreamExt};
+use fastrace::future::FutureExt;
 use futures::Stream;
+use futures::stream::{StreamExt, TryStreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -301,7 +301,7 @@ impl Executor {
             ExecutorState::Running { task, span: _ } => &task.buffer,
             ExecutorState::Pending { context, span: _ } => &context.buffer,
             ExecutorState::Idle | ExecutorState::Failed(_) | ExecutorState::Pausing => {
-                return Ok(())
+                return Ok(());
             }
         };
         if let Some(response_id) = response_id {

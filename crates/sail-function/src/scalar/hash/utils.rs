@@ -3,19 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::*;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion::error::{DataFusionError, Result};
-use twox_hash::XxHash64;
 
 // [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/spark_hash.rs>
 // This includes utilities for hashing and murmur3 hashing.
-
-#[inline]
-fn spark_compatible_xxhash64<T: AsRef<[u8]>>(data: T, seed: u64) -> u64 {
-    XxHash64::oneshot(seed, data.as_ref())
-}
 
 /// Spark-compatible murmur3 hash function
 #[inline]
@@ -49,17 +43,19 @@ pub fn spark_compatible_murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 
 
     #[inline]
     unsafe fn hash_bytes_by_int(data: &[u8], seed: u32) -> i32 {
-        // safety: data length must be aligned to 4 bytes
-        let mut h1 = seed as i32;
-        for i in (0..data.len()).step_by(4) {
-            let ints = data.as_ptr().add(i) as *const i32;
-            let mut half_word = ints.read_unaligned();
-            if cfg!(target_endian = "big") {
-                half_word = half_word.reverse_bits();
+        unsafe {
+            // safety: data length must be aligned to 4 bytes
+            let mut h1 = seed as i32;
+            for i in (0..data.len()).step_by(4) {
+                let ints = data.as_ptr().add(i) as *const i32;
+                let mut half_word = ints.read_unaligned();
+                if cfg!(target_endian = "big") {
+                    half_word = half_word.reverse_bits();
+                }
+                h1 = mix_h1(h1, mix_k1(half_word));
             }
-            h1 = mix_h1(h1, mix_k1(half_word));
+            h1
         }
-        h1
     }
     let data = data.as_ref();
     let len = data.len();
@@ -212,49 +208,6 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
         // same initial seed as Spark
         let mut dict_hashes = vec![42; dict_values.len()];
         create_murmur3_hashes(&[dict_values], &mut dict_hashes)?;
-        for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.to_usize().ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Can not convert key value {:?} to usize in dictionary of type {:?}",
-                        key,
-                        dict_array.data_type()
-                    ))
-                })?;
-                *hash = dict_hashes[idx]
-            } // no update for Null, consistent with other hashes
-        }
-    }
-    Ok(())
-}
-
-// Hash the values in a dictionary array using xxhash64
-fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
-    array: &ArrayRef,
-    hashes_buffer: &mut [u64],
-    first_col: bool,
-) -> Result<()> {
-    let dict_array = array
-        .as_any()
-        .downcast_ref::<DictionaryArray<K>>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Expected DictionaryArray, found {:?}",
-                array.data_type()
-            ))
-        })?;
-    if !first_col {
-        let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
-        create_xxhash64_hashes(&[unpacked], hashes_buffer)?;
-    } else {
-        // Hash each dictionary value once, and then use that computed
-        // hash for each key value to avoid a potentially expensive
-        // redundant hashing for large dictionary elements (e.g. strings)
-        let dict_values = Arc::clone(dict_array.values());
-        // same initial seed as Spark
-        let mut dict_hashes = vec![42u64; dict_values.len()];
-        create_xxhash64_hashes(&[dict_values], &mut dict_hashes)?;
-
         for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
             if let Some(key) = key {
                 let idx = key.to_usize().ok_or_else(|| {
@@ -436,7 +389,7 @@ macro_rules! create_hashes_internal {
                         return Err(DataFusionError::Internal(format!(
                             "Unsupported dictionary type in hasher hashing: {}",
                             col.data_type(),
-                        )))
+                        )));
                     }
                 },
                 _ => {
@@ -469,36 +422,18 @@ pub fn create_murmur3_hashes<'a>(
     Ok(hashes_buffer)
 }
 
-/// Creates xxhash64 hash values for every row, based on the values in the
-/// columns.
-///
-/// The number of rows to hash is determined by `hashes_buffer.len()`.
-/// `hashes_buffer` should be pre-sized appropriately
-pub fn create_xxhash64_hashes<'a>(
-    arrays: &[ArrayRef],
-    hashes_buffer: &'a mut [u64],
-) -> Result<&'a mut [u64]> {
-    create_hashes_internal!(
-        arrays,
-        hashes_buffer,
-        spark_compatible_xxhash64,
-        create_xxhash64_hashes_dictionary
-    );
-    Ok(hashes_buffer)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        Array, ArrayRef, Float32Array, Float64Array, Int8Array, Int32Array, Int64Array, StringArray,
     };
 
-    use super::{create_murmur3_hashes, create_xxhash64_hashes};
+    use super::create_murmur3_hashes;
 
     macro_rules! test_hashes_internal {
-        ($hash_method: ident, $input: expr, $initial_seeds: expr, $expected: expr) => {
+        ($hash_method: ident, $input: expr_2021, $initial_seeds: expr_2021, $expected: expr_2021) => {
             let i = $input;
             let mut hashes = $initial_seeds.clone();
             $hash_method(&[i], &mut hashes).unwrap();
@@ -542,28 +477,11 @@ mod tests {
         test_hashes_with_nulls!(create_murmur3_hashes, T, values, expected, u32);
     }
 
-    fn test_xxhash64_hash<I: Clone, T: Array + From<Vec<Option<I>>> + 'static>(
-        values: Vec<Option<I>>,
-        expected: Vec<u64>,
-    ) {
-        test_hashes_with_nulls!(create_xxhash64_hashes, T, values, expected, u64);
-    }
-
     #[test]
     fn test_i8() {
         test_murmur3_hash::<i8, Int8Array>(
             vec![Some(1), Some(0), Some(-1), Some(i8::MAX), Some(i8::MIN)],
             vec![0xdea578e3, 0x379fae8f, 0xa0590e3d, 0x43b4d8ed, 0x422a1365],
-        );
-        test_xxhash64_hash::<i8, Int8Array>(
-            vec![Some(1), Some(0), Some(-1), Some(i8::MAX), Some(i8::MIN)],
-            vec![
-                0xa309b38455455929,
-                0x3229fbc4681e48f3,
-                0x1bfdda8861c06e45,
-                0x77cc15d9f9f2cdc2,
-                0x39bc22b9e94d81d0,
-            ],
         );
     }
 
@@ -573,16 +491,6 @@ mod tests {
             vec![Some(1), Some(0), Some(-1), Some(i32::MAX), Some(i32::MIN)],
             vec![0xdea578e3, 0x379fae8f, 0xa0590e3d, 0x07fb67e7, 0x2b1f0fc6],
         );
-        test_xxhash64_hash::<i32, Int32Array>(
-            vec![Some(1), Some(0), Some(-1), Some(i32::MAX), Some(i32::MIN)],
-            vec![
-                0xa309b38455455929,
-                0x3229fbc4681e48f3,
-                0x1bfdda8861c06e45,
-                0x14f0ac009c21721c,
-                0x1cc7cb8d034769cd,
-            ],
-        );
     }
 
     #[test]
@@ -590,16 +498,6 @@ mod tests {
         test_murmur3_hash::<i64, Int64Array>(
             vec![Some(1), Some(0), Some(-1), Some(i64::MAX), Some(i64::MIN)],
             vec![0x99f0149d, 0x9c67b85d, 0xc8008529, 0xa05b5d7b, 0xcd1e64fb],
-        );
-        test_xxhash64_hash::<i64, Int64Array>(
-            vec![Some(1), Some(0), Some(-1), Some(i64::MAX), Some(i64::MIN)],
-            vec![
-                0x9ed50fd59358d232,
-                0xb71b47ebda15746c,
-                0x358ae035bfb46fd2,
-                0xd2f1c616ae7eb306,
-                0x88608019c494c1f4,
-            ],
         );
     }
 
@@ -618,24 +516,6 @@ mod tests {
                 0xe434cc39, 0x379fae8f, 0x379fae8f, 0xdc0da8eb, 0xcbdc340f, 0xc0361c86,
             ],
         );
-        test_xxhash64_hash::<f32, Float32Array>(
-            vec![
-                Some(1.0),
-                Some(0.0),
-                Some(-0.0),
-                Some(-1.0),
-                Some(99999999999.99999999999),
-                Some(-99999999999.99999999999),
-            ],
-            vec![
-                0x9b92689757fcdbd,
-                0x3229fbc4681e48f3,
-                0x3229fbc4681e48f3,
-                0xa2becc0e61bb3823,
-                0x8f20ab82d4f3687f,
-                0xdce4982d97f7ac4,
-            ],
-        )
     }
 
     #[test]
@@ -653,25 +533,6 @@ mod tests {
                 0xe4876492, 0x9c67b85d, 0x9c67b85d, 0x13d81357, 0xb87e1595, 0xa0eef9f9,
             ],
         );
-
-        test_xxhash64_hash::<f64, Float64Array>(
-            vec![
-                Some(1.0),
-                Some(0.0),
-                Some(-0.0),
-                Some(-1.0),
-                Some(99999999999.99999999999),
-                Some(-99999999999.99999999999),
-            ],
-            vec![
-                0xe1fd6e07fee8ad53,
-                0xb71b47ebda15746c,
-                0xb71b47ebda15746c,
-                0x8cdde022746f8f1f,
-                0x793c5c88d313eac7,
-                0xc5e60e7b75d9b232,
-            ],
-        )
     }
 
     #[test]
@@ -687,21 +548,6 @@ mod tests {
             1322437556, 0xe860e5cc, 814637928,
         ];
 
-        test_murmur3_hash::<String, StringArray>(input.clone(), expected);
-        test_xxhash64_hash::<String, StringArray>(
-            input,
-            vec![
-                0xc3629e6318d53932,
-                0xe7097b6a54378d8a,
-                0x98b1582b0977e704,
-                0xa80d9d5a6a523bd5,
-                0xfcba5f61ac666c61,
-                0x88e4fe59adf7b0cc,
-                0x259dd873209a3fe3,
-                0x13c1d910702770e6,
-                0xa17b5eb5dc364dff,
-                0xf241303e4a90f299,
-            ],
-        )
+        test_murmur3_hash::<String, StringArray>(input, expected);
     }
 }

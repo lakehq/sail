@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
@@ -9,8 +8,8 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::types::{
-    logical_int16, logical_int32, logical_int64, logical_int8, logical_uint16, logical_uint32,
-    logical_uint64, logical_uint8, NativeType,
+    NativeType, logical_int8, logical_int16, logical_int32, logical_int64, logical_uint8,
+    logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
@@ -69,10 +68,6 @@ impl BitmapConstructAggFunction {
 }
 
 impl AggregateUDFImpl for BitmapConstructAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bitmap_construct_agg"
     }

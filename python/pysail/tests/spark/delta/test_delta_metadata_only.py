@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -56,9 +54,6 @@ def _write_metadata_only_log(table_path: Path) -> None:
     ids=["driver_path", "metadata_path"],
 )
 def test_read_metadata_only_table_without_add_actions(spark, tmp_path: Path, read_mode: str):
-    if is_jvm_spark():
-        pytest.skip("Sail-only: metadata-only Delta log replay behavior is Sail-specific")
-
     table_path = tmp_path / "delta_metadata_only"
     _write_metadata_only_log(table_path)
 

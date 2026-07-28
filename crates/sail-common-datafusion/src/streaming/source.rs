@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -7,7 +6,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{internal_err, Constraints, Result};
+use datafusion_common::{Constraints, Result, internal_err};
 
 /// A streaming data source.
 /// The streaming logical plan rewriter will identify such data sources
@@ -62,10 +61,6 @@ impl StreamSourceTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for StreamSourceTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         // The schema of the table provider is the data schema of the source
         // since this table provider only exists before streaming logical plan rewriting.

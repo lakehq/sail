@@ -4,8 +4,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{Column, DFSchema, JoinType};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    expr, ident, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF,
+    AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, expr,
+    ident,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::spec;
@@ -15,13 +15,13 @@ use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_map_partitions(
@@ -55,7 +55,7 @@ impl PlanResolver<'_> {
             _ => {
                 return Err(PlanError::invalid(
                     "MapPartitions UDF output type must be struct",
-                ))
+                ));
             }
         };
         let output_names = state.register_fields(output_schema.fields());
@@ -173,7 +173,7 @@ impl PlanResolver<'_> {
             _ => {
                 return Err(PlanError::invalid(
                     "GroupMap UDF output type must be struct",
-                ))
+                ));
             }
         };
         let udf_output_type = DataType::List(Arc::new(Field::new_list_field(
@@ -182,13 +182,23 @@ impl PlanResolver<'_> {
         )));
         if !matches!(
             function.eval_type,
-            spec::PySparkUdfType::GroupedMapPandas | spec::PySparkUdfType::GroupedMapArrow
+            spec::PySparkUdfType::GroupedMapPandas
+                | spec::PySparkUdfType::GroupedMapArrow
+                | spec::PySparkUdfType::GroupedMapPandasIter
+                | spec::PySparkUdfType::GroupedMapArrowIter
         ) {
             return Err(PlanError::invalid(
-                "only GroupedMapArrow/GroupedMapPandas UDF is supported in GroupedMap",
+                "only GroupedMapArrow/GroupedMapPandas and iterator variants are supported in GroupedMap",
             ));
         }
-        let is_pandas = matches!(function.eval_type, spec::PySparkUdfType::GroupedMapPandas);
+        let is_pandas = matches!(
+            function.eval_type,
+            spec::PySparkUdfType::GroupedMapPandas | spec::PySparkUdfType::GroupedMapPandasIter
+        );
+        let is_iter = matches!(
+            function.eval_type,
+            spec::PySparkUdfType::GroupedMapPandasIter | spec::PySparkUdfType::GroupedMapArrowIter
+        );
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
         let args = self
@@ -221,7 +231,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
-            is_pandas,
+            PySparkGroupMapMode { is_pandas, is_iter },
             self.config.pyspark_udf_config.clone(),
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
@@ -317,7 +327,7 @@ impl PlanResolver<'_> {
             _ => {
                 return Err(PlanError::invalid(
                     "GroupMap UDF output type must be struct",
-                ))
+                ));
             }
         };
         let mapper_output_type = DataType::List(Arc::new(Field::new_list_field(

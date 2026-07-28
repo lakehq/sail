@@ -64,14 +64,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "hll_sketch_estimate",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "hll_union",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -129,6 +127,26 @@
   {
     "module": "pyspark.sql.functions",
     "function": "spark_partition_id",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_difference",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_intersection",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_sketch_estimate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_union",
     "status": "supported"
   },
   {

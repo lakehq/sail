@@ -6,11 +6,12 @@ use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
 use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
+use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
 /// A parsed pattern segment in a glob pattern.
@@ -223,6 +224,14 @@ impl PatternSegment {
     }
 }
 
+fn expand_glob_pattern(pattern: &str) -> Result<Vec<String>> {
+    let patterns = PatternSegment::sequence_parser()
+        .parse(pattern)
+        .into_result()
+        .map_err(|_| plan_datafusion_err!("glob pattern: {pattern}"))?;
+    Ok(PatternSegment::expand_sequence(patterns))
+}
+
 /// A parsed URL that may contain glob patterns.
 /// The parsing is coarse-grained and permissive since we only need to
 /// identify the path that may contain glob patterns.
@@ -388,11 +397,7 @@ impl GlobUrl {
     }
 
     fn parse_glob_path(path: &str) -> Result<Vec<(String, Option<Pattern>)>> {
-        let patterns = PatternSegment::sequence_parser()
-            .parse(path)
-            .into_result()
-            .map_err(|_| plan_datafusion_err!("glob path: {path}"))?;
-        let paths = PatternSegment::expand_sequence(patterns)
+        let paths = expand_glob_pattern(path)?
             .into_iter()
             .map(|x| {
                 let (prefix, suffix) = Self::split_glob_path(&x)?;
@@ -474,6 +479,39 @@ impl GlobUrl {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathGlobFilter {
+    raw: String,
+    patterns: Vec<Pattern>,
+}
+
+impl PathGlobFilter {
+    pub fn parse(pattern: &str) -> Result<Self> {
+        let parse = || -> Result<Self> {
+            let patterns = expand_glob_pattern(pattern)?
+                .into_iter()
+                .map(|pattern| {
+                    GlobUrl::create_percent_decoded_pattern(&pattern)?
+                        .ok_or_else(|| plan_datafusion_err!("path glob filter cannot be empty"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Self {
+                raw: pattern.to_string(),
+                patterns,
+            })
+        };
+        parse().map_err(|e| DataFusionError::Plan(format!("invalid path glob filter: {e}")))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn matches(&self, value: &str) -> bool {
+        self.patterns.iter().any(|pattern| pattern.matches(value))
+    }
+}
+
 impl AsRef<Url> for GlobUrl {
     fn as_ref(&self) -> &Url {
         &self.base
@@ -497,10 +535,41 @@ pub async fn resolve_listing_urls(
     for path in paths {
         for url in GlobUrl::parse(&path)? {
             let url = rewrite_directory_url(url, ctx).await?;
+            let url = attach_default_glob(url)?;
             urls.push(url.try_into()?);
         }
     }
     Ok(urls)
+}
+
+pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
+    // Listing writes always target a directory of output files.
+    let path = if path.ends_with(object_store::path::DELIMITER) {
+        path
+    } else {
+        format!("{path}{}", object_store::path::DELIMITER)
+    };
+    let Ok(GlobUrl { base, glob }) = GlobUrl::parse(&path)?.one() else {
+        return plan_err!("exactly one URL should be provided for writing: {path}");
+    };
+    if glob.is_some() {
+        return plan_err!("glob pattern is not allowed in the output URL: {path}");
+    }
+    Ok(base)
+}
+
+/// If `url` points to a directory and the user did not supply an explicit
+/// glob, attach a default pattern that excludes file names starting with
+/// `.` or `_` (commit/_SUCCESS markers, `.crc` checksum files, etc.).
+/// Matches Spark's `HiddenFileFilter` semantics so users migrating from
+/// Spark see the same set of files included in directory reads.
+fn attach_default_glob(mut url: GlobUrl) -> Result<GlobUrl> {
+    if url.glob.is_none() && url.base.path().ends_with(object_store::path::DELIMITER) {
+        let pattern = Pattern::new("[!._]*")
+            .map_err(|e| plan_datafusion_err!("default hidden-file glob: {e}"))?;
+        url.glob = Some(pattern);
+    }
+    Ok(url)
 }
 
 pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {
@@ -712,6 +781,18 @@ mod tests {
         test("{a,b{c/**,d}}/x", &["a/x", "bc/**/x", "bd/x"]);
         test("{a,b{c,d},?e{f}}", &["a", "bc", "bd", "?ef"]);
         test("{a,b{c,d}{e,f}}", &["a", "bce", "bcf", "bde", "bdf"]);
+    }
+
+    #[test]
+    fn test_path_glob_filter() {
+        let filter = PathGlobFilter::parse("*.{json,csv}").unwrap();
+        assert!(filter.matches("data.json"));
+        assert!(filter.matches("data.csv"));
+        assert!(!filter.matches("data.parquet"));
+        assert_eq!(filter.as_str(), "*.{json,csv}");
+
+        let error = PathGlobFilter::parse("[").unwrap_err();
+        assert!(error.to_string().contains("invalid path glob filter"));
     }
 
     #[test]

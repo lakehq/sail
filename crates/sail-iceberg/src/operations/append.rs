@@ -20,9 +20,9 @@ use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
 use crate::io::StoreContext;
+use crate::spec::DataFile;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::manifest_list::ManifestList;
-use crate::spec::DataFile;
 
 pub struct FastAppendAction {
     check_duplicate: bool,
@@ -33,6 +33,7 @@ pub struct FastAppendAction {
     parent_manifest_list: Option<ManifestList>,
     store_ctx: Option<StoreContext>,
     manifest_metadata: Option<ManifestMetadata>,
+    row_lineage_start_row_id: Option<i64>,
 }
 
 impl Default for FastAppendAction {
@@ -52,6 +53,7 @@ impl FastAppendAction {
             parent_manifest_list: None,
             store_ctx: None,
             manifest_metadata: None,
+            row_lineage_start_row_id: None,
         }
     }
 
@@ -93,6 +95,11 @@ impl FastAppendAction {
         self.manifest_metadata = Some(metadata);
         self
     }
+
+    pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
+        self.row_lineage_start_row_id = start_row_id;
+        self
+    }
 }
 
 #[async_trait]
@@ -103,7 +110,8 @@ impl TransactionAction for FastAppendAction {
             self.added_data_files.clone(),
             self.store_ctx.clone(),
             self.manifest_metadata.clone(),
-        );
+        )
+        .with_row_lineage_start_row_id(self.row_lineage_start_row_id);
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;
 
         if self.check_duplicate {

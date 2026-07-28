@@ -1,8 +1,13 @@
+pub mod delta;
 pub mod display;
+pub mod iceberg;
+pub mod lakehouse;
+pub mod managed;
 mod status;
 
 use datafusion_common::Column;
 use datafusion_expr::expr;
+pub use lakehouse::*;
 use serde::{Deserialize, Serialize};
 pub use status::*;
 
@@ -61,6 +66,14 @@ impl From<CatalogTableBucketBy> for BucketBy {
 pub struct CatalogTableSort {
     pub column: String,
     pub ascending: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct CatalogTableColumnIdentity {
+    pub start: i64,
+    pub step: i64,
+    pub allow_explicit_insert: bool,
+    pub high_water_mark: Option<i64>,
 }
 
 impl From<CatalogTableSort> for expr::Sort {

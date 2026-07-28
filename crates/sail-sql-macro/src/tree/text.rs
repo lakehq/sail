@@ -42,7 +42,7 @@ fn derive_fields(spanned: impl Spanned, fields: &Fields) -> syn::Result<TextFiel
             return Err(syn::Error::new(
                 spanned.span(),
                 format!("cannot derive `{TRAIT}` for unit fields"),
-            ))
+            ));
         }
     };
     Ok(TextFields {

@@ -55,8 +55,7 @@ Here we recommend some practices to help you adopt Sail in your production envir
 
 Here is a summary of Spark features that are supported in Sail (:white_check_mark:), planned in our roadmap (:construction:), or unsupported due to technical limitations or low priorities (:x:).
 
-As you can see, Sail has a focus on SQL and the DataFrame API,
-which are the most commonly used features in Spark applications.
+Sail focuses on SQL and the DataFrame API, which are the most commonly used features in Spark applications.
 
 There is no support for Spark RDD in Sail since it relies on the JVM implementation of Spark internals and is not covered by the Spark Connect protocol.
 

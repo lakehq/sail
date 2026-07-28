@@ -1,12 +1,11 @@
 use std::collections::HashSet;
-use std::mem;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -28,22 +27,8 @@ use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
-    pub(super) fn handle_server_ready(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        port: u16,
-        signal: oneshot::Sender<()>,
-    ) -> ActorAction {
-        let server = mem::take(&mut self.server);
-        self.server = match server.ready(signal) {
-            Ok(x) => x,
-            Err(e) => {
-                error!("{e}");
-                return ActorAction::Stop;
-            }
-        };
-        info!("driver server is ready on port {port}");
-        self.worker_pool.set_driver_server_port(port);
+    pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
+        info!("activating driver {}", self.options.driver_id);
         for _ in 0..self.options.worker_initial_count {
             self.worker_pool.start_worker(ctx);
         }
@@ -256,15 +241,37 @@ impl DriverActor {
             .get_task_state(&key)
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
-            let message = "task scheduling timeout".to_string();
-            let cause = CommonErrorCause::Execution(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
-                key,
-                status: TaskStatus::Failed,
-                message: Some(message),
-                cause: Some(cause),
-                sequence: None,
-            })
+            // The task has not been assigned to a worker within the launch
+            // timeout. If workers are still launching, the task can be assigned
+            // once one registers (`handle_register_worker` runs pending tasks),
+            // so reschedule the probe instead of failing. This keeps long,
+            // many-stage jobs alive while the worker pool scales between stages.
+            // It cannot loop forever: a pending worker that never registers is
+            // failed at `worker_launch_timeout`, after which there are no pending
+            // workers and the task fails below.
+            //
+            // Re-probe at `worker_launch_timeout` (capped by `task_launch_timeout`)
+            // rather than a full `task_launch_timeout`: that is the window a
+            // pending worker takes to register or be failed, so once the last
+            // pending worker resolves the task fails promptly instead of waiting
+            // another full launch window.
+            if self.worker_pool.has_pending_workers() {
+                let delay = self
+                    .options
+                    .worker_launch_timeout
+                    .min(self.options.task_launch_timeout);
+                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
+            } else {
+                let message = "task scheduling timeout".to_string();
+                let cause = CommonErrorCause::Execution(message.clone());
+                ctx.send(DriverEvent::UpdateTask {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(message),
+                    cause: Some(cause),
+                    sequence: None,
+                })
+            }
         }
         ActorAction::Continue
     }

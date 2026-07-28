@@ -28,7 +28,6 @@ def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
         )
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        py_tbl = catalog.load_table(identifier)
         expected = (
             pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
             .astype({"id": "int64", "score": "float64"})
@@ -37,8 +36,14 @@ def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
         spark_pdf = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_pdf, expected)
 
-        actual = pyiceberg_to_pandas(py_tbl, sort_by="id")
-        assert_frame_equal(actual, expected)
+        static_table = StaticTable.from_metadata(table.location())
+        actual_static = pyiceberg_to_pandas(static_table, sort_by="id")
+        assert_frame_equal(actual_static, expected)
+
+        py_tbl = catalog.load_table(identifier)
+        assert py_tbl.current_snapshot() is None
+        actual_catalog = pyiceberg_to_pandas(py_tbl, sort_by="id")
+        assert_frame_equal(actual_catalog, expected.iloc[0:0])
     finally:
         catalog.drop_table(identifier)
 
@@ -69,7 +74,7 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
         )
         spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_df, expected)
-        # FIXME: Add support to update catalog
+        # Path writes advance the table root metadata, not an independent SQL catalog pointer.
         expected_py = (
             pd.DataFrame({"id": [1, 2], "event": ["a", "b"]})
             .astype({"id": "int64"})

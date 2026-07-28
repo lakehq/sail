@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::TimeUnit::Microsecond;
@@ -37,10 +35,6 @@ impl SparkTryAdd {
 }
 
 impl ScalarUDFImpl for SparkTryAdd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_add"
     }
@@ -63,12 +57,14 @@ impl ScalarUDFImpl for SparkTryAdd {
             | [DataType::Int32, DataType::Interval(MonthDayNano)]
             | [DataType::Interval(MonthDayNano), DataType::Int64]
             | [DataType::Int64, DataType::Interval(MonthDayNano)]
-            | [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
-            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
-                Ok(DataType::Timestamp(Microsecond, None))
-            }
+            | [
+                DataType::Interval(MonthDayNano),
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
+            [
+                DataType::Timestamp(Microsecond, _),
+                DataType::Duration(Microsecond),
+            ] => Ok(DataType::Timestamp(Microsecond, None)),
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_add",

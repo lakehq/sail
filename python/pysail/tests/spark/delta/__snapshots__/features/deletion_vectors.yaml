@@ -8,8 +8,15 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
+    numAddedChangeFiles: 0
     numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
     numRemovedFiles: 1
+    scanTimeMs: <time_ms>
   operationParameters:
     predicate: 'id = 2 '
   timestamp: <timestamp>

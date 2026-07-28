@@ -4,7 +4,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{AggregateUDF, Expr, ExprSchemable, ScalarUDF, expr};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -14,10 +14,10 @@ use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggreg
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 /// If `expr` contains (or is) an `AggregateFunction`, return its name.
 /// Used to detect illegal nesting of aggregate functions as UDAF arguments.

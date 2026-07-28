@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    add_struct_type, checkpoint_metadata_struct_type, domain_metadata_struct_type,
-    metadata_struct_type, protocol_struct_type, remove_struct_type, sidecar_struct_type,
-    transaction_struct_type, Add, CheckpointMetadata, DataType, DomainMetadata, Metadata, Protocol,
-    Remove, Sidecar, StructField, StructType, Transaction,
+    Add, CheckpointMetadata, DataType, DomainMetadata, Metadata, Protocol, Remove, Sidecar,
+    StructField, StructType, Transaction, add_struct_type, checkpoint_metadata_struct_type,
+    domain_metadata_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
+    sidecar_struct_type, transaction_struct_type,
 };
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/checkpoint/mod.rs#L126-L135>

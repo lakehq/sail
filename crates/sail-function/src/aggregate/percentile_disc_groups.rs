@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
@@ -8,25 +8,33 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
-use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator};
-use datafusion::physical_expr::aggregate::utils::Hashable;
+use datafusion::common::{DataFusionError, Result};
+use datafusion::logical_expr::{EmitTo, GroupsAccumulator};
 
-use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type, filtered_null_mask};
+use crate::aggregate::utils::{
+    calculate_percentile_disc, cast_to_type_with_safe, filtered_null_mask,
+};
 
 #[derive(Debug)]
 pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
     percentile: f64,
+    descending: bool,
+    /// When `true`, casts of the ORDER BY input to the storage type are strict
+    /// (invalid values raise an error). When `false`, casts are safe (invalid
+    /// values become NULL and are ignored). Mirrors `spark.sql.ansi.enabled`.
+    ansi_mode: bool,
 }
 
 impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
-    pub fn new(data_type: DataType, percentile: f64) -> Self {
+    pub fn new(data_type: DataType, percentile: f64, descending: bool, ansi_mode: bool) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
             percentile,
+            descending,
+            ansi_mode,
         }
     }
 
@@ -93,7 +101,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        let values_array = cast_to_type(&values[0], &self.data_type)?;
+        let values_array = cast_to_type_with_safe(&values[0], &self.data_type, !self.ansi_mode)?;
         let values = values_array.as_primitive::<T>();
 
         self.group_values.resize(total_num_groups, Vec::new());
@@ -129,10 +137,10 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value {
-                            if let Some(new_value) = new_value {
-                                self.group_values[group_index].push(new_value)
-                            }
+                        if let Some(true) = filter_value
+                            && let Some(new_value) = new_value
+                        {
+                            self.group_values[group_index].push(new_value)
                         }
                     })
             }
@@ -198,7 +206,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
         for values in emit_group_values {
-            let value = calculate_percentile_disc::<T>(values, self.percentile);
+            let value = calculate_percentile_disc::<T>(values, self.percentile, self.descending);
             evaluate_result_builder.append_option(value);
         }
 
@@ -210,7 +218,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let values_array = cast_to_type(&values[0], &self.data_type)?;
+        let values_array = cast_to_type_with_safe(&values[0], &self.data_type, !self.ansi_mode)?;
         let input_array = values_array.as_primitive::<T>();
 
         let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
@@ -248,75 +256,5 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                 .map(|values| values.capacity() * size_of::<T::Native>())
                 .sum::<usize>()
             + self.group_values.capacity() * size_of::<Vec<T::Native>>()
-    }
-}
-
-pub struct DistinctPercentileDiscAccumulator<T: ArrowNumericType> {
-    pub data_type: DataType,
-    pub distinct_values: HashSet<Hashable<T::Native>>,
-    pub percentile: f64,
-}
-
-impl<T: ArrowNumericType> Debug for DistinctPercentileDiscAccumulator<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DistinctPercentileDiscAccumulator({}, percentile={})",
-            self.data_type, self.percentile
-        )
-    }
-}
-
-impl<T: ArrowNumericType> Accumulator for DistinctPercentileDiscAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let all_values = self
-            .distinct_values
-            .iter()
-            .map(|x| ScalarValue::new_primitive::<T>(Some(x.0), &self.data_type))
-            .collect::<Result<Vec<_>>>()?;
-
-        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
-        Ok(vec![ScalarValue::List(arr)])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let values = cast_to_type(&values[0], &self.data_type)?;
-        let array = values.as_primitive::<T>();
-        match array.nulls().filter(|x| x.null_count() > 0) {
-            Some(n) => {
-                for idx in n.valid_indices() {
-                    self.distinct_values.insert(Hashable(array.value(idx)));
-                }
-            }
-            None => array.values().iter().for_each(|x| {
-                self.distinct_values.insert(Hashable(*x));
-            }),
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let array = states[0].as_list::<i32>();
-        for v in array.iter().flatten() {
-            self.update_batch(&[v])?
-        }
-        Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
-        let value = calculate_percentile_disc::<T>(d, self.percentile);
-        ScalarValue::new_primitive::<T>(value, &self.data_type)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.distinct_values.capacity() * size_of::<T::Native>()
     }
 }

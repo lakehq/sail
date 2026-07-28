@@ -8,7 +8,7 @@ pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
 pub(crate) use stage_input::StageInputExec;
 
-pub(crate) mod gen {
+pub(crate) mod r#gen {
     tonic::include_proto!("sail.plan");
 }
 

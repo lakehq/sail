@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -9,22 +8,33 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_datafusion_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_datafusion_err};
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::physical_plan::scan_by_adds_exec::map_statistics_to_schema;
+use crate::datasource::scan::map_statistics_to_schema;
+use crate::schema::restore_logical_record_batch;
+use crate::spec::ColumnMappingMode;
 
 #[derive(Debug, Clone)]
 pub struct RelaxedTzCastExec {
     input: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
+    column_mapping_mode: ColumnMappingMode,
     properties: Arc<PlanProperties>,
 }
 
 impl RelaxedTzCastExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Self {
+        Self::new_with_column_mapping(input, schema, ColumnMappingMode::None)
+    }
+
+    pub fn new_with_column_mapping(
+        input: Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        column_mapping_mode: ColumnMappingMode,
+    ) -> Self {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
@@ -34,12 +44,17 @@ impl RelaxedTzCastExec {
         Self {
             input,
             schema,
+            column_mapping_mode,
             properties,
         }
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub const fn column_mapping_mode(&self) -> ColumnMappingMode {
+        self.column_mapping_mode
     }
 
     fn aligned_timestamp_columns(&self) -> Vec<String> {
@@ -90,10 +105,6 @@ impl ExecutionPlan for RelaxedTzCastExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -121,7 +132,11 @@ impl ExecutionPlan for RelaxedTzCastExec {
         let input = children.one().map_err(|_| {
             internal_datafusion_err!("RelaxedTzCastExec must have exactly one child")
         })?;
-        Ok(Arc::new(Self::new(input, Arc::clone(&self.schema))))
+        Ok(Arc::new(Self::new_with_column_mapping(
+            input,
+            Arc::clone(&self.schema),
+            self.column_mapping_mode,
+        )))
     }
 
     fn execute(
@@ -130,10 +145,16 @@ impl ExecutionPlan for RelaxedTzCastExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let schema = Arc::clone(&self.schema);
+        let column_mapping_mode = self.column_mapping_mode;
         let stream = self.input.execute(partition, context)?;
         let stream = stream.map(move |batch| {
             let schema = Arc::clone(&schema);
-            batch.and_then(|batch| cast_record_batch_relaxed_tz(&batch, &schema))
+            batch.and_then(|batch| match column_mapping_mode {
+                ColumnMappingMode::None => cast_record_batch_relaxed_tz(&batch, &schema),
+                ColumnMappingMode::Name | ColumnMappingMode::Id => {
+                    restore_logical_record_batch(&batch, &schema, column_mapping_mode)
+                }
+            })
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -142,16 +163,16 @@ impl ExecutionPlan for RelaxedTzCastExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let statistics = self.input.partition_statistics(partition)?;
         if self.input.schema() == self.schema {
             Ok(statistics)
         } else {
-            Ok(map_statistics_to_schema(
+            Ok(Arc::new(map_statistics_to_schema(
                 &statistics,
                 &self.input.schema(),
                 &self.schema,
-            ))
+            )))
         }
     }
 }
@@ -161,11 +182,11 @@ impl ExecutionPlan for RelaxedTzCastExec {
 mod tests {
     use datafusion::arrow::array::{RecordBatch, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion::physical_plan::Partitioning;
-    use datafusion_common::stats::{ColumnStatistics, Precision};
+    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_common::ScalarValue;
-    use futures::{stream, StreamExt};
+    use datafusion_common::stats::{ColumnStatistics, Precision};
+    use futures::{StreamExt, stream};
 
     use super::*;
 
@@ -334,10 +355,6 @@ mod tests {
             "TestExec"
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
@@ -371,11 +388,11 @@ mod tests {
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
             if partition.is_none() {
-                Ok(self.statistics.clone())
+                Ok(Arc::new(self.statistics.clone()))
             } else {
-                Ok(Statistics::new_unknown(self.schema.as_ref()))
+                Ok(Arc::new(Statistics::new_unknown(self.schema.as_ref())))
             }
         }
     }

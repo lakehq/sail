@@ -26,4 +26,4 @@ Currently, Sail supports Python data sources for batch reading and writing.
 
 ### More Examples
 
-Please refer to the [Spark documentation](https://spark.apache.org/docs/latest/api/python/tutorial/sql/python_data_source.html) for more Python data source examples, including how to define a batch writer. We will also add more examples to this guide in the future. Stay tuned!
+Please refer to the [Spark documentation](https://spark.apache.org/docs/latest/api/python/tutorial/sql/python_data_source.html) for more Python data source examples, including how to define a batch writer. We will also add more examples to this guide in the future.
