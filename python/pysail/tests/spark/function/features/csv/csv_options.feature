@@ -933,29 +933,32 @@ Feature: CSV expression functions handle Spark's CSV options
         """
       Then query error NON_STRING_TYPE
 
-  Rule: String options with a validated domain are checked (F1 remainder, deferred)
+  Rule: String options with a validated domain are checked
 
     # Spark validates the charset, time zone, and codec names eagerly in the CSVOptions
-    # constructor, so a non-null input makes them throw. Sail accepts any string. These are the
-    # part of the missing-option finding that needs domain validation rather than a bool/int parse,
-    # so they are deferred with the effective-map work.
+    # constructor, so a non-null input makes them throw. Sail now validates the charset (`encoding`
+    # /`charset`) and the `compression` codec against Spark's fixed sets. `timeZone` stays deferred:
+    # Spark accepts offset forms like `+05:00`/`GMT+5`/`Z` and is case-sensitive (`UTC` yes, `utc`
+    # no), which chrono_tz would over-reject.
 
-    @sail-bug
     Scenario: from_csv rejects an unknown encoding
+      # Every Spark version rejects an unknown charset, but the error class diverges (3.5 throws a
+      # java.io.UnsupportedEncodingException; 4.x reports INVALID_PARAMETER_VALUE.CHARSET). The only
+      # fragment common to every version and to Sail's message is the rejected value itself.
       When query
         """
         SELECT from_csv('1', 'a INT', map('encoding', 'utf-99')) AS result
         """
-      Then query error INVALID_PARAMETER_VALUE.CHARSET
+      Then query error utf-99
 
-    @sail-bug
     Scenario: from_csv rejects an unknown charset
-      # `charset` is Spark's alias for `encoding` and validates identically.
+      # `charset` is Spark's alias for `encoding` and validates identically; the error class
+      # likewise diverges by version, so assert the rejected value (common to every version).
       When query
         """
         SELECT from_csv('1', 'a INT', map('charset', 'utf-99')) AS result
         """
-      Then query error INVALID_PARAMETER_VALUE.CHARSET
+      Then query error utf-99
 
     @sail-bug
     Scenario: from_csv rejects an unknown timeZone
@@ -965,13 +968,14 @@ Feature: CSV expression functions handle Spark's CSV options
         """
       Then query error INVALID_TIMEZONE
 
-    @sail-bug
     Scenario: from_csv rejects an unknown compression codec
+      # Spark rejects an unknown codec on every version, but the error class differs (3.5 has no
+      # `CODEC_NOT_AVAILABLE` class), so assert the version-stable message fragment instead.
       When query
         """
         SELECT from_csv('1', 'a INT', map('compression', 'garbage')) AS result
         """
-      Then query error CODEC_NOT_AVAILABLE
+      Then query error is not available
 
     Scenario: from_csv skips charset validation when the input is NULL
       # The domain check is lazy too: a NULL input never reaches the parser, so a bad charset is

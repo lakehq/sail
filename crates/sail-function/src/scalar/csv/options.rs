@@ -71,6 +71,33 @@ const LINE_SEP_OPTION: &str = "lineSep";
 const MODE_OPTION: &str = "mode";
 const DROP_MALFORMED_MODE: &str = "DROPMALFORMED";
 
+/// Spark validates the charset (`encoding`, and its alias `charset`) against a fixed set in
+/// `CSVOptions`, reporting `[INVALID_PARAMETER_VALUE.CHARSET]` for anything else. The set is
+/// narrower than Java's — `Shift_JIS`, for instance, is rejected.
+const CHARSET_OPTIONS: [&str; 2] = ["encoding", "charset"];
+const VALID_CHARSETS: [&str; 7] = [
+    "iso-8859-1",
+    "us-ascii",
+    "utf-16",
+    "utf-16be",
+    "utf-16le",
+    "utf-32",
+    "utf-8",
+];
+
+/// Spark validates `compression` against its registered codecs, reporting `[CODEC_NOT_AVAILABLE]`
+/// for anything else. There is no `gz` alias and `zstd` is not among them.
+const COMPRESSION_OPTION: &str = "compression";
+const VALID_CODECS: [&str; 7] = [
+    "bzip2",
+    "deflate",
+    "uncompressed",
+    "snappy",
+    "none",
+    "lz4",
+    "gzip",
+];
+
 /// The key and value columns of the options map, together with the entry range of its first row.
 ///
 /// The options argument is one map for the whole batch, but `make_scalar_function` pads a scalar
@@ -239,6 +266,25 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
     {
         return exec_err!(
             "The function `from_csv` doesn't support the {DROP_MALFORMED_MODE} mode. Acceptable modes are PERMISSIVE and FAILFAST."
+        );
+    }
+    // Spark's `CSVOptions` validates the charset against a fixed set, matched case-insensitively
+    // (Spark lower-cases with `Locale.ROOT`), and rejects everything else — narrower than Java's.
+    for option in CHARSET_OPTIONS {
+        if let Some(value) = find_option(map, option)
+            && !VALID_CHARSETS.iter().any(|c| value.eq_ignore_ascii_case(c))
+        {
+            return exec_err!(
+                "[INVALID_PARAMETER_VALUE.CHARSET] The value of parameter(s) `charset` in `CSVOptions` is invalid: expects one of the iso-8859-1, us-ascii, utf-16, utf-16be, utf-16le, utf-32, utf-8, but got {value}."
+            );
+        }
+    }
+    // Spark validates `compression` against its registered codecs, case-insensitively.
+    if let Some(value) = find_option(map, COMPRESSION_OPTION)
+        && !VALID_CODECS.iter().any(|c| value.eq_ignore_ascii_case(c))
+    {
+        return exec_err!(
+            "[CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION] The codec {value} is not available. Available codecs are bzip2, deflate, uncompressed, snappy, none, lz4, gzip."
         );
     }
     Ok(())
