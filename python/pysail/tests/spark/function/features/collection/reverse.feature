@@ -151,6 +151,10 @@ Feature: reverse function
         | array of maps    | array(map('a', 1), map('b', 2))                   | [{b -> 2}, {a -> 1}] |
         | array of structs | array(named_struct('x', 1), named_struct('x', 2)) | [{2}, {1}]           |
 
+  # Spark reverses binary bytewise and keeps the binary type since 4.2. Up to
+  # 4.1 it cast BINARY to STRING and reversed by character, so `reverse(x'CAFE')`
+  # was a no-op there (0xCA is a UTF-8 lead byte). Sail follows 4.2.
+  @spark-4.2
   Rule: Binary input
 
     Scenario Outline: Binary: <case>
@@ -163,21 +167,35 @@ Feature: reverse function
         | <result> |
 
       Examples:
-        | case                                               | arg           | result |
-        | BINARY is reversed bytewise and returned as string | X'48656C6C6F' | olleH  |
+        | case                             | arg           | result           |
+        | BINARY is reversed bytewise      | X'48656C6C6F' | [6F 6C 6C 65 48] |
+        | empty BINARY reverses to empty   | X''           | []               |
 
-    Scenario Outline: Binary with empty result: <case>
+    Scenario Outline: Binary stays binary: <case>
       When query
         """
-        SELECT reverse(<arg>) AS result
+        SELECT <expr> AS result
         """
       Then query result
-        | result |
-        |        |
+        | result   |
+        | <result> |
 
       Examples:
-        | case                                  | arg |
-        | empty BINARY returns the empty string | X'' |
+        | case                                    | expr                                   | result |
+        | reversing BINARY yields BINARY          | typeof(reverse(X'48656C6C6F'))         | binary |
+        | non-UTF-8 bytes survive the reversal    | hex(reverse(X'FF00FE'))                | FE00FF |
+        | the reversed bytes decode back as UTF-8 | CAST(reverse(X'48656C6C6F') AS STRING) | olleH  |
+
+    Scenario: multiple BINARY rows including a NULL
+      When query
+        """
+        SELECT reverse(b) AS result FROM VALUES (X'0102'), (NULL), (X'414243') AS t(b)
+        """
+      Then query result
+        | result     |
+        | [02 01]    |
+        | NULL       |
+        | [43 42 41] |
 
     Scenario Outline: Binary NULL propagation: <case>
       When query

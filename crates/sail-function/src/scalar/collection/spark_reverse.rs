@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, BinaryViewBuilder, GenericBinaryBuilder, OffsetSizeTrait,
+};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::functions::unicode::reverse::ReverseFunc;
-use datafusion_common::{Result, plan_err};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
@@ -60,32 +62,62 @@ fn needs_spark_format(dt: &DataType) -> bool {
     )
 }
 
-fn append_reversed_bytes<'a, I>(iter: I, builder: &mut StringBuilder, buf: &mut Vec<u8>)
+fn reversed_bytes(bytes: &Option<Vec<u8>>) -> Option<Vec<u8>> {
+    bytes.as_ref().map(|b| b.iter().rev().copied().collect())
+}
+
+/// Lets the reversal loop below be written once for both the offset-based and the
+/// view-based binary builders.
+trait BinarySink {
+    fn push_null(&mut self);
+    fn push_bytes(&mut self, bytes: &[u8]);
+}
+
+impl<O: OffsetSizeTrait> BinarySink for GenericBinaryBuilder<O> {
+    fn push_null(&mut self) {
+        self.append_null()
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        self.append_value(bytes)
+    }
+}
+
+impl BinarySink for BinaryViewBuilder {
+    fn push_null(&mut self) {
+        self.append_null()
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        self.append_value(bytes)
+    }
+}
+
+fn append_reversed_bytes<'a, I>(iter: I, builder: &mut impl BinarySink, buf: &mut Vec<u8>)
 where
     I: Iterator<Item = Option<&'a [u8]>>,
 {
     for bytes_opt in iter {
         match bytes_opt {
-            None => builder.append_null(),
+            None => builder.push_null(),
             Some(bytes) => {
                 buf.clear();
-                buf.extend_from_slice(bytes);
-                buf.reverse();
-                builder.append_value(String::from_utf8_lossy(buf).as_ref());
+                buf.extend(bytes.iter().rev());
+                builder.push_bytes(buf);
             }
         }
     }
 }
 
+/// Spark reverses binary input bytewise and keeps the binary type, so the bytes
+/// must survive verbatim even when they are not valid UTF-8.
 fn reverse_binary(arg: &ColumnarValue) -> Result<ColumnarValue> {
     match arg {
         ColumnarValue::Scalar(sv) => {
-            use datafusion_common::ScalarValue;
-            let bytes = match sv {
-                ScalarValue::Binary(None) | ScalarValue::LargeBinary(None) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-                }
-                ScalarValue::Binary(Some(b)) | ScalarValue::LargeBinary(Some(b)) => b,
+            let reversed = match sv {
+                ScalarValue::Binary(b) => ScalarValue::Binary(reversed_bytes(b)),
+                ScalarValue::LargeBinary(b) => ScalarValue::LargeBinary(reversed_bytes(b)),
+                ScalarValue::BinaryView(b) => ScalarValue::BinaryView(reversed_bytes(b)),
                 other => {
                     return Err(unsupported_data_type_exec_err(
                         "reverse",
@@ -94,24 +126,28 @@ fn reverse_binary(arg: &ColumnarValue) -> Result<ColumnarValue> {
                     ));
                 }
             };
-            let reversed: Vec<u8> = bytes.iter().copied().rev().collect();
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from_utf8_lossy(&reversed).into_owned(),
-            ))))
+            Ok(ColumnarValue::Scalar(reversed))
         }
         ColumnarValue::Array(array) => {
             let mut buf = Vec::new();
-            let mut builder =
-                StringBuilder::with_capacity(array.len(), array.get_buffer_memory_size());
-            match array.data_type() {
+            let capacity = array.get_buffer_memory_size();
+            let reversed: ArrayRef = match array.data_type() {
                 DataType::Binary => {
+                    let mut builder =
+                        GenericBinaryBuilder::<i32>::with_capacity(array.len(), capacity);
                     append_reversed_bytes(array.as_binary::<i32>().iter(), &mut builder, &mut buf);
+                    Arc::new(builder.finish())
                 }
                 DataType::LargeBinary => {
+                    let mut builder =
+                        GenericBinaryBuilder::<i64>::with_capacity(array.len(), capacity);
                     append_reversed_bytes(array.as_binary::<i64>().iter(), &mut builder, &mut buf);
+                    Arc::new(builder.finish())
                 }
                 DataType::BinaryView => {
+                    let mut builder = BinaryViewBuilder::with_capacity(array.len());
                     append_reversed_bytes(array.as_binary_view().iter(), &mut builder, &mut buf);
+                    Arc::new(builder.finish())
                 }
                 other => {
                     return Err(unsupported_data_type_exec_err(
@@ -120,8 +156,8 @@ fn reverse_binary(arg: &ColumnarValue) -> Result<ColumnarValue> {
                         other,
                     ));
                 }
-            }
-            Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
+            };
+            Ok(ColumnarValue::Array(reversed))
         }
     }
 }
@@ -137,7 +173,9 @@ impl ScalarUDFImpl for SparkReverse {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.first() {
-            Some(dt) if is_array_type(dt) || is_string_type(dt) => Ok(dt.clone()),
+            Some(dt) if is_array_type(dt) || is_string_type(dt) || is_binary_type(dt) => {
+                Ok(dt.clone())
+            }
             _ => Ok(DataType::Utf8),
         }
     }
