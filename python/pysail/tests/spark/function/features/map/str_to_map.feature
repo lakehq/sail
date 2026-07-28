@@ -4,7 +4,6 @@ Feature: str_to_map output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to str_to_map yields the schema Spark declares
       When query
         """
@@ -18,7 +17,6 @@ Feature: str_to_map output schema
          |    |-- value: string (valueContainsNull = true)
         """
 
-    @sail-bug
     Scenario: a non-null column input to str_to_map yields the schema Spark declares
       When query
         """
