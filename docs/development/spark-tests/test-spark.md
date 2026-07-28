@@ -86,7 +86,7 @@ The steps above start the server in the `default` Hatch environment.
 There are a few PySpark UDF tests that would fail in this setup, since they import testing UDFs available only in the **patched** PySpark library (installed in the `test-spark` Hatch environment).
 There are also a few data-dependent tests that would fail, since the data files in the `python/test_support` directory are only available in the **patched** PySpark library.
 
-Moreover, when the server is started in the `default` environment which has the PySpark 4.2.0 library installed, the tests for PySpark 3.5.9 does not work.
+Moreover, when the server is started in the `default` environment which has the PySpark 4.2.0 library installed, the tests for PySpark 3.5.9 do not work.
 
 To use the same PySpark library for both the server and the tests, run the server and the tests in the same `test-spark` environment.
 
