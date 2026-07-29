@@ -1,10 +1,10 @@
-use chrono::{Datelike, Duration, FixedOffset, NaiveDateTime, Timelike};
+use chrono::{Datelike, FixedOffset, NaiveDateTime, Timelike};
 use datafusion_common::Result;
 
-use super::locale::{EN_US, LocaleData};
+use super::locale::LocaleData;
 use super::pattern::{
     DateTimeField, DateTimeFieldSpec, DateTimeFormat, DateTimeItem, FieldStyle, FractionField,
-    FractionSpec, PredefinedFormatter, ZoneField, ZoneSpec,
+    FractionSpec, ZoneField, ZoneSpec,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -39,177 +39,10 @@ pub struct DateTimeFormatInput<'a> {
 
 impl DateTimeFormat {
     pub fn format(&self, input: DateTimeFormatInput<'_>) -> Result<String> {
-        if let Some(predefined) = self.predefined {
-            return Ok(format_predefined(predefined, input));
-        }
         let mut output = String::new();
         format_items(&self.items, input, self.locale.data(), &mut output)?;
         Ok(output)
     }
-}
-
-fn format_predefined(predefined: PredefinedFormatter, input: DateTimeFormatInput<'_>) -> String {
-    match predefined {
-        PredefinedFormatter::BasicIsoDate => {
-            let mut output = input.datetime.format("%Y%m%d").to_string();
-            // Only include offset if timezone is present and not UTC
-            if let Some(tz) = input.timezone
-                && tz.offset.local_minus_utc() != 0
-            {
-                push_basic_offset(offset_seconds(input), &mut output);
-            }
-            output
-        }
-        PredefinedFormatter::IsoLocalDate => input.datetime.format("%Y-%m-%d").to_string(),
-        PredefinedFormatter::IsoOffsetDate => {
-            let mut output = input.datetime.format("%Y-%m-%d").to_string();
-            push_iso_offset_id(offset_seconds(input), &mut output);
-            output
-        }
-        PredefinedFormatter::IsoDate => {
-            let mut output = input.datetime.format("%Y-%m-%d").to_string();
-            if input.timezone.is_some() {
-                push_iso_offset_id(offset_seconds(input), &mut output);
-            }
-            output
-        }
-        PredefinedFormatter::IsoLocalTime => format_iso_local_time(input.datetime),
-        PredefinedFormatter::IsoOffsetTime => {
-            let mut output = format_iso_local_time(input.datetime);
-            push_iso_offset_id(offset_seconds(input), &mut output);
-            output
-        }
-        PredefinedFormatter::IsoTime => {
-            let mut output = format_iso_local_time(input.datetime);
-            if input.timezone.is_some() {
-                push_iso_offset_id(offset_seconds(input), &mut output);
-            }
-            output
-        }
-        PredefinedFormatter::IsoLocalDateTime => format_iso_local_date_time(input.datetime),
-        PredefinedFormatter::IsoOffsetDateTime => {
-            let mut output = format_iso_local_date_time(input.datetime);
-            push_iso_offset_id(offset_seconds(input), &mut output);
-            output
-        }
-        PredefinedFormatter::IsoZonedDateTime => {
-            let mut output = format_iso_local_date_time(input.datetime);
-            push_iso_offset_id(offset_seconds(input), &mut output);
-            if let Some(name) = input.timezone.and_then(|timezone| timezone.name) {
-                output.push('[');
-                output.push_str(name);
-                output.push(']');
-            }
-            output
-        }
-        PredefinedFormatter::IsoDateTime => {
-            let mut output = format_iso_local_date_time(input.datetime);
-            if input.timezone.is_some() {
-                push_iso_offset_id(offset_seconds(input), &mut output);
-                if let Some(name) = input.timezone.and_then(|timezone| timezone.name) {
-                    output.push('[');
-                    output.push_str(name);
-                    output.push(']');
-                }
-            }
-            output
-        }
-        PredefinedFormatter::IsoOrdinalDate => {
-            let mut output = format!(
-                "{:04}-{:03}",
-                input.datetime.year(),
-                input.datetime.ordinal()
-            );
-            if input.timezone.is_some() {
-                push_iso_offset_id(offset_seconds(input), &mut output);
-            }
-            output
-        }
-        PredefinedFormatter::IsoWeekDate => {
-            let week = input.datetime.iso_week();
-            let mut output = format!(
-                "{:04}-W{:02}-{}",
-                week.year(),
-                week.week(),
-                input.datetime.weekday().number_from_monday()
-            );
-            if input.timezone.is_some() {
-                push_iso_offset_id(offset_seconds(input), &mut output);
-            }
-            output
-        }
-        PredefinedFormatter::IsoInstant => {
-            let utc_datetime = input
-                .datetime
-                .checked_sub_signed(Duration::seconds(offset_seconds(input) as i64))
-                .unwrap_or(input.datetime);
-            let mut output = format_iso_local_date_time(utc_datetime);
-            output.push('Z');
-            output
-        }
-        PredefinedFormatter::Rfc1123DateTime => {
-            let mut output = format!(
-                "{}, {} {} {} {:02}:{:02}:{:02} ",
-                EN_US.weekdays_short[input.datetime.weekday().num_days_from_monday() as usize],
-                input.datetime.day(),
-                EN_US.months_short[(input.datetime.month() - 1) as usize],
-                input.datetime.year(),
-                input.datetime.hour(),
-                input.datetime.minute(),
-                input.datetime.second()
-            );
-            let seconds = offset_seconds(input);
-            if seconds == 0 {
-                output.push_str("GMT");
-            } else {
-                push_basic_offset(seconds, &mut output);
-            }
-            output
-        }
-    }
-}
-
-fn format_iso_local_date_time(datetime: NaiveDateTime) -> String {
-    let mut output = datetime.format("%Y-%m-%dT%H:%M:%S").to_string();
-    push_iso_fraction(datetime.nanosecond(), &mut output);
-    output
-}
-
-fn format_iso_local_time(datetime: NaiveDateTime) -> String {
-    let mut output = datetime.format("%H:%M:%S").to_string();
-    push_iso_fraction(datetime.nanosecond(), &mut output);
-    output
-}
-
-fn push_iso_fraction(nanos: u32, output: &mut String) {
-    if nanos == 0 {
-        return;
-    }
-    let mut digits = format!("{nanos:09}");
-    while digits.ends_with('0') {
-        digits.pop();
-    }
-    output.push('.');
-    output.push_str(&digits);
-}
-
-fn offset_seconds(input: DateTimeFormatInput<'_>) -> i32 {
-    input
-        .timezone
-        .map(|timezone| timezone.offset.local_minus_utc())
-        .unwrap_or(0)
-}
-
-fn push_iso_offset_id(seconds: i32, output: &mut String) {
-    if seconds == 0 {
-        output.push('Z');
-    } else {
-        push_offset(seconds, true, seconds % 60 != 0, output);
-    }
-}
-
-fn push_basic_offset(seconds: i32, output: &mut String) {
-    push_offset(seconds, false, seconds % 60 != 0, output);
 }
 
 fn format_items(
@@ -218,68 +51,17 @@ fn format_items(
     locale: &LocaleData,
     output: &mut String,
 ) -> Result<()> {
-    let mut pad_next: Option<(usize, char)> = None;
-
     for item in items {
         match item {
-            DateTimeItem::Literal(value) => {
-                if let Some((width, pad_char)) = pad_next.take() {
-                    let padded = pad_string(value, width, pad_char);
-                    output.push_str(&padded);
-                } else {
-                    output.push_str(value);
-                }
-            }
+            DateTimeItem::Literal(value) => output.push_str(value),
             DateTimeItem::Field(field_spec) => {
-                let start_len = output.len();
                 format_field_spec(field_spec, input, locale, output);
-                if let Some((width, pad_char)) = pad_next.take() {
-                    let field_len = output.len() - start_len;
-                    if field_len < width {
-                        let padding = width - field_len;
-                        let padded_value = format!(
-                            "{}{}",
-                            pad_char.to_string().repeat(padding),
-                            &output[start_len..]
-                        );
-                        output.truncate(start_len);
-                        output.push_str(&padded_value);
-                    }
-                }
             }
             DateTimeItem::Fraction(fraction_spec) => {
-                let start_len = output.len();
                 format_fraction_spec(fraction_spec, input, output);
-                if let Some((width, pad_char)) = pad_next.take() {
-                    let field_len = output.len() - start_len;
-                    if field_len < width {
-                        let padding = width - field_len;
-                        let padded_value = format!(
-                            "{}{}",
-                            pad_char.to_string().repeat(padding),
-                            &output[start_len..]
-                        );
-                        output.truncate(start_len);
-                        output.push_str(&padded_value);
-                    }
-                }
             }
             DateTimeItem::Zone(zone_spec) => {
-                let start_len = output.len();
                 format_zone_spec(zone_spec, input, output);
-                if let Some((width, pad_char)) = pad_next.take() {
-                    let field_len = output.len() - start_len;
-                    if field_len < width {
-                        let padding = width - field_len;
-                        let padded_value = format!(
-                            "{}{}",
-                            pad_char.to_string().repeat(padding),
-                            &output[start_len..]
-                        );
-                        output.truncate(start_len);
-                        output.push_str(&padded_value);
-                    }
-                }
             }
             DateTimeItem::Optional(items) => {
                 let start_len = output.len();
@@ -288,9 +70,6 @@ fn format_items(
                 if is_all_zeros(optional_content) {
                     output.truncate(start_len);
                 }
-            }
-            DateTimeItem::PadNext { width, pad_char } => {
-                pad_next = Some((*width, *pad_char));
             }
         }
     }
@@ -308,15 +87,6 @@ fn is_all_zeros(s: &str) -> bool {
         }
     }
     has_digits
-}
-
-fn pad_string(value: &str, width: usize, pad_char: char) -> String {
-    if value.len() >= width {
-        value.to_string()
-    } else {
-        let padding = width - value.len();
-        format!("{}{}", pad_char.to_string().repeat(padding), value)
-    }
 }
 
 fn format_year(year: i32, count: usize, output: &mut String) {

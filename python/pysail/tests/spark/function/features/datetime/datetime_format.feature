@@ -18,218 +18,95 @@ Feature: datetime format strings
 
       Examples:
         | case                                                            | ts                         | fmt                                       | result               |
-        | `date_format` formats ISO 8601 timestamp with literal separator | 2026-06-01 10:30:45        | 'yyyy-MM-dd''T''HH:mm:ss'                 | 2026-06-01T10:30:45  |
+        | `date_format` formats ISO 8601 timestamp with literal separator | 2026-06-01 10:30:45        | "yyyy-MM-dd'T'HH:mm:ss"                   | 2026-06-01T10:30:45  |
         | `date_format` formats standalone fractional seconds             | 2026-06-15 14:30:45.123456 | 'SSSSSS'                                  | 123456               |
         | `date_format` formats text fields                               | 2026-06-15 14:30:45        | 'EEEE, dd MMMM yyyy'                      | Monday, 15 June 2026 |
-        | `date_format` formats a dynamic format expression               | 2026-06-15 14:30:45        | concat('yyyy-MM-dd', '''T''', 'HH:mm:ss') | 2026-06-15T14:30:45  |
+        | `date_format` formats a dynamic format expression               | 2026-06-15 14:30:45        | concat('yyyy-MM-dd', "'T'", 'HH:mm:ss')   | 2026-06-15T14:30:45  |
 
-  Rule: Java predefined DateTimeFormatter constants
+  Rule: Spark datetime pattern validation for formatting
 
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario: `date_format` formats predefined local ISO constants
+    Scenario Outline: Predefined formatter name: <case>
       When query
         """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'BASIC_ISO_DATE') AS basic_date,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'ISO_LOCAL_DATE') AS local_date,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'ISO_LOCAL_TIME') AS local_time,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'ISO_LOCAL_DATE_TIME') AS local_datetime
+        SELECT date_format(TIMESTAMP '2018-11-17 13:33:33.333', '<fmt>')
         """
-      Then query result
-        | basic_date | local_date | local_time      | local_datetime             |
-        | 20260615   | 2026-06-15 | 14:30:45.123456 | 2026-06-15T14:30:45.123456 |
-
-    Scenario: `date_format` formats predefined ISO offset constants
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_OFFSET_DATE') AS offset_date,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_OFFSET_TIME') AS offset_time,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_OFFSET_DATE_TIME') AS offset_datetime,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_INSTANT') AS instant
-        """
-      Then query result
-        | offset_date | offset_time | offset_datetime      | instant              |
-        | 2026-06-15Z | 14:30:45Z   | 2026-06-15T14:30:45Z | 2026-06-15T14:30:45Z |
-
-    Scenario: `date_format` formats predefined ISO date variants with optional offset
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45', 'ISO_DATE') AS local_date,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_DATE') AS offset_date,
-          date_format(DATE '2026-06-15', 'ISO_DATE') AS date_only,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_DATE_TIME') AS datetime_with_zone
-        """
-      Then query result
-        | local_date  | offset_date | date_only  | datetime_with_zone        |
-        | 2026-06-15Z | 2026-06-15Z | 2026-06-15 | 2026-06-15T14:30:45Z[UTC] |
-
-    Scenario: `date_format` formats predefined ordinal and week dates
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45', 'ISO_ORDINAL_DATE') AS ordinal_date,
-          date_format(TIMESTAMP '2026-06-15 14:30:45', 'ISO_WEEK_DATE') AS week_date,
-          date_format(DATE '2026-06-15', 'ISO_ORDINAL_DATE') AS ordinal_date_only,
-          date_format(DATE '2026-06-15', 'ISO_WEEK_DATE') AS week_date_only
-        """
-      Then query result
-        | ordinal_date | week_date   | ordinal_date_only | week_date_only |
-        | 2026-166Z    | 2026-W25-1Z | 2026-166          | 2026-W25-1     |
-
-    Scenario: `date_format` formats ISO_LOCAL_DATE with different input types
-      When query
-        """
-        SELECT
-          date_format(DATE '2026-06-15', 'ISO_LOCAL_DATE') AS date_only,
-          date_format(TIMESTAMP '2026-06-15 14:30:45', 'ISO_LOCAL_DATE') AS timestamp_local,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_LOCAL_DATE') AS timestamp_utc
-        """
-      Then query result
-        | date_only  | timestamp_local | timestamp_utc |
-        | 2026-06-15 | 2026-06-15      | 2026-06-15    |
-
-    Scenario: `date_format` formats ISO_LOCAL_TIME with different time components
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 00:00:00', 'ISO_LOCAL_TIME') AS midnight,
-          date_format(TIMESTAMP '2026-06-15 12:00:00', 'ISO_LOCAL_TIME') AS noon,
-          date_format(TIMESTAMP '2026-06-15 23:59:59', 'ISO_LOCAL_TIME') AS last_second,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456789', 'ISO_LOCAL_TIME') AS with_nanos
-        """
-      Then query result
-        | midnight | noon     | last_second | with_nanos      |
-        | 00:00:00 | 12:00:00 | 23:59:59    | 14:30:45.123456 |
-
-    Scenario: `date_format` formats ISO_LOCAL_DATE_TIME with different components
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 00:00:00', 'ISO_LOCAL_DATE_TIME') AS midnight,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'ISO_LOCAL_DATE_TIME') AS with_fractional,
-          date_format(TIMESTAMP '2026-06-15 23:59:59', 'ISO_LOCAL_DATE_TIME') AS last_second
-        """
-      Then query result
-        | midnight            | with_fractional            | last_second         |
-        | 2026-06-15T00:00:00 | 2026-06-15T14:30:45.123456 | 2026-06-15T23:59:59 |
-
-    Scenario: `date_format` formats ISO_OFFSET_DATE with non-UTC timezones
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45+02:00', 'ISO_OFFSET_DATE') AS positive_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-05:00', 'ISO_OFFSET_DATE') AS negative_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45+05:30', 'ISO_OFFSET_DATE') AS half_hour_offset
-        """
-      Then query result
-        | positive_offset | negative_offset | half_hour_offset |
-        | 2026-06-15Z     | 2026-06-15Z     | 2026-06-15Z      |
-
-    Scenario: `date_format` formats ISO_OFFSET_TIME with non-UTC timezones
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45+02:00', 'ISO_OFFSET_TIME') AS positive_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-05:00', 'ISO_OFFSET_TIME') AS negative_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45+05:30', 'ISO_OFFSET_TIME') AS half_hour_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456+02:00', 'ISO_OFFSET_TIME') AS with_fractional
-        """
-      Then query result
-        | positive_offset | negative_offset | half_hour_offset | with_fractional  |
-        | 12:30:45Z       | 19:30:45Z       | 09:00:45Z        | 12:30:45.123456Z |
-
-    Scenario: `date_format` formats ISO_OFFSET_DATE_TIME with non-UTC timezones
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45+02:00', 'ISO_OFFSET_DATE_TIME') AS positive_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-05:00', 'ISO_OFFSET_DATE_TIME') AS negative_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45+05:30', 'ISO_OFFSET_DATE_TIME') AS half_hour_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45.123456+02:00', 'ISO_OFFSET_DATE_TIME') AS with_fractional
-        """
-      Then query result
-        | positive_offset      | negative_offset      | half_hour_offset     | with_fractional             |
-        | 2026-06-15T12:30:45Z | 2026-06-15T19:30:45Z | 2026-06-15T09:00:45Z | 2026-06-15T12:30:45.123456Z |
-
-    Scenario: `date_format` formats ISO_INSTANT with different timezone inputs
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'ISO_INSTANT') AS utc_instant,
-          date_format(TIMESTAMP '2026-06-15 14:30:45+02:00', 'ISO_INSTANT') AS positive_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-05:00', 'ISO_INSTANT') AS negative_offset
-        """
-      Then query result
-        | utc_instant          | positive_offset      | negative_offset      |
-        | 2026-06-15T14:30:45Z | 2026-06-15T12:30:45Z | 2026-06-15T19:30:45Z |
-
-    Scenario: `date_format` formats BASIC_ISO_DATE with different input types
-      When query
-        """
-        SELECT
-          date_format(DATE '2026-06-15', 'BASIC_ISO_DATE') AS date_only,
-          date_format(TIMESTAMP '2026-06-15 14:30:45', 'BASIC_ISO_DATE') AS timestamp_local,
-          date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', 'BASIC_ISO_DATE') AS timestamp_utc
-        """
-      Then query result
-        | date_only | timestamp_local | timestamp_utc |
-        | 20260615  | 20260615        | 20260615      |
-
-    Scenario: `date_format` handles NULL with ISO formats
-      When query
-        """
-        SELECT
-          date_format(CAST(NULL AS TIMESTAMP), 'ISO_DATE') AS null_timestamp,
-          date_format(CAST(NULL AS DATE), 'ISO_LOCAL_DATE') AS null_date,
-          date_format(CAST(NULL AS TIMESTAMP), 'ISO_OFFSET_TIME') AS null_time
-        """
-      Then query result
-        | null_timestamp | null_date | null_time |
-        | NULL           | NULL      | NULL      |
-
-    Scenario: `date_format` formats extreme dates with ISO formats
-      When query
-        """
-        SELECT
-          date_format(DATE '0001-01-01', 'ISO_DATE') AS min_date,
-          date_format(DATE '9999-12-31', 'ISO_DATE') AS max_date,
-          date_format(TIMESTAMP '0001-01-01 00:00:00', 'ISO_DATE_TIME') AS min_timestamp,
-          date_format(TIMESTAMP '9999-12-31 23:59:59', 'ISO_DATE_TIME') AS max_timestamp
-        """
-      Then query result
-        | min_date   | max_date   | min_timestamp             | max_timestamp             |
-        | 0001-01-01 | 9999-12-31 | 0001-01-01T00:00:00Z[UTC] | 9999-12-31T23:59:59Z[UTC] |
-
-    Scenario: `date_format` formats timezone offset edge cases
-      When query
-        """
-        SELECT
-          date_format(TIMESTAMP '2026-06-15 14:30:45+00:00', 'ISO_OFFSET_DATE') AS zero_offset,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-00:00', 'ISO_OFFSET_DATE') AS negative_zero,
-          date_format(TIMESTAMP '2026-06-15 14:30:45+14:00', 'ISO_OFFSET_DATE') AS max_positive,
-          date_format(TIMESTAMP '2026-06-15 14:30:45-12:00', 'ISO_OFFSET_DATE') AS max_negative
-        """
-      Then query result
-        | zero_offset | negative_zero | max_positive | max_negative |
-        | 2026-06-15Z | 2026-06-15Z   | 2026-06-15Z  | 2026-06-16Z  |
-
-    Scenario Outline: Predefined constant: <case>
-      When query
-        """
-        SELECT date_format(TIMESTAMP '2026-06-15 14:30:45 UTC', '<fmt>') AS result
-        """
-      Then query result
-        | result   |
-        | <result> |
+      Then query error .*
 
       Examples:
-        | case                                                | fmt                | result                        |
-        | `date_format` formats predefined ISO time variants  | ISO_OFFSET_TIME    | 14:30:45Z                     |
-        | `date_format` formats predefined RFC 1123 date time | RFC_1123_DATE_TIME | Mon, 15 Jun 2026 14:30:45 GMT |
+        | case                                                       | fmt                  |
+        | `date_format` rejects BASIC_ISO_DATE as a predefined name  | BASIC_ISO_DATE       |
+        | `date_format` rejects ISO_LOCAL_DATE as a predefined name  | ISO_LOCAL_DATE       |
+        | `date_format` rejects ISO_WEEK_DATE as a predefined name   | ISO_WEEK_DATE        |
+        | `date_format` rejects RFC_1123_DATE_TIME as a predefined name | RFC_1123_DATE_TIME |
+
+    Scenario Outline: Disabled week-based pattern: <case>
+      When query
+        """
+        SELECT date_format(TIMESTAMP '2018-11-17 13:33:33.333', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                             | fmt |
+        | `date_format` rejects week-based year            | Y   |
+        | `date_format` rejects week of month              | W   |
+        | `date_format` rejects week of year               | w   |
+        | `date_format` rejects ISO day number             | u   |
+        | `date_format` rejects localized day number       | e   |
+        | `date_format` rejects stand-alone day number     | c   |
+
+    Scenario Outline: Invalid Java datetime pattern: <case>
+      When query
+        """
+        SELECT date_format(TIMESTAMP '2018-11-17 13:33:33.333', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                                        | fmt        |
+        | `date_format` rejects narrow era                            | GGGGG      |
+        | `date_format` rejects narrow month                          | MMMMM      |
+        | `date_format` rejects narrow stand-alone month              | LLLLL      |
+        | `date_format` rejects narrow day name                       | EEEEE      |
+        | `date_format` rejects narrow quarter                        | QQQQQ      |
+        | `date_format` rejects narrow stand-alone quarter            | qqqqq      |
+        | `date_format` rejects year wider than six digits            | yyyyyyy    |
+        | `date_format` rejects repeated aligned day of week in month | FF         |
+        | `date_format` rejects three day-of-month letters            | ddd        |
+        | `date_format` rejects four day-of-year letters              | DDDD       |
+        | `date_format` rejects three 24-hour letters                 | HHH        |
+        | `date_format` rejects three 12-hour letters                 | hhh        |
+        | `date_format` rejects three clock-hour letters              | kkk        |
+        | `date_format` rejects three am-pm hour letters              | KKK        |
+        | `date_format` rejects three minute letters                  | mmm        |
+        | `date_format` rejects three second letters                  | sss        |
+        | `date_format` rejects ten fractional-second letters         | SSSSSSSSSS |
+        | `date_format` rejects repeated am-pm marker                 | aa         |
+        | `date_format` rejects single zone ID letter                 | V          |
+        | `date_format` rejects five zone-name letters                | zzzzz      |
+        | `date_format` rejects six ISO offset letters                | XXXXXX     |
+        | `date_format` rejects six localized offset letters          | ZZZZZZ     |
+        | `date_format` rejects two localized-zone offset letters     | OO         |
+        | `date_format` rejects six lower-case offset letters         | xxxxxx     |
+        | `date_format` rejects millisecond-of-day                    | A          |
+        | `date_format` rejects day-period                            | B          |
+        | `date_format` rejects nano-of-second                        | n          |
+        | `date_format` rejects nano-of-day                           | N          |
+        | `date_format` rejects pad-next                              | p          |
+        | `date_format` rejects unknown pattern letter C              | C          |
+        | `date_format` rejects unknown pattern letter I              | I          |
+
+    Scenario: `date_format` treats quoted restricted letters as literals
+      When query
+        """
+        SELECT date_format(DATE '2026-06-15', "yyyy-MM-dd 'Y' 'B' 'E' 'Q'") AS result
+        """
+      Then query result
+        | result             |
+        | 2026-06-15 Y B E Q |
 
   Rule: Edge cases and special scenarios
 
@@ -254,7 +131,6 @@ Feature: datetime format strings
         | `date_format` formats date only                      | DATE '2026-06-15'                         | 'yyyy-MM-dd'                    | 2026-06-15                    |
         | `date_format` formats with quarter                   | DATE '2026-06-15'                         | 'yyyy-Q-dd'                     | 2026-2-15                     |
         | `date_format` formats with era                       | DATE '2026-06-15'                         | 'GGGG yyyy-MM-dd'               | Anno Domini 2026-06-15        |
-        | `date_format` formats with week-based year           | DATE '2026-06-15'                         | 'YYYY-ww-e'                     | 2026-25-1                     |
         | `date_format` formats with day of year               | DATE '2026-06-15'                         | 'yyyy-DDD'                      | 2026-166                      |
 
   Rule: Width variation tests for month patterns
@@ -277,7 +153,6 @@ Feature: datetime format strings
         | `date_format` formats month with width 2 (MM)    | MM    | 06     |
         | `date_format` formats month with width 3 (MMM)   | MMM   | Jun    |
         | `date_format` formats month with width 4 (MMMM)  | MMMM  | June   |
-        | `date_format` formats month with width 5 (MMMMM) | MMMMM | J      |
 
   Rule: Width variation tests for day-of-week patterns
 
@@ -299,7 +174,6 @@ Feature: datetime format strings
         | `date_format` formats day-of-week with width 2 (EE)    | EE    | Mon    |
         | `date_format` formats day-of-week with width 3 (EEE)   | EEE   | Mon    |
         | `date_format` formats day-of-week with width 4 (EEEE)  | EEEE  | Monday |
-        | `date_format` formats day-of-week with width 5 (EEEEE) | EEEEE | M      |
 
   Rule: Width variation tests for era patterns
 
@@ -320,7 +194,7 @@ Feature: datetime format strings
         | `date_format` formats era with width 1 (G)     | G     | AD     |
         | `date_format` formats era with width 2 (GG)    | GG    | AD     |
         | `date_format` formats era with width 3 (GGG)   | GGG   | AD     |
-        | `date_format` formats era with width 5 (GGGGG) | GGGGG | A      |
+        | `date_format` formats era with width 4 (GGGG)  | GGGG  | Anno Domini |
 
   Rule: Width variation tests for quarter patterns
 
@@ -342,7 +216,6 @@ Feature: datetime format strings
         | `date_format` formats quarter with width 2 (QQ)    | QQ    | 02          |
         | `date_format` formats quarter with width 3 (QQQ)   | QQQ   | Q2          |
         | `date_format` formats quarter with width 4 (QQQQ)  | QQQQ  | 2nd quarter |
-        | `date_format` formats quarter with width 5 (QQQQQ) | QQQQQ | 2           |
 
   Rule: Padding tests for numeric fields
 

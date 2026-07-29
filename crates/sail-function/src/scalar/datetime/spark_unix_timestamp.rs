@@ -264,7 +264,7 @@ fn parse_format_scalar(scalar: &ScalarValue) -> Result<DateTimeFormat> {
     scalar
         .try_as_str()
         .flatten()
-        .map(DateTimeFormat::parse)
+        .map(DateTimeFormat::for_parsing)
         .transpose()?
         .ok_or_else(|| exec_datafusion_err!("spark_unix_timestamp format cannot be null"))
 }
@@ -275,6 +275,6 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
     }
 }

@@ -100,7 +100,7 @@ impl ScalarUDFImpl for SparkDate {
                     Some(ColumnarValue::Scalar(scalar)) => scalar
                         .try_as_str()
                         .flatten()
-                        .map(DateTimeFormat::parse)
+                        .map(DateTimeFormat::for_parsing)
                         .transpose()?,
                     Some(ColumnarValue::Array(_)) => unreachable!(),
                     None => None,
@@ -148,7 +148,7 @@ impl ScalarUDFImpl for SparkDate {
                     Some(ColumnarValue::Scalar(scalar)) => scalar
                         .try_as_str()
                         .flatten()
-                        .map(DateTimeFormat::parse)
+                        .map(DateTimeFormat::for_parsing)
                         .transpose()?,
                     Some(ColumnarValue::Array(_)) => unreachable!(),
                     None => None,
@@ -242,6 +242,6 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
     }
 }

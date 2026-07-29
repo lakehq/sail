@@ -182,6 +182,13 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
+    Scenario: `date_format` rejects week-of-month pattern W
+      When query
+        """
+        SELECT date_format(DATE '2026-06-15', 'W')
+        """
+      Then query error .*
+
     Scenario Outline: Week-based field: <case>
       When query
         """
@@ -193,7 +200,6 @@ Feature: datetime edge cases
 
       Examples:
         | case                                        | fmt | result |
-        | `date_format` formats week-of-month         | W   | 3      |
         | `date_format` formats aligned week-of-month | F   | 1      |
         | `date_format` formats quarter               | Q   | 2      |
         | `date_format` formats quarter with text     | QQQ | Q2     |

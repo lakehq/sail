@@ -69,21 +69,21 @@ impl SparkFromCSVOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
                     .expect("default timestamp format should be valid")
             });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
 
@@ -104,9 +104,9 @@ impl Default for SparkFromCSVOptions {
     fn default() -> Self {
         Self {
             sep: Self::SEP_DEFAULT.to_string(),
-            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+            timestamp_format: DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
                 .expect("default timestamp format should be valid"),
-            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+            date_format: DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             timezone: None,
         }

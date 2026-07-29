@@ -378,7 +378,7 @@ impl ScalarUDFImpl for SparkTimestamp {
 fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
     match format {
         Some(ColumnarValue::Scalar(scalar)) => match scalar.try_as_str() {
-            Some(Some(format)) => Ok(ScalarFormat::Format(DateTimeFormat::parse(format)?)),
+            Some(Some(format)) => Ok(ScalarFormat::Format(DateTimeFormat::for_parsing(format)?)),
             Some(None) => Ok(ScalarFormat::Null),
             None => exec_err!("spark_timestamp format argument must be a string scalar"),
         },
@@ -472,6 +472,6 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
     }
 }

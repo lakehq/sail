@@ -2,72 +2,12 @@
 @datetime_parse
 Feature: datetime parsing with format strings
 
-  Rule: Java predefined DateTimeFormatter constants for parsing
+  Rule: Spark datetime pattern validation for parsing
 
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario Outline: Predefined constant: <case>
-      When query
-        """
-        SELECT to_timestamp('<in>', '<fmt>') AS result
-        """
-      Then query result
-        | result   |
-        | <result> |
-
-      Examples:
-        | case                                                      | in                            | fmt                  | result                     |
-        | `to_timestamp` parses ISO_LOCAL_DATE_TIME format          | 2026-06-15T14:30:45           | ISO_LOCAL_DATE_TIME  | 2026-06-15 14:30:45        |
-        | `to_timestamp` parses ISO_OFFSET_DATE_TIME format         | 2026-06-15T14:30:45Z          | ISO_OFFSET_DATE_TIME | 2026-06-15 14:30:45        |
-        | `to_timestamp` parses ISO_INSTANT format                  | 2026-06-15T14:30:45Z          | ISO_INSTANT          | 2026-06-15 14:30:45        |
-        | `to_timestamp` parses ISO_LOCAL_DATE format               | 2026-06-15                    | ISO_LOCAL_DATE       | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_LOCAL_TIME format               | 14:30:45                      | ISO_LOCAL_TIME       | 1970-01-01 14:30:45        |
-        | `to_timestamp` parses BASIC_ISO_DATE format               | 20260615                      | BASIC_ISO_DATE       | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_ORDINAL_DATE format             | 2026-166                      | ISO_ORDINAL_DATE     | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_WEEK_DATE format                | 2026-W25-1                    | ISO_WEEK_DATE        | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_DATE format with offset         | 2026-06-15Z                   | ISO_DATE             | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_DATE format without offset      | 2026-06-15                    | ISO_DATE             | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_TIME format with offset         | 14:30:45Z                     | ISO_TIME             | 1970-01-01 14:30:45        |
-        | `to_timestamp` parses ISO_TIME format without offset      | 14:30:45.123                  | ISO_TIME             | 1970-01-01 14:30:45.123    |
-        | `to_timestamp` parses ISO_OFFSET_DATE format              | 2026-06-15Z                   | ISO_OFFSET_DATE      | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses ISO_OFFSET_TIME format              | 14:30:45Z                     | ISO_OFFSET_TIME      | 1970-01-01 14:30:45        |
-        | `to_timestamp` parses ISO_DATE_TIME format with zone      | 2026-06-15T14:30:45Z[UTC]     | ISO_DATE_TIME        | 2026-06-15 14:30:45        |
-        | `to_timestamp` parses ISO_DATE_TIME format without offset | 2026-06-15T14:30:45.123456    | ISO_DATE_TIME        | 2026-06-15 14:30:45.123456 |
-        | `to_timestamp` parses ISO_8601 format alias               | 2026-06-01T10:30:45           | ISO_8601             | 2026-06-01 10:30:45        |
-        | `to_timestamp` parses ISO_ZONED_DATE_TIME format          | 2026-06-15T14:30:45Z[UTC]     | ISO_ZONED_DATE_TIME  | 2026-06-15 14:30:45        |
-        | `to_timestamp` parses RFC_1123_DATE_TIME format           | Mon, 15 Jun 2026 14:30:45 GMT | RFC_1123_DATE_TIME   | 2026-06-15 14:30:45        |
-
-  Rule: to_date with predefined formatters
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario Outline: to_date constant: <case>
-      When query
-        """
-        SELECT to_date('<in>', '<fmt>') AS result
-        """
-      Then query result
-        | result   |
-        | <result> |
-
-      Examples:
-        | case                                            | in          | fmt              | result     |
-        | `to_date` parses ISO_LOCAL_DATE format          | 2026-06-15  | ISO_LOCAL_DATE   | 2026-06-15 |
-        | `to_date` parses BASIC_ISO_DATE format          | 20260615    | BASIC_ISO_DATE   | 2026-06-15 |
-        | `to_date` parses ISO_ORDINAL_DATE format        | 2026-166    | ISO_ORDINAL_DATE | 2026-06-15 |
-        | `to_date` parses ISO_WEEK_DATE format           | 2026-W25-1  | ISO_WEEK_DATE    | 2026-06-15 |
-        | `to_date` parses ISO_DATE format with offset    | 2026-06-15Z | ISO_DATE         | 2026-06-15 |
-        | `to_date` parses ISO_DATE format without offset | 2026-06-15  | ISO_DATE         | 2026-06-15 |
-        | `to_date` parses ISO_OFFSET_DATE format         | 2026-06-15Z | ISO_OFFSET_DATE  | 2026-06-15 |
-
-  Rule: Error handling for invalid formats
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario Outline: Invalid format: <case>
+    Scenario Outline: Predefined formatter name: <case>
       When query
         """
         SELECT <fn>('<in>', '<fmt>')
@@ -75,10 +15,62 @@ Feature: datetime parsing with format strings
       Then query error .*
 
       Examples:
-        | case                                                 | fn           | in         | fmt                 |
-        | `to_timestamp` errors on invalid ISO_LOCAL_DATE_TIME | to_timestamp | invalid    | ISO_LOCAL_DATE_TIME |
-        | `to_date` errors on invalid BASIC_ISO_DATE           | to_date      | invalid    | BASIC_ISO_DATE      |
-        | `to_timestamp` errors on mismatched format           | to_timestamp | 2026-06-15 | ISO_LOCAL_TIME      |
+        | case                                                          | fn           | in         | fmt                |
+        | `to_timestamp` rejects ISO_LOCAL_DATE as a predefined name    | to_timestamp | 2026-06-15 | ISO_LOCAL_DATE     |
+        | `to_date` rejects BASIC_ISO_DATE as a predefined name          | to_date      | 2026-06-15 | BASIC_ISO_DATE     |
+        | `to_timestamp` rejects ISO_WEEK_DATE as a predefined name      | to_timestamp | 2026-06-15 | ISO_WEEK_DATE      |
+        | `to_timestamp` rejects RFC_1123_DATE_TIME as a predefined name | to_timestamp | 2026-06-15 | RFC_1123_DATE_TIME |
+
+    Scenario Outline: Disabled week-based parsing pattern: <case>
+      When query
+        """
+        SELECT to_timestamp('2018-11-17', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                              | fmt |
+        | `to_timestamp` rejects week-based year            | Y   |
+        | `to_timestamp` rejects week of month              | W   |
+        | `to_timestamp` rejects week of year               | w   |
+        | `to_timestamp` rejects ISO day number             | u   |
+        | `to_timestamp` rejects localized day number       | e   |
+        | `to_timestamp` rejects stand-alone day number     | c   |
+
+    Scenario Outline: Parsing-only restricted pattern: <case>
+      When query
+        """
+        SELECT to_timestamp('2018-11-17', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                                  | fmt |
+        | `to_timestamp` rejects day-of-week text while parsing | E   |
+        | `to_timestamp` rejects aligned day while parsing      | F   |
+        | `to_timestamp` rejects stand-alone quarter parsing    | q   |
+        | `to_timestamp` rejects quarter parsing                | Q   |
+
+    Scenario Outline: Invalid Java datetime parsing pattern: <case>
+      When query
+        """
+        SELECT to_timestamp('2018-11-17', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                                   | fmt        |
+        | `to_timestamp` rejects narrow month                    | MMMMM      |
+        | `to_timestamp` rejects year wider than six digits      | yyyyyyy    |
+        | `to_timestamp` rejects three 24-hour letters           | HHH        |
+        | `to_timestamp` rejects ten fractional-second letters   | SSSSSSSSSS |
+        | `to_timestamp` rejects millisecond-of-day              | A          |
+        | `to_timestamp` rejects day-period                      | B          |
+        | `to_timestamp` rejects nano-of-second                  | n          |
+        | `to_timestamp` rejects nano-of-day                     | N          |
+        | `to_timestamp` rejects pad-next                        | p          |
+        | `to_timestamp` rejects unknown pattern letter C        | C          |
+        | `to_timestamp` rejects unknown pattern letter I        | I          |
 
   Rule: Parsing with custom format patterns
 
@@ -100,69 +92,8 @@ Feature: datetime parsing with format strings
         | `to_timestamp` parses custom format with fractional seconds | to_timestamp     | 2026-06-15 14:30:45.123456 | 'yyyy-MM-dd HH:mm:ss.SSSSSS' | 2026-06-15 14:30:45.123456 |
         | `to_date` parses custom format                              | to_date          | 2026/06/15                 | 'yyyy/MM/dd'                 | 2026-06-15                 |
         | `to_timestamp` parses with month name                       | to_timestamp     | 15 June 2026               | 'dd MMMM yyyy'               | 2026-06-15 00:00:00        |
-        | `to_timestamp` parses with day name                         | to_timestamp     | Monday, 15 June 2026       | 'EEEE, dd MMMM yyyy'         | 2026-06-15 00:00:00        |
         | `to_timestamp_ltz` parses custom format with offset         | to_timestamp_ltz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 14:30:45        |
         | `to_timestamp_ntz` parses custom format with offset         | to_timestamp_ntz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 14:30:45        |
-
-  Rule: Day-of-week parsing
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario: `to_timestamp` parses day-of-week with width 1-3 (E, EE, EEE)
-      When query
-        """
-        SELECT
-          to_timestamp('Mon, 15 June 2026', 'EEE, dd MMMM yyyy') AS day_mon,
-          to_timestamp('Tue, 16 June 2026', 'EEE, dd MMMM yyyy') AS day_tue,
-          to_timestamp('Sun, 14 June 2026', 'EEE, dd MMMM yyyy') AS day_sun
-        """
-      Then query result
-        | day_mon             | day_tue             | day_sun             |
-        | 2026-06-15 00:00:00 | 2026-06-16 00:00:00 | 2026-06-14 00:00:00 |
-
-    Scenario: `to_timestamp` parses day-of-week with width 4 (EEEE)
-      When query
-        """
-        SELECT
-          to_timestamp('Monday, 15 June 2026', 'EEEE, dd MMMM yyyy') AS day_monday,
-          to_timestamp('Sunday, 14 June 2026', 'EEEE, dd MMMM yyyy') AS day_sunday
-        """
-      Then query result
-        | day_monday          | day_sunday          |
-        | 2026-06-15 00:00:00 | 2026-06-14 00:00:00 |
-
-  Rule: Quarter parsing
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario Outline: Quarter width: <case>
-      When query
-        """
-        SELECT
-          to_timestamp('<q2in>', '<fmt>') AS q2,
-          to_timestamp('<q4in>', '<fmt>') AS q4
-        """
-      Then query result
-        | q2                  | q4                  |
-        | 2026-04-01 00:00:00 | 2026-10-01 00:00:00 |
-
-      Examples:
-        | case                                              | q2in             | q4in             | fmt       |
-        | `to_timestamp` parses quarter with width 1 (Q)    | 2026 Q2          | 2026 Q4          | yyyy Q    |
-        | `to_timestamp` parses quarter with width 2 (QQ)   | 2026 Q02         | 2026 Q04         | yyyy QQ   |
-        | `to_timestamp` parses quarter with width 3 (QQQ)  | 2026 Q2          | 2026 Q4          | yyyy QQQ  |
-        | `to_timestamp` parses quarter with width 4 (QQQQ) | 2026 2nd quarter | 2026 4th quarter | yyyy QQQQ |
-
-    Scenario: `to_timestamp` parses 12-hour timestamp with AM/PM marker
-      When query
-        """
-        SELECT to_timestamp('5/9/2026 4:53:33 PM', 'M/d/yyyy h:mm:ss a') AS result
-        """
-      Then query result
-        | result              |
-        | 2026-05-09 16:53:33 |
 
   Rule: AM/PM marker parsing variations
 
@@ -325,17 +256,6 @@ Feature: datetime parsing with format strings
         | lower_june          | upper_june          | mixed_june          |
         | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
 
-    Scenario: `to_timestamp` parses with case-insensitive day names
-      When query
-        """
-        SELECT
-          to_timestamp('monday, 15 June 2026', 'EEEE, dd MMMM yyyy') AS lower_mon,
-          to_timestamp('MONDAY, 15 June 2026', 'EEEE, dd MMMM yyyy') AS upper_mon
-        """
-      Then query result
-        | lower_mon           | upper_mon           |
-        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
-
   Rule: Parsing with different timezones
 
     Background:
@@ -406,7 +326,7 @@ Feature: datetime parsing with format strings
         | without_tz          | with_tz             |
         | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
 
-  Rule: Two-digit year parsing (yy and uu)
+  Rule: Two-digit year parsing
 
     Background:
       Given config spark.sql.session.timeZone = UTC
@@ -426,7 +346,6 @@ Feature: datetime parsing with format strings
       Examples:
         | case                                                          | pat |
         | `to_timestamp` parses two-digit year with yy (base year 2000) | yy  |
-        | `to_timestamp` parses two-digit year with uu (base year 2000) | uu  |
 
     Scenario: `to_date` parses two-digit year with yy
       When query
@@ -637,56 +556,6 @@ Feature: datetime parsing with format strings
       Then query result
         | day_166             | day_001             | day_365             |
         | 2026-06-15 00:00:00 | 2026-01-01 00:00:00 | 2026-12-31 00:00:00 |
-
-    Scenario: `to_timestamp` parses week-based date
-      When query
-        """
-        SELECT
-          to_timestamp('2026-W25-1', 'YYYY-\'W\'ww-e') AS week_date,
-          to_timestamp('2026-W01-1', 'YYYY-\'W\'ww-e') AS first_week,
-          to_timestamp('2026-W52-7', 'YYYY-\'W\'ww-e') AS last_week
-        """
-      Then query result
-        | week_date           | first_week          | last_week           |
-        | 2026-06-15 00:00:00 | 2025-12-29 00:00:00 | 2026-12-27 00:00:00 |
-
-  Rule: Week-based pattern variations
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario: `to_timestamp` parses week year with YYYY
-      When query
-        """
-        SELECT
-          to_timestamp('2025-W01-1', 'YYYY-\'W\'ww-e') AS week_year_2025,
-          to_timestamp('2026-W01-1', 'YYYY-\'W\'ww-e') AS week_year_2026
-        """
-      Then query result
-        | week_year_2025      | week_year_2026      |
-        | 2024-12-30 00:00:00 | 2025-12-29 00:00:00 |
-
-    Scenario: `to_timestamp` parses week of month with W
-      When query
-        """
-        SELECT
-          to_timestamp('2026-06-3', 'yyyy-MM-W') AS week_3,
-          to_timestamp('2026-06-1', 'yyyy-MM-W') AS week_1
-        """
-      Then query result
-        | week_3              | week_1              |
-        | 2026-06-15 00:00:00 | 2026-06-01 00:00:00 |
-
-    Scenario: `to_timestamp` parses day of week with e
-      When query
-        """
-        SELECT
-          to_timestamp('2026-W25-1', 'YYYY-\'W\'ww-e') AS day_1,
-          to_timestamp('2026-W25-7', 'YYYY-\'W\'ww-e') AS day_7
-        """
-      Then query result
-        | day_1               | day_7               |
-        | 2026-06-15 00:00:00 | 2026-06-21 00:00:00 |
 
   Rule: Invalid input handling
 
@@ -1015,10 +884,10 @@ Feature: datetime parsing with format strings
       When query
         """
         SELECT
-          to_timestamp('2026-06-15', 'yyyy-MM-dd[ T][HH][:mm][:ss][.SSS]') AS minimal,
-          to_timestamp('2026-06-15T14', 'yyyy-MM-dd[ T][HH][:mm][:ss][.SSS]') AS with_hour,
-          to_timestamp('2026-06-15T14:30', 'yyyy-MM-dd[ T][HH][:mm][:ss][.SSS]') AS with_min,
-          to_timestamp('2026-06-15T14:30:45', 'yyyy-MM-dd[ T][HH][:mm][:ss][.SSS]') AS with_sec
+          to_timestamp('2026-06-15', "yyyy-MM-dd['T'][HH][:mm][:ss][.SSS]") AS minimal,
+          to_timestamp('2026-06-15T14', "yyyy-MM-dd['T'][HH][:mm][:ss][.SSS]") AS with_hour,
+          to_timestamp('2026-06-15T14:30', "yyyy-MM-dd['T'][HH][:mm][:ss][.SSS]") AS with_min,
+          to_timestamp('2026-06-15T14:30:45', "yyyy-MM-dd['T'][HH][:mm][:ss][.SSS]") AS with_sec
         """
       Then query result
         | minimal             | with_hour           | with_min            | with_sec            |
@@ -1344,55 +1213,6 @@ Feature: datetime parsing with format strings
         | last_second         | last_nano                  |
         | 2026-06-15 23:59:59 | 2026-06-15 23:59:59.999999 |
 
-  Rule: Aligned week-of-month parsing
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario: `to_timestamp` parses aligned week-of-month with F
-      When query
-        """
-        SELECT
-          to_timestamp('2026-06-15 1', 'yyyy-MM-dd F') AS week_1,
-          to_timestamp('2026-06-08 2', 'yyyy-MM-dd F') AS week_2
-        """
-      Then query error (?i).*
-
-    Scenario: `to_timestamp` errors on inconsistent aligned week-of-month
-      When query
-        """
-        SELECT to_timestamp('2026-06-15 2', 'yyyy-MM-dd F')
-        """
-      Then query error .*
-
-  Rule: Week-of-month validation
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario: `to_timestamp` validates week-of-month consistency
-      When query
-        """
-        SELECT
-          to_timestamp('2026-06-15 3 1', 'yyyy-MM-dd W F') AS valid_week,
-          to_timestamp('2026-06-01 1 1', 'yyyy-MM-dd W F') AS first_week
-        """
-      Then query result
-        | valid_week          | first_week          |
-        | 2026-06-15 00:00:00 | 2026-06-01 00:00:00 |
-
-    Scenario Outline: Week-of-month error: <case>
-      When query
-        """
-        SELECT to_timestamp('<in>', 'yyyy-MM-dd W F')
-        """
-      Then query error .*
-
-      Examples:
-        | case                                                | in             |
-        | `to_timestamp` errors on invalid week-of-month      | 2026-06-15 6 1 |
-        | `to_timestamp` errors on inconsistent week-of-month | 2026-06-15 2 1 |
-
   Rule: Pattern parsing with optional sections and literals
 
     Background:
@@ -1419,9 +1239,14 @@ Feature: datetime parsing with format strings
         | 2026-06-15 00:00:00 |
 
       Examples:
-        | case                                                          | in               | fmt                  |
-        | `to_timestamp` parses quoted literals with special characters | "2026-06-15 'Q'" | "yyyy-MM-dd '''Q'''" |
-        | `to_timestamp` parses pattern with quarter field              | '2026-06-15 Q2'  | "yyyy-MM-dd 'Q'Q"    |
+        | case                                                      | in             | fmt                  |
+        | `to_timestamp` treats quoted day name as a literal        | '2026-06-15 E' | "yyyy-MM-dd 'E'" |
+        | `to_timestamp` treats quoted aligned day as a literal      | '2026-06-15 F' | "yyyy-MM-dd 'F'" |
+        | `to_timestamp` treats quoted stand-alone quarter literally | '2026-06-15 q' | "yyyy-MM-dd 'q'" |
+        | `to_timestamp` treats quoted quarter as a literal         | '2026-06-15 Q' | "yyyy-MM-dd 'Q'" |
+        | `to_timestamp` treats quoted week-based year literally    | '2026-06-15 Y' | "yyyy-MM-dd 'Y'" |
+        | `to_timestamp` treats quoted day-period as a literal       | '2026-06-15 B' | "yyyy-MM-dd 'B'" |
+        | `to_timestamp` treats quoted unknown letter as a literal   | '2026-06-15 C' | "yyyy-MM-dd 'C'" |
 
   Rule: Pattern validation and error handling
 
@@ -1437,6 +1262,5 @@ Feature: datetime parsing with format strings
 
       Examples:
         | case                                              | in               | fmt         |
-        | `to_timestamp` rejects invalid pattern width      | 2026-06-15       | MMMMMM      |
         | `to_timestamp` rejects unclosed optional section  | 2026-06-15T14:30 | yyyy-MM-dd[ |
         | `to_timestamp` rejects unexpected closing bracket | 2026-06-15T14:30 | yyyy-MM-dd] |

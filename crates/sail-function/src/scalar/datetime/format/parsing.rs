@@ -59,31 +59,18 @@ fn parse_items(
     locale: &LocaleData,
     state: &mut ParseState,
 ) -> Result<usize> {
-    let mut pad_next = false;
     for item in items {
         match item {
             DateTimeItem::Literal(literal) => {
                 position = consume_literal(value, position, literal)?;
             }
             DateTimeItem::Field(field_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
-                }
                 position = parse_field_spec(field_spec, value, position, locale, state)?;
             }
             DateTimeItem::Fraction(fraction_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
-                }
                 position = parse_fraction_spec(fraction_spec, value, position, state)?;
             }
             DateTimeItem::Zone(zone_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
-                }
                 position = parse_zone_spec(zone_spec, value, position, state)?;
             }
             DateTimeItem::Optional(items) => {
@@ -129,9 +116,6 @@ fn parse_items(
                         }
                     }
                 }
-            }
-            DateTimeItem::PadNext { .. } => {
-                pad_next = true;
             }
         }
     }
