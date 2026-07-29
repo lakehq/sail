@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{DataFusionError, Result};
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{ScalarValue, internal_err};
 use datafusion_expr::ScalarFunctionArgs;
@@ -50,7 +54,16 @@ impl ScalarUDFImpl for RaiseError {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Null)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `RaiseError` declares `override def nullable: Boolean = true`
+    // (misc.scala:86).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Null, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

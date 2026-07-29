@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_int32_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 use datafusion_expr_common::type_coercion::binary::{binary_to_string_coercion, string_coercion};
 
@@ -57,18 +59,8 @@ impl Levenshtein {
             ),
         }
     }
-}
 
-impl ScalarUDFImpl for Levenshtein {
-    fn name(&self) -> &str {
-        "levenshtein"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
             .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
         {
@@ -82,6 +74,36 @@ impl ScalarUDFImpl for Levenshtein {
                 "Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View"
             )
         }
+    }
+}
+
+impl ScalarUDFImpl for Levenshtein {
+    fn name(&self) -> &str {
+        "levenshtein"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.output_type(&data_types)?,
+            args.arg_fields.iter().any(|f| f.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

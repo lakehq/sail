@@ -1,7 +1,11 @@
-use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::unicode::reverse::ReverseFunc;
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -34,8 +38,21 @@ impl ScalarUDFImpl for SparkReverse {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // `reverse` is null-intolerant, so nullability follows the input.
+        let field = &args.arg_fields[0];
+        Ok(Arc::new(Field::new(
+            self.name(),
+            field.data_type().clone(),
+            field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

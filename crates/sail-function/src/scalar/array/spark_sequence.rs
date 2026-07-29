@@ -9,12 +9,14 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{
-    ArrowNativeType, DataType, Date32Type, Field, Int8Type, Int16Type, Int32Type, Int64Type,
-    IntervalMonthDayNanoType, IntervalUnit, TimeUnit, TimestampMicrosecondType,
+    ArrowNativeType, DataType, Date32Type, Field, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, IntervalMonthDayNanoType, IntervalUnit, TimeUnit, TimestampMicrosecondType,
 };
 use datafusion::arrow::temporal_conversions::as_datetime_with_timezone;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -35,6 +37,17 @@ impl SparkSequence {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.iter().any(|t| t.is_null()) {
+            Ok(DataType::Null)
+        } else {
+            Ok(DataType::List(Arc::new(Field::new_list_field(
+                arg_types[0].clone(),
+                true,
+            ))))
+        }
+    }
 }
 
 impl ScalarUDFImpl for SparkSequence {
@@ -46,15 +59,28 @@ impl ScalarUDFImpl for SparkSequence {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.is_null()) {
-            Ok(DataType::Null)
-        } else {
-            Ok(DataType::List(Arc::new(Field::new_list_field(
-                arg_types[0].clone(),
-                true,
-            ))))
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `Sequence` declares `nullable = children.exists(_.nullable)`
+    // (collectionOperations.scala:3301).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

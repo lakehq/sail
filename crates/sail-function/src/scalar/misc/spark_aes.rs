@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::consts::U12;
@@ -12,9 +13,13 @@ use datafusion::arrow::array::{
     BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
     StringArray, StringViewArray,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
@@ -104,6 +109,16 @@ impl SparkAESEncrypt {
             signature: Signature::variadic_any(Volatility::Volatile),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() < 2 || arg_types.len() > 6 {
+            return exec_err!(
+                "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        Ok(DataType::Binary)
+    }
 }
 
 // TODO: Support array batch
@@ -116,14 +131,24 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 6 {
-            return exec_err!(
-                "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `AesEncrypt` rewrites to `StaticInvoke(..)` with the default
+    // `returnNullable = true` (misc.scala:442).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -606,6 +631,16 @@ impl SparkAESDecrypt {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() < 2 || arg_types.len() > 5 {
+            return exec_err!(
+                "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        Ok(DataType::Binary)
+    }
 }
 
 // TODO: Support array batch
@@ -618,14 +653,24 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 5 {
-            return exec_err!(
-                "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `AesDecrypt` rewrites to `StaticInvoke(..)` with the default
+    // `returnNullable = true` (misc.scala:523).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1044,7 +1089,16 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // `try_*` swallows the failure and yields NULL, so the output is always nullable
+    // (TryEval.scala:51).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1085,7 +1139,16 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // `try_*` swallows the failure and yields NULL, so the output is always nullable
+    // (TryEval.scala:51).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

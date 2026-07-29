@@ -20,7 +20,8 @@ use crate::scalar::json::common_union::{
     TYPE_ID_NULL, is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref,
 };
 
-/// General implementation of `ScalarUDFImpl::return_type`.
+/// Shared output-type derivation for the JSON functions, called from their
+/// `ScalarUDFImpl::return_field_from_args`.
 ///
 /// # Arguments
 ///

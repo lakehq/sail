@@ -30,7 +30,6 @@ Feature: unix_timestamp with an argument coming from a column
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null string literal yields a bigint
       When query
         """

@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, IntervalYearMonthArray};
 use datafusion::arrow::compute::try_binary;
-use datafusion::arrow::datatypes::{DataType, Int32Type, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type, IntervalUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::invalid_arg_count_exec_err;
 
@@ -41,7 +43,20 @@ impl ScalarUDFImpl for SparkMakeYmInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Interval(IntervalUnit::YearMonth))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `MakeYMInterval` is a `BinaryExpression` with no `nullable` override
+    // (intervalExpressions.scala:576).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Interval(IntervalUnit::YearMonth),
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

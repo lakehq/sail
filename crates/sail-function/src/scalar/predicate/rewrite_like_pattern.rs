@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 
 use crate::functions_utils::make_scalar_function;
@@ -47,6 +47,14 @@ impl RewriteLikePatternFunc {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
+            other => exec_err!("Unsupported data type {other:?} for function rewrite_like_pattern"),
+        }
+    }
 }
 
 impl ScalarUDFImpl for RewriteLikePatternFunc {
@@ -58,12 +66,27 @@ impl ScalarUDFImpl for RewriteLikePatternFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
-            other => exec_err!("Unsupported data type {other:?} for function rewrite_like_pattern"),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Internal plumbing; nullability follows the input pattern.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

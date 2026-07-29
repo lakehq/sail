@@ -41,22 +41,8 @@ impl ArrayIntersect {
             aliases: vec![String::from("list_intersect")],
         }
     }
-}
 
-impl ScalarUDFImpl for ArrayIntersect {
-    fn name(&self) -> &str {
-        "array_intersect"
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [array1, array2] = take_function_args(self.name(), arg_types)?;
 
         match (array1, array2) {
@@ -94,6 +80,27 @@ impl ScalarUDFImpl for ArrayIntersect {
             (dt, _) => Ok(dt.clone()),
         }
     }
+}
+
+impl ScalarUDFImpl for ArrayIntersect {
+    fn name(&self) -> &str {
+        "array_intersect"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
@@ -101,7 +108,7 @@ impl ScalarUDFImpl for ArrayIntersect {
             .iter()
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
-        let return_type = self.return_type(&arg_types)?;
+        let return_type = self.output_type(&arg_types)?;
 
         Ok(Arc::new(Field::new(
             self.name(),
@@ -381,7 +388,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, exec_err};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 
     use super::ArrayIntersect;
 
@@ -464,13 +471,11 @@ mod tests {
                 config_options: Arc::new(ConfigOptions::default()),
             })?;
 
-            assert_eq!(
-                result.data_type(),
-                udf.return_type(&[
-                    input_field.data_type().clone(),
-                    input_field.data_type().clone()
-                ])?
-            );
+            let return_field = udf.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[input_field.clone().into(), input_field.clone().into()],
+                scalar_arguments: &[None, None],
+            })?;
+            assert_eq!(&result.data_type(), return_field.data_type());
         }
         Ok(())
     }

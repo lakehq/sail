@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::{DataFusionError, ScalarValue, internal_err};
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 
 use crate::scalar::hash::utils::create_murmur3_hashes;
 
@@ -38,7 +38,14 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

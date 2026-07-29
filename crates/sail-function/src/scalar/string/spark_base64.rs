@@ -8,9 +8,13 @@ use datafusion::arrow::array::{
     GenericBinaryBuilder, GenericStringArray, GenericStringBuilder, LargeBinaryArray,
     LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 const SPARK_BASE64_DECODE: GeneralPurpose = GeneralPurpose::new(
     &alphabet::STANDARD,
@@ -36,18 +40,8 @@ impl SparkBase64 {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
-}
 
-impl ScalarUDFImpl for SparkBase64 {
-    fn name(&self) -> &str {
-        "spark_base64"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
             return plan_err!(
                 "{} expects 1 argument, but got {}",
@@ -68,6 +62,40 @@ impl ScalarUDFImpl for SparkBase64 {
                 arg_types[0]
             ),
         }
+    }
+}
+
+impl ScalarUDFImpl for SparkBase64 {
+    fn name(&self) -> &str {
+        "spark_base64"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `Base64` rewrites to `StaticInvoke(.., returnNullable = false)`
+    // (stringExpressions.scala:2884), so nullability follows the input.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -277,6 +305,22 @@ impl SparkUnbase64 {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let [arg_type] = arg_types else {
+            return plan_err!(
+                "{} expects 1 argument, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        };
+        match arg_type {
+            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
+            DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            DataType::Null => Ok(DataType::Binary),
+            _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
+        }
+    }
 }
 
 fn encode_spark_base64_array<'a, O: OffsetSizeTrait>(
@@ -348,20 +392,28 @@ impl ScalarUDFImpl for SparkUnbase64 {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [arg_type] = arg_types else {
-            return plan_err!(
-                "{} expects 1 argument, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        };
-        match arg_type {
-            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
-            DataType::LargeUtf8 => Ok(DataType::LargeBinary),
-            DataType::Null => Ok(DataType::Binary),
-            _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `UnBase64` is a null-intolerant `UnaryExpression` with no `nullable` override
+    // (stringExpressions.scala:2924).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -465,12 +517,15 @@ mod tests {
     fn invoke(udf: &dyn ScalarUDFImpl, array: Arc<dyn Array>) -> Result<Arc<dyn Array>> {
         let field = Arc::new(Field::new("v", array.data_type().clone(), true));
         let number_rows = array.len();
-        let return_type = udf.return_type(&[array.data_type().clone()])?;
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&field),
+            scalar_arguments: &[None],
+        })?;
         let result = udf.invoke_with_args(ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(array)],
             arg_fields: vec![Arc::clone(&field)],
             number_rows,
-            return_field: Arc::new(Field::new("r", return_type, true)),
+            return_field,
             config_options: Arc::new(ConfigOptions::default()),
         })?;
         result.into_array(number_rows)

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -21,6 +21,13 @@ impl TimestampNow {
             session_timezone,
             time_unit,
         }
+    }
+
+    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Timestamp(
+            *self.time_unit(),
+            Some(self.session_timezone().into()),
+        ))
     }
 
     pub fn session_timezone(&self) -> &str {
@@ -42,10 +49,23 @@ impl ScalarUDFImpl for TimestampNow {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            *self.time_unit(),
-            Some(self.session_timezone().into()),
-        ))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `CurrentTimestamp`/`Now` declare `override def nullable: Boolean = false`
+    // via `CurrentTimestampLike` (datetimeExpressions.scala:221).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, false)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

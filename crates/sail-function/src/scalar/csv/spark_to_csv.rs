@@ -3,10 +3,12 @@ use std::sync::Arc;
 use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
-use datafusion::arrow::datatypes::*;
+use datafusion::arrow::datatypes::{Field, FieldRef, *};
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
@@ -221,7 +223,16 @@ impl ScalarUDFImpl for SparkToCsv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `StructsToCsv` declares `override def nullable: Boolean = true`
+    // (csvExpressions.scala:227).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {

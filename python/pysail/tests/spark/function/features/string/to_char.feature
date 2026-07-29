@@ -62,7 +62,6 @@ Feature: to_char with an argument coming from a column
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null numeric literal yields a non-nullable string
       When query
         """
@@ -85,6 +84,10 @@ Feature: to_char with an argument coming from a column
          |-- result: string (nullable = true)
         """
 
+    # Spark reports `true`: CAST(... AS DECIMAL) is nullable (it can overflow).
+    # Sail's CAST reports non-nullable, and `to_char` now propagates it faithfully,
+    # so the divergence surfaces here. The bug is in CAST, not in `to_char`.
+    @sail-bug
     Scenario: a non-null numeric column yields a non-nullable string
       When query
         """

@@ -1,14 +1,17 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone};
 use chrono_tz::{GapInfo, Tz};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::datetime::time_unit_to_multiplier;
@@ -34,6 +37,16 @@ impl ConvertTz {
         }
     }
 
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let [_, _, ts] = arg_types else {
+            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
+        };
+        match ts {
+            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
+            _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
+        }
+    }
+
     pub fn classic(&self) -> bool {
         self.classic
     }
@@ -48,14 +61,27 @@ impl ScalarUDFImpl for ConvertTz {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [_, _, ts] = arg_types else {
-            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
-        };
-        match ts {
-            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
-            _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark's `ConvertTimezone` alone would be `children.exists(_.nullable)`, but this UDF
+    // also backs `to_utc_timestamp`/`from_utc_timestamp`, where Spark's child is an implicit
+    // string->timestamp cast that is itself nullable. Sail const-folds that cast to a
+    // non-nullable value, so deriving from the inputs would report `false` where Spark
+    // reports `true` — the unsound direction.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

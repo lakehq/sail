@@ -9,6 +9,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
+use datafusion_common::internal_err;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
@@ -36,6 +37,19 @@ impl SparkParseJson {
             signature: Signature::user_defined(Volatility::Immutable),
             safe,
         }
+    }
+
+    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Use Binary instead of BinaryView for PySpark compatibility.
+        // parquet-variant uses BinaryView internally (zero-copy, more efficient),
+        // but PySpark doesn't support BinaryView in Arrow-to-Python conversion,
+        // failing at gRPC serialization. The ideal approach would be BinaryView
+        // internally and convert to Binary only at the Spark Connect serialization
+        // layer, but that requires a broader refactor of the serialization path.
+        Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
+        ])))
     }
 
     pub fn safe(&self) -> bool {
@@ -180,20 +194,14 @@ impl ScalarUDFImpl for SparkParseJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // Use Binary instead of BinaryView for PySpark compatibility.
-        // parquet-variant uses BinaryView internally (zero-copy, more efficient),
-        // but PySpark doesn't support BinaryView in Arrow-to-Python conversion,
-        // failing at gRPC serialization. The ideal approach would be BinaryView
-        // internally and convert to Binary only at the Spark Connect serialization
-        // layer, but that requires a broader refactor of the serialization path.
-        Ok(DataType::Struct(Fields::from(vec![
-            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
-            variant_metadata_field(DataType::Binary, false),
-        ])))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        let data_type = self.return_type(
+        let data_type = self.output_type(
             args.arg_fields
                 .iter()
                 .map(|f| f.data_type().clone())

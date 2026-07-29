@@ -340,7 +340,7 @@ fn nested_concat_args(expr: &Expr) -> Option<&[Expr]> {
 /// Spark's `CombineConcats`: flatten nested `spark_concat` children,
 /// `concat(concat(a, b), c)` -> `concat(a, b, c)`, reducing nesting to a single
 /// kernel pass. Only flatten when it keeps the same return type — this guards the
-/// array element-type / dimension merge in `return_type`; otherwise the arguments
+/// array element-type / dimension merge in `concat_return_type`; otherwise the arguments
 /// are returned unchanged.
 fn flatten_nested_concats(args: Vec<Expr>, info: &SimplifyContext) -> Result<Vec<Expr>> {
     if !args.iter().any(|arg| nested_concat_args(arg).is_some()) {

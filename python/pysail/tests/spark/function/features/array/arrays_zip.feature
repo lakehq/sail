@@ -323,7 +323,6 @@ Feature: arrays_zip comprehensive tests
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: non-null array literals yield a non-nullable array
       When query
         """
@@ -338,7 +337,6 @@ Feature: arrays_zip comprehensive tests
          |    |    |-- 1: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null array column yields a non-nullable array
       When query
         """

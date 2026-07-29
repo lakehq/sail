@@ -3,9 +3,9 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, Int64Builder, new_null_array,
 };
-use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
@@ -35,18 +35,8 @@ impl HllSketchEstimateFunction {
             ),
         }
     }
-}
 
-impl ScalarUDFImpl for HllSketchEstimateFunction {
-    fn name(&self) -> &str {
-        "hll_sketch_estimate"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
             return exec_err!(
                 "hll_sketch_estimate requires 1 argument, got {}",
@@ -59,6 +49,40 @@ impl ScalarUDFImpl for HllSketchEstimateFunction {
                 exec_err!("hll_sketch_estimate requires a binary argument, got {data_type}")
             }
         }
+    }
+}
+
+impl ScalarUDFImpl for HllSketchEstimateFunction {
+    fn name(&self) -> &str {
+        "hll_sketch_estimate"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `HllSketchEstimate` is a null-intolerant `UnaryExpression` with no `nullable`
+    // override (datasketchesExpressions.scala:39).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -93,6 +117,11 @@ impl HllUnionFunction {
             ),
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        validate_hll_union_types("hll_union", arg_types)?;
+        Ok(DataType::Binary)
+    }
 }
 
 impl ScalarUDFImpl for HllUnionFunction {
@@ -104,9 +133,28 @@ impl ScalarUDFImpl for HllUnionFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        validate_hll_union_types("hll_union", arg_types)?;
-        Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `HllUnion` is a null-intolerant `TernaryExpression` with no `nullable`
+    // override (datasketchesExpressions.scala:81).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

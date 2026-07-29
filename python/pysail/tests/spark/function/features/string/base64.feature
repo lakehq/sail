@@ -107,7 +107,6 @@ Feature: base64 functions encode and decode binary strings
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null binary literal yields a non-nullable string
       When query
         """
@@ -130,7 +129,6 @@ Feature: base64 functions encode and decode binary strings
          |-- result: string (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null binary column yields a non-nullable string
       When query
         """

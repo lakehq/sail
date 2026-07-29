@@ -1,8 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, DecimalType, Field, FieldRef, Int32Type, Int64Type,
+};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{binary_op_scalar_or_array, try_binary_op_primitive};
@@ -22,6 +28,18 @@ impl SparkTryMod {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
+            let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
+            return Ok(DataType::Decimal128(result_precision, result_scale));
+        }
+        if arg_types.contains(&DataType::Int64) {
+            Ok(DataType::Int64)
+        } else {
+            Ok(DataType::Int32)
         }
     }
 
@@ -50,16 +68,24 @@ impl ScalarUDFImpl for SparkTryMod {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
-            let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
-            return Ok(DataType::Decimal128(result_precision, result_scale));
-        }
-        if arg_types.contains(&DataType::Int64) {
-            Ok(DataType::Int64)
-        } else {
-            Ok(DataType::Int32)
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `BinaryArithmetic.nullable` is `.. || evalMode == EvalMode.TRY`
+    // (arithmetic.scala:236), so every `try_*` arithmetic is always nullable.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

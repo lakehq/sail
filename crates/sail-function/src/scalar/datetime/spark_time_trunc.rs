@@ -3,9 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, PrimitiveBuilder, StringArrayType, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Time64MicrosecondType, TimeUnit};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimeTrunc {
@@ -49,7 +51,19 @@ impl ScalarUDFImpl for SparkTimeTrunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Time64(TimeUnit::Microsecond))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `TimeTrunc` has no `nullable` override (timeExpressions.scala:740).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Time64(TimeUnit::Microsecond),
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use chrono::{Datelike, Duration, NaiveDate};
 use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err,
+};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::interval_arithmetic::Interval;
 
@@ -45,7 +47,20 @@ impl ScalarUDFImpl for SparkLastDay {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `LastDay` is a `UnaryExpression` with no `nullable` override
+    // (datetimeExpressions.scala:1530).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

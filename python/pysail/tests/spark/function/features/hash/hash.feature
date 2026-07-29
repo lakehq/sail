@@ -32,7 +32,6 @@ Feature: hash() returns murmur3 hash
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal yields a non-nullable integer
       When query
         """
@@ -44,7 +43,6 @@ Feature: hash() returns murmur3 hash
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column yields a non-nullable integer
       When query
         """
@@ -56,7 +54,6 @@ Feature: hash() returns murmur3 hash
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column: hash is still non-nullable (hash of NULL is defined)
       When query
         """

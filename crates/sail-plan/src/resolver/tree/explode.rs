@@ -79,7 +79,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
-        let return_type = func.return_type(&[arg_type])?;
+        let return_type = explode.output_type(&[arg_type])?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
         let arg = match data_type {
             ExplodeDataType::List => arg,

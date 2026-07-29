@@ -313,7 +313,6 @@ Feature: year
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null date literal yields a non-nullable integer
       When query
         """
@@ -325,7 +324,6 @@ Feature: year
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null date column yields a non-nullable integer
       When query
         """

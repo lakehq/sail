@@ -9,8 +9,10 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::cast::{as_large_list_array, as_list_array};
 use datafusion::common::{DataFusionError, Result};
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::exec_err;
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_common::{exec_err, internal_err};
 use datafusion_expr::ScalarFunctionArgs;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -29,6 +31,33 @@ impl ArrayItemWithPosition {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
         }
+    }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let out = match arg_types {
+            [DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
+                Self::item_type::<Int32Type>(f),
+                f.is_nullable(),
+            ))),
+            [DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
+                Self::item_type::<Int64Type>(f),
+                f.is_nullable(),
+            ))),
+            [DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
+                Arc::new(Field::new_list_field(
+                    Self::item_type::<Int32Type>(f),
+                    f.is_nullable(),
+                )),
+                *n,
+            ),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "{} should only be called with a list",
+                    self.name()
+                )));
+            }
+        };
+        Ok(out)
     }
 
     fn item_fields<P: ArrowPrimitiveType>(field: &FieldRef) -> Fields {
@@ -91,31 +120,28 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let out = match arg_types {
-            [DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
-                Self::item_type::<Int32Type>(f),
-                f.is_nullable(),
-            ))),
-            [DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
-                Self::item_type::<Int64Type>(f),
-                f.is_nullable(),
-            ))),
-            [DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
-                Arc::new(Field::new_list_field(
-                    Self::item_type::<Int32Type>(f),
-                    f.is_nullable(),
-                )),
-                *n,
-            ),
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "{} should only be called with a list",
-                    self.name()
-                )));
-            }
-        };
-        Ok(out)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Internal helper behind `posexplode`; the element nullability is computed in
+    // `output_type`, the container follows the input.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

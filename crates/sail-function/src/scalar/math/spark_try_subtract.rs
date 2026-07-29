@@ -5,11 +5,14 @@ use datafusion::arrow::array::{Array, AsArray, Date32Array};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::TimeUnit::Microsecond;
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNano,
-    IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
+    DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int32Type, Int64Type,
+    IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
+    TimestampMicrosecondType,
 };
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{
@@ -35,18 +38,8 @@ impl SparkTrySubtract {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
 
-impl ScalarUDFImpl for SparkTrySubtract {
-    fn name(&self) -> &str {
-        "try_subtract"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
             [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
             [DataType::Int64, DataType::Int64]
@@ -76,6 +69,36 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 arg_types,
             )),
         }
+    }
+}
+
+impl ScalarUDFImpl for SparkTrySubtract {
+    fn name(&self) -> &str {
+        "try_subtract"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `BinaryArithmetic.nullable` is `.. || evalMode == EvalMode.TRY`
+    // (arithmetic.scala:236), so every `try_*` arithmetic is always nullable.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

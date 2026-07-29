@@ -5,10 +5,11 @@
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, UInt64Array, UInt64Builder};
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use jiter::Peek;
 
@@ -35,6 +36,10 @@ impl JsonLength {
             aliases: ["json_length".to_string(), "json_len".to_string()],
         }
     }
+
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        return_type_check(arg_types, self.name(), DataType::UInt64)
+    }
 }
 
 impl ScalarUDFImpl for JsonLength {
@@ -46,8 +51,24 @@ impl ScalarUDFImpl for JsonLength {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return_type_check(arg_types, self.name(), DataType::UInt64)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `LengthOfJsonArray` declares `override def nullable: Boolean = true`
+    // (jsonExpressions.scala:522) — malformed JSON yields NULL.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -1,10 +1,15 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    DataType, Field, FieldRef, Int32Type, Int64Type, IntervalMonthDayNanoType,
+    IntervalYearMonthType,
 };
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{
@@ -30,18 +35,8 @@ impl SparkTryDiv {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
 
-impl ScalarUDFImpl for SparkTryDiv {
-    fn name(&self) -> &str {
-        "try_divide"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
             [DataType::Int32, DataType::Int32]
             | [DataType::Int64, DataType::Int64]
@@ -60,6 +55,36 @@ impl ScalarUDFImpl for SparkTryDiv {
                 arg_types,
             )),
         }
+    }
+}
+
+impl ScalarUDFImpl for SparkTryDiv {
+    fn name(&self) -> &str {
+        "try_divide"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `BinaryArithmetic.nullable` is `.. || evalMode == EvalMode.TRY`
+    // (arithmetic.scala:236), so every `try_*` arithmetic is always nullable.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, LargeStringArray, StringArray};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array, as_large_binary_array,
 };
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -27,18 +29,8 @@ impl MakeValidUtf8 {
             signature: Signature::any(1, Volatility::Immutable),
         }
     }
-}
 
-impl ScalarUDFImpl for MakeValidUtf8 {
-    fn name(&self) -> &str {
-        "make_valid_utf8"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.first() {
             Some(data_type) => match data_type {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(data_type.clone()),
@@ -50,6 +42,36 @@ impl ScalarUDFImpl for MakeValidUtf8 {
             },
             None => exec_err!("expected single argument for `make_valid_utf8`"),
         }
+    }
+}
+
+impl ScalarUDFImpl for MakeValidUtf8 {
+    fn name(&self) -> &str {
+        "make_valid_utf8"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Sail-only helper with no Spark expression to read the rule off, so the loose default
+    // stays: `true` costs an optimisation, `false` would let the optimizer drop null checks.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

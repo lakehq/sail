@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, ListBuilder, StringBuilder};
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::Result;
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
@@ -36,6 +36,13 @@ impl SparkSentences {
             ),
         }
     }
+
+    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        ))))
+    }
 }
 
 impl ScalarUDFImpl for SparkSentences {
@@ -48,10 +55,23 @@ impl ScalarUDFImpl for SparkSentences {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
-            true,
-        ))))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `Sentences` declares `override def nullable: Boolean = true`
+    // (stringExpressions.scala:3548).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let arg_types = arg_types.as_slice();
+        let data_type = self.output_type(arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

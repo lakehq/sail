@@ -7,7 +7,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, internal_err};
 use parquet_variant_compute::{VariantType, cast_to_variant};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
@@ -28,6 +28,13 @@ impl SparkCastToVariant {
             signature: Signature::any(1, Volatility::Immutable),
         }
     }
+
+    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
+        ])))
+    }
 }
 
 impl Default for SparkCastToVariant {
@@ -46,14 +53,14 @@ impl ScalarUDFImpl for SparkCastToVariant {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Struct(Fields::from(vec![
-            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
-            variant_metadata_field(DataType::Binary, false),
-        ])))
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        let data_type = self.return_type(
+        let data_type = self.output_type(
             args.arg_fields
                 .iter()
                 .map(|f| f.data_type().clone())

@@ -9,11 +9,11 @@ use datafusion::arrow::array::{
     Int64Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
     StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use serde_json::{Map, Value};
@@ -132,7 +132,16 @@ impl ScalarUDFImpl for SparkToJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
+    }
+
+    // Spark: `StructsToJson` declares `override def nullable: Boolean = true`
+    // (jsonExpressions.scala:379).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
