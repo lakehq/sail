@@ -155,27 +155,37 @@ Feature: datetime parsing with format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario: `to_timestamp` parses AD era
+    Scenario Outline: Strict era parsing accepts width-matched era text: <case>
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT
-          to_timestamp('AD 2026-06-15', 'G yyyy-MM-dd') AS era_ad,
-          to_timestamp('2026-06-15 AD', 'yyyy-MM-dd G') AS era_ad_suffix
+        SELECT to_timestamp('<in>', '<fmt>') AS result
         """
       Then query result
-        | era_ad              | era_ad_suffix       |
-        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
+        | result              |
+        | 2026-06-15 00:00:00 |
 
-    Scenario: `to_timestamp` parses CE era
+      Examples:
+        | case                              | in                     | fmt             |
+        | short AD prefix with G            | AD 2026-06-15          | G yyyy-MM-dd    |
+        | short AD suffix with G            | 2026-06-15 AD          | yyyy-MM-dd G    |
+        | full Anno Domini prefix with GGGG | Anno Domini 2026-06-15 | GGGG yyyy-MM-dd |
+
+    Scenario Outline: Strict era parsing rejects unsupported or width-mismatched era text: <case>
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT
-          to_timestamp('CE 2026-06-15', 'G yyyy-MM-dd') AS era_ce,
-          to_timestamp('2026-06-15 CE', 'yyyy-MM-dd G') AS era_ce_suffix
+        SELECT to_timestamp('<in>', '<fmt>')
         """
-      Then query result
-        | era_ce              | era_ce_suffix       |
-        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
+      Then query error .*
+
+      Examples:
+        | case                         | in                     | fmt             |
+        | CE prefix with G             | CE 2026-06-15          | G yyyy-MM-dd    |
+        | CE suffix with G             | 2026-06-15 CE          | yyyy-MM-dd G    |
+        | full Anno Domini text with G | Anno Domini 2026-06-15 | G yyyy-MM-dd    |
+        | short AD text with GGGG      | AD 2026-06-15          | GGGG yyyy-MM-dd |
+        | narrow A text with G         | A 2026-06-15           | G yyyy-MM-dd    |
 
     Scenario Outline: NULL handling: <case>
       When query

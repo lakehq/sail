@@ -213,21 +213,23 @@ fn parse_fraction(
 fn parse_era(
     value: &str,
     position: usize,
+    style: FieldStyle,
     locale: &LocaleData,
     state: &mut ParseState,
 ) -> Result<usize> {
-    if starts_with_ignore_case(&value[position..], "CE") {
-        state.era_bc = Some(false);
-        return Ok(position + 2);
-    }
-    let choices = [
-        (locale.eras_full[0], true),
-        (locale.eras_full[1], false),
-        (locale.eras_short[0], true),
-        (locale.eras_short[1], false),
-        (locale.eras_narrow[0], true),
-        (locale.eras_narrow[1], false),
-    ];
+    let choices = match style {
+        FieldStyle::TextShort => [(locale.eras_short[0], true), (locale.eras_short[1], false)],
+        FieldStyle::TextFull => [(locale.eras_full[0], true), (locale.eras_full[1], false)],
+        FieldStyle::TextNarrow => [
+            (locale.eras_narrow[0], true),
+            (locale.eras_narrow[1], false),
+        ],
+        _ => {
+            return Err(exec_datafusion_err!(
+                "unsupported datetime era field style: {style:?}"
+            ));
+        }
+    };
     choices
         .iter()
         .filter(|(text, _)| starts_with_ignore_case(&value[position..], text))
@@ -700,7 +702,7 @@ fn parse_field_spec(
     state: &mut ParseState,
 ) -> Result<usize> {
     match spec.kind {
-        DateTimeField::Era => parse_era(value, position, locale, state),
+        DateTimeField::Era => parse_era(value, position, spec.style, locale, state),
         DateTimeField::YearOfEra => {
             parse_signed_number(value, position, number_bounds(spec.width, 10)).map(
                 |(next, year)| {
