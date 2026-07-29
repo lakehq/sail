@@ -31,7 +31,9 @@ use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{
+    BinaryExpr as PhysicalBinaryExpr, Column, Literal as PhysicalLiteral,
+};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
@@ -754,7 +756,10 @@ impl IcebergTableProvider {
         let table_url = Url::parse(&self.table_uri)
             .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
         let expected_snapshot_id = Some(self.snapshot.as_ref().map(Snapshot::snapshot_id));
-        let (candidate_scan, removed_data_file_paths) = if self.snapshot.is_some() {
+        let (candidate_scan, removed_data_file_paths, candidate_row_count) = if self
+            .snapshot
+            .is_some()
+        {
             let object_store = get_object_store_from_session(session, &table_url)?;
             let store_ctx = StoreContext::new(object_store, &table_url)?;
             let manifest_list = self.load_manifest_list(&store_ctx).await?;
@@ -776,6 +781,13 @@ impl IcebergTableProvider {
                 .into_iter()
                 .map(|(data_file, _)| data_file)
                 .collect::<Vec<_>>();
+            let candidate_row_count = candidates.iter().try_fold(0_u64, |count, data_file| {
+                count.checked_add(data_file.record_count()).ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(
+                        "Iceberg DELETE candidate row count overflow".to_string(),
+                    )
+                })
+            })?;
             let removed_data_file_paths = candidates
                 .iter()
                 .map(|data_file| data_file.file_path.clone())
@@ -783,11 +795,13 @@ impl IcebergTableProvider {
             (
                 self.scan_data_files(session, &store_ctx, candidates)?,
                 removed_data_file_paths,
+                candidate_row_count,
             )
         } else {
             (
                 Arc::new(EmptyExec::new(self.arrow_schema.clone())) as Arc<dyn ExecutionPlan>,
                 vec![],
+                0,
             )
         };
         let survivor_plan = Self::retain_delete_survivors(session, candidate_scan, condition)?;
@@ -797,7 +811,7 @@ impl IcebergTableProvider {
             table_exists: true,
             options: writer_options,
         };
-        IcebergPlanBuilder::new(
+        let commit_plan = IcebergPlanBuilder::new(
             survivor_plan,
             table_config,
             PhysicalSinkMode::Append,
@@ -808,7 +822,24 @@ impl IcebergTableProvider {
         .with_expected_snapshot_id(expected_snapshot_id)
         .with_rewrite_data_files(removed_data_file_paths, crate::spec::Operation::Delete)
         .build()
-        .await
+        .await?;
+
+        // The writer/commit plan returns the number of survivor rows rewritten.
+        // Spark DELETE must instead report affected rows. Every row in a candidate
+        // data file is either emitted as a survivor or matched by the predicate,
+        // so candidate rows minus rewritten survivors is the exact delete count,
+        // including conservative metric-pruning false positives.
+        let affected_count: Arc<dyn PhysicalExpr> = Arc::new(PhysicalBinaryExpr::new(
+            Arc::new(PhysicalLiteral::new(ScalarValue::UInt64(Some(
+                candidate_row_count,
+            )))),
+            Operator::Minus,
+            Arc::new(Column::new("count", 0)),
+        ));
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![(affected_count, "count".to_string())],
+            commit_plan,
+        )?))
     }
 }
 
@@ -1653,11 +1684,19 @@ mod tests {
                 IcebergWriterExecOptions::default(),
             )
             .await?;
-        let commit = plan.downcast_ref::<IcebergCommitExec>().ok_or_else(|| {
+        let projection = plan.downcast_ref::<ProjectionExec>().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
-                "delete plan root must be IcebergCommitExec".to_string(),
+                "delete plan root must project the affected row count".to_string(),
             )
         })?;
+        let commit = projection
+            .input()
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "delete count projection input must be IcebergCommitExec".to_string(),
+                )
+            })?;
 
         assert!(commit.removed_data_file_paths().is_empty());
         Ok(())
@@ -1675,11 +1714,19 @@ mod tests {
         let plan = provider
             .build_cow_delete_plan(&context.state(), None, IcebergWriterExecOptions::default())
             .await?;
-        let commit = plan.downcast_ref::<IcebergCommitExec>().ok_or_else(|| {
+        let projection = plan.downcast_ref::<ProjectionExec>().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
-                "delete plan root must be IcebergCommitExec".to_string(),
+                "delete plan root must project the affected row count".to_string(),
             )
         })?;
+        let commit = projection
+            .input()
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "delete count projection input must be IcebergCommitExec".to_string(),
+                )
+            })?;
 
         assert_eq!(commit.expected_snapshot_id(), Some(None));
         assert_eq!(
