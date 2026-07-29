@@ -86,7 +86,6 @@ impl TimestampParser {
         let parsed = match format.parse_datetime_value(value) {
             Ok(v) => v,
             Err(_e) if is_try => return Ok(None),
-            Err(e) if is_invalid_leap_second(&e) => return Ok(None),
             Err(e) => return Err(e),
         };
         match self {
@@ -127,12 +126,6 @@ impl TimestampParser {
         };
         self.localize(datetime, timezone, safe)
     }
-}
-
-fn is_invalid_leap_second(error: &datafusion_common::DataFusionError) -> bool {
-    error
-        .to_string()
-        .contains("valid leap second must be 23:59:60")
 }
 
 /// Spark-compatible `to_timestamp` / `try_to_timestamp` (and their `_ntz`

@@ -412,7 +412,7 @@ Feature: datetime parsing with format strings
         """
       Then query result
         | hour_1              | hour_24             |
-        | 2026-06-15 01:30:45 | 2026-06-16 00:00:00 |
+        | 2026-06-15 01:30:45 | 2026-06-15 00:00:00 |
 
     Scenario: `to_timestamp` parses 23-hour clock with H (0-23)
       When query
@@ -425,16 +425,22 @@ Feature: datetime parsing with format strings
         | hour_0              | hour_23             |
         | 2026-06-15 00:30:45 | 2026-06-15 23:59:59 |
 
-    Scenario: `to_timestamp` distinguishes k and H at 24:00:00
+    Scenario: `to_timestamp` distinguishes k and H at 24:00:00: k succeeds
       When query
         """
-        SELECT
-          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd k:mm:ss') AS clock_hour_24,
-          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss') AS hour_24
+        SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd k:mm:ss') AS clock_hour_24
         """
       Then query result
-        | clock_hour_24       | hour_24             |
-        | 2026-06-16 00:00:00 | 2026-06-16 00:00:00 |
+        | clock_hour_24       |
+        | 2026-06-15 00:00:00 |
+
+    Scenario: `to_timestamp` distinguishes k and H at 24:00:00: H errors in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss')
+        """
+      Then query error .*
 
   Rule: Width variation parsing for month patterns
 
@@ -596,13 +602,12 @@ Feature: datetime parsing with format strings
         | `to_timestamp` errors on non-leap year Feb 29 | 2023-02-29           | yyyy-MM-dd          |
 
     Scenario: `to_timestamp` errors on invalid second
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('2026-06-15 14:30:60', 'yyyy-MM-dd HH:mm:ss') AS result
+        SELECT to_timestamp('2026-06-15 14:30:60', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query result
-        | result |
-        | NULL   |
+      Then query error .*
 
   Rule: Timezone parsing variations
 
@@ -858,23 +863,21 @@ Feature: datetime parsing with format strings
         | us_date             | eu_date             | iso_date            |
         | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
 
-    Scenario: `to_timestamp` handles 24:00:00 as next day midnight
+    Scenario: `to_timestamp` rejects H=24 at 24:00:00 in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss') AS midnight_next
+        SELECT to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query result
-        | midnight_next       |
-        | 2026-06-16 00:00:00 |
+      Then query error .*
 
-    Scenario: `to_timestamp` handles leap second 23:59:60
+    Scenario: `to_timestamp` rejects leap second 23:59:60 in ANSI mode
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('2026-06-15 23:59:60', 'yyyy-MM-dd HH:mm:ss') AS leap_second
+        SELECT to_timestamp('2026-06-15 23:59:60', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query result
-        | leap_second         |
-        | 2026-06-16 00:00:00 |
+      Then query error .*
 
     Scenario: `to_timestamp` parses with Thai Buddhist calendar
       When query

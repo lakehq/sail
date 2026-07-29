@@ -1,5 +1,5 @@
 use chrono::format::Parsed;
-use chrono::{Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Weekday};
+use chrono::{Datelike, FixedOffset, NaiveDate, NaiveDateTime, Weekday};
 use datafusion_common::{Result, exec_datafusion_err};
 
 use super::locale::LocaleData;
@@ -28,9 +28,6 @@ struct ParseState {
     milli_of_day: Option<u32>,
     nano_of_day: Option<u64>,
     timezone: Option<String>,
-    /// Flag indicating hour was 24 (midnight of next day)
-    hour_24: Option<bool>,
-    leap_second: bool,
 }
 
 impl DateTimeFormat {
@@ -499,28 +496,16 @@ impl ParseState {
     fn resolve(mut self) -> Result<ParsedDateTime> {
         self.resolve_sail_fields()?;
         self.apply_defaults()?;
-        let add_day = self.hour_24.unwrap_or(false);
-        let mut date = self
+        let date = self
             .parsed
             .to_naive_date()
             .map_err(|e| exec_datafusion_err!("invalid parsed date: {e}"))?;
-        if add_day {
-            date = date.succ_opt().unwrap_or(date);
-        }
         validate_week_of_month(&self, date)?;
-        let mut datetime = date.and_time(
+        let datetime = date.and_time(
             self.parsed
                 .to_naive_time()
                 .map_err(|e| exec_datafusion_err!("invalid parsed time: {e}"))?,
         );
-        if self.leap_second {
-            if datetime.hour() != 23 || datetime.minute() != 59 {
-                return Err(exec_datafusion_err!(
-                    "Invalid value for SecondOfMinute (valid leap second must be 23:59:60)"
-                ));
-            }
-            datetime += Duration::seconds(1);
-        }
         let date = datetime.date();
         let time = datetime.time();
         let offset = self
@@ -571,9 +556,6 @@ impl ParseState {
                 return Err(exec_datafusion_err!(
                     "Invalid value for ClockHourOfDay (valid values 1 - 24): {hour}"
                 ));
-            }
-            if hour == 24 {
-                self.hour_24 = Some(true);
             }
             self.set_hour(if hour == 24 { 0 } else { hour as i32 })?;
         }
@@ -810,13 +792,12 @@ fn parse_field_spec(
         DateTimeField::AmPmOfDay => parse_am_pm(value, position, locale, state),
         DateTimeField::HourOfDay => parse_number(value, position, number_bounds(spec.width, 2))
             .and_then(|(next, hour)| {
-                if hour == 24 {
-                    // Hour 24 means midnight of the next day
-                    state.hour_24 = Some(true);
-                    state.set_hour(0)?;
-                } else {
-                    state.set_hour(hour)?;
+                if !(0..24).contains(&hour) {
+                    return Err(exec_datafusion_err!(
+                        "Invalid value for HourOfDay (valid values 0 - 23): {hour}"
+                    ));
                 }
+                state.set_hour(hour)?;
                 Ok(next)
             }),
         DateTimeField::ClockHourOfDay => {
@@ -849,17 +830,12 @@ fn parse_field_spec(
         DateTimeField::SecondOfMinute => {
             parse_number(value, position, number_bounds(spec.width, 2)).and_then(
                 |(next, second)| {
-                    if !(0..=60).contains(&second) {
+                    if !(0..60).contains(&second) {
                         return Err(exec_datafusion_err!(
-                            "Invalid value for SecondOfMinute (valid values 0 - 60): {second}"
+                            "Invalid value for SecondOfMinute (valid values 0 - 59): {second}"
                         ));
                     }
-                    if second == 60 {
-                        state.leap_second = true;
-                        state.set_second(59)?;
-                    } else {
-                        state.set_second(second)?;
-                    }
+                    state.set_second(second)?;
                     Ok(next)
                 },
             )
