@@ -30,6 +30,7 @@ use sail_iceberg::physical_plan::IcebergCommitExec;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -461,6 +462,7 @@ fn plan_job_graph_stages(
         || subtree.plan.is::<FileDeleteExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
+        || subtree.plan.is::<RemoteCheckpointCommitExec>()
     {
         if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
             subtree.into_planned_subtree()
@@ -611,6 +613,7 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
         || plan.is::<FileDeleteExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
+        || plan.is::<RemoteCheckpointCommitExec>()
 }
 
 fn wrap_pending_scalar_subqueries(
@@ -912,6 +915,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
     use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
@@ -931,6 +935,7 @@ mod tests {
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::JobGraph;
@@ -1004,6 +1009,34 @@ mod tests {
             [StageInput {
                 stage: 0,
                 mode: InputMode::Rescale,
+            }]
+        ));
+    }
+
+    #[test]
+    fn test_job_graph_places_remote_checkpoint_commit_on_driver() {
+        let schema = schema();
+        let commit = Arc::new(RemoteCheckpointCommitExec::new(
+            empty_plan(),
+            "relation".to_string(),
+            ObjectStoreUrl::parse("memory://").unwrap(),
+            object_store::path::Path::from("checkpoint/session/relation"),
+            Arc::clone(&schema),
+            schema,
+            Partitioning::UnknownPartitioning(1),
+            None,
+        ));
+
+        let graph = JobGraph::try_new(commit).unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
+        assert!(graph.stages()[0].plan.is::<RemoteCheckpointCommitExec>());
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Forward,
             }]
         ));
     }
