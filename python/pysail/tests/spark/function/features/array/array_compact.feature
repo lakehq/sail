@@ -13,13 +13,14 @@ Feature: array_compact() removes null values from an array
         | <result> |
 
       Examples:
-        | case                                     | arr                                         | result    |
-        | removes null values from integer array   | array(1, NULL, 2, NULL, 3)                  | [1, 2, 3] |
-        | removes null values from string array    | array('a', NULL, 'b', NULL, 'c')            | [a, b, c] |
-        | with no null values returns same array   | array(1, 2, 3)                              | [1, 2, 3] |
-        | with all null values returns empty array | array(CAST(NULL AS INT), CAST(NULL AS INT)) | []        |
-        | with null at beginning                   | array(NULL, 1, 2, 3)                        | [1, 2, 3] |
-        | with null at end                         | array(1, 2, 3, NULL)                        | [1, 2, 3] |
+        | case                                         | arr                                         | result    |
+        | removes null values from integer array       | array(1, NULL, 2, NULL, 3)                  | [1, 2, 3] |
+        | removes null values from string array        | array('a', NULL, 'b', NULL, 'c')            | [a, b, c] |
+        | with no null values returns same array       | array(1, 2, 3)                              | [1, 2, 3] |
+        | with all null values returns empty array     | array(CAST(NULL AS INT), CAST(NULL AS INT)) | []        |
+        | with untyped null values returns empty array | array(NULL, NULL)                           | []        |
+        | with null at beginning                       | array(NULL, 1, 2, 3)                        | [1, 2, 3] |
+        | with null at end                             | array(1, 2, 3, NULL)                        | [1, 2, 3] |
 
   Rule: Empty array handling
 
