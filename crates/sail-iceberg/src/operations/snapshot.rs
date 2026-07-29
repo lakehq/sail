@@ -279,17 +279,28 @@ impl<'a> SnapshotProducer<'a> {
 
     pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
-        let is_overwrite = op.operation() == Operation::Overwrite.as_str();
+        let operation = match op.operation() {
+            "append" => Operation::Append,
+            "replace" => Operation::Replace,
+            "overwrite" => Operation::Overwrite,
+            "delete" => Operation::Delete,
+            operation => return Err(format!("unsupported snapshot operation: {operation}")),
+        };
+        let is_overwrite = matches!(operation, Operation::Overwrite);
         let deleted_data_file_paths = op
             .deleted_data_file_paths_for_rewrite()
             .map(|paths| paths.iter().cloned().collect::<HashSet<_>>());
+        let is_rewrite = deleted_data_file_paths.is_some();
+        if is_rewrite && matches!(operation, Operation::Append) {
+            return Err("selective manifest rewrite cannot use an append operation".to_string());
+        }
         if deleted_data_file_paths
             .as_ref()
             .is_some_and(HashSet::is_empty)
+            && self.added_data_files.is_empty()
         {
-            return Err("rewrite requires at least one data file path to delete".to_string());
+            return Err("rewrite requires at least one data file addition or deletion".to_string());
         }
-        let is_rewrite = deleted_data_file_paths.is_some();
 
         // Build manifest metadata: prefer caller-provided metadata derived from table schema/spec
         // Fall back to deriving from the current transaction snapshot if not provided
@@ -411,11 +422,7 @@ impl<'a> SnapshotProducer<'a> {
             (parent_manifest_entries, 0, 0, 0, 0)
         };
 
-        let mut summary = if is_overwrite {
-            crate::spec::snapshots::Summary::new(Operation::Overwrite)
-        } else {
-            crate::spec::snapshots::Summary::new(Operation::Append)
-        };
+        let mut summary = crate::spec::snapshots::Summary::new(operation);
         if is_rewrite {
             let total_data_files = parent_live_files
                 .checked_sub(deleted_files)
@@ -1102,6 +1109,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rewrite_paths_reject_append_operation() {
+        struct AppendWithRewritePaths {
+            paths: Vec<String>,
+        }
+
+        impl SnapshotProduceOperation for AppendWithRewritePaths {
+            fn operation(&self) -> &'static str {
+                Operation::Append.as_str()
+            }
+
+            fn deleted_data_file_paths_for_rewrite(&self) -> Option<&[String]> {
+                Some(&self.paths)
+            }
+        }
+
+        let fixture = single_file_parent("memory://rewrite-operation-test/table/").await;
+        let result = SnapshotProducer::new(
+            &fixture.tx,
+            vec![],
+            Some(fixture.store_ctx),
+            Some(fixture.manifest_metadata),
+        )
+        .with_write_path_mode(WritePathMode::Relative)
+        .commit(AppendWithRewritePaths {
+            paths: vec![fixture.live_file.file_path],
+        })
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(message) if message.contains("cannot use an append operation")
+        ));
+    }
+
+    #[tokio::test]
+    async fn rewrite_paths_preserve_delete_snapshot_operation() {
+        struct DeleteWithRewritePaths {
+            paths: Vec<String>,
+        }
+
+        impl SnapshotProduceOperation for DeleteWithRewritePaths {
+            fn operation(&self) -> &'static str {
+                Operation::Delete.as_str()
+            }
+
+            fn deleted_data_file_paths_for_rewrite(&self) -> Option<&[String]> {
+                Some(&self.paths)
+            }
+        }
+
+        let fixture = single_file_parent("memory://rewrite-delete-operation-test/table/").await;
+        let action_commit = SnapshotProducer::new(
+            &fixture.tx,
+            vec![],
+            Some(fixture.store_ctx),
+            Some(fixture.manifest_metadata),
+        )
+        .with_write_path_mode(WritePathMode::Relative)
+        .commit(DeleteWithRewritePaths {
+            paths: vec![fixture.live_file.file_path],
+        })
+        .await
+        .unwrap();
+        let operation = action_commit
+            .updates()
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::AddSnapshot { snapshot } => Some(&snapshot.summary.operation),
+                _ => None,
+            });
+
+        assert_eq!(operation, Some(&Operation::Delete));
+    }
+
+    #[tokio::test]
+    async fn rewrite_files_rejects_empty_additions_and_deletions() {
+        let fixture = single_file_parent("memory://rewrite-empty-test/table/").await;
+        let result = SnapshotProducer::new(
+            &fixture.tx,
+            vec![],
+            Some(fixture.store_ctx),
+            Some(fixture.manifest_metadata),
+        )
+        .with_write_path_mode(WritePathMode::Relative)
+        .commit(RewriteFilesOperation::new(vec![]))
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(message) if message.contains("at least one data file addition or deletion")
+        ));
+    }
+
+    #[tokio::test]
+    async fn rewrite_files_supports_add_only_overwrite() {
+        let fixture = single_file_parent("memory://rewrite-add-only-test/table/").await;
+        let new_file = data_file("data/new.parquet", 2, 200);
+        let action_commit = SnapshotProducer::new(
+            &fixture.tx,
+            vec![new_file],
+            Some(fixture.store_ctx.clone()),
+            Some(fixture.manifest_metadata),
+        )
+        .with_write_path_mode(WritePathMode::Relative)
+        .commit(RewriteFilesOperation::new(vec![]))
+        .await
+        .unwrap();
+
+        let new_snapshot = action_commit
+            .updates()
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .unwrap();
+        for (key, expected) in [
+            ("added-data-files", "1"),
+            ("deleted-data-files", "0"),
+            ("added-records", "2"),
+            ("deleted-records", "0"),
+            ("total-data-files", "2"),
+            ("total-records", "3"),
+        ] {
+            assert_eq!(
+                new_snapshot
+                    .summary
+                    .additional_properties
+                    .get(key)
+                    .map(String::as_str),
+                Some(expected)
+            );
+        }
+
+        let manifest_list = load_manifest_list(&fixture.store_ctx, new_snapshot.manifest_list())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 2);
+    }
+
+    #[tokio::test]
     async fn rewrite_files_rejects_paths_not_live_without_writing_orphan_manifests() {
         let fixture = single_file_parent("memory://rewrite-missing-test/table/").await;
 
@@ -1179,6 +1327,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(manifest_list.entries().len(), 1);
+        assert_eq!(manifest_list.entries()[0].min_sequence_number, 2);
         let manifest = load_manifest(
             &fixture.store_ctx,
             &manifest_list.entries()[0].manifest_path,
