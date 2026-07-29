@@ -133,6 +133,48 @@ Feature: datetime format strings
         | `date_format` formats with era                       | DATE '2026-06-15'                         | 'GGGG yyyy-MM-dd'               | Anno Domini 2026-06-15        |
         | `date_format` formats with day of year               | DATE '2026-06-15'                         | 'yyyy-DDD'                      | 2026-166                      |
 
+  Rule: Java offset pattern formatting semantics
+
+    Scenario: Offset pattern semantics formats UTC with X and x widths 1 through 5
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'X') AS upper_1,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'XX') AS upper_2,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'XXX') AS upper_3,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'XXXX') AS upper_4,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'XXXXX') AS upper_5,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'x') AS lower_1,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'xx') AS lower_2,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'xxx') AS lower_3,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'xxxx') AS lower_4,
+          date_format(TIMESTAMP '2026-06-15 14:30:45', 'xxxxx') AS lower_5
+        """
+      Then query result
+        | upper_1 | upper_2 | upper_3 | upper_4 | upper_5 | lower_1 | lower_2 | lower_3 | lower_4 | lower_5 |
+        | Z       | Z       | Z       | Z       | Z       | +00     | +0000   | +00:00  | +0000   | +00:00  |
+
+    Scenario: Offset pattern semantics formats a historical second-precision offset
+      Given config spark.sql.session.timeZone = Europe/Paris
+      When query
+        """
+        SELECT
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'X') AS upper_1,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'XX') AS upper_2,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'XXX') AS upper_3,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'XXXX') AS upper_4,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'XXXXX') AS upper_5,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'x') AS lower_1,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'xx') AS lower_2,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'xxx') AS lower_3,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'xxxx') AS lower_4,
+          date_format(TIMESTAMP '1900-01-01 12:00:00', 'xxxxx') AS lower_5
+        """
+      Then query result
+        | upper_1 | upper_2 | upper_3 | upper_4 | upper_5  | lower_1 | lower_2 | lower_3 | lower_4 | lower_5  |
+        | +0009   | +0009   | +00:09  | +000921 | +00:09:21 | +0009   | +0009   | +00:09  | +000921 | +00:09:21 |
+
   Rule: Width variation tests for month patterns
 
     Background:

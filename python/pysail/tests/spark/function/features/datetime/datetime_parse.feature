@@ -526,27 +526,56 @@ Feature: datetime parsing with format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario: `to_timestamp` parses zone offset with X (Z for zero)
+    Scenario Outline: Offset pattern semantics parses X and x width <case> to the same instant
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT
-          to_timestamp('2026-06-15 14:30:45Z', 'yyyy-MM-dd HH:mm:ssX') AS offset_z,
-          to_timestamp('2026-06-15 14:30:45+02', 'yyyy-MM-dd HH:mm:ssX') AS offset_02
+          to_timestamp('<local><upper_offset>', 'yyyy-MM-dd HH:mm:ss<upper>') AS upper_result,
+          to_timestamp('<local><lower_offset>', 'yyyy-MM-dd HH:mm:ss<lower>') AS lower_result
         """
       Then query result
-        | offset_z            | offset_02           |
-        | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
+        | upper_result        | lower_result        |
+        | 2026-06-15 12:00:45 | 2026-06-15 12:00:45 |
 
-    Scenario: `to_timestamp` parses zone offset with x (+00 for zero)
+      Examples:
+        | case                            | local               | upper_offset | upper | lower_offset | lower |
+        | 1 zero                          | 2026-06-15 12:00:45 | Z            | X     | +00          | x     |
+        | 1 hour only                     | 2026-06-15 14:00:45 | +02          | X     | +02          | x     |
+        | 1 with minute                   | 2026-06-15 14:30:45 | +0230        | X     | +0230        | x     |
+        | 2                               | 2026-06-15 14:30:45 | +0230        | XX    | +0230        | xx    |
+        | 3                               | 2026-06-15 14:30:45 | +02:30       | XXX   | +02:30       | xxx   |
+        | 4 with second                   | 2026-06-15 14:31:00 | +023015      | XXXX  | +023015      | xxxx  |
+        | 5 with second                   | 2026-06-15 14:31:00 | +02:30:15    | XXXXX | +02:30:15    | xxxxx |
+
+    Scenario Outline: Offset pattern semantics rejects invalid offset components and ranges: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 12:00:45<offset>', 'yyyy-MM-dd HH:mm:ss<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                              | offset    | fmt   |
+        | minute component 60               | +01:60    | XXX   |
+        | second component 60               | +01:00:60 | XXXXX |
+        | positive offset beyond +18:00      | +19:00    | XXX   |
+        | negative offset beyond -18:00      | -18:01    | XXX   |
+
+    Scenario: Offset pattern semantics try_to_timestamp returns NULL for invalid offsets
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT
-          to_timestamp('2026-06-15 14:30:45+00', 'yyyy-MM-dd HH:mm:ssx') AS offset_00,
-          to_timestamp('2026-06-15 14:30:45+02', 'yyyy-MM-dd HH:mm:ssx') AS offset_02
+          try_to_timestamp('2026-06-15 12:00:45+01:60', 'yyyy-MM-dd HH:mm:ssXXX') AS minute_60,
+          try_to_timestamp('2026-06-15 12:00:45+01:00:60', 'yyyy-MM-dd HH:mm:ssXXXXX') AS second_60,
+          try_to_timestamp('2026-06-15 12:00:45+19:00', 'yyyy-MM-dd HH:mm:ssXXX') AS hour_19,
+          try_to_timestamp('2026-06-15 12:00:45-18:01', 'yyyy-MM-dd HH:mm:ssXXX') AS past_negative_limit
         """
       Then query result
-        | offset_00           | offset_02           |
-        | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
+        | minute_60 | second_60 | hour_19 | past_negative_limit |
+        | NULL      | NULL      | NULL    | NULL                |
 
     Scenario: `to_timestamp` parses zone offset with Z
       When query

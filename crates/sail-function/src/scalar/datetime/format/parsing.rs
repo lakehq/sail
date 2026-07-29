@@ -326,10 +326,47 @@ fn parse_offset(
             .ok_or_else(|| exec_datafusion_err!("invalid UTC offset seconds: 0"))?;
         return Ok((position + 1, offset));
     }
-    let colon = count >= 3;
-    let include_seconds = count >= 4;
-    let require_minutes = count != 1;
-    parse_numeric_offset(value, position, colon, include_seconds, require_minutes)
+    parse_iso_offset(value, position, count)
+}
+
+fn parse_iso_offset(value: &str, position: usize, count: usize) -> Result<(usize, FixedOffset)> {
+    let sign = parse_offset_sign(value, position)?;
+    let (mut next, hours) = parse_number(value, position + 1, (2, 2))?;
+    let mut minutes = 0;
+    let mut seconds = 0;
+
+    match count {
+        1 => {
+            if matches!(value.as_bytes().get(next), Some(b'0'..=b'9')) {
+                (next, minutes) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        2 => (next, minutes) = parse_number(value, next, (2, 2))?,
+        3 => {
+            next = consume_literal(value, next, ":")?;
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+        }
+        4 => {
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+            if matches!(value.as_bytes().get(next), Some(b'0'..=b'9')) {
+                (next, seconds) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        5 => {
+            next = consume_literal(value, next, ":")?;
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+            if value[next..].starts_with(':') {
+                next += 1;
+                (next, seconds) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        _ => unreachable!("offset pattern width is validated when the pattern is parsed"),
+    }
+
+    Ok((
+        next,
+        fixed_offset_from_components(sign, hours, minutes, seconds)?,
+    ))
 }
 
 fn parse_localized_offset(value: &str, position: usize) -> Result<(usize, FixedOffset)> {
@@ -354,21 +391,10 @@ fn parse_numeric_offset(
     include_seconds: bool,
     require_minutes: bool,
 ) -> Result<(usize, FixedOffset)> {
-    let sign = match value.as_bytes().get(position) {
-        Some(b'+') => 1,
-        Some(b'-') => -1,
-        _ => {
-            return Err(exec_datafusion_err!(
-                "expected offset sign at byte offset {position}"
-            ));
-        }
-    };
+    let sign = parse_offset_sign(value, position)?;
     let (mut next, hours) = parse_number(value, position + 1, (2, 2))?;
     if !require_minutes && !matches!(value.as_bytes().get(next), Some(b'0'..=b'9') | Some(b':')) {
-        let total = sign * hours * 3600;
-        let offset = FixedOffset::east_opt(total)
-            .ok_or_else(|| exec_datafusion_err!("invalid datetime offset seconds: {total}"))?;
-        return Ok((next, offset));
+        return Ok((next, fixed_offset_from_components(sign, hours, 0, 0)?));
     }
     if colon {
         next = consume_literal(value, next, ":")?;
@@ -384,10 +410,47 @@ fn parse_numeric_offset(
         next = parsed.0;
         seconds = parsed.1;
     }
+    Ok((
+        next,
+        fixed_offset_from_components(sign, hours, minutes, seconds)?,
+    ))
+}
+
+fn parse_offset_sign(value: &str, position: usize) -> Result<i32> {
+    match value.as_bytes().get(position) {
+        Some(b'+') => Ok(1),
+        Some(b'-') => Ok(-1),
+        _ => Err(exec_datafusion_err!(
+            "expected offset sign at byte offset {position}"
+        )),
+    }
+}
+
+fn fixed_offset_from_components(
+    sign: i32,
+    hours: i32,
+    minutes: i32,
+    seconds: i32,
+) -> Result<FixedOffset> {
+    if !(0..60).contains(&minutes) {
+        return Err(exec_datafusion_err!(
+            "invalid datetime offset minute component: {minutes}"
+        ));
+    }
+    if !(0..60).contains(&seconds) {
+        return Err(exec_datafusion_err!(
+            "invalid datetime offset second component: {seconds}"
+        ));
+    }
+    if hours > 18 || (hours == 18 && (minutes != 0 || seconds != 0)) {
+        return Err(exec_datafusion_err!(
+            "datetime offset exceeds the valid range of -18:00 to +18:00"
+        ));
+    }
     let total = sign * (hours * 3600 + minutes * 60 + seconds);
     let offset = FixedOffset::east_opt(total)
         .ok_or_else(|| exec_datafusion_err!("invalid datetime offset seconds: {total}"))?;
-    Ok((next, offset))
+    Ok(offset)
 }
 
 fn parse_zone_name(value: &str, position: usize) -> Result<(usize, String)> {
@@ -855,12 +918,17 @@ fn parse_zone_spec(
     state: &mut ParseState,
 ) -> Result<usize> {
     match spec.kind {
-        ZoneField::Offset => {
+        ZoneField::IsoOffset => {
             parse_offset(value, position, spec.width, spec.zero_as_z).and_then(|(next, offset)| {
                 state.set_offset(offset)?;
                 Ok(next)
             })
         }
+        ZoneField::Rfc822Offset => parse_numeric_offset(value, position, false, false, true)
+            .and_then(|(next, offset)| {
+                state.set_offset(offset)?;
+                Ok(next)
+            }),
         ZoneField::LocalizedOffset => {
             parse_localized_offset(value, position).and_then(|(next, offset)| {
                 state.set_offset(offset)?;

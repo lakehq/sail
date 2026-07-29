@@ -130,7 +130,8 @@ pub(crate) struct ZoneSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ZoneField {
-    Offset,
+    IsoOffset,
+    Rfc822Offset,
     LocalizedOffset,
     ZoneId,
     ZoneName,

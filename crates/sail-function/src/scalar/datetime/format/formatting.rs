@@ -142,9 +142,16 @@ fn format_offset(
         output.push('Z');
         return;
     }
-    let include_colon = count >= 3;
-    let include_seconds = count >= 4;
-    push_offset(seconds, include_colon, include_seconds, output);
+    let minutes = seconds.abs() % 3600 / 60;
+    let offset_seconds = seconds.abs() % 60;
+    match count {
+        1 => push_offset(seconds, false, minutes != 0, false, output),
+        2 => push_offset(seconds, false, true, false, output),
+        3 => push_offset(seconds, true, true, false, output),
+        4 => push_offset(seconds, false, true, offset_seconds != 0, output),
+        5 => push_offset(seconds, true, true, offset_seconds != 0, output),
+        _ => unreachable!("offset pattern width is validated when the pattern is parsed"),
+    }
 }
 
 fn format_localized_offset(
@@ -157,10 +164,22 @@ fn format_localized_offset(
     if seconds == 0 {
         return;
     }
-    push_offset(seconds, count == 4, count == 4 && seconds % 60 != 0, output);
+    push_offset(
+        seconds,
+        count == 4,
+        true,
+        count == 4 && seconds % 60 != 0,
+        output,
+    );
 }
 
-fn push_offset(seconds: i32, colon: bool, include_seconds: bool, output: &mut String) {
+fn push_offset(
+    seconds: i32,
+    colon: bool,
+    include_minutes: bool,
+    include_seconds: bool,
+    output: &mut String,
+) {
     let sign = if seconds < 0 { '-' } else { '+' };
     let seconds = seconds.abs();
     let hours = seconds / 3600;
@@ -168,10 +187,12 @@ fn push_offset(seconds: i32, colon: bool, include_seconds: bool, output: &mut St
     let seconds = seconds % 60;
     output.push(sign);
     push_exact_padded(hours as i64, 2, output);
-    if colon {
-        output.push(':');
+    if include_minutes {
+        if colon {
+            output.push(':');
+        }
+        push_exact_padded(minutes as i64, 2, output);
     }
-    push_exact_padded(minutes as i64, 2, output);
     if include_seconds {
         if colon {
             output.push(':');
@@ -397,8 +418,15 @@ fn format_fraction_spec(spec: &FractionSpec, input: DateTimeFormatInput<'_>, out
 
 fn format_zone_spec(spec: &ZoneSpec, input: DateTimeFormatInput<'_>, output: &mut String) {
     match spec.kind {
-        ZoneField::Offset => {
+        ZoneField::IsoOffset => {
             format_offset(input.timezone, spec.width, spec.zero_as_z, output);
+        }
+        ZoneField::Rfc822Offset => {
+            let seconds = input
+                .timezone
+                .map(|tz| tz.offset.local_minus_utc())
+                .unwrap_or(0);
+            push_offset(seconds, false, true, false, output);
         }
         ZoneField::LocalizedOffset => {
             format_localized_offset(input.timezone, spec.width, output);

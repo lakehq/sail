@@ -386,7 +386,7 @@ fn build_field_item(symbol: char, count: usize, pattern_use: PatternUse) -> Resu
             sign_style: SignStyle::NotNegative,
         })),
         'X' | 'x' => Ok(DateTimeItem::Zone(ZoneSpec {
-            kind: ZoneField::Offset,
+            kind: ZoneField::IsoOffset,
             width: count,
             zero_as_z: symbol == 'X',
             style: match count {
@@ -398,8 +398,10 @@ fn build_field_item(symbol: char, count: usize, pattern_use: PatternUse) -> Resu
         'Z' => Ok(DateTimeItem::Zone(ZoneSpec {
             kind: if count == 4 {
                 ZoneField::LocalizedOffset
+            } else if count == 5 {
+                ZoneField::IsoOffset
             } else {
-                ZoneField::Offset
+                ZoneField::Rfc822Offset
             },
             width: count,
             zero_as_z: count == 5,
