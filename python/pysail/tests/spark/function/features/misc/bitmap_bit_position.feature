@@ -39,3 +39,24 @@ Feature: bitmap_bit_position output schema
         root
          |-- result: long (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: bitmap_bit_position loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT bitmap_bit_position(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = <nullable>)
+        """
+
+      Examples:
+        | case             | input             | nullable |
+        | no cast          | 1                 | false    |
+        | DOUBLE -> BIGINT | CAST(1 AS DOUBLE) | true     |

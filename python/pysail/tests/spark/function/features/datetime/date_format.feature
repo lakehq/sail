@@ -75,3 +75,38 @@ Feature: date_format with an argument coming from a column
         root
          |-- result: string (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: date_format without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT date_format(<input>'2024-01-15 10:00:00', 'yyyy-MM') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+      Examples:
+        | case    | input      |
+        | no cast | TIMESTAMP  |
+
+    Scenario Outline: date_format through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT date_format(<input>'2024-01-15 10:00:00', 'yyyy-MM') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case                | input |
+        | STRING -> TIMESTAMP |       |

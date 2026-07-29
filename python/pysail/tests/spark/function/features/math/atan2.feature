@@ -38,3 +38,38 @@ Feature: atan2 output schema
         root
          |-- result: double (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: atan2 without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT atan2(<input>, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 0     |
+
+    Scenario Outline: atan2 through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT atan2(<input>, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+      Examples:
+        | case             | input |
+        | STRING -> DOUBLE | '0'   |
