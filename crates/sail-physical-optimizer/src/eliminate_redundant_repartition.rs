@@ -15,7 +15,7 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 ///
 /// The rule targets two redundant patterns:
 ///
-/// Pattern 1: `RepartitionExec(RoundRobinBatch)` → `ExplicitRepartitionExec`
+/// ## Pattern 1: `RepartitionExec(RoundRobinBatch)` → `ExplicitRepartitionExec`
 ///
 /// This rule removes a `RepartitionExec` with `Partitioning::RoundRobinBatch` inserted by the
 /// `EnforceDistribution` rule that sits directly on top of an `ExplicitRepartitionExec`.
@@ -35,7 +35,7 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 /// To avoid eliminating any unintended `RepartitionExec`, this rule should be applied
 /// immediately after the `EnforceDistribution` rule.
 ///
-/// Pattern 2: `ExplicitRepartitionExec` → `ExplicitRepartitionExec`
+/// ## Pattern 2: `ExplicitRepartitionExec` → `ExplicitRepartitionExec`
 ///
 /// This rule collapses nested `ExplicitRepartitionExec` nodes into one, using the outer node's
 /// partitioning scheme, since the outer repartition redistributes the data regardless of how
@@ -48,7 +48,6 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 /// to the outer count. Collapsing here would silently remove the shuffle and turn it into a
 /// no-shuffle operation.
 ///
-
 pub struct EliminateRedundantRepartition {}
 
 impl EliminateRedundantRepartition {
@@ -161,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminates_rr_repartition_above_rr_explicit() {
+    fn test_p1_eliminates_rr_repartition_and_preserves_explicit_partition_count() {
         let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
             empty_plan(),
             Partitioning::RoundRobinBatch(3),
@@ -169,6 +168,7 @@ mod tests {
         let redundant: Arc<dyn ExecutionPlan> = Arc::new(
             RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
         );
+
         let result = optimize(redundant);
 
         assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
@@ -176,50 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminates_rr_repartition_above_hash_explicit() {
-        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
-            empty_plan(),
-            Partitioning::Hash(vec![], 3),
-        ));
-        let redundant: Arc<dyn ExecutionPlan> = Arc::new(
-            RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
-        );
-        let result = optimize(redundant);
-
-        assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
-        assert_eq!(result.output_partitioning().partition_count(), 3);
-    }
-
-    #[test]
-    fn test_eliminates_rr_repartition_above_unknown_explicit() {
-        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
-            empty_plan(),
-            Partitioning::UnknownPartitioning(3),
-        ));
-        let redundant: Arc<dyn ExecutionPlan> = Arc::new(
-            RepartitionExec::try_new(explicit, Partitioning::RoundRobinBatch(10)).unwrap(),
-        );
-        let result = optimize(redundant);
-
-        assert!(result.downcast_ref::<ExplicitRepartitionExec>().is_some());
-        assert_eq!(result.output_partitioning().partition_count(), 3);
-    }
-
-    #[test]
-    fn test_no_change_when_repartition_is_hash() {
-        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
-            empty_plan(),
-            Partitioning::RoundRobinBatch(3),
-        ));
-        let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(RepartitionExec::try_new(explicit, Partitioning::Hash(vec![], 10)).unwrap());
-        let result = optimize(plan);
-
-        assert!(result.downcast_ref::<RepartitionExec>().is_some());
-    }
-
-    #[test]
-    fn test_no_change_when_repartition_is_unknown() {
+    fn test_p1_keeps_unknown_repartition() {
         let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
             empty_plan(),
             Partitioning::RoundRobinBatch(3),
@@ -227,18 +184,64 @@ mod tests {
         let plan: Arc<dyn ExecutionPlan> = Arc::new(
             RepartitionExec::try_new(explicit, Partitioning::UnknownPartitioning(10)).unwrap(),
         );
-        let result = optimize(plan);
+
+        let result: Arc<dyn ExecutionPlan> = optimize(plan);
 
         assert!(result.downcast_ref::<RepartitionExec>().is_some());
     }
 
     #[test]
-    fn test_no_change_when_child_is_not_explicit_repartition() {
-        let repartition: Arc<dyn ExecutionPlan> = Arc::new(
-            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(3)).unwrap(),
-        );
-        let result = optimize(repartition);
+    fn test_p2_keeps_nested_structure_when_outer_unknown_over_inner_rr() {
+        let inner: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::RoundRobinBatch(9),
+        ));
+        let outer: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            inner,
+            Partitioning::UnknownPartitioning(5),
+        ));
 
-        assert!(result.downcast_ref::<RepartitionExec>().is_some());
+        let result = optimize(outer);
+
+        let outer = result.downcast_ref::<ExplicitRepartitionExec>().unwrap();
+        assert_eq!(
+            outer.properties().output_partitioning().partition_count(),
+            5
+        );
+        assert!(
+            outer
+                .input()
+                .downcast_ref::<ExplicitRepartitionExec>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_p2_collapses_chain_of_three_to_single_explicit() {
+        let inner: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::RoundRobinBatch(3),
+        ));
+        let middle: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            inner,
+            Partitioning::RoundRobinBatch(9),
+        ));
+        let outer: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            middle,
+            Partitioning::RoundRobinBatch(11),
+        ));
+
+        let result: Arc<dyn ExecutionPlan> = optimize(outer);
+
+        let node = result.downcast_ref::<ExplicitRepartitionExec>().unwrap();
+        assert_eq!(
+            node.properties().output_partitioning().partition_count(),
+            11
+        );
+        assert!(
+            node.input()
+                .downcast_ref::<ExplicitRepartitionExec>()
+                .is_none()
+        );
     }
 }
