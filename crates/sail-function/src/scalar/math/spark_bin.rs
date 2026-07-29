@@ -56,13 +56,13 @@ impl ScalarUDFImpl for SparkBin {
         )
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+    // Spark: `Bin` casts its input to LONG. Both `String -> Long` (Cast.scala:458) and
+    // fractional-to-integral (Cast.scala:471) are force-nullable, so `bin('13')` and
+    // `bin(13.3)` are nullable in Spark. Sail keeps those inputs and converts inside the
+    // UDF, so the coercion-induced nullability is not visible here.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         // `bin` is null-intolerant, so nullability follows the input.
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Utf8,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
-        )))
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

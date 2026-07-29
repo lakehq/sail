@@ -70,6 +70,10 @@ impl ScalarUDFImpl for SparkToChar {
         )
     }
 
+    // Spark: `ToCharacter` casts the value to DECIMAL, and both `String -> Decimal`
+    // (Cast.scala:458) and a non-null-safe `_ -> Decimal` (Cast.scala:470) are
+    // force-nullable, so `to_char('12', '99')` and `to_char(CAST(12 AS DOUBLE), '99')` are
+    // nullable in Spark. Sail keeps those inputs and converts inside the UDF.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_types = args
             .arg_fields
@@ -79,7 +83,7 @@ impl ScalarUDFImpl for SparkToChar {
         Ok(Arc::new(Field::new(
             self.name(),
             self.output_type(&data_types)?,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            true,
         )))
     }
 

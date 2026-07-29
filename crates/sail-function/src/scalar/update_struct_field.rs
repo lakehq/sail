@@ -178,8 +178,10 @@ impl ScalarUDFImpl for UpdateStructField {
         )
     }
 
-    // Spark: `UpdateFields` declares `nullable = children.exists(_.nullable)`
-    // (complexTypeCreator.scala:720).
+    // Spark: `UpdateFields` declares `override def nullable: Boolean = structExpr.nullable`
+    // (complexTypeCreator.scala:755) — only the struct being updated decides. A nullable
+    // replacement value changes the nested field's nullability but cannot make a non-null
+    // input struct null, so this must not derive from all the arguments.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
@@ -188,10 +190,13 @@ impl ScalarUDFImpl for UpdateStructField {
             .collect::<Vec<_>>();
         let arg_types = arg_types.as_slice();
         let data_type = self.output_type(arg_types)?;
+        let [struct_field, ..] = args.arg_fields else {
+            return internal_err!("{} requires at least 1 argument", self.name());
+        };
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            struct_field.is_nullable(),
         )))
     }
 

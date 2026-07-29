@@ -63,6 +63,7 @@ Feature: to_varchar with an argument coming from a column
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null numeric literal yields a non-nullable string
       When query
         """
@@ -88,7 +89,6 @@ Feature: to_varchar with an argument coming from a column
     # Spark reports `true` here because CAST(... AS DECIMAL) is nullable (it can
     # overflow); Sail's CAST reports non-nullable, so `to_varchar` faithfully
     # propagates the wrong input nullability. The bug is in CAST, not here.
-    @sail-bug
     Scenario: a non-null numeric column yields a non-nullable string
       When query
         """

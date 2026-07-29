@@ -609,6 +609,7 @@ Feature: abs comprehensive tests
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -620,6 +621,7 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
@@ -640,4 +642,32 @@ Feature: abs comprehensive tests
         """
         root
          |-- result: integer (nullable = true)
+        """
+
+  Rule: Nullability through Spark's implicit casts
+
+    # The pair below is the whole point: same value, different nullability.
+    # Sail cannot tell them apart because `return_field_from_args` only sees the
+    # type AFTER coercion, so it reports nullable for both.
+    @sail-bug
+    Scenario: abs without a cast is non-nullable, because the argument is already numeric
+      When query
+        """
+        SELECT abs(-5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DOUBLE
+      When query
+        """
+        SELECT abs('13') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
         """

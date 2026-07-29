@@ -313,6 +313,7 @@ Feature: year
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null date literal yields a non-nullable integer
       When query
         """
@@ -324,6 +325,7 @@ Feature: year
          |-- result: integer (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null date column yields a non-nullable integer
       When query
         """
@@ -339,6 +341,34 @@ Feature: year
       When query
         """
         SELECT year(c) AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+  Rule: Nullability through Spark's implicit casts
+
+    # The pair below is the whole point: same value, different nullability.
+    # Sail cannot tell them apart because `return_field_from_args` only sees the
+    # type AFTER coercion, so it reports nullable for both.
+    @sail-bug
+    Scenario: year without a cast is non-nullable, because the argument is already a DATE
+      When query
+        """
+        SELECT year(DATE '2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DATE
+      When query
+        """
+        SELECT year('2024-01-15') AS result
         """
       Then query schema
         """

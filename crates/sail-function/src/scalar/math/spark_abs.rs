@@ -78,6 +78,10 @@ impl ScalarUDFImpl for SparkAbs {
         )
     }
 
+    // Spark: `Abs` derives from its child, but a STRING input is implicitly cast to DOUBLE
+    // and `Cast.forceNullable(StringType, _)` is true (Cast.scala:458), so `abs('13')` is
+    // nullable in Spark in both ANSI modes. Sail's coercion keeps `nullable = false` and the
+    // original type is gone here, so deriving would be unsound.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // `abs` is null-intolerant, so nullability follows the input.
         let data_types = args
@@ -88,7 +92,7 @@ impl ScalarUDFImpl for SparkAbs {
         Ok(Arc::new(Field::new(
             self.name(),
             self.output_type(&data_types)?,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            true,
         )))
     }
 

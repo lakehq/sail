@@ -51,11 +51,15 @@ impl ScalarUDFImpl for SparkMakeYmInterval {
 
     // Spark: `MakeYMInterval` is a `BinaryExpression` with no `nullable` override
     // (intervalExpressions.scala:576).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+    // Spark: `MakeYMInterval` derives from its children, but STRING arguments are implicitly
+    // cast to INT and `Cast.forceNullable(StringType, _)` is true (Cast.scala:458), so
+    // `make_ym_interval('1', '2')` is nullable in Spark. DataFusion keeps `nullable = false`
+    // through that coercion, so deriving here would be unsound.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Interval(IntervalUnit::YearMonth),
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            true,
         )))
     }
 

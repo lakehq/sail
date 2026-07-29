@@ -190,6 +190,7 @@ Feature: unary minus (negative) honors ANSI overflow semantics
          |-- result: integer (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """
@@ -210,4 +211,30 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         """
         root
          |-- result: integer (nullable = true)
+        """
+
+  Rule: Nullability through Spark's implicit casts
+
+    # Here the literal is constant-folded before the UDF runs, so Sail agrees.
+    # With a string argument (below) the fold cannot happen and the divergence shows.
+    Scenario: negative without a cast is non-nullable, because the argument is already numeric
+      When query
+        """
+        SELECT negative(5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DOUBLE
+      When query
+        """
+        SELECT negative('13') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
         """

@@ -60,12 +60,14 @@ macro_rules! define_interval_udf {
                 )
             }
 
-            // String-to-interval conversion behind `CAST(string AS INTERVAL)`: the kernel maps
-            // null to null and raises on an unparsable value rather than yielding NULL, so
-            // nullability follows the input.
-            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-                Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
+            // These implement `CAST(string AS INTERVAL)`, and Spark's `Cast.nullable` is
+            // `child.nullable || Cast.forceNullable(from, to)` (Cast.scala:656).
+            // `Cast.forceNullable` is true for every `String -> non-string` cast
+            // (Cast.scala:458), so Spark declares all three interval cast forms nullable
+            // regardless of the input. Deriving from the kernel's error behaviour instead
+            // would report a non-null literal as non-nullable.
+            fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+                Ok(Arc::new(Field::new(self.name(), $return_type, true)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

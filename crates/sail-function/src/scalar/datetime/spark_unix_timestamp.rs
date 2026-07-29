@@ -53,12 +53,12 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
 
     // Spark: `ToUnixTimestamp` declares `nullable = children.exists(_.nullable)` via
     // `UnixTime` (datetimeExpressions.scala:1045).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Int64,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
-        )))
+    // Spark: `ToTimestamp.nullable` is `if (failOnError) children.exists(_.nullable) else
+    // true` (datetimeExpressions.scala:1302), and `failOnError` follows `spark.sql.ansi.
+    // enabled`. With ANSI off a non-null malformed string still yields NULL, and this UDF
+    // does not carry the ANSI flag, so the only sound answer here is nullable.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

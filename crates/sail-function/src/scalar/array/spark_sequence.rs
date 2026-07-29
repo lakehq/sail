@@ -66,8 +66,12 @@ impl ScalarUDFImpl for SparkSequence {
         )
     }
 
-    // Spark: `Sequence` declares `nullable = children.exists(_.nullable)`
-    // (collectionOperations.scala:3301).
+    // Spark: `Sequence` derives from its children, but the children include the implicit cast
+    // that `coerce_types` below also performs, and `Cast.forceNullable` is true for
+    // `String -> Date` (Cast.scala:465). DataFusion keeps `nullable = false` through that
+    // coercion and the original type is gone by the time this hook runs, so
+    // `sequence(DATE '2020-01-01', '2020-01-03')` would be reported non-nullable while Spark
+    // reports true.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
@@ -76,11 +80,7 @@ impl ScalarUDFImpl for SparkSequence {
             .collect::<Vec<_>>();
         let arg_types = arg_types.as_slice();
         let data_type = self.output_type(arg_types)?;
-        Ok(Arc::new(Field::new(
-            self.name(),
-            data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
-        )))
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

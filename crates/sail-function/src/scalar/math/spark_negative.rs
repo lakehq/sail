@@ -73,6 +73,10 @@ impl ScalarUDFImpl for SparkNegative {
         )
     }
 
+    // Spark: `UnaryMinus` derives from its child, but a STRING input is implicitly cast to
+    // DOUBLE and `Cast.forceNullable(StringType, _)` is true (Cast.scala:458) even under
+    // ANSI, so `negative('13')` is nullable in Spark. The ANSI path wraps the string in a
+    // plain `Cast` whose field keeps `nullable = false`, so deriving here would be unsound.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // `negative` is null-intolerant, so nullability follows the input.
         // `self.inner` does not override this hook, so delegating would inherit
@@ -85,7 +89,7 @@ impl ScalarUDFImpl for SparkNegative {
         Ok(Arc::new(Field::new(
             self.name(),
             self.inner.return_type(&data_types)?,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            true,
         )))
     }
 

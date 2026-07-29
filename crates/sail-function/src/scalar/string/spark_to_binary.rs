@@ -51,10 +51,33 @@ impl ScalarUDFImpl for SparkToBinary {
         )
     }
 
-    // Spark: `ToBinary`'s replacement is format-dependent and the default `hex` resolves to
-    // `Unhex`, which is `nullable = true` (stringExpressions.scala:3249).
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
+    // Spark: `ToBinary` is `RuntimeReplaceable` and its nullability comes from the
+    // format-dependent replacement (stringExpressions.scala:3249): `hex` and the
+    // single-argument form resolve to `Unhex` and `utf-8` to `Encode`, both nullable, while
+    // `base64` resolves to `UnBase64`, a null-intolerant `UnaryExpression` with no `nullable`
+    // override, so that branch follows the input.
+    //
+    // `simplify` below rewrites the call for execution, but the output field is resolved from
+    // this hook beforehand, so the branch has to be made here: delegating to the simplified
+    // expression would report `to_binary(.., 'base64')` nullable while `unbase64` is not.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let format = args
+            .scalar_arguments
+            .get(1)
+            .copied()
+            .flatten()
+            .and_then(|value| value.try_as_str())
+            .flatten()
+            .map(|format| format.trim().to_lowercase());
+        let nullable = match format.as_deref() {
+            Some("base64") => args.arg_fields.iter().any(|field| field.is_nullable()),
+            _ => true,
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Binary,
+            nullable,
+        )))
     }
 
     // This will only be called by TryToBinary

@@ -30,6 +30,7 @@ Feature: to_unix_timestamp with an argument coming from a column
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null literal input to to_unix_timestamp yields the schema Spark declares
       When query
         """
@@ -41,6 +42,7 @@ Feature: to_unix_timestamp with an argument coming from a column
          |-- result: long (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null column input to to_unix_timestamp yields the schema Spark declares
       When query
         """

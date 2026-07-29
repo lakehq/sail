@@ -62,6 +62,7 @@ Feature: to_char with an argument coming from a column
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null numeric literal yields a non-nullable string
       When query
         """
@@ -87,7 +88,6 @@ Feature: to_char with an argument coming from a column
     # Spark reports `true`: CAST(... AS DECIMAL) is nullable (it can overflow).
     # Sail's CAST reports non-nullable, and `to_char` now propagates it faithfully,
     # so the divergence surfaces here. The bug is in CAST, not in `to_char`.
-    @sail-bug
     Scenario: a non-null numeric column yields a non-nullable string
       When query
         """
@@ -1367,3 +1367,42 @@ Feature: to_char with an argument coming from a column
         SELECT to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING)) AS r
         """
       Then query error (?i).*
+
+  Rule: Nullability through Spark's implicit casts
+
+    # The pair below is the whole point: same value, different nullability.
+    # Sail cannot tell them apart because `return_field_from_args` only sees the
+    # type AFTER coercion, so it reports nullable for both.
+    @sail-bug
+    Scenario: to_char without a cast is non-nullable, because the value is already numeric
+      When query
+        """
+        SELECT to_char(12, '99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a non-null string value is nullable, because Spark casts it to DECIMAL
+      When query
+        """
+        SELECT to_char('12', '99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a non-null double value is nullable, because Spark's cast to DECIMAL is force-nullable
+      When query
+        """
+        SELECT to_char(CAST(12 AS DOUBLE), '99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """

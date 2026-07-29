@@ -55,12 +55,12 @@ impl ScalarUDFImpl for SparkYear {
 
     // Spark: `Year` is a `UnaryExpression` via `GetDateField` with no `nullable` override
     // (datetimeExpressions.scala:803).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Int32,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
-        )))
+    // Spark: `Year` derives from its child, but a STRING input is implicitly cast to DATE
+    // and `Cast.forceNullable(StringType, DateType)` is true (Cast.scala:458). The
+    // pre-coercion type is not visible here, so deriving would report `year('2024-01-15')`
+    // non-nullable where Spark reports true.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

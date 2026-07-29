@@ -533,6 +533,7 @@ Feature: last_day comprehensive tests
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null date literal yields a date
       When query
         """
@@ -544,6 +545,7 @@ Feature: last_day comprehensive tests
          |-- result: date (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null date column yields a date
       When query
         """
@@ -559,6 +561,34 @@ Feature: last_day comprehensive tests
       When query
         """
         SELECT last_day(c) AS result FROM VALUES (DATE '2024-01-15'), (CAST(NULL AS DATE)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+  Rule: Nullability through Spark's implicit casts
+
+    # The pair below is the whole point: same value, different nullability.
+    # Sail cannot tell them apart because `return_field_from_args` only sees the
+    # type AFTER coercion, so it reports nullable for both.
+    @sail-bug
+    Scenario: last_day without a cast is non-nullable, because the argument is already a DATE
+      When query
+        """
+        SELECT last_day(DATE '2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DATE
+      When query
+        """
+        SELECT last_day('2024-01-15') AS result
         """
       Then query schema
         """

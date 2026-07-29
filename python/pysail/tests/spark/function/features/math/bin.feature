@@ -199,6 +199,7 @@ Feature: bin converts integral values to binary strings
   @spark_null
   Rule: Output schema
 
+    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable string
       When query
         """
@@ -210,6 +211,7 @@ Feature: bin converts integral values to binary strings
          |-- result: string (nullable = false)
         """
 
+    @sail-bug
     Scenario: a non-null integer column yields a non-nullable string
       When query
         """
@@ -225,6 +227,45 @@ Feature: bin converts integral values to binary strings
       When query
         """
         SELECT bin(c) AS result FROM VALUES (5), (CAST(NULL AS INT)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+  Rule: Nullability through Spark's implicit casts
+
+    # The pair below is the whole point: same value, different nullability.
+    # Sail cannot tell them apart because `return_field_from_args` only sees the
+    # type AFTER coercion, so it reports nullable for both.
+    @sail-bug
+    Scenario: bin without a cast is non-nullable, because the argument is already an INT
+      When query
+        """
+        SELECT bin(5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to LONG
+      When query
+        """
+        SELECT bin('13') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: a fractional input is nullable, because Spark's cast to LONG is force-nullable
+      When query
+        """
+        SELECT bin(13.3) AS result
         """
       Then query schema
         """

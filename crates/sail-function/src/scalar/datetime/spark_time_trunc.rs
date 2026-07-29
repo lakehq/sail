@@ -58,11 +58,15 @@ impl ScalarUDFImpl for SparkTimeTrunc {
     }
 
     // Spark: `TimeTrunc` has no `nullable` override (timeExpressions.scala:740).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+    // Spark: `TimeTrunc` is `RuntimeReplaceable` (timeExpressions.scala:740), so its
+    // nullability comes from the replacement, not from `BinaryExpression`. The replacement
+    // is a `StaticInvoke` with the default `returnNullable = true`, so the result is always
+    // nullable.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Time64(TimeUnit::Microsecond),
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            true,
         )))
     }
 

@@ -55,12 +55,13 @@ impl ScalarUDFImpl for SparkLastDay {
 
     // Spark: `LastDay` is a `UnaryExpression` with no `nullable` override
     // (datetimeExpressions.scala:1530).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Date32,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
-        )))
+    // Spark: `LastDay` derives from its child, but a STRING input is implicitly cast to
+    // DATE and `Cast.forceNullable(StringType, DateType)` is true (Cast.scala:458). Sail's
+    // `coerce_types` performs the same cast while DataFusion keeps `nullable = false`, and
+    // the pre-coercion type is not visible here, so deriving would report
+    // `last_day('2024-01-15')` non-nullable where Spark reports true.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

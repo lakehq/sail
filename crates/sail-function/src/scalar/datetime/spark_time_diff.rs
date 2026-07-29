@@ -64,12 +64,12 @@ impl ScalarUDFImpl for SparkTimeDiff {
 
     // Spark: `TimeDiff` is a `TernaryExpression` with no `nullable` override
     // (timeExpressions.scala:679).
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Int64,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
-        )))
+    // Spark: `TimeDiff` is `RuntimeReplaceable` (timeExpressions.scala:683), so its
+    // nullability comes from the replacement, not from `TernaryExpression`. The replacement
+    // is a `StaticInvoke` with the default `returnNullable = true`, so the result is always
+    // nullable.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
