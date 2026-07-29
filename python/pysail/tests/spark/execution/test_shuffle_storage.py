@@ -51,7 +51,7 @@ def test_query_execution_with_storage_shuffle(spark, snapshot):
         .orderBy("g")
     )
 
-    plan = normalize_plan_text(df._explain_string())  # noqa: SLF001
+    plan = normalize_plan_text(df._explain_string(mode="codegen"))  # noqa: SLF001
     assert plan == snapshot
 
     actual = df.toPandas()
