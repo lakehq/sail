@@ -247,10 +247,16 @@ impl IcebergWriterExec {
                 .map_err(|e| DataFusionError::Plan(format!("Invalid Iceberg data path: {e}")))?,
         };
 
-        if data_url.scheme() != table_url.scheme() || data_url.authority() != table_url.authority()
-        {
+        // TODO: Remove this restriction once readers resolve each file URI through its object store.
+        let schemes_are_compatible = data_url.scheme() == table_url.scheme()
+            || matches!(
+                (table_url.scheme(), data_url.scheme()),
+                ("s3", "s3a") | ("s3a", "s3")
+            );
+        if !schemes_are_compatible || data_url.authority() != table_url.authority() {
             return Err(DataFusionError::Plan(format!(
-                "Iceberg data path must use the same object store as the table location: {data_url}"
+                "Iceberg data path {data_url} must use the same object store as table location \
+                 {table_url}"
             )));
         }
 
