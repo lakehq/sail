@@ -7,14 +7,15 @@ use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
-use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_server::actor::ActorSystem;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::job_graph::JobGraph;
+use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
+use crate::job_graph::{JobGraph, JobGraphOptions};
+use crate::shuffle::ShuffleBackendKind;
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -77,13 +78,22 @@ impl JobRunner for LocalJobRunner {
 }
 
 pub struct ClusterJobRunner {
-    driver: ActorHandle<DriverActor>,
+    driver: DriverHandle,
+    shuffle_backend: ShuffleBackendKind,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
-        let driver = system.spawn(options);
-        Self { driver }
+        let shuffle_backend = options.shuffle_backend.clone();
+        let driver = DriverHandle::new(system.spawn::<DriverActor>(options));
+        Self {
+            driver,
+            shuffle_backend,
+        }
+    }
+
+    pub fn driver(&self) -> DriverHandle {
+        self.driver.clone()
     }
 }
 
@@ -105,9 +115,17 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        JobGraph::try_new(plan)
-            .map(|graph| Some(graph.to_string()))
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+        JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                use_blocking_shuffle: matches!(
+                    &self.shuffle_backend,
+                    ShuffleBackendKind::Storage { .. }
+                ),
+            },
+        )
+        .map(|graph| Some(graph.to_string()))
+        .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.

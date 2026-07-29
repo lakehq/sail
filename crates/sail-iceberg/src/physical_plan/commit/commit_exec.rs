@@ -43,7 +43,7 @@ use crate::operations::bootstrap::{
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotUpdateKind, Transaction, TransactionAction};
-use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
+use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -376,6 +376,33 @@ impl IcebergCommitExec {
     fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
         table_metadata_location(table_url, metadata_file)
     }
+
+    fn merge_writer_commit_meta(
+        accumulated: &mut Option<CommitMeta>,
+        mut incoming: CommitMeta,
+    ) -> Result<()> {
+        let Some(existing) = accumulated.as_mut() else {
+            *accumulated = Some(incoming);
+            return Ok(());
+        };
+
+        let incoming_row_count = incoming.row_count;
+        incoming.row_count = existing.row_count;
+        if existing != &incoming {
+            return Err(DataFusionError::Internal(
+                "inconsistent commit_meta actions from Iceberg writer partitions".to_string(),
+            ));
+        }
+        existing.row_count = existing
+            .row_count
+            .checked_add(incoming_row_count)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Iceberg writer row count overflow across partitions".to_string(),
+                )
+            })?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -456,8 +483,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
                 added_data_files.extend(adds);
                 added_delete_files.extend(deletes);
-                if meta.is_some() {
-                    commit_meta = meta;
+                if let Some(meta) = meta {
+                    Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
                 }
             }
 

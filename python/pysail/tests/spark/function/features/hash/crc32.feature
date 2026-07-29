@@ -1,0 +1,38 @@
+@crc32
+Feature: crc32 output schema
+
+  @spark_null
+  Rule: Output schema
+
+    Scenario: a non-null literal input to crc32 yields the schema Spark declares
+      When query
+        """
+        SELECT crc32('Spark') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: a non-null column input to crc32 yields the schema Spark declares
+      When query
+        """
+        SELECT crc32(CAST(id AS STRING)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
+
+    Scenario: a nullable column input to crc32 stays nullable
+      When query
+        """
+        SELECT crc32(c) AS result FROM VALUES ('Spark'), (CAST(NULL AS STRING)) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """

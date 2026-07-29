@@ -3,39 +3,43 @@ syntax = "proto3";
 package sail.driver;
 
 message RegisterWorkerRequest {
-  uint64 worker_id = 1;
-  string host = 2;
-  uint32 port = 3;
+  uint64 driver_id = 1;
+  uint64 worker_id = 2;
+  string host = 3;
+  uint32 port = 4;
 }
 
 message RegisterWorkerResponse {
 }
 
 message ReportWorkerHeartbeatRequest {
-  uint64 worker_id = 1;
+  uint64 driver_id = 1;
+  uint64 worker_id = 2;
 }
 
 message ReportWorkerHeartbeatResponse {
 }
 
 message ReportWorkerKnownPeersRequest {
-  uint64 worker_id = 1;
-  repeated uint64 peer_worker_ids = 2;
+  uint64 driver_id = 1;
+  uint64 worker_id = 2;
+  repeated uint64 peer_worker_ids = 3;
 }
 
 message ReportWorkerKnownPeersResponse {
 }
 
 message ReportTaskStatusRequest {
-  uint64 job_id = 1;
-  uint64 stage = 2;
-  uint64 partition = 3;
-  uint64 attempt = 4;
-  TaskStatus status = 5;
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+  uint64 stage = 3;
+  uint64 partition = 4;
+  uint64 attempt = 5;
+  TaskStatus status = 6;
   // An optional explanation of the task status.
-  optional string message = 6;
+  optional string message = 7;
   // An optional JSON string that contains the cause of the task failure.
-  optional string cause = 7;
+  optional string cause = 8;
   uint64 sequence = 101;
 }
 

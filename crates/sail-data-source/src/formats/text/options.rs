@@ -15,6 +15,7 @@ impl TextReadOptions {
         let TextReadOptions {
             whole_text,
             line_sep,
+            path_glob_filter: _,
         } = self;
         // Validate that line_sep (if set) is a valid ASCII byte character
         if let Some(c) = line_sep {

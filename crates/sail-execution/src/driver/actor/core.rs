@@ -1,8 +1,5 @@
 use std::collections::HashMap;
-use std::mem;
 
-use fastrace::Span;
-use fastrace::future::FutureExt;
 use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
@@ -10,7 +7,6 @@ use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::rpc::ServerMonitor;
 use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
 
@@ -33,7 +29,6 @@ impl Actor for DriverActor {
         let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
-            server: ServerMonitor::new(),
             worker_pool,
             job_scheduler,
             task_assigner,
@@ -44,23 +39,9 @@ impl Actor for DriverActor {
         }
     }
 
-    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
-        let addr = (
-            self.options.driver_listen_host.clone(),
-            self.options.driver_listen_port,
-        );
-        let server = mem::take(&mut self.server);
-        let span = Span::enter_with_local_parent("DriverActor::serve");
-        self.server = server
-            .start(Self::serve(ctx.handle().clone(), addr).in_span(span))
-            .await;
-    }
-
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {
         match message {
-            DriverEvent::ServerReady { port, signal } => {
-                self.handle_server_ready(ctx, port, signal)
-            }
+            DriverEvent::Activate => self.handle_activate(ctx),
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
@@ -107,11 +88,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             DriverEvent::CreateRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
             DriverEvent::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
@@ -122,11 +103,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
             DriverEvent::FetchRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
             DriverEvent::Shutdown { history } => self.handle_shutdown(ctx, history),
         }
@@ -141,8 +122,6 @@ impl Actor for DriverActor {
         if let Some(history) = self.history.take() {
             let _ = history.send(self.build_history());
         }
-        info!("stopping driver server");
-        self.server.stop().await;
-        info!("driver server has stopped");
+        info!("driver {} has stopped", self.options.driver_id);
     }
 }

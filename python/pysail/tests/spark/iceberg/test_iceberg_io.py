@@ -158,7 +158,7 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_iceberg_io_rejects_external_write_data_path_without_side_effects(spark, tmp_path):
+def test_iceberg_merge_honors_external_write_data_path(spark, tmp_path):
     table_path = tmp_path / "iceberg_external_write_path"
     external_data_path = tmp_path / "external_data"
     table_name = "iceberg_external_write_path_test"
@@ -171,18 +171,30 @@ def test_iceberg_io_rejects_external_write_data_path_without_side_effects(spark,
             USING ICEBERG
             LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
             TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read',
               'write.data.path' = '{escape_sql_string_literal(external_data_path.as_uri())}'
             )
             """
         )
-        before_metadata = latest_iceberg_metadata(table_path)
+        spark.sql(f"INSERT INTO {table_name} VALUES (1), (2)")  # noqa: S608
+        spark.sql("CREATE OR REPLACE TEMP VIEW iceberg_external_write_source AS SELECT * FROM VALUES (1), (3) AS t(id)")
+        spark.sql(
+            """
+            MERGE INTO iceberg_external_write_path_test AS target
+            USING iceberg_external_write_source AS source
+            ON target.id = source.id
+            WHEN MATCHED THEN UPDATE SET id = source.id + 10
+            WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)
+            """
+        )
 
-        with pytest.raises(Exception, match=r"external Iceberg write paths are not supported"):
-            spark.sql(f"INSERT INTO {table_name} VALUES (1)").collect()  # noqa: S608
-
-        assert latest_iceberg_metadata(table_path) == before_metadata
+        rows = spark.sql(f"SELECT id FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert [row.id for row in rows] == [2, 3, 11]
         assert not list(table_path.rglob("*.parquet"))
-        assert not list(external_data_path.rglob("*.parquet"))
+        external_files = list(external_data_path.rglob("*.parquet"))
+        assert any(path.name.startswith("part-") for path in external_files)
+        assert any(path.name.startswith("delete-") for path in external_files)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 

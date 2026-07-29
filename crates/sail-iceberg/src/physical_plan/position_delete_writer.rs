@@ -140,21 +140,14 @@ impl PositionDeleteAccumulator {
 
     pub(crate) async fn finish(
         self,
-        store_ctx: &StoreContext,
-        table_url: &Url,
-        data_dir: &str,
+        data_store_ctx: &StoreContext,
+        data_url: &Url,
     ) -> Result<Vec<DataFile>> {
         let mut delete_files = Vec::with_capacity(self.rows_by_file.len());
         for rows in self.rows_by_file.into_values() {
             delete_files.push(
-                write_position_delete_file(
-                    store_ctx,
-                    table_url,
-                    data_dir,
-                    &rows.target,
-                    &rows.positions,
-                )
-                .await?,
+                write_position_delete_file(data_store_ctx, data_url, &rows.target, &rows.positions)
+                    .await?,
             );
         }
         Ok(delete_files)
@@ -195,9 +188,8 @@ const POSITION_DELETE_FILE_PATH_ID: &str = "2147483546";
 const POSITION_DELETE_POS_ID: &str = "2147483545";
 
 async fn write_position_delete_file(
-    store_ctx: &StoreContext,
-    table_url: &Url,
-    data_dir: &str,
+    data_store_ctx: &StoreContext,
+    data_url: &Url,
     target: &PositionDeleteTarget,
     positions: &BTreeSet<i64>,
 ) -> Result<DataFile> {
@@ -221,9 +213,8 @@ async fn write_position_delete_file(
         .await
         .map_err(DataFusionError::Execution)?;
     let mut delete_file = delete_writer_common::write_delete_parquet_file(
-        store_ctx,
-        table_url,
-        data_dir,
+        data_store_ctx,
+        data_url,
         "delete",
         writer,
         target.partition_spec_id,

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pyspark.sql import SparkSession
 
 
 def _latest_metadata(base: Path) -> dict:
@@ -28,6 +34,69 @@ def _physical_name_for_column(metadata: dict, column_name: str) -> str:
             return field.get("metadata", {}).get("delta.columnMapping.physicalName", column_name)
     message = f"column {column_name!r} not found in schema"
     raise AssertionError(message)
+
+
+def _latest_added_parquet_files(base: Path) -> list[Path]:
+    for log_file in sorted((base / "_delta_log").glob("*.json"), reverse=True):
+        added = []
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if "add" in action and action["add"]["path"].endswith(".parquet"):
+                    added.append(base / unquote(action["add"]["path"]))
+        if added:
+            return added
+    return []
+
+
+def _assert_parquet_struct_matches_delta(
+    arrow_type: pa.Schema | pa.StructType,
+    delta_type: dict,
+) -> None:
+    for delta_field in delta_type["fields"]:
+        metadata = delta_field["metadata"]
+        physical_name = metadata["delta.columnMapping.physicalName"]
+        arrow_field = arrow_type.field(physical_name)
+        arrow_metadata = {key.decode(): value.decode() for key, value in (arrow_field.metadata or {}).items()}
+        assert arrow_metadata["PARQUET:field_id"] == str(metadata["delta.columnMapping.id"])
+
+        nested_type = delta_field["type"]
+        if not isinstance(nested_type, dict):
+            continue
+        if nested_type["type"] == "struct":
+            _assert_parquet_struct_matches_delta(arrow_field.type, nested_type)
+        elif nested_type["type"] == "array" and isinstance(nested_type["elementType"], dict):
+            element_type = nested_type["elementType"]
+            if element_type["type"] == "struct":
+                _assert_parquet_struct_matches_delta(
+                    arrow_field.type.value_type,
+                    element_type,
+                )
+        elif nested_type["type"] == "map":
+            key_type = nested_type["keyType"]
+            value_type = nested_type["valueType"]
+            if isinstance(key_type, dict) and key_type["type"] == "struct":
+                _assert_parquet_struct_matches_delta(arrow_field.type.key_type, key_type)
+            if isinstance(value_type, dict) and value_type["type"] == "struct":
+                _assert_parquet_struct_matches_delta(
+                    arrow_field.type.item_type,
+                    value_type,
+                )
+
+
+def _assert_parquet_files_match_delta_schema(
+    base: Path,
+    *,
+    latest_only: bool = False,
+) -> None:
+    delta_schema = json.loads(_latest_metadata(base)["schemaString"])
+    parquet_files = _latest_added_parquet_files(base) if latest_only else list(base.rglob("*.parquet"))
+    assert parquet_files
+    for parquet_file in parquet_files:
+        _assert_parquet_struct_matches_delta(
+            pq.ParquetFile(parquet_file).schema_arrow,
+            delta_schema,
+        )
 
 
 def test_create_table_with_column_mapping_name(spark, tmp_path: Path):
@@ -186,16 +255,90 @@ def test_merge_nested_struct_in_name_mode(spark, tmp_path: Path):
     ]
 
 
+def test_column_mapping_nested_struct_round_trip(spark, tmp_path: Path):
+    source_path = tmp_path / "delta_cm_nested_round_trip_source"
+    output_path = tmp_path / "delta_cm_nested_round_trip_output"
+    source_rows = [
+        Row(
+            id=1,
+            code="USD",
+            original_details=Row(amount=10, active=True),
+        )
+    ]
+
+    (
+        spark.createDataFrame(source_rows)
+        .write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", "name")
+        .save(str(source_path))
+    )
+
+    loaded = spark.read.format("delta").load(str(source_path))
+    assert [row.asDict(recursive=True) for row in loaded.collect()] == [
+        {
+            "id": 1,
+            "code": "USD",
+            "original_details": {"amount": 10, "active": True},
+        }
+    ]
+    assert loaded.select("original_details.amount").collect() == [Row(amount=10)]
+    _assert_parquet_files_match_delta_schema(source_path)
+
+    rebuilt = loaded.select(F.struct(F.col("id"), F.col("code")).alias("details"))
+    (rebuilt.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(output_path)))
+
+    result = spark.read.format("delta").load(str(output_path))
+    assert [row.asDict(recursive=True) for row in result.collect()] == [{"details": {"id": 1, "code": "USD"}}]
+    _assert_parquet_files_match_delta_schema(output_path)
+    target_schema = _latest_metadata(output_path)["schemaString"]
+    assert "PARQUET:field_id" not in target_schema
+    assert "parquet.field.id" not in target_schema
+
+
+def test_deep_nested_predicate_with_explicit_schema(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_deep_predicate"
+    rows = [
+        Row(id=1, payload=Row(level=Row(value=10))),
+        Row(id=2, payload=Row(level=Row(value=20))),
+    ]
+    source = spark.createDataFrame(rows)
+    (source.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    loaded = spark.read.schema(source.schema).format("delta").load(str(base))
+    filtered = loaded.where(F.col("payload.level.value") > F.lit(10)).collect()
+
+    assert [row.asDict(recursive=True) for row in filtered] == [{"id": 2, "payload": {"level": {"value": 20}}}]
+
+
+def test_nested_mapping_with_metadata_as_data_read(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_metadata_as_data"
+    rows = [
+        Row(id=1, payload=Row(level=Row(value=10))),
+        Row(id=2, payload=Row(level=Row(value=20))),
+    ]
+    source = spark.createDataFrame(rows)
+    (source.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    loaded = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(base)).orderBy("id")
+
+    assert [row.asDict(recursive=True) for row in loaded.collect()] == [
+        {"id": 1, "payload": {"level": {"value": 10}}},
+        {"id": 2, "payload": {"level": {"value": 20}}},
+    ]
+
+
 def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
     base = tmp_path / "delta_cm_array_struct"
     df = spark.createDataFrame([Row(events=[Row(ts=1)])])
-    df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+    (df.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
 
     df2 = spark.createDataFrame([Row(events=[Row(ts=2, kind="x")])])
     df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
 
     rows = [r.asDict(recursive=True) for r in spark.read.format("delta").load(str(base)).collect()]
-    assert any("kind" in ev for row in rows for ev in row.get("events", []) or [])
+    assert {"ts": 2, "kind": "x"} in [event for row in rows for event in row["events"]]
+    _assert_parquet_files_match_delta_schema(base, latest_only=True)
 
 
 def test_add_new_array_struct_field(spark, tmp_path: Path):
@@ -213,8 +356,8 @@ def test_add_new_array_struct_field(spark, tmp_path: Path):
     assert rows[1]["id"] == 2  # noqa: PLR2004
     assert isinstance(rows[1]["items"], list)
     assert len(rows[1]["items"]) == 1
-    # Do not assert nested field logical name to avoid coupling to physicalName mapping
-    assert list(rows[1]["items"][0].values()) == [10]
+    assert rows[1]["items"][0] == {"a": 10}
+    _assert_parquet_files_match_delta_schema(base, latest_only=True)
 
 
 def test_merge_map_value_struct(spark, tmp_path: Path):
@@ -225,8 +368,9 @@ def test_merge_map_value_struct(spark, tmp_path: Path):
     df2 = spark.createDataFrame([Row(attrs={"k": Row(a=2, b=3)})])
     df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
 
-    row = spark.read.format("delta").load(str(base)).collect()[0].asDict(recursive=True)
-    assert "b" in row["attrs"]["k"]
+    rows = [row.asDict(recursive=True) for row in spark.read.format("delta").load(str(base)).collect()]
+    assert {"k": {"a": 2, "b": 3}} in [row["attrs"] for row in rows]
+    _assert_parquet_files_match_delta_schema(base, latest_only=True)
 
 
 def test_partitioned_table_with_column_mapping_name(spark, tmp_path: Path):
@@ -378,3 +522,190 @@ def test_column_mapping_supports_special_characters_in_column_names(spark, tmp_p
 
     projected = out.selectExpr("`first.name`", "`name with space`", "`a,b`").collect()
     assert [row.asDict() for row in projected] == rows
+
+
+RENAMED_EXPECTED_ROWS = [
+    {"id": 1, "code": "alpha", "details": {"total": 10, "active": True}},
+    {"id": 2, "code": "beta", "details": {"total": 20, "active": False}},
+    {"id": 3, "code": "gamma", "details": {"total": 30, "active": True}},
+]
+
+
+def _collect_rows(df) -> list[dict]:
+    return sorted(
+        (row.asDict(recursive=True) for row in df.collect()),
+        key=lambda row: row["id"],
+    )
+
+
+def _rename_schema(schema: dict) -> dict:
+    renamed = json.loads(json.dumps(schema))
+    for field in renamed["fields"]:
+        if field["name"] == "label":
+            field["name"] = "code"
+        if field["name"] == "details":
+            for child in field["type"]["fields"]:
+                if child["name"] == "amount":
+                    child["name"] = "total"
+    return renamed
+
+
+def _append_metadata_only_rename(table_path: Path) -> None:
+    metadata = _latest_metadata(table_path)
+    original_schema = json.loads(metadata["schemaString"])
+    renamed_schema = _rename_schema(original_schema)
+
+    original_fields = {field["name"]: field["metadata"] for field in original_schema["fields"]}
+    renamed_fields = {field["name"]: field["metadata"] for field in renamed_schema["fields"]}
+    assert renamed_fields["code"] == original_fields["label"]
+    original_details = {field["name"]: field["metadata"] for field in original_schema["fields"][2]["type"]["fields"]}
+    renamed_details = {field["name"]: field["metadata"] for field in renamed_schema["fields"][2]["type"]["fields"]}
+    assert renamed_details["total"] == original_details["amount"]
+
+    log_dir = table_path / "_delta_log"
+    version = max(int(path.stem) for path in log_dir.glob("*.json")) + 1
+    renamed_metadata = {
+        **metadata,
+        "schemaString": json.dumps(renamed_schema, separators=(",", ":")),
+    }
+    actions = [
+        {
+            "commitInfo": {
+                "operation": "RENAME COLUMN",
+                "operationParameters": {
+                    "oldColumnPath": "label,details.amount",
+                    "newColumnPath": "code,details.total",
+                },
+                "readVersion": version - 1,
+                "isBlindAppend": True,
+            }
+        },
+        {"metaData": renamed_metadata},
+    ]
+    log_file = log_dir / f"{version:020}.json"
+    log_file.write_text(
+        "".join(f"{json.dumps(action, separators=(',', ':'))}\n" for action in actions),
+        encoding="utf-8",
+    )
+
+
+def _change_nested_physical_name(table_path: Path) -> None:
+    metadata = _latest_metadata(table_path)
+    schema = json.loads(metadata["schemaString"])
+    details = next(field for field in schema["fields"] if field["name"] == "details")
+    amount = next(field for field in details["type"]["fields"] if field["name"] == "amount")
+    amount["metadata"]["delta.columnMapping.physicalName"] = "missing-physical-name"
+
+    log_dir = table_path / "_delta_log"
+    version = max(int(path.stem) for path in log_dir.glob("*.json")) + 1
+    changed_metadata = {
+        **metadata,
+        "schemaString": json.dumps(schema, separators=(",", ":")),
+    }
+    actions = [
+        {
+            "commitInfo": {
+                "operation": "SET TBLPROPERTIES",
+                "readVersion": version - 1,
+                "isBlindAppend": True,
+            }
+        },
+        {"metaData": changed_metadata},
+    ]
+    (log_dir / f"{version:020}.json").write_text(
+        "".join(f"{json.dumps(action, separators=(',', ':'))}\n" for action in actions),
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def renamed_table(spark: SparkSession, tmp_path: Path) -> Path:
+    table_path = tmp_path / "renamed_column_mapping"
+    initial_rows = [
+        Row(id=1, label="alpha", details=Row(amount=10, active=True)),
+        Row(id=2, label="beta", details=Row(amount=20, active=False)),
+    ]
+    (
+        spark.createDataFrame(initial_rows)
+        .write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", "name")
+        .save(str(table_path))
+    )
+    _append_metadata_only_rename(table_path)
+
+    appended = [Row(id=3, code="gamma", details=Row(total=30, active=True))]
+    spark.createDataFrame(appended).write.format("delta").mode("append").save(str(table_path))
+    return table_path
+
+
+def test_reads_files_written_before_and_after_rename(
+    spark: SparkSession,
+    renamed_table: Path,
+):
+    df = spark.read.format("delta").load(str(renamed_table))
+
+    assert _collect_rows(df) == RENAMED_EXPECTED_ROWS
+    assert sorted(row.total for row in df.select("details.total").collect()) == [
+        10,
+        20,
+        30,
+    ]
+
+
+def test_append_preserves_renamed_nested_mapping(
+    spark: SparkSession,
+    renamed_table: Path,
+):
+    row = [Row(id=4, code="delta", details=Row(total=40, active=False))]
+    spark.createDataFrame(row).write.format("delta").mode("append").save(str(renamed_table))
+
+    assert _collect_rows(spark.read.format("delta").load(str(renamed_table))) == [
+        *RENAMED_EXPECTED_ROWS,
+        {"id": 4, "code": "delta", "details": {"total": 40, "active": False}},
+    ]
+    schema_string = _latest_metadata(renamed_table)["schemaString"]
+    assert "PARQUET:field_id" not in schema_string
+    assert "parquet.field.id" not in schema_string
+
+
+def test_overwrite_preserves_renamed_nested_mapping(
+    spark: SparkSession,
+    renamed_table: Path,
+):
+    original_schema = _latest_metadata(renamed_table)["schemaString"]
+    loaded = spark.read.format("delta").load(str(renamed_table))
+
+    loaded.where("id < 3").write.format("delta").mode("overwrite").save(str(renamed_table))
+
+    assert _collect_rows(spark.read.format("delta").load(str(renamed_table))) == RENAMED_EXPECTED_ROWS[:2]
+    assert _latest_metadata(renamed_table)["schemaString"] == original_schema
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("name", None),
+        ("id", 10),
+    ],
+)
+def test_nested_resolution_uses_only_the_configured_identity(
+    spark: SparkSession,
+    tmp_path: Path,
+    mode: str,
+    expected: int | None,
+):
+    table_path = tmp_path / f"nested_resolution_{mode}"
+    rows = [Row(id=1, details=Row(amount=10))]
+    (
+        spark.createDataFrame(rows)
+        .write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", mode)
+        .save(str(table_path))
+    )
+    _change_nested_physical_name(table_path)
+
+    row = spark.read.format("delta").load(str(table_path)).collect()[0]
+
+    assert row.details.amount == expected

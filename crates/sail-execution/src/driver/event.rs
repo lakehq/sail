@@ -20,12 +20,7 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
 pub enum DriverEvent {
-    ServerReady {
-        /// The local port that the driver server listens on.
-        /// This may be different from the port accessible from other nodes.
-        port: u16,
-        signal: oneshot::Sender<()>,
-    },
+    Activate,
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
@@ -80,9 +75,9 @@ pub enum DriverEvent {
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     CreateRemoteStream {
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     FetchDriverStream {
@@ -96,9 +91,9 @@ pub enum DriverEvent {
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchRemoteStream {
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     ObserveState {
@@ -154,7 +149,7 @@ impl From<TaskStatus> for r#gen::TaskStatus {
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverEvent::ServerReady { .. } => "ServerReady",
+            DriverEvent::Activate => "Activate",
             DriverEvent::RegisterWorker { .. } => "RegisterWorker",
             DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
             DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
@@ -180,9 +175,7 @@ impl SpanAssociation for DriverEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverEvent::ServerReady { port, signal: _ } => {
-                p.push((SpanAttribute::CLUSTER_DRIVER_PORT, port.to_string()));
-            }
+            DriverEvent::Activate => {}
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
@@ -299,7 +292,6 @@ impl SpanAssociation for DriverEvent {
                 ));
             }
             DriverEvent::CreateRemoteStream {
-                uri,
                 key:
                     TaskStreamKey {
                         job_id,
@@ -309,6 +301,7 @@ impl SpanAssociation for DriverEvent {
                         channel,
                     },
                 schema: _,
+                context: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
@@ -316,7 +309,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
             DriverEvent::FetchDriverStream {
                 key:
@@ -356,7 +348,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             DriverEvent::FetchRemoteStream {
-                uri,
                 key:
                     TaskStreamKey {
                         job_id,
@@ -366,6 +357,7 @@ impl SpanAssociation for DriverEvent {
                         channel,
                     },
                 schema: _,
+                context: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
@@ -373,7 +365,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
             DriverEvent::ObserveState { observer: _ } => {}
             DriverEvent::Shutdown { .. } => {}

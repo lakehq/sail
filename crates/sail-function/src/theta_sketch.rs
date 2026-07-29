@@ -1,9 +1,8 @@
 use std::collections::{BTreeSet, HashSet};
 
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, Float32Array, Float64Array, Int32Array, Int64Array,
-    LargeListArray, LargeStringArray, ListArray, StringArray, StringViewArray, UInt32Array,
-    UInt64Array,
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::datatypes::{
+    DataType, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::{DataFusionError, Result, exec_err};
 use datasketches::hash_value::{canonical_float, raw_bytes};
@@ -59,8 +58,83 @@ pub(crate) fn normalize_sketch_bytes(bytes: &[u8], function_name: &str) -> Resul
 }
 
 pub(crate) fn update_sketch_from_array(sketch: &mut ThetaSketch, values: &ArrayRef) -> Result<()> {
-    for row in 0..values.len() {
-        update_sketch_from_array_value(sketch, values.as_ref(), row)?;
+    // Downcast once outside the row loop (the data type and concrete array are
+    // loop-invariant); `iter().flatten()` skips nulls without a per-row branch.
+    match values.data_type() {
+        DataType::Int32 => {
+            for v in values.as_primitive::<Int32Type>().iter().flatten() {
+                sketch.update(v as i64);
+            }
+        }
+        DataType::Int64 => {
+            for v in values.as_primitive::<Int64Type>().iter().flatten() {
+                sketch.update(v);
+            }
+        }
+        DataType::UInt32 => {
+            for v in values.as_primitive::<UInt32Type>().iter().flatten() {
+                sketch.update(v as u64);
+            }
+        }
+        DataType::UInt64 => {
+            for v in values.as_primitive::<UInt64Type>().iter().flatten() {
+                sketch.update(v);
+            }
+        }
+        DataType::Float32 => {
+            for v in values.as_primitive::<Float32Type>().iter().flatten() {
+                sketch.update(canonical_float::from_f32(v));
+            }
+        }
+        DataType::Float64 => {
+            for v in values.as_primitive::<Float64Type>().iter().flatten() {
+                sketch.update(canonical_float::from_f64(v));
+            }
+        }
+        DataType::Binary => {
+            for v in values.as_binary::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_slice(v));
+                }
+            }
+        }
+        DataType::Utf8 => {
+            for v in values.as_string::<i32>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::LargeUtf8 => {
+            for v in values.as_string::<i64>().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::Utf8View => {
+            for v in values.as_string_view().iter().flatten() {
+                if !v.is_empty() {
+                    sketch.update(raw_bytes::from_str(v));
+                }
+            }
+        }
+        DataType::List(_) => {
+            let mut scratch = Vec::new();
+            for cell in values.as_list::<i32>().iter().flatten() {
+                update_sketch_from_list(sketch, &cell, &mut scratch)?;
+            }
+        }
+        DataType::LargeList(_) => {
+            let mut scratch = Vec::new();
+            for cell in values.as_list::<i64>().iter().flatten() {
+                update_sketch_from_list(sketch, &cell, &mut scratch)?;
+            }
+        }
+        DataType::Null => {}
+        data_type => {
+            return exec_err!("theta_sketch_agg does not support input type {data_type}");
+        }
     }
     Ok(())
 }
@@ -180,186 +254,46 @@ pub(crate) fn difference_sketch_bytes(
     serialize_compact_sketch(entries, theta, output_seed_hash(&left, &right), empty)
 }
 
-fn update_sketch_from_array_value(
+fn update_sketch_from_list(
     sketch: &mut ThetaSketch,
-    values: &dyn Array,
-    row: usize,
+    values: &ArrayRef,
+    scratch: &mut Vec<u8>,
 ) -> Result<()> {
-    if values.is_null(row) {
-        return Ok(());
-    }
-
-    match values.data_type() {
-        arrow::datatypes::DataType::Int32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected Int32Array".to_string())
-                })?;
-            sketch.update(values.value(row) as i64);
-        }
-        arrow::datatypes::DataType::Int64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected Int64Array".to_string())
-                })?;
-            sketch.update(values.value(row));
-        }
-        arrow::datatypes::DataType::UInt32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected UInt32Array".to_string())
-                })?;
-            sketch.update(values.value(row) as u64);
-        }
-        arrow::datatypes::DataType::UInt64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected UInt64Array".to_string())
-                })?;
-            sketch.update(values.value(row));
-        }
-        arrow::datatypes::DataType::Float32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected Float32Array".to_string())
-                })?;
-            sketch.update(canonical_float::from_f32(values.value(row)));
-        }
-        arrow::datatypes::DataType::Float64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected Float64Array".to_string())
-                })?;
-            sketch.update(canonical_float::from_f64(values.value(row)));
-        }
-        arrow::datatypes::DataType::Binary => {
-            let values = values
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected BinaryArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_slice(value));
-            }
-        }
-        arrow::datatypes::DataType::Utf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected StringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        arrow::datatypes::DataType::LargeUtf8 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected LargeStringArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        arrow::datatypes::DataType::Utf8View => {
-            let values = values
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected StringViewArray".to_string())
-                })?;
-            let value = values.value(row);
-            if !value.is_empty() {
-                sketch.update(raw_bytes::from_str(value));
-            }
-        }
-        arrow::datatypes::DataType::List(_) => {
-            let values = values.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                DataFusionError::Internal("theta sketch expected ListArray".to_string())
-            })?;
-            update_sketch_from_list(sketch, &values.value(row))?;
-        }
-        arrow::datatypes::DataType::LargeList(_) => {
-            let values = values
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("theta sketch expected LargeListArray".to_string())
-                })?;
-            update_sketch_from_list(sketch, &values.value(row))?;
-        }
-        arrow::datatypes::DataType::Null => {}
-        data_type => {
-            return exec_err!("theta_sketch_agg does not support input type {data_type}");
-        }
-    }
-    Ok(())
-}
-
-fn update_sketch_from_list(sketch: &mut ThetaSketch, values: &ArrayRef) -> Result<()> {
     if values.is_empty() {
         return Ok(());
     }
 
+    // Spark hashes the whole array as one entity, so the element bytes must be
+    // concatenated into a contiguous buffer. `scratch` is reused across list cells
+    // (cleared per cell) to avoid a fresh allocation for every array value.
     match values.data_type() {
-        arrow::datatypes::DataType::Int32 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "theta sketch expected Int32Array list values".to_string(),
-                    )
-                })?;
-            let mut bytes = Vec::with_capacity(values.len() * std::mem::size_of::<i32>());
+        DataType::Int32 => {
+            let values = values.as_primitive::<Int32Type>();
+            scratch.clear();
+            scratch.reserve(values.len() * std::mem::size_of::<i32>());
             for row in 0..values.len() {
                 let value = if values.is_null(row) {
                     0
                 } else {
                     values.value(row)
                 };
-                bytes.extend_from_slice(&value.to_le_bytes());
+                scratch.extend_from_slice(&value.to_le_bytes());
             }
-            sketch.update(raw_bytes::from_slice(&bytes));
+            sketch.update(raw_bytes::from_slice(scratch.as_slice()));
         }
-        arrow::datatypes::DataType::Int64 => {
-            let values = values
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "theta sketch expected Int64Array list values".to_string(),
-                    )
-                })?;
-            let mut bytes = Vec::with_capacity(values.len() * std::mem::size_of::<i64>());
+        DataType::Int64 => {
+            let values = values.as_primitive::<Int64Type>();
+            scratch.clear();
+            scratch.reserve(values.len() * std::mem::size_of::<i64>());
             for row in 0..values.len() {
                 let value = if values.is_null(row) {
                     0
                 } else {
                     values.value(row)
                 };
-                bytes.extend_from_slice(&value.to_le_bytes());
+                scratch.extend_from_slice(&value.to_le_bytes());
             }
-            sketch.update(raw_bytes::from_slice(&bytes));
+            sketch.update(raw_bytes::from_slice(scratch.as_slice()));
         }
         data_type => {
             return exec_err!("theta_sketch_agg does not support array element type {data_type}");

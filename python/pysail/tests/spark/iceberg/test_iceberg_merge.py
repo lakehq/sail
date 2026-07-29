@@ -42,6 +42,18 @@ def _parquet_file_paths(table_path: Path) -> set[Path]:
     return {path.relative_to(table_path) for path in table_path.rglob("*.parquet")}
 
 
+def _find_data_file_row_position(table_path: Path, target_id: int) -> tuple[Path, int]:
+    for relative_path in sorted(_parquet_file_paths(table_path)):
+        data_file = table_path / relative_path
+        row_offset = 0
+        for batch in pq.ParquetFile(data_file).iter_batches(columns=["id"]):
+            ids = batch.column("id").to_pylist()
+            if target_id in ids:
+                return data_file, row_offset + ids.index(target_id)
+            row_offset += batch.num_rows
+    pytest.fail(f"target id {target_id} was not found in Iceberg data files")
+
+
 def _current_manifests(table_path: Path) -> list[dict]:
     metadata = _find_latest_metadata(table_path)
     return _current_manifest_list(metadata)["manifests"]
@@ -156,8 +168,6 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
             expected_snapshot_count=2,
         )
         assert current_snapshot["summary"]["operation"] == "overwrite"
-        assert current_snapshot["summary"]["total-data-files"] == "2"
-        assert current_snapshot["summary"]["total-delete-files"] == "1"
         assert current_snapshot["summary"]["total-records"] == "5"
 
         manifests = _current_manifest_list(metadata)["manifests"]
@@ -181,6 +191,8 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
         assert data_entries
         assert delete_entries
+        assert current_snapshot["summary"]["total-data-files"] == str(len(data_entries))
+        assert current_snapshot["summary"]["total-delete-files"] == str(len(delete_entries))
         assert all(entry.data_file.file_path.startswith(custom_prefix) for entry in data_entries)
         assert all(entry.data_file.file_path.startswith(f"{custom_prefix}delete-") for entry in delete_entries)
         referenced_data_files = {entry.data_file.file_path for entry in data_entries}
@@ -277,9 +289,11 @@ def test_iceberg_dataframe_merge_into_mor_update_delete_insert(spark, tmp_path):
         )
         assert snapshot["summary"]["operation"] == "overwrite"
         assert snapshot["summary"]["added-position-deletes"] == "2"
-        assert snapshot["summary"]["total-data-files"] == "2"
-        assert snapshot["summary"]["total-delete-files"] == "1"
         assert snapshot["summary"]["total-records"] == "5"
+        data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
+        delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
+        assert snapshot["summary"]["total-data-files"] == str(len(data_entries))
+        assert snapshot["summary"]["total-delete-files"] == str(len(delete_entries))
     finally:
         _drop_table(spark, table_name)
 
@@ -535,6 +549,7 @@ def test_iceberg_merge_with_schema_evolution_is_rejected_without_side_effects(sp
 def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path):
     table_name = "iceberg_merge_multi_batch"
     table_path = tmp_path / table_name
+    target_id = 49_999
 
     _drop_table(spark, table_name)
     try:
@@ -553,11 +568,12 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
             """
         )
         spark.sql("INSERT INTO iceberg_merge_multi_batch SELECT id, 'old' FROM range(50000)")
-        assert len(_parquet_file_paths(table_path)) == 1
+        _, target_position = _find_data_file_row_position(table_path, target_id)
+        assert target_position >= 8192  # noqa: PLR2004
         spark.sql(
-            """
+            f"""
             CREATE OR REPLACE TEMP VIEW iceberg_merge_multi_batch_source AS
-            SELECT 20000L AS id, 'updated' AS value
+            SELECT {target_id}L AS id, 'updated' AS value
             """
         )
 
@@ -572,9 +588,11 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
 
         rows = [
             tuple(row)
-            for row in spark.sql("SELECT id, value FROM iceberg_merge_multi_batch WHERE id = 20000").collect()
+            for row in spark.sql(
+                f"SELECT id, value FROM iceberg_merge_multi_batch WHERE id = {target_id}"  # noqa: S608
+            ).collect()
         ]
-        assert rows == [(20000, "updated")]
+        assert rows == [(target_id, "updated")]
     finally:
         _drop_table(spark, table_name)
 
@@ -582,7 +600,7 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
 def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(spark, tmp_path):
     table_name = "iceberg_merge_split_file_position"
     table_path = tmp_path / table_name
-    target_id = 1_100_000
+    target_id = 4_300_000
 
     _drop_table(spark, table_name)
     try:
@@ -603,25 +621,14 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         large_file_insert_sql = (
             f"INSERT INTO {table_name} "  # noqa: S608
             "SELECT id, sha2(CAST(id AS STRING), 256) AS value "
-            "FROM range(1200000)"
+            "FROM range(4400000)"
         )
         spark.sql(large_file_insert_sql)
 
-        data_files = sorted(table_path / path for path in _parquet_file_paths(table_path))
-        assert len(data_files) == 1
-        data_file = data_files[0]
+        data_file, expected_position = _find_data_file_row_position(table_path, target_id)
         parquet_file = pq.ParquetFile(data_file)
         assert data_file.stat().st_size > 10 * 1024 * 1024
         assert parquet_file.metadata.num_row_groups >= 2  # noqa: PLR2004
-        expected_position = None
-        row_offset = 0
-        for batch in parquet_file.iter_batches(columns=["id"]):
-            ids = batch.column("id").to_pylist()
-            if target_id in ids:
-                expected_position = row_offset + ids.index(target_id)
-                break
-            row_offset += batch.num_rows
-        assert expected_position is not None
         assert expected_position >= parquet_file.metadata.row_group(0).num_rows
 
         spark.sql(

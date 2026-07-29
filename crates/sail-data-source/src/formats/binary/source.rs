@@ -16,31 +16,20 @@ use crate::formats::binary::reader::{BinaryFileMetadata, BinaryFileReader};
 #[derive(Debug, Clone)]
 pub struct BinarySource {
     table_schema: TableSchema,
-    path_glob_filter: Option<String>,
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
 }
 
 impl BinarySource {
-    pub fn new(table_schema: impl Into<TableSchema>, path_glob_filter: Option<String>) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
         Self {
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
-            path_glob_filter,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
         }
-    }
-
-    pub fn with_path_glob_filter(mut self, path_glob_filter: Option<String>) -> Self {
-        self.path_glob_filter = path_glob_filter;
-        self
-    }
-
-    pub fn path_glob_filter(&self) -> Option<&String> {
-        self.path_glob_filter.as_ref()
     }
 }
 
@@ -118,17 +107,6 @@ impl BinaryOpener {
 
 impl FileOpener for BinaryOpener {
     fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
-        if let Some(ref glob_pattern) = self.config.path_glob_filter {
-            let file_name = file.object_meta.location.filename().unwrap_or("");
-            let pattern = glob::Pattern::new(glob_pattern)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            if !pattern.matches(file_name) {
-                return Ok(Box::pin(
-                    async move { Ok(futures::stream::empty().boxed()) },
-                ));
-            }
-        }
-
         let store = Arc::clone(&self.object_store);
         let location = file.object_meta.location.clone();
         let last_modified = file.object_meta.last_modified;

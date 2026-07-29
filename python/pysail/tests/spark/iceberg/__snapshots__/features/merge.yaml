@@ -5,8 +5,8 @@ data:
   |-
     == Physical Plan ==
     IcebergCommitExec(table_path=file://<tmp>/iceberg_merge_many_files_plan/)
-      IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_many_files_plan/, merge_row_intents=true)
-        CoalescePartitionsExec
+      CoalescePartitionsExec
+        IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_many_files_plan/, merge_row_intents=true)
           UnionExec
             ProjectionExec: expr=[id@1 as id, CASE WHEN __common_expr_1@0 THEN __sail_src_value@8 ELSE value@2 END as value, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, CASE WHEN __sail_merge_target_row_present@7 IS NULL THEN 3 WHEN __common_expr_1@0 THEN 6 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
               ProjectionExec: expr=[(__sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@8 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_1, id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@3 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_value@7 as __sail_src_value]
@@ -31,8 +31,8 @@ data:
   |-
     == Physical Plan ==
     IcebergCommitExec(table_path=file://<tmp>/iceberg_merge_plan/)
-      IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_plan/, merge_row_intents=true)
-        CoalescePartitionsExec
+      CoalescePartitionsExec
+        IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_plan/, merge_row_intents=true)
           UnionExec
             ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@12 ELSE id@5 END as id, CASE WHEN __common_expr_2@1 THEN __sail_src_value@13 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN expired WHEN __common_expr_1@0 THEN __sail_src_value@13 ELSE value@6 END as value, CASE WHEN __common_expr_1@0 THEN __sail_src_flag@14 ELSE flag@7 END as flag, __sail_file_path@8 as __sail_file_path, __sail_file_row_index@9 as __sail_file_row_index, __sail_iceberg_partition_spec_id@10 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@11 as __sail_iceberg_partition, CASE WHEN __common_expr_4@3 THEN 3 WHEN __common_expr_2@1 THEN 6 WHEN (__common_expr_5@4 AND flag@7 = delete) IS NOT DISTINCT FROM true AND NOT __common_expr_2@1 THEN 5 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN 8 WHEN (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = purge) IS NOT DISTINCT FROM true AND NOT (__common_expr_3@2 AND __sail_merge_source_row_present@15 IS NULL AND flag@7 = expire) IS NOT DISTINCT FROM true THEN 7 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
               ProjectionExec: expr=[(__common_expr_6@0 AND __sail_merge_source_row_present@13 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_1, (__common_expr_7@1 AND flag@5 = update) IS NOT DISTINCT FROM true as __common_expr_2, __common_expr_8@2 as __common_expr_3, __common_expr_6@0 as __common_expr_4, __common_expr_7@1 as __common_expr_5, id@3 as id, value@4 as value, flag@5 as flag, __sail_file_path@6 as __sail_file_path, __sail_file_row_index@7 as __sail_file_row_index, __sail_iceberg_partition_spec_id@8 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@9 as __sail_iceberg_partition, __sail_src_id@10 as __sail_src_id, __sail_src_value@11 as __sail_src_value, __sail_src_flag@12 as __sail_src_flag, __sail_merge_source_row_present@13 as __sail_merge_source_row_present]
@@ -122,14 +122,14 @@ data:
     sequence-number: 2
     snapshot-id: <snapshot-id>
     summary:
-      added-data-files: '1'
-      added-delete-files: '1'
-      added-position-delete-files: '1'
+      added-data-files: '2'
+      added-delete-files: '2'
+      added-position-delete-files: '2'
       added-position-deletes: '4'
       added-records: '3'
       operation: overwrite
-      total-data-files: '2'
-      total-delete-files: '1'
+      total-data-files: '3'
+      total-delete-files: '2'
       total-equality-deletes: '0'
       total-position-deletes: '4'
       total-records: '8'
@@ -157,7 +157,7 @@ data:
     partition-spec-id: 0
     partitions: null
     sequence-number: 1
-  - added-files-count: 1
+  - added-files-count: 2
     added-rows-count: 3
     added-snapshot-id: <snapshot-id>
     content: data
@@ -172,7 +172,7 @@ data:
     partition-spec-id: 0
     partitions: null
     sequence-number: 2
-  - added-files-count: 1
+  - added-files-count: 2
     added-rows-count: 4
     added-snapshot-id: <snapshot-id>
     content: deletes
@@ -190,14 +190,14 @@ data:
 ---
 name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests.2"
 data:
-  added-data-files: '1'
-  added-delete-files: '1'
-  added-position-delete-files: '1'
+  added-data-files: '2'
+  added-delete-files: '2'
+  added-position-delete-files: '2'
   added-position-deletes: '4'
   added-records: '3'
   operation: overwrite
-  total-data-files: '2'
-  total-delete-files: '1'
+  total-data-files: '3'
+  total-delete-files: '2'
   total-equality-deletes: '0'
   total-position-deletes: '4'
   total-records: '8'

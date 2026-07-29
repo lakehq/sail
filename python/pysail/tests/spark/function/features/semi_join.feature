@@ -1,3 +1,4 @@
+@semi_join
 Feature: Semi join support
 
   Rule: LEFT SEMI JOIN with ON condition

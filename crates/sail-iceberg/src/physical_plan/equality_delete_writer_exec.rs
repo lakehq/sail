@@ -163,10 +163,10 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let store_ctx =
+            let table_store_ctx =
                 delete_writer_common::store_context(&context, writer_config.table_url())?;
             let table_meta = writer_config
-                .load_current_table_metadata(&store_ctx)
+                .load_current_table_metadata(&table_store_ctx)
                 .await?;
             if table_meta.format_version < FormatVersion::V2 {
                 return Err(DataFusionError::Plan(
@@ -189,7 +189,8 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                         .to_string(),
                 ));
             }
-            let data_dir = writer_config.resolve_data_dir(&table_meta)?;
+            let data_location = writer_config.resolve_data_location(&table_meta)?;
+            let data_store_ctx = delete_writer_common::store_context(&context, &data_location)?;
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
             let delete_spec = EqualityDeleteSpec::full_row(current_schema, &input_schema)?;
@@ -231,9 +232,8 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             };
 
             let delete_file = write_equality_delete_file(
-                &store_ctx,
-                writer_config.table_url(),
-                &data_dir,
+                &data_store_ctx,
+                &data_location,
                 writer,
                 default_spec.spec_id(),
                 total_rows,
@@ -404,18 +404,16 @@ fn project_delete_batch(
 }
 
 async fn write_equality_delete_file(
-    store_ctx: &crate::io::StoreContext,
-    table_url: &Url,
-    data_dir: &str,
+    data_store_ctx: &crate::io::StoreContext,
+    data_url: &Url,
     writer: ArrowParquetWriter,
     partition_spec_id: i32,
     total_rows: u64,
     equality_ids: Vec<i32>,
 ) -> Result<DataFile> {
     let mut delete_file = delete_writer_common::write_delete_parquet_file(
-        store_ctx,
-        table_url,
-        data_dir,
+        data_store_ctx,
+        data_url,
         "equality-delete",
         writer,
         partition_spec_id,

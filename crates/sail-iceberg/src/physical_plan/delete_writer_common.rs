@@ -17,13 +17,13 @@ use crate::table_format::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
 
-pub(crate) fn store_context(context: &TaskContext, table_url: &Url) -> Result<StoreContext> {
+pub(crate) fn store_context(context: &TaskContext, location_url: &Url) -> Result<StoreContext> {
     let object_store = context
         .runtime_env()
         .object_store_registry
-        .get_store(table_url)
+        .get_store(location_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    StoreContext::new(object_store, table_url)
+    StoreContext::new(object_store, location_url)
 }
 
 #[derive(Debug, Clone)]
@@ -72,8 +72,8 @@ impl IcebergDeleteWriterConfig {
         load_current_table_metadata(store_ctx, &self.table_url, &self.table_properties).await
     }
 
-    pub(crate) fn resolve_data_dir(&self, table_meta: &TableMetadata) -> Result<String> {
-        write_location::resolve_data_dir_from_options_and_properties(
+    pub(crate) fn resolve_data_location(&self, table_meta: &TableMetadata) -> Result<Url> {
+        write_location::resolve_data_location_from_options_and_properties(
             self.write_data_path(),
             self.write_folder_storage_path(),
             &table_meta.properties,
@@ -100,9 +100,8 @@ pub(crate) async fn load_current_table_metadata(
 }
 
 pub(crate) async fn write_delete_parquet_file(
-    store_ctx: &StoreContext,
-    table_url: &Url,
-    data_dir: &str,
+    data_store_ctx: &StoreContext,
+    data_url: &Url,
     file_prefix: &str,
     writer: ArrowParquetWriter,
     partition_spec_id: i32,
@@ -110,18 +109,14 @@ pub(crate) async fn write_delete_parquet_file(
 ) -> Result<DataFile> {
     let (bytes, meta) = writer.close().await.map_err(DataFusionError::Execution)?;
 
-    let rel = write_location::parquet_file_path(data_dir, file_prefix);
-    let path = ObjectPath::from(rel.as_str());
-    store_ctx
+    let relative_path = write_location::parquet_file_name(file_prefix);
+    let path = ObjectPath::from(relative_path.as_str());
+    data_store_ctx
         .prefixed
         .put(&path, object_store::PutPayload::from(bytes))
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let delete_file_path = crate::utils::join_table_uri(
-        table_url.as_str(),
-        &rel,
-        &crate::utils::WritePathMode::Absolute,
-    );
+    let delete_file_path = write_location::manifest_file_path(data_url, &relative_path);
 
     DataFileWriter::new(partition_spec_id, delete_file_path, partition)
         .finish(meta)

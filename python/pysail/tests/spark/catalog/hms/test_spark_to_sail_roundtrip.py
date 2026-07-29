@@ -268,6 +268,30 @@ def test_spark_alters_datasource_table_location_sail_reads_new_path(
     assert [(r.id, r.name) for r in sail_rows] == [(2, "new")]
 
 
+def test_spark_creates_sail_reads_delta_datasource_table(
+    jvm_spark: SparkSession,
+    spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Spark registers a Delta table in HMS as a datasource table; Sail reads it.
+
+    Delta Lake tables registered in the Hive Metastore are persisted as Spark
+    datasource tables carrying ``spark.sql.sources.provider=delta``. Sail must
+    recognise the provider and resolve the table location. This covers the Delta
+    branch of ``sail_catalog_hms::convert::table_location`` end-to-end.
+    """
+    table_fqn = f"{hms_s3_database}.roundtrip_delta_datasource"
+
+    jvm_spark.sql(f"CREATE TABLE {table_fqn} USING DELTA AS SELECT 1 AS id, 'alice' AS name UNION ALL SELECT 2, 'bob'")
+
+    properties = _describe_extended_properties(spark, table_fqn)
+    assert properties.get("Provider", "").lower() == "delta"
+    assert properties.get("Location"), "Sail did not resolve a location for the Delta table"
+
+    sail_rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
+
+
 def test_spark_catalog_api_creates_table_sail_reads_external_table(
     jvm_spark: SparkSession,
     spark: SparkSession,

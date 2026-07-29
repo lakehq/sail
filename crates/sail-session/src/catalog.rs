@@ -193,11 +193,13 @@ pub fn create_catalog_manager(
                 }
                 CatalogType::Glue {
                     name,
+                    catalog_id,
                     region,
                     endpoint_url,
                     cache,
                 } => {
                     let config = GlueCatalogConfig {
+                        catalog_id: catalog_id.clone(),
                         region: region.clone(),
                         endpoint_url: endpoint_url.clone(),
                     };
@@ -350,6 +352,7 @@ mod tests {
         let mut config = AppConfig::load().unwrap();
         config.catalog.list = vec![CatalogType::Glue {
             name: "glue".to_string(),
+            catalog_id: None,
             region: None,
             endpoint_url: None,
             cache: CatalogCacheConfig {
@@ -385,6 +388,7 @@ mod tests {
         let mut config = AppConfig::load().unwrap();
         config.catalog.list = vec![CatalogType::Glue {
             name: "glue".to_string(),
+            catalog_id: None,
             region: None,
             endpoint_url: None,
             cache: CatalogCacheConfig {

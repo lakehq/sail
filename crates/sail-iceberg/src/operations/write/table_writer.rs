@@ -60,7 +60,7 @@ pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
-    pub table_url: Url,
+    pub data_url: Url,
     // Typed partition tuple -> writer.
     writers: HashMap<Vec<Option<Literal>>, PartitionWriter>,
     written: Vec<DataFile>,
@@ -73,14 +73,13 @@ impl IcebergTableWriter {
         root: ObjectPath,
         config: WriterConfig,
         partition_spec_id: i32,
-        data_dir: String,
-        table_url: Url,
+        data_url: Url,
     ) -> Self {
         Self {
-            generator: DefaultLocationGenerator::new_with_data_dir(root, data_dir),
+            generator: DefaultLocationGenerator::new(root),
             store,
             config,
-            table_url,
+            data_url,
             writers: HashMap::new(),
             written: Vec::new(),
             partition_spec_id,
@@ -291,10 +290,11 @@ impl IcebergTableWriter {
             rel,
             full
         );
-        let file_path = match self.table_url.join(&rel) {
+        // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
+        let file_path = match self.data_url.join(&format!("./{rel}")) {
             Ok(u) => u.to_string(),
             Err(_) => {
-                format!("{}{}", self.table_url.as_str(), rel)
+                format!("{}{}", self.data_url.as_str(), rel)
             }
         };
         let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)

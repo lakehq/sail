@@ -4,7 +4,10 @@ mod options;
 mod state;
 mod topology;
 
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
@@ -55,5 +58,6 @@ pub enum JobAction {
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
+        context: Arc<TaskContext>,
     },
 }

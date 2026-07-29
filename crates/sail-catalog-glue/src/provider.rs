@@ -26,6 +26,8 @@ use crate::{hive, iceberg, managed_table};
 /// Configuration for AWS Glue Data Catalog.
 #[derive(Debug, Clone, Default)]
 pub struct GlueCatalogConfig {
+    /// AWS Glue Data Catalog ID. If not set, AWS uses the caller's account ID.
+    pub catalog_id: Option<String>,
     /// AWS region (e.g., "us-east-1"). If not set, uses default from credential chain.
     pub region: Option<String>,
     /// Custom endpoint URL (optional). Useful for VPC endpoints or local development.
@@ -97,6 +99,11 @@ impl GlueCatalogProvider {
 
     pub(super) fn has_custom_endpoint(&self) -> bool {
         self.config.endpoint_url.is_some()
+    }
+
+    /// Returns the configured AWS Glue Data Catalog ID.
+    pub(super) fn catalog_id(&self) -> Option<String> {
+        self.config.catalog_id.clone()
     }
 
     pub(super) fn database_name(database: &Namespace) -> CatalogResult<String> {
@@ -385,10 +392,7 @@ fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option
         .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
         .trim()
         .to_ascii_lowercase();
-    Some(match provider.as_str() {
-        "deltalake" => "delta".to_string(),
-        _ => provider,
-    })
+    Some(provider)
 }
 
 #[async_trait::async_trait]
@@ -436,6 +440,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .create_database()
+            .set_catalog_id(self.catalog_id())
             .database_input(database_input)
             .send()
             .await;
@@ -466,7 +471,12 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
 
-        let result = client.get_database().name(&database_name).send().await;
+        let result = client
+            .get_database()
+            .set_catalog_id(self.catalog_id())
+            .name(&database_name)
+            .send()
+            .await;
 
         match result {
             Ok(output) => {
@@ -498,7 +508,11 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
 
         let mut databases = Vec::new();
-        let mut paginator = client.get_databases().into_paginator().send();
+        let mut paginator = client
+            .get_databases()
+            .set_catalog_id(self.catalog_id())
+            .into_paginator()
+            .send();
 
         while let Some(page) = paginator
             .next()
@@ -535,7 +549,12 @@ impl CatalogProvider for GlueCatalogProvider {
             cascade: _, // Glue requires database to be empty; cascade not directly supported
         } = options;
 
-        let result = client.delete_database().name(&database_name).send().await;
+        let result = client
+            .delete_database()
+            .set_catalog_id(self.catalog_id())
+            .name(&database_name)
+            .send()
+            .await;
 
         match result {
             Ok(_) => Ok(()),
@@ -606,6 +625,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .get_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .name(table)
             .send()
@@ -650,6 +670,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let mut tables = Vec::new();
         let mut paginator = client
             .get_tables()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .into_paginator()
             .send();
@@ -691,6 +712,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .delete_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .name(table)
             .send()
@@ -726,6 +748,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let database_name = Self::database_name(database)?;
         let result = client
             .get_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .name(table)
             .send()
@@ -755,6 +778,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let table_input = Self::table_input_with_parameters(&table_value, parameters)?;
         let mut update_table = client
             .update_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .table_input(table_input);
         if let Some(version_id) = table_value.version_id() {
@@ -822,6 +846,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .create_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .table_input(view_input)
             .send()
@@ -855,6 +880,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .get_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .name(view)
             .send()
@@ -899,6 +925,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let mut views = Vec::new();
         let mut paginator = client
             .get_tables()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .into_paginator()
             .send();
@@ -932,6 +959,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .delete_table()
+            .set_catalog_id(self.catalog_id())
             .database_name(&database_name)
             .name(view)
             .send()
@@ -990,7 +1018,7 @@ mod tests {
             .storage_descriptor(storage)
             .set_parameters(Some(HashMap::from([(
                 hive::SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
-                "deltalake".to_string(),
+                "delta".to_string(),
             )])))
             .build()
             .unwrap();

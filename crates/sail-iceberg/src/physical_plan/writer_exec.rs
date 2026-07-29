@@ -116,7 +116,8 @@ impl IcebergWriterExec {
                 Arc::new(datafusion::arrow::datatypes::Schema::empty())
             }
         };
-        let cache = Self::compute_properties(schema.clone());
+        let output_partitions = input.output_partitioning().partition_count().max(1);
+        let cache = Self::compute_properties(schema.clone(), output_partitions);
         Self {
             input,
             table_url,
@@ -152,10 +153,13 @@ impl IcebergWriterExec {
         writer
     }
 
-    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> Arc<PlanProperties> {
+    fn compute_properties(
+        schema: datafusion::arrow::datatypes::SchemaRef,
+        output_partitions: usize,
+    ) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         ))
@@ -262,9 +266,7 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        // FIXME: Write data in parallel and roll files by target size once writer
-        // commit metadata can be merged safely across output partitions.
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -308,18 +310,17 @@ impl ExecutionPlan for IcebergWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("IcebergWriterExec can only be executed in a single partition");
-        }
-
         let input_partitions = self.input.output_partitioning().partition_count();
-        if input_partitions != 1 {
+        if input_partitions == 0 {
+            return internal_err!("IcebergWriterExec requires at least one input partition");
+        }
+        if partition >= input_partitions {
             return internal_err!(
-                "IcebergWriterExec requires exactly one input partition, got {input_partitions}"
+                "IcebergWriterExec invalid partition {partition} (input partitions: {input_partitions})"
             );
         }
 
-        let stream = self.input.execute(0, Arc::clone(&context))?;
+        let stream = self.input.execute(partition, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -368,14 +369,14 @@ impl ExecutionPlan for IcebergWriterExec {
                 }
             }
 
-            let object_store = get_object_store_from_context(&context, &table_url)?;
+            let table_object_store = get_object_store_from_context(&context, &table_url)?;
             let input_schema = input_schema.clone();
 
             let (
                 iceberg_schema,
                 table_schema,
                 default_spec,
-                data_dir,
+                data_location,
                 spec_id_val,
                 commit_schema,
                 commit_requirements,
@@ -387,26 +388,31 @@ impl ExecutionPlan for IcebergWriterExec {
                         match metadata_location_from_properties(&options.table_properties) {
                             Some(location) => metadata_location_to_object_path_string(&location)?,
                             None => {
-                                crate::table::find_latest_metadata_file(&object_store, &table_url)
-                                    .await?
+                                crate::table::find_latest_metadata_file(
+                                    &table_object_store,
+                                    &table_url,
+                                )
+                                .await?
                             }
                         }
                     } else {
-                        crate::table::find_latest_metadata_file(&object_store, &table_url).await?
+                        crate::table::find_latest_metadata_file(&table_object_store, &table_url)
+                            .await?
                     };
                 let bytes = crate::table::metadata_loader::load_metadata_file_bytes(
-                    &object_store,
+                    &table_object_store,
                     &latest_meta,
                 )
                 .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let data_dir = write_location::resolve_data_dir_from_options_and_properties(
-                    options.write_data_path.as_deref(),
-                    options.write_folder_storage_path.as_deref(),
-                    &table_meta.properties,
-                    &table_url,
-                )?;
+                let data_location =
+                    write_location::resolve_data_location_from_options_and_properties(
+                        options.write_data_path.as_deref(),
+                        options.write_folder_storage_path.as_deref(),
+                        &table_meta.properties,
+                        &table_url,
+                    )?;
                 let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
@@ -476,7 +482,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     schema_outcome.iceberg_schema,
                     schema_outcome.arrow_schema,
                     default_spec,
-                    data_dir,
+                    data_location,
                     spec_id_val,
                     commit_schema,
                     requirements,
@@ -521,7 +527,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    write_location::resolve_data_dir_from_options_and_properties(
+                    write_location::resolve_data_location_from_options_and_properties(
                         options.write_data_path.as_deref(),
                         options.write_folder_storage_path.as_deref(),
                         &metadata_properties,
@@ -564,15 +570,15 @@ impl ExecutionPlan for IcebergWriterExec {
                 variant_shredding,
             };
 
-            let writer_root = crate::utils::url_to_object_path(&table_url)
+            let data_object_store = get_object_store_from_context(&context, &data_location)?;
+            let writer_root = crate::utils::url_to_object_path(&data_location)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
             let mut writer = IcebergTableWriter::new(
-                object_store.clone(),
+                data_object_store.clone(),
                 writer_root,
                 writer_config,
                 spec_id_val,
-                data_dir.clone(),
-                table_url.clone(),
+                data_location.clone(),
             );
 
             let mut position_deletes = if writes_position_deletes {
@@ -640,9 +646,9 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
             let delete_files = if let Some(position_deletes) = position_deletes {
-                let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+                let data_store_ctx = StoreContext::new(data_object_store, &data_location)?;
                 position_deletes
-                    .finish(&store_ctx, &table_url, &data_dir)
+                    .finish(&data_store_ctx, &data_location)
                     .await?
             } else {
                 Vec::new()

@@ -52,7 +52,6 @@ message TaskInputWorkerKeyList {
 }
 
 message TaskInputRemoteLocator {
-  string uri = 1;
   uint64 stage = 2;
   repeated TaskInputRemoteKeyList keys = 3;
 }
@@ -105,6 +104,4 @@ message TaskOutputLocalLocator {
 }
 
 message TaskOutputRemoteLocator {
-  string uri = 1;
 }
-

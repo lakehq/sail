@@ -451,12 +451,11 @@ pub(crate) fn count_min_sketch_args(arguments: Vec<expr::Expr>) -> PlanResult<Ve
     match arguments.len() {
         4 => {
             let (value, eps, confidence, seed) = arguments.four()?;
-            Ok(vec![
-                value,
-                cast(eps, DataType::Float64),
-                cast(confidence, DataType::Float64),
-                seed,
-            ])
+            // Spark requires `eps` and `confidence` to be DOUBLE literals and rejects
+            // other types (including DECIMAL/FLOAT). Pass them through unchanged so the
+            // aggregate's type validation enforces the same rule, instead of casting and
+            // silently accepting types Spark rejects.
+            Ok(vec![value, eps, confidence, seed])
         }
         count => Err(PlanError::invalid(format!(
             "count_min_sketch requires 4 arguments, got {count}"
