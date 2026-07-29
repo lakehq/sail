@@ -241,7 +241,7 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario Outline: Optional section date_format: <case>
+    Scenario Outline: Optional section formatting with fractional seconds: <case>
       When query
         """
         SELECT date_format(TIMESTAMP '<ts>', 'yyyy-MM-dd HH:mm:ss[.SSSSSS]') AS result
@@ -251,9 +251,18 @@ Feature: datetime edge cases
         | <result> |
 
       Examples:
-        | case                                                  | ts                         | result                     |
-        | `date_format` omits optional section when zero        | 2026-06-15 14:30:45        | 2026-06-15 14:30:45        |
-        | `date_format` includes optional section when non-zero | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+        | case                                                               | ts                         | result                     |
+        | `date_format` includes optional section when fraction is zero     | 2026-06-15 14:30:45        | 2026-06-15 14:30:45.000000 |
+        | `date_format` includes optional section when fraction is non-zero | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+
+    Scenario: Optional section formatting includes all-zero time fields
+      When query
+        """
+        SELECT date_format(TIMESTAMP '2026-06-15 00:00:00', 'yyyy-MM-dd[ HH:mm:ss]') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 00:00:00 |
 
     Scenario Outline: Optional section to_timestamp: <case>
       When query

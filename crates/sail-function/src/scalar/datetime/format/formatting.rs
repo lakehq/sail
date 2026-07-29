@@ -64,29 +64,11 @@ fn format_items(
                 format_zone_spec(zone_spec, input, output);
             }
             DateTimeItem::Optional(items) => {
-                let start_len = output.len();
                 format_items(items, input, locale, output)?;
-                let optional_content = &output[start_len..];
-                if is_all_zeros(optional_content) {
-                    output.truncate(start_len);
-                }
             }
         }
     }
     Ok(())
-}
-
-fn is_all_zeros(s: &str) -> bool {
-    let mut has_digits = false;
-    for c in s.chars() {
-        if c.is_ascii_digit() {
-            has_digits = true;
-            if c != '0' {
-                return false;
-            }
-        }
-    }
-    has_digits
 }
 
 fn format_year(year: i32, count: usize, output: &mut String) {
