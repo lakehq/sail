@@ -428,14 +428,15 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
     if input.arguments.is_empty() {
         let expr = ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Second)).call(vec![]);
         Ok(cast(expr, DataType::Int64))
     } else if input.arguments.len() == 1 {
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(input.arguments))
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid(
             "unix_timestamp requires 0, 1, or 2 arguments",

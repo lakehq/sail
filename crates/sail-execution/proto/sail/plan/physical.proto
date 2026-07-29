@@ -284,6 +284,7 @@ message SparkFromXmlUdf {
 
 message SparkUnixTimestampUdf {
   string session_timezone = 1;
+  bool ansi_mode = 2;
 }
 
 message SparkDateFormatUdf {

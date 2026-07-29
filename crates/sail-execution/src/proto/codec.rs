@@ -2458,8 +2458,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { session_timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone));
+            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
@@ -2955,7 +2958,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
             let session_timezone = func.session_timezone().to_string();
-            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { session_timezone })
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone })
@@ -5633,9 +5640,10 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_unix_timestamp_preserves_options() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(Arc::from(
-            "America/Los_Angeles",
-        ))))?;
+        let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(
+            Arc::from("America/Los_Angeles"),
+            true,
+        )))?;
 
         let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
