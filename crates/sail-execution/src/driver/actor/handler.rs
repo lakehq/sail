@@ -303,7 +303,6 @@ impl DriverActor {
     pub(super) fn handle_create_remote_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -311,7 +310,7 @@ impl DriverActor {
     ) -> ActorAction {
         let _ = result.send(
             self.stream_manager
-                .create_remote_stream(uri, key, schema, &context),
+                .create_remote_stream(key, schema, &context),
         );
         ActorAction::Continue
     }
@@ -344,7 +343,6 @@ impl DriverActor {
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -352,7 +350,7 @@ impl DriverActor {
     ) -> ActorAction {
         let _ = result.send(
             self.stream_manager
-                .fetch_remote_stream(ctx, uri, &key, schema, &context),
+                .fetch_remote_stream(ctx, &key, schema, &context),
         );
         ActorAction::Continue
     }

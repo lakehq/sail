@@ -18,10 +18,10 @@ def remote(tmp_path_factory):
     shuffle_path = tmp_path_factory.mktemp("shuffle_storage")
     envs = {
         "SAIL_MODE": "local-cluster",
-        "SAIL_CLUSTER__SHUFFLE_SERVICE__TYPE": "storage",
-        "SAIL_CLUSTER__SHUFFLE_SERVICE__STORAGE__PATH": shuffle_path.as_uri(),
-        "SAIL_CLUSTER__SHUFFLE_SERVICE__STORAGE__MAX_FILE_SIZE": "1024",
-        "SAIL_CLUSTER__SHUFFLE_SERVICE__STORAGE__COMPRESSION": "lz4",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "storage",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__STORAGE__PATH": shuffle_path.as_uri(),
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE": "1024",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__STORAGE__COMPRESSION": "lz4",
     }
     with spark_connect_server(envs=envs) as server:
         yield server.remote

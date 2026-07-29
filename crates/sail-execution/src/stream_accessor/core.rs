@@ -34,13 +34,9 @@ where
             TaskReadLocation::Worker { worker_id, key } => {
                 T::Message::fetch_worker_stream(*worker_id, key.clone(), schema, tx)
             }
-            TaskReadLocation::Remote { uri, key } => T::Message::fetch_remote_stream(
-                uri.clone(),
-                key.clone(),
-                schema,
-                self.context.clone(),
-                tx,
-            ),
+            TaskReadLocation::Remote { key } => {
+                T::Message::fetch_remote_stream(key.clone(), schema, self.context.clone(), tx)
+            }
         };
         self.handle.send(event).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream reader".to_string())
@@ -66,13 +62,9 @@ where
             TaskWriteLocation::Local { key, storage } => {
                 T::Message::create_local_stream(key.clone(), *storage, schema, tx)
             }
-            TaskWriteLocation::Remote { uri, key } => T::Message::create_remote_stream(
-                uri.clone(),
-                key.clone(),
-                schema,
-                self.context.clone(),
-                tx,
-            ),
+            TaskWriteLocation::Remote { key } => {
+                T::Message::create_remote_stream(key.clone(), schema, self.context.clone(), tx)
+            }
         };
         self.handle.send(event).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream writer".to_string())

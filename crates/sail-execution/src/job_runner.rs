@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
-use crate::shuffle::ShuffleServiceKind;
+use crate::shuffle::ShuffleBackendKind;
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -79,14 +79,17 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: DriverHandle,
-    shuffle: ShuffleServiceKind,
+    shuffle_backend: ShuffleBackendKind,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
-        let shuffle = options.shuffle.clone();
+        let shuffle_backend = options.shuffle_backend.clone();
         let driver = DriverHandle::new(system.spawn::<DriverActor>(options));
-        Self { driver, shuffle }
+        Self {
+            driver,
+            shuffle_backend,
+        }
     }
 
     pub fn driver(&self) -> DriverHandle {
@@ -115,7 +118,10 @@ impl JobRunner for ClusterJobRunner {
         JobGraph::try_new(
             plan,
             JobGraphOptions {
-                shuffle: self.shuffle.clone(),
+                use_blocking_shuffle: matches!(
+                    &self.shuffle_backend,
+                    ShuffleBackendKind::Storage { .. }
+                ),
             },
         )
         .map(|graph| Some(graph.to_string()))

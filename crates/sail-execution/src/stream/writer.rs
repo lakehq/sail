@@ -14,7 +14,6 @@ pub enum TaskWriteLocation {
         key: TaskStreamKey,
     },
     Remote {
-        uri: String,
         key: TaskStreamKey,
     },
 }
@@ -34,8 +33,8 @@ impl fmt::Display for TaskWriteLocation {
             TaskWriteLocation::Local { key, storage } => {
                 write!(f, "Local({storage}, {})", TaskStreamKeyDenseDisplay(key))
             }
-            TaskWriteLocation::Remote { uri, key } => {
-                write!(f, "Remote({uri}, {})", TaskStreamKeyDenseDisplay(key))
+            TaskWriteLocation::Remote { key } => {
+                write!(f, "Remote({})", TaskStreamKeyDenseDisplay(key))
             }
         }
     }

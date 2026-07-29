@@ -24,9 +24,9 @@ use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessag
 
 impl StreamManager {
     pub fn new(options: StreamManagerOptions) -> Self {
-        let remote_streams = match &options.shuffle {
-            crate::shuffle::ShuffleServiceKind::None => None,
-            crate::shuffle::ShuffleServiceKind::Storage {
+        let remote_streams = match &options.shuffle_backend {
+            crate::shuffle::ShuffleBackendKind::Streaming => None,
+            crate::shuffle::ShuffleBackendKind::Storage {
                 path,
                 max_file_size,
                 compression,
@@ -103,17 +103,16 @@ impl StreamManager {
 
     pub fn create_remote_stream(
         &mut self,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let Some(remote_streams) = &self.remote_streams else {
             return Err(ExecutionError::InternalError(
-                "remote stream requested without a storage shuffle service".to_string(),
+                "remote stream requested without a storage shuffle backend".to_string(),
             ));
         };
-        remote_streams.create_stream(uri, key, schema, context)
+        remote_streams.create_stream(key, schema, context)
     }
 
     pub fn fetch_local_stream<T>(
@@ -155,7 +154,6 @@ impl StreamManager {
     pub fn fetch_remote_stream<T>(
         &mut self,
         _ctx: &mut ActorContext<T>,
-        uri: String,
         key: &TaskStreamKey,
         schema: SchemaRef,
         context: &TaskContext,
@@ -166,10 +164,10 @@ impl StreamManager {
     {
         let Some(remote_streams) = &self.remote_streams else {
             return Err(ExecutionError::InternalError(
-                "remote stream requested without a storage shuffle service".to_string(),
+                "remote stream requested without a storage shuffle backend".to_string(),
             ));
         };
-        remote_streams.fetch_stream(uri, key.clone(), schema, context)
+        remote_streams.fetch_stream(key.clone(), schema, context)
     }
 
     pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {

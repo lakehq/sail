@@ -8,11 +8,9 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use crate::shuffle::ShuffleServiceKind;
-
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
-    pub shuffle: ShuffleServiceKind,
+    pub use_blocking_shuffle: bool,
 }
 
 /// A job graph represents a distributed execution plan for a job.

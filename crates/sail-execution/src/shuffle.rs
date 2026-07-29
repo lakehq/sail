@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShuffleServiceKind {
-    None,
+pub enum ShuffleBackendKind {
+    Streaming,
     Storage {
         path: String,
         max_file_size: usize,
@@ -8,11 +8,11 @@ pub enum ShuffleServiceKind {
     },
 }
 
-impl From<&sail_common::config::ShuffleService> for ShuffleServiceKind {
-    fn from(value: &sail_common::config::ShuffleService) -> Self {
+impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
+    fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
-            sail_common::config::ShuffleService::None => Self::None,
-            sail_common::config::ShuffleService::Storage(storage) => Self::Storage {
+            sail_common::config::ShuffleBackend::Streaming => Self::Streaming,
+            sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
                 max_file_size: storage.max_file_size,
                 compression: storage.compression.clone().into(),

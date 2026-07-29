@@ -44,7 +44,6 @@ pub trait StreamAccessorMessage {
     ) -> Self;
 
     fn create_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -65,7 +64,6 @@ pub trait StreamAccessorMessage {
     ) -> Self;
 
     fn fetch_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -89,14 +87,12 @@ impl StreamAccessorMessage for DriverEvent {
     }
 
     fn create_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
         DriverEvent::CreateRemoteStream {
-            uri,
             key,
             schema,
             context,
@@ -127,14 +123,12 @@ impl StreamAccessorMessage for DriverEvent {
     }
 
     fn fetch_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
         DriverEvent::FetchRemoteStream {
-            uri,
             key,
             schema,
             context,
@@ -159,14 +153,12 @@ impl StreamAccessorMessage for WorkerEvent {
     }
 
     fn create_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
         WorkerEvent::CreateRemoteStream {
-            uri,
             key,
             schema,
             context,
@@ -200,14 +192,12 @@ impl StreamAccessorMessage for WorkerEvent {
     }
 
     fn fetch_remote_stream(
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
         WorkerEvent::FetchRemoteStream {
-            uri,
             key,
             schema,
             context,

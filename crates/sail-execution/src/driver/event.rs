@@ -75,7 +75,6 @@ pub enum DriverEvent {
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     CreateRemoteStream {
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -92,7 +91,6 @@ pub enum DriverEvent {
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchRemoteStream {
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -294,7 +292,6 @@ impl SpanAssociation for DriverEvent {
                 ));
             }
             DriverEvent::CreateRemoteStream {
-                uri,
                 key:
                     TaskStreamKey {
                         job_id,
@@ -312,7 +309,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
             DriverEvent::FetchDriverStream {
                 key:
@@ -352,7 +348,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             DriverEvent::FetchRemoteStream {
-                uri,
                 key:
                     TaskStreamKey {
                         job_id,
@@ -370,7 +365,6 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
             DriverEvent::ObserveState { observer: _ } => {}
             DriverEvent::Shutdown { .. } => {}

@@ -860,10 +860,7 @@ fn create_shuffle_input(
     properties: Arc<PlanProperties>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    if !matches!(
-        graph.options.shuffle,
-        crate::shuffle::ShuffleServiceKind::Storage { .. }
-    ) {
+    if !graph.options.use_blocking_shuffle {
         return Ok(stage_input_exec(stage, mode, properties));
     }
 
@@ -986,7 +983,6 @@ mod tests {
     use crate::error::ExecutionResult;
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
-    use crate::shuffle::{ShuffleCompression, ShuffleServiceKind};
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
@@ -1000,18 +996,14 @@ mod tests {
         JobGraph::try_new(
             plan,
             JobGraphOptions {
-                shuffle: ShuffleServiceKind::None,
+                use_blocking_shuffle: false,
             },
         )
     }
 
-    fn storage_shuffle_options() -> JobGraphOptions {
+    fn blocking_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
-            shuffle: ShuffleServiceKind::Storage {
-                path: "file:///tmp/sail/shuffle".to_string(),
-                max_file_size: 1024,
-                compression: ShuffleCompression::None,
-            },
+            use_blocking_shuffle: true,
         }
     }
 
@@ -1060,7 +1052,7 @@ mod tests {
             Arc::new(
                 RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
             ),
-            storage_shuffle_options(),
+            blocking_shuffle_options(),
         )
         .unwrap();
 

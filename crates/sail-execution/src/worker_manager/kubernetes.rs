@@ -18,7 +18,7 @@ use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
-use crate::shuffle::{ShuffleCompression, ShuffleServiceKind};
+use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ impl KubernetesWorkerManager {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
-            shuffle,
+            shuffle_backend,
         } = options;
         let w3c_traceparent =
             SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
@@ -219,36 +219,36 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
-                name: ClusterConfigEnv::SHUFFLE_SERVICE__TYPE.to_string(),
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
-                    match &shuffle {
-                        ShuffleServiceKind::None => "none",
-                        ShuffleServiceKind::Storage { .. } => "storage",
+                    match &shuffle_backend {
+                        ShuffleBackendKind::Streaming => "streaming",
+                        ShuffleBackendKind::Storage { .. } => "storage",
                     }
                     .to_string(),
                 ),
                 value_from: None,
             },
         ];
-        if let ShuffleServiceKind::Storage {
+        if let ShuffleBackendKind::Storage {
             path,
             max_file_size,
             compression,
-        } = shuffle
+        } = shuffle_backend
         {
             env.extend([
                 EnvVar {
-                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__PATH.to_string(),
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__PATH.to_string(),
                     value: Some(path),
                     value_from: None,
                 },
                 EnvVar {
-                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__MAX_FILE_SIZE.to_string(),
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE.to_string(),
                     value: Some(max_file_size.to_string()),
                     value_from: None,
                 },
                 EnvVar {
-                    name: ClusterConfigEnv::SHUFFLE_SERVICE__STORAGE__COMPRESSION.to_string(),
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__COMPRESSION.to_string(),
                     value: Some(
                         match compression {
                             ShuffleCompression::None => "none",

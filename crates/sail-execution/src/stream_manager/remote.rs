@@ -44,18 +44,17 @@ impl RemoteStreamManager {
 
     pub(super) fn create_stream(
         &self,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         if self.max_file_size == 0 {
             return Err(ExecutionError::InvalidArgument(
-                "cluster.shuffle_service.storage.max_file_size must be greater than zero"
+                "cluster.shuffle_backend.storage.max_file_size must be greater than zero"
                     .to_string(),
             ));
         }
-        let (store, prefix) = self.store_and_prefix(&uri, &key, context)?;
+        let (store, prefix) = self.store_and_prefix(&key, context)?;
         let options = IpcWriteOptions::default()
             .try_with_compression(match self.compression {
                 ShuffleCompression::None => None,
@@ -74,12 +73,11 @@ impl RemoteStreamManager {
 
     pub(super) fn fetch_stream(
         &self,
-        uri: String,
         key: TaskStreamKey,
         _schema: SchemaRef,
         context: &TaskContext,
     ) -> ExecutionResult<TaskStreamSource> {
-        let (store, prefix) = self.store_and_prefix(&uri, &key, context)?;
+        let (store, prefix) = self.store_and_prefix(&key, context)?;
         let list_store = Arc::clone(&store);
         let output = futures::stream::once(async move {
             let mut locations = list_store
@@ -164,11 +162,11 @@ impl RemoteStreamManager {
 
     fn store_and_prefix(
         &self,
-        uri: &str,
         key: &TaskStreamKey,
         context: &TaskContext,
     ) -> ExecutionResult<(Arc<dyn ObjectStore>, Path)> {
-        let url = Url::parse(uri).map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
+        let url = Url::parse(&self.storage_path)
+            .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
         let store = context
             .runtime_env()
             .object_store_registry

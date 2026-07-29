@@ -88,12 +88,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             DriverEvent::CreateRemoteStream {
-                uri,
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, key, schema, context, result),
+            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
             DriverEvent::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
@@ -104,12 +103,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
             DriverEvent::FetchRemoteStream {
-                uri,
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, context, result),
+            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
             DriverEvent::Shutdown { history } => self.handle_shutdown(ctx, history),
         }
