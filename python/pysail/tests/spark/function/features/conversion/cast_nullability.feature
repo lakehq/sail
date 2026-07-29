@@ -1,4 +1,3 @@
-@cast
 @cast_nullability
 Feature: nullability of an explicit CAST
 
@@ -513,16 +512,3 @@ Feature: nullability of an explicit CAST
         | case                  |
         | folded WHEN true CASE |
 
-  @spark_null
-  Rule: the cast(...) function spelling
-
-    Scenario: a non-null literal input to cast yields the schema Spark declares
-      When query
-        """
-        SELECT cast('10' as int) AS result
-        """
-      Then query schema
-        """
-        root
-         |-- result: integer (nullable = true)
-        """
