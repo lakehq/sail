@@ -26,10 +26,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult, relation,
@@ -515,19 +516,66 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
-    let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
-        Box::new(result),
-    ))];
+    let CheckpointCommand {
+        relation,
+        local: _,
+        eager,
+        storage_level,
+    } = checkpoint;
+    if !eager {
+        return Err(SparkError::unsupported("lazy DataFrame checkpoint"));
+    }
+    if storage_level.is_some() {
+        return Err(SparkError::unsupported(
+            "checkpoint StorageLevel; Sail checkpoints are object-store backed",
+        ));
+    }
+    let relation = relation.required("checkpoint relation")?;
+    let query: spec::QueryPlan = relation.try_into()?;
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    let plan = spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::RemoteCheckpoint {
+            relation_id: relation_id.clone(),
+            input: Box::new(query),
+        },
+    ));
+    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let service = ctx.extension::<JobService>()?;
+    let stream = service.runner().execute(ctx, plan).await?;
+    let _ = read_stream(stream).await?;
+    let result = ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(Box::new(
+        CheckpointCommandResult {
+            relation: Some(CachedRemoteRelation { relation_id }),
+        },
+    )));
+    let mut output = vec![result];
     if metadata.reattachable {
         output.push(ExecutorOutput::complete());
     }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    _command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = ctx.extension::<SparkSession>()?;
+    // TODO: Remove checkpoint data on a best-effort basis when the client releases the relation.
+    // Checkpoints have session lifetime so plans can safely share their immutable relation ID.
+    // The registry and object-store namespace are cleared together after the job runner stops.
+    let output = metadata
+        .reattachable
+        .then(ExecutorOutput::complete)
+        .into_iter();
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,

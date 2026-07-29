@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
@@ -399,11 +400,22 @@ impl SessionManagerActor {
             warn!("job service not found for session {session_id}");
             return;
         };
+        let checkpoint_registry = context.extension::<RemoteCheckpointRegistry>().ok();
+        let runtime_env = context.runtime_env();
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         ctx.spawn(async move {
+            // Stop tasks before deleting the namespace so late attempts cannot recreate objects.
             service.runner().stop(tx).await;
-            let message = match rx.await {
+            let history = rx.await;
+            if let Some(checkpoint_registry) = checkpoint_registry
+                && let Err(error) = checkpoint_registry
+                    .cleanup_session(runtime_env.as_ref())
+                    .await
+            {
+                warn!("failed to clean checkpoints for session {session_id}: {error}");
+            }
+            let message = match history {
                 Ok(x) => SessionManagerEvent::SetSessionHistory {
                     session_id,
                     history: SessionHistory { job_runner: x },
