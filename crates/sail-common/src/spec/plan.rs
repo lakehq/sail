@@ -447,6 +447,10 @@ pub enum CommandNode {
         is_global: bool,
         if_exists: bool,
     },
+    RemoteCheckpoint {
+        relation_id: String,
+        input: Box<QueryPlan>,
+    },
     Write(Write),
     WriteTo(WriteTo),
     WriteStream(WriteStream),

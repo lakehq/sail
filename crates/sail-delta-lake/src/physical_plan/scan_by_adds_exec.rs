@@ -29,7 +29,6 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
@@ -43,7 +42,7 @@ use crate::datasource::{DeltaScanConfig, build_file_scan_config};
 use crate::deletion_vector::DeletionVectorBitmap;
 use crate::delta_log::LogStoreRef;
 use crate::physical_plan::{COL_ACTION, decode_adds_from_batch, meta_adds};
-use crate::schema::{arrow_field_physical_name, get_physical_schema};
+use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
 use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
 use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
 use crate::spec::StructType;
@@ -183,7 +182,7 @@ impl ScanByAddsStreamState {
         let kschema_arc = snapshot_state.schema();
         let logical_kernel = StructType::try_from(kschema_arc)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let physical_arrow = get_physical_schema(&logical_kernel, kmode);
+        let physical_arrow = get_physical_schema(&logical_kernel, kmode)?;
         let physical_partition_cols: std::collections::HashSet<String> = table_partition_cols
             .iter()
             .map(|col| {
@@ -239,6 +238,7 @@ impl ScanByAddsStreamState {
             .snapshot
             .as_deref()
             .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?;
+        let column_mapping_mode = snapshot.effective_column_mapping_mode();
         let log_store = self
             .log_store
             .as_ref()
@@ -323,8 +323,11 @@ impl ScanByAddsStreamState {
                 .and_then(move |batch| {
                     let output_schema = Arc::clone(&output_schema);
                     async move {
-                        let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        let casted = restore_logical_record_batch(
+                            &batch,
+                            &output_schema,
+                            column_mapping_mode,
+                        )?;
                         Ok(casted)
                     }
                 });
@@ -403,8 +406,8 @@ impl ScanByAddsStreamState {
             .and_then(move |batch| {
                 let output_schema = Arc::clone(&output_schema);
                 async move {
-                    let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let casted =
+                        restore_logical_record_batch(&batch, &output_schema, column_mapping_mode)?;
                     Ok(casted)
                 }
             });

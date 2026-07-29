@@ -67,7 +67,27 @@ message ExtendedPhysicalPlanNode {
     NoopSinkExecNode noop_sink = 52;
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
   }
+}
+
+message RemoteCheckpointWriteExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string prefix = 3;
+  bytes storage_schema = 4;
+}
+
+message RemoteCheckpointCommitExecNode {
+  bytes input = 1;
+  string relation_id = 2;
+  string object_store_url = 3;
+  string prefix = 4;
+  bytes logical_schema = 5;
+  bytes storage_schema = 6;
+  bytes output_partitioning = 7;
+  LexOrdering output_ordering = 8;
 }
 
 message ExtendedPhysicalExprNode {
@@ -79,9 +99,16 @@ message ExtendedPhysicalExprNode {
   }
 }
 
+enum StructFieldMatching {
+  STRUCT_FIELD_MATCHING_NAME = 0;
+  STRUCT_FIELD_MATCHING_PHYSICAL_NAME = 1;
+  STRUCT_FIELD_MATCHING_FIELD_ID = 2;
+}
+
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+  StructFieldMatching struct_field_matching = 3;
 }
 
 message LambdaExprNode {
@@ -184,6 +211,8 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
+    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
+    SparkDateFormatUdf spark_date_format = 36;
   }
 }
 
@@ -246,7 +275,7 @@ message XpathTypedUdf {
 }
 
 message SparkToXmlUdf {
-    string session_timezone = 1;
+  string session_timezone = 1;
 }
 
 message SparkFromXmlUdf {
@@ -254,7 +283,11 @@ message SparkFromXmlUdf {
 }
 
 message SparkUnixTimestampUdf {
-  string timezone = 1;
+  string session_timezone = 1;
+}
+
+message SparkDateFormatUdf {
+  string session_timezone = 1;
 }
 
 message StructFunctionUdf {
@@ -270,7 +303,7 @@ message UpdateStructFieldUdf {
 }
 
 message TimestampNowUdf {
-  string timezone = 1;
+  string session_timezone = 1;
   string time_unit = 2;
 }
 
@@ -282,6 +315,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkTryToTimestampUdf {
+  optional string timezone = 1;
 }
 
 message SparkVariantGetUdf {
@@ -470,6 +507,7 @@ message PySparkUdfConfig {
   bool python_udtf_pandas_conversion_enabled = 7;
   bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
   bool binary_as_bytes = 9;
+  bool python_udf_pandas_prefer_int_extension_dtype = 10;
 }
 
 message EquivalenceProperties {
@@ -587,6 +625,7 @@ message MemoryExecNode {
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
   optional uint64 limit = 6;
+  bytes output_partitioning = 7;
 }
 
 message ValuesExecNode {
@@ -608,6 +647,7 @@ message ParquetExecNode {
   bytes base_config = 1;
   bytes options = 2;
   optional bytes predicate = 3;
+  bytes output_partitioning = 4;
 }
 
 message ArrowExecNode {
@@ -623,7 +663,6 @@ message TextExecNode {
 
 message BinarySourceExecNode {
   bytes base_config = 1;
-  optional string path_glob_filter = 2;
 }
 
 message AvroExecNode {
@@ -640,6 +679,7 @@ message RecursiveQueryExecNode {
   bytes static_term = 2;
   bytes recursive_term = 3;
   bool is_distinct = 4;
+  bytes output_schema = 5;
 }
 
 message SortMergeJoinExecNode {
@@ -853,6 +893,7 @@ message CoalesceExecNode {
 message RelaxedTzCastExecNode {
   bytes input = 1;
   bytes schema = 2;
+  DeltaColumnMappingMode column_mapping_mode = 3;
 }
 
 message JoinOn {
