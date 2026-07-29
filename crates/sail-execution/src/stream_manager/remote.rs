@@ -1,8 +1,9 @@
-use std::collections::VecDeque;
 use std::io::Cursor;
 use std::sync::Arc;
 
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
@@ -97,12 +98,18 @@ impl RemoteStreamManager {
                     RemoteReadState {
                         store: Arc::clone(&store),
                         locations: locations.into_iter(),
-                        batches: VecDeque::new(),
+                        reader: None,
                     },
                     |mut state| async move {
                         loop {
-                            if let Some(batch) = state.batches.pop_front() {
-                                return Ok(Some((batch, state)));
+                            if let Some(reader) = state.reader.as_mut() {
+                                match reader.next() {
+                                    Some(Ok(batch)) => return Ok(Some((batch, state))),
+                                    Some(Err(error)) => {
+                                        return Err(TaskStreamError::External(Arc::new(error)));
+                                    }
+                                    None => state.reader = None,
+                                }
                             }
                             let Some(location) = state.locations.next() else {
                                 return Ok(None);
@@ -117,10 +124,7 @@ impl RemoteStreamManager {
                                 .map_err(|e| TaskStreamError::External(Arc::new(e)))?;
                             let reader = StreamReader::try_new(Cursor::new(bytes), None)
                                 .map_err(|e| TaskStreamError::External(Arc::new(e)))?;
-                            state.batches = reader
-                                .collect::<std::result::Result<Vec<_>, _>>()
-                                .map_err(|e| TaskStreamError::External(Arc::new(e)))?
-                                .into();
+                            state.reader = Some(Box::new(reader));
                         }
                     },
                 )),
@@ -171,13 +175,7 @@ impl RemoteStreamManager {
             .runtime_env()
             .object_store_registry
             .get_store(&url)?;
-        let prefix = shuffle_prefix(&url, key.job_id, Some(key.stage));
-        Ok((
-            store,
-            prefix
-                .join(format!("partition-{}", key.partition))
-                .join(format!("attempt-{}", key.attempt)),
-        ))
+        Ok((store, stream_prefix(&url, key)?))
     }
 
     fn store_and_cleanup_prefix(
@@ -195,15 +193,18 @@ impl RemoteStreamManager {
             .runtime_env()
             .object_store_registry
             .get_store(&url)?;
-        Ok(Some((store, shuffle_prefix(&url, job_id, stage))))
+        Ok(Some((store, shuffle_prefix(&url, job_id, stage)?)))
     }
 }
 
 struct RemoteReadState {
     store: Arc<dyn ObjectStore>,
     locations: std::vec::IntoIter<Path>,
-    batches: VecDeque<datafusion::arrow::array::RecordBatch>,
+    reader: Option<RemoteBatchReader>,
 }
+
+type RemoteBatchReader =
+    Box<dyn Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send>;
 
 struct RemoteStreamSink {
     store: Arc<dyn ObjectStore>,
@@ -248,9 +249,12 @@ impl RemoteStreamSink {
         if !self.has_batches {
             return Ok(());
         }
-        let writer = self.writer.take().ok_or_else(|| {
+        let mut writer = self.writer.take().ok_or_else(|| {
             DataFusionError::Internal("remote shuffle writer is not present".to_string())
         })?;
+        writer
+            .finish()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let bytes = writer
             .into_inner()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -271,10 +275,7 @@ impl RemoteStreamSink {
 
 #[tonic::async_trait]
 impl TaskStreamSink for RemoteStreamSink {
-    async fn write(
-        &mut self,
-        batch: TaskStreamResult<datafusion::arrow::array::RecordBatch>,
-    ) -> TaskStreamSinkState {
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState {
         let batch = match batch {
             Ok(batch) => batch,
             Err(error) => {
@@ -306,14 +307,51 @@ impl TaskStreamSink for RemoteStreamSink {
     }
 }
 
-fn shuffle_prefix(url: &Url, job_id: JobId, stage: Option<usize>) -> Path {
-    let mut prefix = url.path().trim_matches('/').to_string();
-    if !prefix.is_empty() {
-        prefix.push('/');
-    }
-    prefix.push_str(&format!("job-{job_id}"));
+fn stream_prefix(url: &Url, key: &TaskStreamKey) -> ExecutionResult<Path> {
+    Ok(shuffle_prefix(url, key.job_id, Some(key.stage))?
+        .join(format!("partition-{}", key.partition))
+        .join(format!("attempt-{}", key.attempt))
+        .join(format!("channel-{}", key.channel)))
+}
+
+fn shuffle_prefix(url: &Url, job_id: JobId, stage: Option<usize>) -> ExecutionResult<Path> {
+    let mut prefix = Path::from_url_path(url.path())
+        .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?
+        .join(format!("job-{job_id}"));
     if let Some(stage) = stage {
-        prefix.push_str(&format!("/stage-{stage}"));
+        prefix = prefix.join(format!("stage-{stage}"));
     }
-    Path::from(prefix)
+    Ok(prefix)
+}
+
+#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shuffle_prefix_decodes_url_path() {
+        let url = Url::parse("file:///tmp/sail%20shuffle").unwrap();
+        assert_eq!(
+            shuffle_prefix(&url, JobId::from(1), Some(2)).unwrap(),
+            Path::from("tmp/sail shuffle/job-1/stage-2")
+        );
+    }
+
+    #[test]
+    fn stream_prefix_includes_channel() {
+        let url = Url::parse("memory:///shuffle").unwrap();
+        let key = TaskStreamKey {
+            job_id: JobId::from(1),
+            stage: 2,
+            partition: 3,
+            attempt: 4,
+            channel: 5,
+        };
+        let prefix = stream_prefix(&url, &key).unwrap();
+        assert_eq!(
+            prefix,
+            Path::from("shuffle/job-1/stage-2/partition-3/attempt-4/channel-5")
+        );
+    }
 }

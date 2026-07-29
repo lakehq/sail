@@ -1118,7 +1118,13 @@ mod tests {
             None,
         ));
 
-        let graph = JobGraph::try_new(commit).unwrap();
+        let graph = JobGraph::try_new(
+            commit,
+            JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )
+        .unwrap();
 
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
