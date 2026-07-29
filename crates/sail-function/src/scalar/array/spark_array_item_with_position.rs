@@ -128,7 +128,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
     }
 
     // Internal helper behind `posexplode`; the element nullability is computed in
-    // `return_type`, the container follows the input.
+    // `output_type`, the container follows the input.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
