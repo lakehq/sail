@@ -93,7 +93,24 @@ Feature: datetime parsing with format strings
         | `to_date` parses custom format                              | to_date          | 2026/06/15                 | 'yyyy/MM/dd'                 | 2026-06-15                 |
         | `to_timestamp` parses with month name                       | to_timestamp     | 15 June 2026               | 'dd MMMM yyyy'               | 2026-06-15 00:00:00        |
         | `to_timestamp_ltz` parses custom format with offset         | to_timestamp_ltz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 14:30:45        |
-        | `to_timestamp_ntz` parses custom format with offset         | to_timestamp_ntz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 14:30:45        |
+        | `to_timestamp_ntz` ignores a positive offset                | to_timestamp_ntz | 2026-06-15T16:30:45+02:00  | "yyyy-MM-dd'T'HH:mm:ssXXX"   | 2026-06-15 16:30:45        |
+
+  Rule: Formatted TIMESTAMP_NTZ offset handling
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: `to_timestamp_ntz` ignores a negative offset
+      When query
+        """
+        SELECT to_timestamp_ntz(
+          '2026-06-15T16:30:45-05:00',
+          "yyyy-MM-dd'T'HH:mm:ssXXX"
+        ) AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 16:30:45 |
 
   Rule: AM/PM marker parsing variations
 

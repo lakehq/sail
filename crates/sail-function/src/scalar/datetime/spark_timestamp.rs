@@ -115,21 +115,7 @@ impl TimestampParser {
                 let micros = truncate_datetime_to_microseconds(&datetime);
                 Ok(Some(micros))
             }
-            TimestampParser::Ntz => {
-                let datetime = if let Some(offset) = parsed.offset {
-                    parsed
-                        .datetime
-                        .and_local_timezone(offset)
-                        .single()
-                        .map(|x| x.to_utc())
-                        .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
-                } else {
-                    parsed.datetime.and_utc()
-                };
-                // Truncate nanoseconds to microseconds to preserve fractional seconds
-                let micros = truncate_datetime_to_microseconds(&datetime);
-                Ok(Some(micros))
-            }
+            TimestampParser::Ntz => Ok(Some(parsed.datetime.and_utc().timestamp_micros())),
         }
     }
 
