@@ -947,6 +947,32 @@ Feature: datetime parsing with format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
+    Scenario Outline: Six-letter fractional pattern: <case>
+      When query
+        """
+        SELECT
+          to_timestamp(
+            '2026-06-15 14:30:45.<fraction>',
+            'yyyy-MM-dd HH:mm:ss.SSSSSS'
+          ) AS parsed,
+          date_format(
+            to_timestamp(
+              '2026-06-15 14:30:45.<fraction>',
+              'yyyy-MM-dd HH:mm:ss.SSSSSS'
+            ),
+            'SSSSSS'
+          ) AS formatted_fraction
+        """
+      Then query result
+        | parsed   | formatted_fraction   |
+        | <parsed> | <formatted_fraction> |
+
+      Examples:
+        | case                                                    | fraction | parsed                     | formatted_fraction |
+        | `to_timestamp` parses one fractional digit with SSSSSS  | 1        | 2026-06-15 14:30:45.1      | 100000             |
+        | `to_timestamp` parses three fractional digits with SSSSSS | 123    | 2026-06-15 14:30:45.123    | 123000             |
+        | `to_timestamp` parses six fractional digits with SSSSSS | 123456   | 2026-06-15 14:30:45.123456 | 123456             |
+
     Scenario: `to_timestamp` parses fractional seconds with varying widths
       When query
         """

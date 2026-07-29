@@ -67,7 +67,7 @@ fn parse_items(
 
                 validate_pattern_field(symbol, count, pattern_use)?;
                 flush_literal(&mut items, &mut literal);
-                items.push(build_field_item(symbol, count)?);
+                items.push(build_field_item(symbol, count, pattern_use)?);
             }
             _ => {
                 literal.push(ch);
@@ -171,7 +171,7 @@ fn validate_pattern_field(symbol: char, count: usize, pattern_use: PatternUse) -
     }
 }
 
-fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
+fn build_field_item(symbol: char, count: usize, pattern_use: PatternUse) -> Result<DateTimeItem> {
     match symbol {
         'G' => Ok(DateTimeItem::Field(DateTimeFieldSpec {
             kind: DateTimeField::Era,
@@ -359,7 +359,11 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
         })),
         'S' => Ok(DateTimeItem::Fraction(FractionSpec {
             field: FractionField::NanoOfSecond,
-            min_width: count,
+            min_width: if pattern_use == PatternUse::Parsing {
+                1
+            } else {
+                count
+            },
             max_width: count.min(9),
             decimal_point: false,
         })),
