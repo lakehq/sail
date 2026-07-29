@@ -168,12 +168,20 @@ impl ScalarUDFImpl for SparkUniform {
         let t_max = args.arg_fields[1].data_type();
         let return_type = Self::calculate_output_type(t_min, t_max);
 
-        // The result is NULL whenever a bound is NULL, so the field must be
-        // nullable if either bound is a NULL literal or a nullable expression.
-        let nullable = matches!(t_min, DataType::Null)
-            || matches!(t_max, DataType::Null)
-            || args.arg_fields[0].is_nullable()
-            || args.arg_fields[1].is_nullable();
+        // The result is NULL whenever a bound is NULL. The bounds must be foldable, so this
+        // looks at the literal VALUE rather than the field's `nullable` flag: an argument that
+        // went through a force-nullable cast (e.g. `CAST(1 AS DECIMAL(5,2))`) has a nullable
+        // field but is never NULL, and Spark reports such a call as non-nullable.
+        let bound_is_null = |index: usize| {
+            matches!(args.arg_fields[index].data_type(), DataType::Null)
+                || args
+                    .scalar_arguments
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|value| value.is_null())
+        };
+        let nullable = bound_is_null(0) || bound_is_null(1);
 
         Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }

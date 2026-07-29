@@ -1,3 +1,4 @@
+@cast
 @cast_nullability
 Feature: nullability of an explicit CAST
 
@@ -116,6 +117,24 @@ Feature: nullability of an explicit CAST
         | tinyint -> string              | CAST(1 AS TINYINT)                  | STRING                 | string                 |
         | tinyint -> timestamp           | CAST(1 AS TINYINT)                  | TIMESTAMP              | timestamp              |
         | tinyint -> tinyint             | CAST(1 AS TINYINT)                  | TINYINT                | byte                   |
+        | array<int> -> string      | array(1, 2)                         | STRING  | string  |
+        | array<int> -> variant     | array(1, 2)                         | VARIANT | variant |
+        | bigint -> variant         | CAST(1 AS BIGINT)                   | VARIANT | variant |
+        | binary -> variant         | X'01'                               | VARIANT | variant |
+        | boolean -> variant        | true                                | VARIANT | variant |
+        | date -> string            | DATE '2024-01-15'                   | STRING  | string  |
+        | decimal(10,2) -> variant  | CAST(1.5 AS DECIMAL(10,2))          | VARIANT | variant |
+        | double -> variant         | CAST(1.5 AS DOUBLE)                 | VARIANT | variant |
+        | float -> variant          | CAST(1.5 AS FLOAT)                  | VARIANT | variant |
+        | int -> variant            | 1                                   | VARIANT | variant |
+        | interval d-s -> string    | INTERVAL '1 12:30:01' DAY TO SECOND | STRING  | string  |
+        | interval y-m -> string    | INTERVAL '1-2' YEAR TO MONTH        | STRING  | string  |
+        | smallint -> variant       | CAST(1 AS SMALLINT)                 | VARIANT | variant |
+        | timestamp -> string       | TIMESTAMP '2024-01-15 10:00:00'     | STRING  | string  |
+        | timestamp -> variant      | TIMESTAMP '2024-01-15 10:00:00'     | VARIANT | variant |
+        | timestamp_ntz -> string   | TIMESTAMP_NTZ '2024-01-15 10:00:00' | STRING  | string  |
+        | timestamp_ntz -> variant  | TIMESTAMP_NTZ '2024-01-15 10:00:00' | VARIANT | variant |
+        | tinyint -> variant        | CAST(1 AS TINYINT)                  | VARIANT | variant |
 
   @spark_null
   Rule: scalar casts, non-nullable (Sail diverges)
@@ -134,26 +153,8 @@ Feature: nullability of an explicit CAST
 
       Examples:
         | case                      | input                               | type    | result  |
-        | array<int> -> string      | array(1, 2)                         | STRING  | string  |
-        | array<int> -> variant     | array(1, 2)                         | VARIANT | variant |
-        | bigint -> variant         | CAST(1 AS BIGINT)                   | VARIANT | variant |
-        | binary -> variant         | X'01'                               | VARIANT | variant |
-        | boolean -> variant        | true                                | VARIANT | variant |
-        | date -> string            | DATE '2024-01-15'                   | STRING  | string  |
-        | decimal(10,2) -> variant  | CAST(1.5 AS DECIMAL(10,2))          | VARIANT | variant |
-        | double -> variant         | CAST(1.5 AS DOUBLE)                 | VARIANT | variant |
-        | float -> variant          | CAST(1.5 AS FLOAT)                  | VARIANT | variant |
-        | int -> variant            | 1                                   | VARIANT | variant |
-        | interval d-s -> string    | INTERVAL '1 12:30:01' DAY TO SECOND | STRING  | string  |
-        | interval y-m -> string    | INTERVAL '1-2' YEAR TO MONTH        | STRING  | string  |
         | map<string,int> -> string | map('a', 1)                         | STRING  | string  |
-        | smallint -> variant       | CAST(1 AS SMALLINT)                 | VARIANT | variant |
         | struct<a:int> -> string   | named_struct('a', 1)                | STRING  | string  |
-        | timestamp -> string       | TIMESTAMP '2024-01-15 10:00:00'     | STRING  | string  |
-        | timestamp -> variant      | TIMESTAMP '2024-01-15 10:00:00'     | VARIANT | variant |
-        | timestamp_ntz -> string   | TIMESTAMP_NTZ '2024-01-15 10:00:00' | STRING  | string  |
-        | timestamp_ntz -> variant  | TIMESTAMP_NTZ '2024-01-15 10:00:00' | VARIANT | variant |
-        | tinyint -> variant        | CAST(1 AS TINYINT)                  | VARIANT | variant |
         | variant -> variant        | PARSE_JSON('1')                     | VARIANT | variant |
 
   @spark_null
@@ -191,24 +192,6 @@ Feature: nullability of an explicit CAST
         | variant -> string        | PARSE_JSON('1')   | STRING                 | string                 | :455 |
         | variant -> timestamp_ntz | PARSE_JSON('1')   | TIMESTAMP_NTZ          | timestamp_ntz          | :455 |
         | variant -> tinyint       | PARSE_JSON('1')   | TINYINT                | byte                   | :455 |
-
-  @spark_null
-  Rule: scalar casts, force-nullable (Sail diverges)
-
-    @sail-bug
-    Scenario Outline: a scalar CAST that is force-nullable but Sail does not: <case>
-      When query
-        """
-        SELECT CAST(<input> AS <type>) AS result
-        """
-      Then query schema
-        """
-        root
-         |-- result: <result> (nullable = true)
-        """
-
-      Examples:
-        | case                          | input                               | type          | result        | rule |
         | bigint -> decimal(10,2)       | CAST(1 AS BIGINT)                   | DECIMAL(10,2) | decimal(10,2) | :470 |
         | date -> timestamp_ntz         | DATE '2024-01-15'                   | TIMESTAMP_NTZ | timestamp_ntz | :467 |
         | decimal(10,2) -> bigint       | CAST(1.5 AS DECIMAL(10,2))          | BIGINT        | long          | :471 |
@@ -243,6 +226,24 @@ Feature: nullability of an explicit CAST
         | timestamp -> smallint         | TIMESTAMP '2024-01-15 10:00:00'     | SMALLINT      | short         | :461 |
         | timestamp -> tinyint          | TIMESTAMP '2024-01-15 10:00:00'     | TINYINT       | byte          | :461 |
         | timestamp_ntz -> date         | TIMESTAMP_NTZ '2024-01-15 10:00:00' | DATE          | date          | :465 |
+
+  @spark_null
+  Rule: scalar casts, force-nullable (Sail diverges)
+
+    @sail-bug
+    Scenario Outline: a scalar CAST that is force-nullable but Sail does not: <case>
+      When query
+        """
+        SELECT CAST(<input> AS <type>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <result> (nullable = true)
+        """
+
+      Examples:
+        | case                          | input                               | type          | result        | rule |
         | variant -> timestamp          | PARSE_JSON('1')                     | TIMESTAMP     | timestamp     | :455 |
 
   @spark_null
@@ -401,8 +402,7 @@ Feature: nullability of an explicit CAST
         | case          | rows                                     |
         | bigint -> INT | (CAST(1 AS BIGINT)), (CAST(2 AS BIGINT)) |
 
-    @sail-bug
-    Scenario Outline: a chained CAST propagates the inner force-nullable cast but Sail does not: <case>
+    Scenario Outline: a chained CAST propagates the inner force-nullable cast: <case>
       When query
         """
         SELECT CAST(<input> AS <type>) AS result
@@ -450,3 +450,17 @@ Feature: nullability of an explicit CAST
       Examples:
         | case                  |
         | folded WHEN true CASE |
+
+  @spark_null
+  Rule: the cast(...) function spelling
+
+    Scenario: a non-null literal input to cast yields the schema Spark declares
+      When query
+        """
+        SELECT cast('10' as int) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """

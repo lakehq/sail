@@ -5,7 +5,6 @@ Feature: CAST(... AS VARIANT) output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: casting a non-null literal to variant yields a non-nullable variant
       When query
         """
@@ -17,7 +16,6 @@ Feature: CAST(... AS VARIANT) output schema
          |-- result: variant (nullable = false)
         """
 
-    @sail-bug
     Scenario: casting a non-null column to variant yields a non-nullable variant
       When query
         """
@@ -44,7 +42,6 @@ Feature: CAST(... AS VARIANT) output schema
   Rule: Nullability through Spark's implicit casts
   # String -> * is force-nullable (Cast.scala:458)
 
-    @sail-bug
     Scenario Outline: cast_to_variant without an implicit cast keeps its non-nullable schema
       When query
         """
