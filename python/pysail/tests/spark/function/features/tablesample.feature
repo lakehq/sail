@@ -1,3 +1,4 @@
+@tablesample
 Feature: TABLESAMPLE clause
 
   Rule: TABLESAMPLE with PERCENT

@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -41,30 +41,39 @@ macro_rules! downcast_and_convert {
 /// Options for to_json function
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ToJsonOptions {
-    timestamp_format: String,
-    date_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
 }
 
 impl ToJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     // Default ISO 8601 format with timezone offset (not Z)
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.6f%:z";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    // Using Java DateTimeFormatter patterns
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                    .expect("default timestamp format should be valid")
+            });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
 
         Ok(Self {
             timestamp_format,
@@ -74,10 +83,13 @@ impl ToJsonOptions {
 }
 
 impl Default for ToJsonOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
         }
     }
 }
@@ -472,27 +484,60 @@ fn struct_to_values_array(
     Ok(Value::Array(json_values))
 }
 
-fn format_timestamp(value: i64, tz: Option<&str>, format: &str) -> String {
-    if let Some(tz_str) = tz {
-        // Try to parse the timezone and format with offset
-        if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>()
-            && let Some(dt_utc) = Utc.timestamp_micros(value).single()
-        {
-            let local_dt = dt_utc.with_timezone(&tz);
-            return local_dt.format(format).to_string();
-        }
-    }
+fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> String {
+    use chrono::Offset;
 
-    // Fallback to UTC
-    Utc.timestamp_micros(value)
-        .single()
-        .map(|ts| ts.format(format).to_string())
-        .unwrap_or_else(|| value.to_string())
+    use crate::scalar::datetime::format::{
+        DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+    };
+
+    if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
+        let (datetime, timezone) = if let Some(tz_str) = tz {
+            if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
+                let local_dt = dt_utc.with_timezone(&tz);
+                let offset = local_dt.offset().fix();
+                (
+                    local_dt.naive_local(),
+                    Some(TimeZoneDisplay {
+                        offset,
+                        name: Some(tz_str),
+                    }),
+                )
+            } else {
+                (dt_utc.naive_utc(), None)
+            }
+        } else {
+            (dt_utc.naive_utc(), None)
+        };
+
+        let input = DateTimeFormatInput {
+            datetime,
+            timezone,
+            zone_id: tz,
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+
+        format.format(input).unwrap_or_else(|_| value.to_string())
+    } else {
+        value.to_string()
+    }
 }
 
-fn format_date(days: i32, format: &str) -> String {
+fn format_date(days: i32, format: &DateTimeFormat) -> String {
+    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+
     chrono::DateTime::from_timestamp(days as i64 * 24 * 3600, 0)
-        .map(|date| date.format(format).to_string())
+        .map(|date| {
+            let input = DateTimeFormatInput {
+                datetime: date.naive_utc(),
+                timezone: None,
+                zone_id: None,
+                timestamp_kind: TimestampKind::Normal,
+                precision: TimePrecision::Second,
+            };
+            format.format(input).unwrap_or_else(|_| days.to_string())
+        })
         .unwrap_or_else(|| days.to_string())
 }
 

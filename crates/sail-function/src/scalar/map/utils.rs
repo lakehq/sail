@@ -1,12 +1,11 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, MapArray, StructArray};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::filter;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{HashSet, Result, ScalarValue, exec_err, internal_err};
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 /// Helper function to get element [`DataType`]

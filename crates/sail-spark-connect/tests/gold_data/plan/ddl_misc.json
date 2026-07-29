@@ -151,6 +151,66 @@
       }
     },
     {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl (a, b)SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE ON t.col1 = col2 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl AS t REPLACE ON t.col1 = col2 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl BY NAME REPLACE USING (col1) SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl REPLACE USING (col1) SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION OVERWRITE testcat.ns1.ns2.tbl (a, b)SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION OVERWRITE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION OVERWRITE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
+      }
+    },
+    {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
         "success": {

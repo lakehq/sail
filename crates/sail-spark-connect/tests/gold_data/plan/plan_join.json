@@ -127,6 +127,12 @@
       }
     },
     {
+      "input": "SELECT * FROM t1 CHANGES FROM VERSION 1 TO VERSION 5 AS a JOIN t2 CHANGES FROM VERSION 1 TO VERSION 5 AS b ON a.id = b.id",
+      "output": {
+        "failure": "invalid argument: found FROM at 25:29 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from a join b join c right join d",
       "output": {
         "success": {
@@ -1477,6 +1483,13 @@
       }
     },
     {
+      "input": "select * from t cross join u approx nearest 1 by similarity t.a",
+      "exception": "\n[NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE] Invalid nearest-by join. Unsupported nearest-by join type CROSS. Supported types: 'INNER', 'LEFT OUTER'. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t cross join u approx nearest 1 by similarity t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 36:43 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from t full join u as uu on a = b",
       "output": {
         "success": {
@@ -1647,6 +1660,13 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t full outer join u approx nearest 1 by similarity t.a",
+      "exception": "\n[NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE] Invalid nearest-by join. Unsupported nearest-by join type FULL OUTER. Supported types: 'INNER', 'LEFT OUTER'. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t full outer join u approx nearest 1 by similarity t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 41:48 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2017,6 +2037,12 @@
       }
     },
     {
+      "input": "select * from t inner join u exact nearest 3 by distance t.a - u.a",
+      "output": {
+        "failure": "invalid argument: found nearest at 35:42 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from t inner join u using(a, b)",
       "output": {
         "success": {
@@ -2174,6 +2200,13 @@
       }
     },
     {
+      "input": "select * from t join lateral (select * from u) uu approx nearest 1 by similarity 1",
+      "exception": "\n[UNSUPPORTED_FEATURE.LATERAL_JOIN_NEAREST_BY] The feature is not supported: LATERAL correlation with NEAREST BY clause. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t join lateral (select * from u) uu approx nearest 1 by similarity 1\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found approx at 50:56 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from t join lateral (select * from u) uu on true",
       "output": {
         "success": {
@@ -2266,6 +2299,33 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t join u approx nearest 0 by similarity t.a",
+      "exception": "\n[NEAREST_BY_JOIN.NUM_RESULTS_OUT_OF_RANGE] Invalid nearest-by join. The number of results 0 must be between 1 and 100000. Update the literal in `APPROX NEAREST 0 BY ...` (or `EXACT NEAREST 0 BY ...`) to fall within that range. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t join u approx nearest 0 by similarity t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 30:37 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select * from t join u approx nearest 100001 by distance t.a",
+      "exception": "\n[NEAREST_BY_JOIN.NUM_RESULTS_OUT_OF_RANGE] Invalid nearest-by join. The number of results 100001 must be between 1 and 100000. Update the literal in `APPROX NEAREST 100001 BY ...` (or `EXACT NEAREST 100001 BY ...`) to fall within that range. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t join u approx nearest 100001 by distance t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 30:37 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select * from t join u approx nearest 5 by similarity t.a + u.a",
+      "output": {
+        "failure": "invalid argument: found nearest at 30:37 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select * from t join u approx nearest 99999999999999999999 by distance t.a",
+      "exception": "\n[NEAREST_BY_JOIN.NUM_RESULTS_OUT_OF_RANGE] Invalid nearest-by join. The number of results 99999999999999999999 must be between 1 and 100000. Update the literal in `APPROX NEAREST 99999999999999999999 BY ...` (or `EXACT NEAREST 99999999999999999999 BY ...`) to fall within that range. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t join u approx nearest 99999999999999999999 by distance t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 30:37 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2966,6 +3026,12 @@
       }
     },
     {
+      "input": "select * from t left outer join u approx nearest by similarity t.a + u.a",
+      "output": {
+        "failure": "invalid argument: found nearest at 41:48 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from t left outer join u as uu on a = b",
       "output": {
         "success": {
@@ -3482,6 +3548,13 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t right outer join u approx nearest 1 by similarity t.a",
+      "exception": "\n[NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE] Invalid nearest-by join. Unsupported nearest-by join type RIGHT OUTER. Supported types: 'INNER', 'LEFT OUTER'. SQLSTATE: 42604\n== SQL (line 1, position 17) ==\nselect * from t right outer join u approx nearest 1 by similarity t.a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found nearest at 42:49 expected '(', 'ON', 'USING', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {

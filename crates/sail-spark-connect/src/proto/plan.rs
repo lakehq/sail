@@ -206,7 +206,11 @@ impl TryFrom<RelType> for RelationNode {
                             options,
                             paths,
                             predicates,
+                            source_name,
                         } = x;
+                        if source_name.is_some() {
+                            return Err(SparkError::unsupported("streaming source name"));
+                        }
                         let schema = schema
                             .and_then(|s| {
                                 if s.is_empty() {
@@ -905,6 +909,7 @@ impl TryFrom<RelType> for RelationNode {
                     ParseFormat::Unspecified => spec::ParseFormat::Unspecified,
                     ParseFormat::Csv => spec::ParseFormat::Csv,
                     ParseFormat::Json => spec::ParseFormat::Json,
+                    ParseFormat::Xml => return Err(SparkError::unsupported("XML parse relation")),
                 };
                 let schema: Option<spec::DataType> = schema.map(|x| x.try_into()).transpose()?;
                 Ok(RelationNode::Query(spec::QueryNode::Parse(spec::Parse {
@@ -1328,6 +1333,8 @@ impl TryFrom<RelType> for RelationNode {
                 }))
             }
             RelType::Catalog(catalog) => Ok(RelationNode::Command(catalog.try_into()?)),
+            RelType::RelationChanges(_) => Err(SparkError::unsupported("relation changes")),
+            RelType::NearestByJoin(_) => Err(SparkError::unsupported("nearest-by join")),
             RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
             RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
             RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
@@ -1605,6 +1612,18 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let sc::ListCatalogs { pattern } = x;
                 Ok(spec::CommandNode::ListCatalogs { pattern })
             }
+            CatType::DropTable(_) => Err(SparkError::unsupported("drop table")),
+            CatType::DropView(_) => Err(SparkError::unsupported("drop view")),
+            CatType::CreateDatabase(_) => Err(SparkError::unsupported("create database")),
+            CatType::DropDatabase(_) => Err(SparkError::unsupported("drop database")),
+            CatType::ListPartitions(_) => Err(SparkError::unsupported("list partitions")),
+            CatType::ListViews(_) => Err(SparkError::unsupported("list views")),
+            CatType::GetTableProperties(_) => Err(SparkError::unsupported("get table properties")),
+            CatType::GetCreateTableString(_) => {
+                Err(SparkError::unsupported("get create table string"))
+            }
+            CatType::TruncateTable(_) => Err(SparkError::unsupported("truncate table")),
+            CatType::AnalyzeTable(_) => Err(SparkError::unsupported("analyze table")),
         }
     }
 }
@@ -1648,7 +1667,11 @@ impl TryFrom<WriteOperation> for spec::Write {
             options,
             clustering_columns,
             save_type,
+            with_schema_evolution,
         } = write;
+        if with_schema_evolution {
+            return Err(SparkError::unsupported("write schema evolution"));
+        }
         let input = input.required("input")?.try_into()?;
         let mode = match SaveMode::try_from(mode).required("save mode")? {
             SaveMode::Unspecified => None,
@@ -1747,7 +1770,11 @@ impl TryFrom<WriteOperationV2> for spec::WriteTo {
             mode,
             overwrite_condition,
             clustering_columns,
+            with_schema_evolution,
         } = write;
+        if with_schema_evolution {
+            return Err(SparkError::unsupported("write schema evolution"));
+        }
         let input = input.required("input")?.try_into()?;
         let table = from_ast_object_name(parse_object_name(table_name.as_str())?)?;
         let partitioning_columns = partitioning_columns
