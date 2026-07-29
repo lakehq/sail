@@ -250,6 +250,40 @@
     when using the `exponential_backoff` retry strategy.
   experimental: true
 
+- key: cluster.shuffle_backend.type
+  type: string
+  default: "streaming"
+  description: |
+    The shuffle backend type. Valid values are `streaming` and `storage`.
+    The `streaming` shuffle backend streams shuffle data directly among tasks.
+    The `storage` shuffle backend materializes merged shuffle partitions in object storage
+    before running dependent stages.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.path
+  type: string
+  default: "file:///tmp/sail/shuffle"
+  description: |
+    The object storage base URL for storage-backed shuffle data.
+    This is only used when `cluster.shuffle_backend.type` is `storage`.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.max_file_size
+  type: number
+  default: "134217728"
+  description: |
+    The maximum size in bytes of each storage-backed shuffle file. Larger partitions are
+    split into multiple Arrow IPC files.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
 - key: execution.batch_size
   type: number
   default: "8192"
