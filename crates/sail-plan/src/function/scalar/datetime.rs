@@ -411,6 +411,9 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
             let expr = expr_fn::to_local_time(vec![expr]);
             return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
         }
+        if matches!(expr_type, Ok(DataType::Date32) | Ok(DataType::Date64)) {
+            return Ok(cast(expr, DataType::Date32)); // In case of data type date, ignore format
+        }
         let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
