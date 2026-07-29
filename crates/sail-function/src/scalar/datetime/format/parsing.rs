@@ -33,9 +33,8 @@ struct ParseState {
 impl DateTimeFormat {
     pub fn parse_datetime_value(&self, value: &str) -> Result<ParsedDateTime> {
         let mut state = ParseState::default();
-        let value = value.trim();
-        let mut position = parse_items(&self.items, value, 0, self.locale.data(), &mut state)?;
-        position = parse_optional_zone_region(value, position);
+        let (position, _) =
+            parse_items(&self.items, value, 0, self.locale.data(), &mut state, false)?;
         if position != value.len() {
             return Err(exec_datafusion_err!(
                 "datetime value does not match format at byte offset {position}: {value}"
@@ -55,77 +54,59 @@ fn parse_items(
     mut position: usize,
     locale: &LocaleData,
     state: &mut ParseState,
-) -> Result<usize> {
+    mut previous_item_is_numeric_field: bool,
+) -> Result<(usize, bool)> {
     for item in items {
         match item {
             DateTimeItem::Literal(literal) => {
                 position = consume_literal(value, position, literal)?;
+                previous_item_is_numeric_field = false;
             }
             DateTimeItem::Field(field_spec) => {
                 position = parse_field_spec(field_spec, value, position, locale, state)?;
+                previous_item_is_numeric_field = matches!(
+                    field_spec.style,
+                    FieldStyle::Numeric | FieldStyle::LocalizedNumeric
+                );
             }
             DateTimeItem::Fraction(fraction_spec) => {
+                if previous_item_is_numeric_field {
+                    return Err(exec_datafusion_err!(
+                        "seconds fraction cannot directly follow a numeric datetime field"
+                    ));
+                }
                 position = parse_fraction_spec(fraction_spec, value, position, state)?;
+                previous_item_is_numeric_field = false;
             }
             DateTimeItem::Zone(zone_spec) => {
                 position = parse_zone_spec(zone_spec, value, position, state)?;
+                previous_item_is_numeric_field = false;
             }
             DateTimeItem::Optional(items) => {
                 let snapshot = state.clone();
-                match parse_items(items, value, position, locale, state) {
-                    Ok(next) => position = next,
+                match parse_items(
+                    items,
+                    value,
+                    position,
+                    locale,
+                    state,
+                    previous_item_is_numeric_field,
+                ) {
+                    Ok((next, next_item_is_numeric_field)) => {
+                        position = next;
+                        previous_item_is_numeric_field = next_item_is_numeric_field;
+                    }
                     Err(_) => {
-                        *state = snapshot.clone();
-                        // Try partial literal matching for the first item
-                        if let Some(DateTimeItem::Literal(literal)) = items.first() {
-                            // Try to find a suffix of the literal that matches
-                            let mut matched = false;
-                            for i in 0..literal.len() {
-                                let suffix = &literal[i..];
-                                if value[position..].starts_with(suffix) {
-                                    // Found matching suffix, parse rest of optional items
-                                    let new_position = position + suffix.len();
-                                    match parse_items(
-                                        &items[1..],
-                                        value,
-                                        new_position,
-                                        locale,
-                                        state,
-                                    ) {
-                                        Ok(next) => {
-                                            position = next;
-                                            matched = true;
-                                            break;
-                                        }
-                                        Err(_) => {
-                                            *state = snapshot.clone();
-                                        }
-                                    }
-                                }
-                            }
-                            // Also try the original special case for single space
-                            if !matched && literal == " " {
-                                match parse_items(&items[1..], value, position, locale, state) {
-                                    Ok(next) => position = next,
-                                    Err(_) => *state = snapshot,
-                                }
-                            }
-                        }
+                        *state = snapshot;
                     }
                 }
             }
         }
     }
-    Ok(position)
+    Ok((position, previous_item_is_numeric_field))
 }
 
 fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize> {
-    if literal == " " {
-        let next = skip_padding(value, position);
-        if next > position {
-            return Ok(next);
-        }
-    }
     if value[position..].starts_with(literal) {
         Ok(position + literal.len())
     } else {
@@ -133,13 +114,6 @@ fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize>
             "expected datetime literal '{literal}' at byte offset {position}"
         ))
     }
-}
-
-fn skip_padding(value: &str, mut position: usize) -> usize {
-    while value[position..].starts_with(' ') {
-        position += 1;
-    }
-    position
 }
 
 fn parse_quarter(
@@ -430,16 +404,6 @@ fn parse_zone_name(value: &str, position: usize) -> Result<(usize, String)> {
     } else {
         Ok((next, value[position..next].to_string()))
     }
-}
-
-fn parse_optional_zone_region(value: &str, position: usize) -> usize {
-    if !value[position..].starts_with('[') {
-        return position;
-    }
-    value[position + 1..]
-        .find(']')
-        .map(|offset| position + offset + 2)
-        .unwrap_or(position)
 }
 
 fn parse_week_of_month_field(

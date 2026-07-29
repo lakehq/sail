@@ -250,16 +250,27 @@ Feature: datetime parsing with format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario: `to_timestamp` parses with extra whitespace
+    Scenario Outline: `to_timestamp` rejects extra whitespace under strict input consumption: <case>
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT
-          to_timestamp('2026-06-15  14:30:45', 'yyyy-MM-dd HH:mm:ss') AS extra_space,
-          to_timestamp('  2026-06-15 14:30:45  ', 'yyyy-MM-dd HH:mm:ss') AS leading_trailing
+        SELECT to_timestamp(<in>, 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query result
-        | extra_space         | leading_trailing    |
-        | 2026-06-15 14:30:45 | 2026-06-15 14:30:45 |
+      Then query error .*
+
+      Examples:
+        | case                                           | in                                        |
+        | leading space before the timestamp             | concat(' ', '2026-06-15 14:30:45')        |
+        | trailing space after the timestamp             | concat('2026-06-15 14:30:45', ' ')        |
+        | double space where the pattern has one space   | '2026-06-15  14:30:45'                    |
+
+    Scenario: `to_timestamp` rejects an unpatterned bracket suffix under strict input consumption
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45[garbage]', 'yyyy-MM-dd HH:mm:ss')
+        """
+      Then query error .*
 
     Scenario: `to_timestamp` parses with case-insensitive month names
       When query
@@ -332,16 +343,25 @@ Feature: datetime parsing with format strings
         | date_only           | with_time           | with_frac               |
         | 2026-06-15 00:00:00 | 2026-06-15 14:30:45 | 2026-06-15 14:30:45.789 |
 
-    Scenario: `to_timestamp` parses with optional timezone
+    Scenario: `to_timestamp` parses with optional timezone under strict input consumption
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT
           to_timestamp('2026-06-15 14:30:45', 'yyyy-MM-dd HH:mm:ss[ XXX]') AS without_tz,
-          to_timestamp('2026-06-15 14:30:45+02:00', 'yyyy-MM-dd HH:mm:ss[ XXX]') AS with_tz
+          to_timestamp('2026-06-15 14:30:45 +02:00', 'yyyy-MM-dd HH:mm:ss[ XXX]') AS with_tz
         """
       Then query result
         | without_tz          | with_tz             |
         | 2026-06-15 14:30:45 | 2026-06-15 12:30:45 |
+
+    Scenario: `to_timestamp` rejects optional timezone without its literal space under strict input consumption
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 14:30:45+02:00', 'yyyy-MM-dd HH:mm:ss[ XXX]')
+        """
+      Then query error .*
 
   Rule: Two-digit year parsing
 
@@ -785,16 +805,18 @@ Feature: datetime parsing with format strings
         | adjacent_date       | adjacent_datetime   |
         | 2026-06-15 00:00:00 | 2026-06-15 14:30:45 |
 
-    Scenario: `to_timestamp` parses adjacent with fractional seconds
+    Scenario Outline: `to_timestamp` rejects adjacent fractional seconds under strict input consumption: <case>
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT
-          to_timestamp('20260615143045123', 'yyyyMMddHHmmssSSS') AS adjacent_ms,
-          to_timestamp('20260615143045123456', 'yyyyMMddHHmmssSSSSSS') AS adjacent_us
+        SELECT to_timestamp('<in>', '<fmt>')
         """
-      Then query result
-        | adjacent_ms             | adjacent_us                |
-        | 2026-06-15 14:30:45.123 | 2026-06-15 14:30:45.123456 |
+      Then query error .*
+
+      Examples:
+        | case                                      | in                   | fmt                    |
+        | adjacent millisecond fraction with SSS    | 20260615143045123     | yyyyMMddHHmmssSSS      |
+        | adjacent microsecond fraction with SSSSSS | 20260615143045123456  | yyyyMMddHHmmssSSSSSS   |
 
   Rule: Spark-specific deviation tests
 
