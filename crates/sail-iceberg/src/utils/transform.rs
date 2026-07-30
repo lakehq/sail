@@ -287,11 +287,19 @@ fn hash_long(v: i64) -> i32 {
 #[inline]
 fn hash_decimal(v: i128) -> i32 {
     let bytes = v.to_be_bytes();
-    if let Some(start) = bytes.iter().position(|&x| x != 0) {
-        hash_bytes(&bytes[start..])
-    } else {
-        hash_bytes(&[0])
+    let mut start = 0;
+    while start < bytes.len() - 1 {
+        let current = bytes[start];
+        let next = bytes[start + 1];
+        let redundant_positive = current == 0x00 && (next & 0x80) == 0;
+        let redundant_negative = current == 0xff && (next & 0x80) != 0;
+        if redundant_positive || redundant_negative {
+            start += 1;
+        } else {
+            break;
+        }
     }
+    hash_bytes(&bytes[start..])
 }
 
 #[inline]
@@ -426,5 +434,11 @@ mod tests {
             ),
             Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(6))))
         );
+    }
+
+    #[test]
+    fn decimal_bucket_uses_minimal_twos_complement_bytes() {
+        assert_eq!(bucket_decimal(-5, 16), 2);
+        assert_eq!(bucket_decimal(128, 16), 5);
     }
 }
