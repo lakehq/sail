@@ -60,6 +60,9 @@ pub struct CommitMetaAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PartitionValue {
+    /// `serde_arrow` cannot encode `None` directly inside a union, so null partition
+    /// values use an explicit sentinel variant.
+    Null(bool),
     Boolean(bool),
     Int(i32),
     Long(i64),
@@ -78,7 +81,7 @@ pub struct AddFileAction {
     pub content: String,
     pub file_path: String,
     pub file_format: String,
-    pub partition: Vec<Option<PartitionValue>>,
+    pub partition: Vec<PartitionValue>,
     pub record_count: u64,
     pub file_size_in_bytes: u64,
     pub column_sizes: BTreeMap<i32, u64>,
@@ -116,8 +119,9 @@ fn partition_value_union_type() -> DataType {
         reason = "partition_value_union_type is a process-global constant."
     )]
     let union_fields = UnionFields::try_new(
-        [0i8, 1, 2, 3, 4, 5, 6, 7, 8],
+        [0i8, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         [
+            Arc::new(Field::new("Null", DataType::Boolean, false)),
             Arc::new(Field::new("Boolean", DataType::Boolean, false)),
             Arc::new(Field::new("Int", DataType::Int32, false)),
             Arc::new(Field::new("Long", DataType::Int64, false)),
@@ -237,6 +241,9 @@ impl TryFrom<PartitionValue> for PrimitiveLiteral {
 
     fn try_from(v: PartitionValue) -> Result<Self> {
         match v {
+            PartitionValue::Null(_) => Err(DataFusionError::Internal(
+                "null partition sentinel cannot be converted to a primitive literal".to_string(),
+            )),
             PartitionValue::Boolean(x) => Ok(PrimitiveLiteral::Boolean(x)),
             PartitionValue::Int(x) => Ok(PrimitiveLiteral::Int(x)),
             PartitionValue::Long(x) => Ok(PrimitiveLiteral::Long(x)),
@@ -275,9 +282,9 @@ impl TryFrom<DataFile> for AddFileAction {
         let partition = df
             .partition
             .into_iter()
-            .map(|opt| match opt {
-                None => Ok(None),
-                Some(Literal::Primitive(p)) => Ok(Some(p.into())),
+            .map(|value| match value {
+                None => Ok(PartitionValue::Null(false)),
+                Some(Literal::Primitive(primitive)) => Ok(primitive.into()),
                 Some(other) => Err(DataFusionError::Internal(format!(
                     "unsupported non-primitive partition literal in DataFile: {other:?}"
                 ))),
@@ -329,9 +336,9 @@ impl TryFrom<AddFileAction> for DataFile {
         let partition = a
             .partition
             .into_iter()
-            .map(|opt| match opt {
-                None => Ok(None),
-                Some(pv) => Ok(Some(Literal::Primitive(pv.try_into()?))),
+            .map(|value| match value {
+                PartitionValue::Null(_) => Ok(None),
+                primitive => Ok(Some(Literal::Primitive(primitive.try_into()?))),
             })
             .collect::<Result<Vec<_>>>()?;
 
