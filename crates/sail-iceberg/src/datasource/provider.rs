@@ -40,6 +40,7 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use object_store::ObjectMeta;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
@@ -84,6 +85,15 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
+    fn iceberg_field_id_for_arrow_field(
+        field: &datafusion::arrow::datatypes::Field,
+    ) -> Option<i32> {
+        field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .and_then(|value| value.parse().ok())
+    }
+
     /// Create a new Iceberg table provider
     pub fn new(
         table_uri: impl ToString,
@@ -547,8 +557,12 @@ impl IcebergTableProvider {
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
 
-        // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
+        let field_ids: Vec<Option<i32>> = self
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| Self::iceberg_field_id_for_arrow_field(field))
+            .collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
@@ -562,6 +576,9 @@ impl IcebergTableProvider {
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                let Some(field_id) = field_id else {
+                    continue;
+                };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
@@ -629,14 +646,10 @@ impl IcebergTableProvider {
             .arrow_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                let field_id = self
-                    .schema
-                    .fields()
-                    .get(i)
-                    .map(|f| f.id)
-                    .unwrap_or(i as i32 + 1);
+            .map(|field| {
+                let Some(field_id) = Self::iceberg_field_id_for_arrow_field(field) else {
+                    return ColumnStatistics::new_unknown();
+                };
 
                 let null_count = data_file
                     .null_value_counts()
@@ -1211,5 +1224,100 @@ impl IcebergTableProvider {
         );
 
         Ok(scan_exec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::manifest::{DataContentType, DataFileFormat};
+    use crate::spec::types::values::{Datum, PrimitiveLiteral};
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    fn reordered_identity_provider() -> Result<IcebergTableProvider> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "part",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "value",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .map_err(datafusion::common::DataFusionError::Execution)?;
+        let spec = PartitionSpec::builder()
+            .add_field(1, "part", Transform::Identity)
+            .build();
+        IcebergTableProvider::new_empty("memory://table", schema, vec![spec], 0)
+    }
+
+    fn data_file_with_long_bounds() -> DataFile {
+        let long_bound = |value| Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(value));
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "data/file.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Long(10)))],
+            record_count: 1,
+            file_size_in_bytes: 100,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::from([(1, 0), (2, 0)]),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::from([(1, long_bound(10)), (2, long_bound(20))]),
+            upper_bounds: HashMap::from([(1, long_bound(10)), (2, long_bound(20))]),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    #[test]
+    fn file_statistics_follow_arrow_field_ids_after_partition_reorder() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        assert_eq!(
+            provider
+                .arrow_schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["value", "part"]
+        );
+
+        let statistics = provider.create_file_statistics(&data_file_with_long_bounds());
+
+        assert_eq!(
+            statistics.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(20)))
+        );
+        assert_eq!(
+            statistics.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(10)))
+        );
+
+        let aggregate = provider.aggregate_statistics(&[data_file_with_long_bounds()]);
+        assert_eq!(
+            aggregate.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(20)))
+        );
+        assert_eq!(
+            aggregate.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(10)))
+        );
+        Ok(())
     }
 }
