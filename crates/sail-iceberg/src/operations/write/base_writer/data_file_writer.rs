@@ -59,6 +59,8 @@ impl DataFileWriter {
             nan_value_counts: Default::default(),
             lower_bounds,
             upper_bounds,
+            raw_lower_bounds: Default::default(),
+            raw_upper_bounds: Default::default(),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets,

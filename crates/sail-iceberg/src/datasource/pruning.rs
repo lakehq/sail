@@ -831,6 +831,8 @@ mod tests {
             upper_bounds: upper
                 .map(|value| HashMap::from([(1, bound(value))]))
                 .unwrap_or_default(),
+            raw_lower_bounds: HashMap::new(),
+            raw_upper_bounds: HashMap::new(),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: vec![],

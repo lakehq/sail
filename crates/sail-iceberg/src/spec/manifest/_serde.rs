@@ -282,14 +282,24 @@ fn datum_to_bytes(datum: &Datum) -> Result<Vec<u8>, String> {
     }
 }
 
-fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
-    if values.is_empty() {
+fn bytes_map_from(
+    values: HashMap<i32, Datum>,
+    raw_values: HashMap<i32, Vec<u8>>,
+) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
+    if values.is_empty() && raw_values.is_empty() {
         Ok(None)
     } else {
-        let mut out = values
+        let mut encoded = HashMap::with_capacity(values.len() + raw_values.len());
+        for (key, datum) in values {
+            encoded.insert(key, datum_to_bytes(&datum)?);
+        }
+        // The original manifest bytes are authoritative. In particular, a promoted int bound
+        // decoded through a long schema must remain four bytes when the manifest is rewritten.
+        encoded.extend(raw_values);
+        let mut out = encoded
             .into_iter()
-            .map(|(key, value)| datum_to_bytes(&value).map(|value| IntBytesMapEntry { key, value }))
-            .collect::<Result<Vec<_>, String>>()?;
+            .map(|(key, value)| IntBytesMapEntry { key, value })
+            .collect::<Vec<_>>();
         out.sort_by_key(|entry| entry.key);
         Ok(Some(out))
     }
@@ -298,26 +308,37 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
 fn bytes_map_into(
     values: Option<Vec<IntBytesMapEntry>>,
     schema: Option<&Schema>,
-) -> HashMap<i32, Datum> {
-    // TODO: Preserve raw bound bytes like `Map<Integer, ByteBuffer>` metrics.
-    // For now, keep only bounds we can decode into `Datum`; unknown fields and unsupported
-    // primitive encodings are ignored so manifest reads remain non-fatal after schema evolution.
-    values
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|entry| {
-            let primitive = schema
-                .and_then(|schema| schema.field_by_id(entry.key))
-                .and_then(|field| match field.field_type.as_ref() {
-                    Type::Primitive(primitive) => Some(primitive.clone()),
-                    Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
-                })?;
+) -> (HashMap<i32, Datum>, HashMap<i32, Vec<u8>>) {
+    let mut decoded = HashMap::new();
+    let mut raw = HashMap::new();
+    for entry in values.unwrap_or_default() {
+        let primitive = schema
+            .and_then(|schema| schema.field_by_id(entry.key))
+            .and_then(|field| match field.field_type.as_ref() {
+                Type::Primitive(primitive) => Some(primitive.clone()),
+                Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
+            });
+        match primitive.and_then(|primitive| {
             primitive
                 .literal_from_bytes(&entry.value)
                 .ok()
-                .map(|literal| (entry.key, Datum::new(primitive, literal)))
-        })
-        .collect()
+                .map(|literal| Datum::new(primitive, literal))
+        }) {
+            Some(datum) => {
+                if datum_to_bytes(&datum)
+                    .map(|encoded| encoded != entry.value)
+                    .unwrap_or(true)
+                {
+                    raw.insert(entry.key, entry.value.clone());
+                }
+                decoded.insert(entry.key, datum);
+            }
+            None => {
+                raw.insert(entry.key, entry.value);
+            }
+        }
+    }
+    (decoded, raw)
 }
 
 #[expect(dead_code)]
@@ -366,8 +387,8 @@ impl DataFileSerde {
             value_counts: int_long_map_from(df.value_counts),
             null_value_counts: int_long_map_from(df.null_value_counts),
             nan_value_counts: int_long_map_from(df.nan_value_counts),
-            lower_bounds: bytes_map_from(df.lower_bounds)?,
-            upper_bounds: bytes_map_from(df.upper_bounds)?,
+            lower_bounds: bytes_map_from(df.lower_bounds, df.raw_lower_bounds)?,
+            upper_bounds: bytes_map_from(df.upper_bounds, df.raw_upper_bounds)?,
             key_metadata: df.key_metadata,
             split_offsets: if df.split_offsets.is_empty() {
                 None
@@ -406,6 +427,8 @@ impl DataFileSerde {
             "PUFFIN" => DataFileFormat::Puffin,
             _ => DataFileFormat::Parquet,
         };
+        let (lower_bounds, raw_lower_bounds) = bytes_map_into(self.lower_bounds, schema);
+        let (upper_bounds, raw_upper_bounds) = bytes_map_into(self.upper_bounds, schema);
         Ok(super::DataFile {
             content,
             file_path: self.file_path,
@@ -420,8 +443,10 @@ impl DataFileSerde {
             value_counts: int_long_map_into("value_counts", self.value_counts)?,
             null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
             nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
-            lower_bounds: bytes_map_into(self.lower_bounds, schema),
-            upper_bounds: bytes_map_into(self.upper_bounds, schema),
+            lower_bounds,
+            upper_bounds,
+            raw_lower_bounds,
+            raw_upper_bounds,
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
@@ -433,5 +458,127 @@ impl DataFileSerde {
             content_offset: self.content_offset,
             content_size_in_bytes: self.content_size_in_bytes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::types::{NestedField, PrimitiveType};
+
+    fn current_schema() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "promoted_long",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "decimal",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                )),
+                Arc::new(NestedField::required(
+                    3,
+                    "uuid",
+                    Type::Primitive(PrimitiveType::Uuid),
+                )),
+            ])
+            .build()
+            .expect("valid test schema")
+    }
+
+    fn data_file_serde_with_historical_bounds() -> DataFileSerde {
+        let lower_bounds = [
+            (1, 34_i32.to_le_bytes().to_vec()),
+            (2, vec![0x80]),
+            (3, (0_u8..16).collect()),
+            (99, vec![0x01, 0x02, 0x03]),
+        ];
+        let upper_bounds = [
+            (1, 35_i32.to_le_bytes().to_vec()),
+            (2, vec![0x00, 0x80]),
+            (3, (16_u8..32).collect()),
+            (99, vec![0x04, 0x05, 0x06]),
+        ];
+        DataFileSerde {
+            content: 0,
+            file_path: "data/file.parquet".to_string(),
+            file_format: "PARQUET".to_string(),
+            partition: None,
+            record_count: 1,
+            file_size_in_bytes: 100,
+            column_sizes: None,
+            value_counts: None,
+            null_value_counts: None,
+            nan_value_counts: None,
+            lower_bounds: Some(
+                lower_bounds
+                    .into_iter()
+                    .map(|(key, value)| IntBytesMapEntry { key, value })
+                    .collect(),
+            ),
+            upper_bounds: Some(
+                upper_bounds
+                    .into_iter()
+                    .map(|(key, value)| IntBytesMapEntry { key, value })
+                    .collect(),
+            ),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    #[test]
+    fn historical_bound_bytes_survive_data_file_round_trip() {
+        let partition_type = StructType::new(vec![]);
+        let data_file = data_file_serde_with_historical_bounds()
+            .into_data_file(0, &partition_type, Some(&current_schema()))
+            .expect("decode data file");
+        let encoded =
+            DataFileSerde::from_data_file(data_file, &partition_type).expect("encode data file");
+
+        let lower = encoded.lower_bounds.expect("lower bounds");
+        assert_eq!(
+            lower
+                .into_iter()
+                .map(|entry| (entry.key, entry.value))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                (1, 34_i32.to_le_bytes().to_vec()),
+                (2, vec![0x80]),
+                (3, (0_u8..16).collect()),
+                (99, vec![0x01, 0x02, 0x03]),
+            ])
+        );
+
+        let upper = encoded.upper_bounds.expect("upper bounds");
+        assert_eq!(
+            upper
+                .into_iter()
+                .map(|entry| (entry.key, entry.value))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                (1, 35_i32.to_le_bytes().to_vec()),
+                (2, vec![0x00, 0x80]),
+                (3, (16_u8..32).collect()),
+                (99, vec![0x04, 0x05, 0x06]),
+            ])
+        );
     }
 }

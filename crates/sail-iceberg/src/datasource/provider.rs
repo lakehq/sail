@@ -580,8 +580,7 @@ impl IcebergTableProvider {
             vec![None; self.arrow_schema.fields().len()];
         let mut min_complete = vec![true; self.arrow_schema.fields().len()];
         let mut max_complete = vec![true; self.arrow_schema.fields().len()];
-        let mut null_counts: Vec<Option<usize>> =
-            vec![Some(0); self.arrow_schema.fields().len()];
+        let mut null_counts: Vec<Option<usize>> = vec![Some(0); self.arrow_schema.fields().len()];
 
         for df in data_files {
             total_rows = total_rows.saturating_add(df.record_count() as usize);
@@ -1310,6 +1309,8 @@ mod tests {
             nan_value_counts: HashMap::new(),
             lower_bounds: HashMap::from([(1, long_bound(10)), (2, long_bound(20))]),
             upper_bounds: HashMap::from([(1, long_bound(10)), (2, long_bound(20))]),
+            raw_lower_bounds: HashMap::new(),
+            raw_upper_bounds: HashMap::new(),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: vec![],
@@ -1356,6 +1357,8 @@ mod tests {
             nan_value_counts: HashMap::new(),
             lower_bounds: HashMap::from([(3, date.clone())]),
             upper_bounds: HashMap::from([(3, date)]),
+            raw_lower_bounds: HashMap::new(),
+            raw_upper_bounds: HashMap::new(),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: vec![],
