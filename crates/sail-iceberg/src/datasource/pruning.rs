@@ -148,10 +148,10 @@ impl PruningStatistics for IcebergPruningStats {
         if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
             return Some(arr.clone());
         }
-        let counts: Vec<u64> = self
+        let counts: Vec<Option<u64>> = self
             .files
             .iter()
-            .map(|f| f.null_value_counts().get(&field_id).copied().unwrap_or(0))
+            .map(|f| f.null_value_counts().get(&field_id).copied())
             .collect();
         let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
         self.nulls_cache.borrow_mut().insert(field_id, arr.clone());
@@ -792,6 +792,7 @@ fn collect_source_range_filters(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::array::Array;
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::prelude::SessionContext;
 
@@ -872,6 +873,41 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["data/matching.parquet"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_null_count_is_reported_as_unknown() -> Result<()> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            true,
+        )]));
+        let iceberg_schema = test_schema()?;
+        let mut unknown = data_file("data/unknown.parquet", None, None);
+        unknown.null_value_counts.clear();
+        let stats = IcebergPruningStats::new(
+            vec![unknown, data_file("data/no-nulls.parquet", None, None)],
+            arrow_schema,
+            &iceberg_schema,
+        );
+
+        let counts = stats.null_counts(&Column::from_name("id")).ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "null count statistics are unavailable".to_string(),
+            )
+        })?;
+        let counts = counts
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "null counts must be UInt64".to_string(),
+                )
+            })?;
+        assert!(counts.is_null(0));
+        assert!(!counts.is_null(1));
+        assert_eq!(counts.value(1), 0);
         Ok(())
     }
 }
