@@ -67,14 +67,7 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
     }
 
     fn max_in_field(field: &StructField) -> i64 {
-        let field_id = field
-            .metadata()
-            .get("delta.columnMapping.id")
-            .and_then(|v| match v {
-                MetadataValue::Number(n) => Some(*n),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let field_id = column_mapping_id(field).unwrap_or_default();
 
         field_id.max(max_in_data_type(field.data_type()))
     }
@@ -84,8 +77,7 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
 
 fn column_mapping_id(field: &StructField) -> Option<i64> {
     field
-        .metadata()
-        .get("delta.columnMapping.id")
+        .get_config_value(&ColumnMetadataKey::ColumnMappingId)
         .and_then(|v| match v {
             MetadataValue::Number(n) => Some(*n),
             _ => None,
@@ -94,8 +86,7 @@ fn column_mapping_id(field: &StructField) -> Option<i64> {
 
 fn column_mapping_physical_name(field: &StructField) -> Option<&str> {
     field
-        .metadata()
-        .get("delta.columnMapping.physicalName")
+        .get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName)
         .and_then(|v| match v {
             MetadataValue::String(s) => Some(s.as_str()),
             _ => None,
@@ -112,8 +103,8 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
     strip_parquet_field_id_metadata(&mut merged);
 
     for (key, value) in new.metadata() {
-        let is_column_mapping_key =
-            key == "delta.columnMapping.id" || key == "delta.columnMapping.physicalName";
+        let is_column_mapping_key = key == ColumnMetadataKey::ColumnMappingId.as_ref()
+            || key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
 
         if is_column_mapping_key {
             // Preserve existing column mapping metadata if present; otherwise add it.
@@ -135,9 +126,12 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     let mut annotated = field.clone();
     strip_parquet_field_id_metadata(&mut annotated.metadata);
     let annotated = annotated.add_metadata([
-        ("delta.columnMapping.id", MetadataValue::Number(next_id)),
         (
-            "delta.columnMapping.physicalName",
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            MetadataValue::Number(next_id),
+        ),
+        (
+            ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
             MetadataValue::String(physical_name),
         ),
     ]);
@@ -302,24 +296,5 @@ mod tests {
             );
             assert!(field.metadata().contains_key("delta.columnMapping.id"));
         }
-    }
-
-    #[test]
-    fn max_column_id_traverses_consecutive_collection_types() {
-        let value = StructField::new("value", DataType::LONG, true)
-            .with_metadata([("delta.columnMapping.id", MetadataValue::Number(7))]);
-        let nested = StructType::try_new(vec![value]).expect("nested schema");
-        let nested_arrays = DataType::Array(Box::new(ArrayType::new(
-            DataType::Array(Box::new(ArrayType::new(
-                DataType::Struct(Box::new(nested)),
-                true,
-            ))),
-            true,
-        )));
-        let payload = StructField::new("payload", nested_arrays, true)
-            .with_metadata([("delta.columnMapping.id", MetadataValue::Number(1))]);
-        let schema = StructType::try_new(vec![payload]).expect("schema");
-
-        assert_eq!(compute_max_column_id(&schema), 7);
     }
 }

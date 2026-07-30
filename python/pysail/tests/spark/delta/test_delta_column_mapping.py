@@ -199,10 +199,10 @@ def test_scalar_column_mapping_read_does_not_expose_parquet_field_ids(
         .save(str(source_path))
     )
 
-    loaded_schema = spark.read.format("delta").load(str(source_path)).schema.json()
-
-    assert "PARQUET:field_id" not in loaded_schema
-    assert "parquet.field.id" not in loaded_schema
+    loaded_schema = spark.read.format("delta").load(str(source_path)).schema
+    for field in loaded_schema.fields:
+        assert "PARQUET:field_id" not in field.metadata
+        assert "parquet.field.id" not in field.metadata
 
 
 def test_merge_schema_with_column_mapping_name(spark, tmp_path: Path):

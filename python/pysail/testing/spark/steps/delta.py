@@ -236,14 +236,17 @@ def _normalize_column_mapping_schema(schema: object, field_path: str = "") -> ob
     normalized = dict(schema)
     if "fields" in normalized and isinstance(normalized["fields"], list):
         for i, field in enumerate(normalized["fields"]):
+            if not isinstance(field, dict):
+                continue
             current_path = f"{field_path}.{i}" if field_path else str(i)
-            if isinstance(field, dict) and "metadata" in field:
-                meta = field.get("metadata", {})
+            meta = field.get("metadata")
+            if isinstance(meta, dict):
                 phys = meta.get("delta.columnMapping.physicalName", "")
                 if isinstance(phys, str) and phys.startswith("col-"):
                     meta["delta.columnMapping.physicalName"] = f"<physical_name_{current_path}>"
-            if isinstance(field, dict) and "type" in field and isinstance(field["type"], dict):
-                field["type"] = _normalize_column_mapping_schema(field["type"], field_path=current_path)
+            field_type = field.get("type")
+            if isinstance(field_type, dict):
+                field["type"] = _normalize_column_mapping_schema(field_type, field_path=current_path)
     for child_key in ("elementType", "keyType", "valueType"):
         child_type = normalized.get(child_key)
         if isinstance(child_type, dict):

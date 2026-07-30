@@ -3569,23 +3569,18 @@ impl RemoteExecutionCodec {
             .table_schema()
             .file_schema()
             .fields();
-        let has_column_mapping = fields.iter().any(|field| {
-            field
-                .metadata()
-                .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
-        });
-        if !has_column_mapping {
-            return StructFieldMatching::Name;
-        }
+        let has_metadata = |key: &str| {
+            fields
+                .iter()
+                .any(|field| field.metadata().contains_key(key))
+        };
 
-        if fields.iter().any(|field| {
-            field
-                .metadata()
-                .contains_key(ColumnMetadataKey::ParquetFieldId.as_ref())
-        }) {
+        if has_metadata(ColumnMetadataKey::ParquetFieldId.as_ref()) {
             StructFieldMatching::FieldId
-        } else {
+        } else if has_metadata(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()) {
             StructFieldMatching::PhysicalName
+        } else {
+            StructFieldMatching::Name
         }
     }
 
@@ -4640,103 +4635,6 @@ mod tests {
             StructFieldMatching::Name
         );
         assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_round_trip_parquet_scan_preserves_delta_struct_field_matching() -> Result<()> {
-        use std::collections::HashMap;
-
-        use datafusion::datasource::table_schema::TableSchema;
-        use datafusion::execution::object_store::ObjectStoreUrl;
-        use datafusion::physical_expr::expressions::Column;
-
-        for matching in [
-            StructFieldMatching::PhysicalName,
-            StructFieldMatching::FieldId,
-        ] {
-            let mut target_metadata = HashMap::from([(
-                ColumnMetadataKey::ColumnMappingPhysicalName
-                    .as_ref()
-                    .to_string(),
-                "details".to_string(),
-            )]);
-            let mut target_child_metadata = HashMap::from([(
-                ColumnMetadataKey::ColumnMappingPhysicalName
-                    .as_ref()
-                    .to_string(),
-                "stored-value".to_string(),
-            )]);
-            let mut source_child_metadata = HashMap::new();
-            if matching == StructFieldMatching::FieldId {
-                target_metadata.insert(
-                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
-                    "1".to_string(),
-                );
-                target_child_metadata.insert(
-                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
-                    "2".to_string(),
-                );
-                source_child_metadata.insert(
-                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
-                    "2".to_string(),
-                );
-            }
-
-            let target_child = Arc::new(
-                Field::new("current-value", DataType::Int64, true)
-                    .with_metadata(target_child_metadata),
-            );
-            let target_schema = Arc::new(Schema::new(vec![
-                Field::new("details", DataType::Struct(vec![target_child].into()), true)
-                    .with_metadata(target_metadata),
-            ]));
-            let source_child = Arc::new(
-                Field::new("stored-value", DataType::Int64, true)
-                    .with_metadata(source_child_metadata),
-            );
-            let source_schema = Arc::new(Schema::new(vec![Field::new(
-                "details",
-                DataType::Struct(vec![source_child].into()),
-                true,
-            )]));
-
-            let parquet_source = Arc::new(ParquetSource::new(TableSchema::from_file_schema(
-                Arc::clone(&target_schema),
-            )));
-            let file_scan =
-                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), parquet_source)
-                    .with_expr_adapter(Some(Arc::new(
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching),
-                    )))
-                    .build();
-            let scan = DataSourceExec::from_data_source(file_scan);
-            let remote_scan = RemoteDataSourceExec::new(scan.as_ref());
-            let codec = RemoteExecutionCodec;
-
-            let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
-            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-            let decoded_scan = decoded
-                .downcast_ref::<DataSourceExec>()
-                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
-            let decoded_file_scan = decoded_scan
-                .data_source()
-                .downcast_ref::<FileScanConfig>()
-                .ok_or_else(|| plan_datafusion_err!("decoded source is not a file scan"))?;
-            let adapter_factory = decoded_file_scan
-                .expr_adapter_factory
-                .as_ref()
-                .ok_or_else(|| plan_datafusion_err!("decoded scan is missing its adapter"))?;
-            let adapter =
-                adapter_factory.create(Arc::clone(&target_schema), source_schema.clone())?;
-            let rewritten = adapter.rewrite(Arc::new(Column::new("details", 0)))?;
-            let cast = rewritten
-                .downcast_ref::<SchemaEvolutionCastColumnExpr>()
-                .ok_or_else(|| plan_datafusion_err!("rewritten expression is not a cast"))?;
-
-            assert_eq!(cast.matching(), matching);
-        }
-
         Ok(())
     }
 

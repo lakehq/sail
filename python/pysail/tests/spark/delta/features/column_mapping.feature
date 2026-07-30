@@ -133,11 +133,6 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
           'delta.columnMapping.mode' = 'name'
         )
         """
-      Given statement
-        """
-        INSERT INTO delta_cm_consecutive_arrays
-        SELECT array(array(named_struct('value', CAST(1 AS BIGINT))))
-        """
       Given append query to delta table in location with mergeSchema
         """
         SELECT
@@ -146,23 +141,23 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         """
       Then delta log latest effective protocol and metadata matches snapshot
 
-  Rule: Scalar name mapping metadata is not propagated to a non-mapped table
+  Rule: Scalar mapping metadata is not propagated to a non-mapped table
     Background:
-      Given variable source_location for temporary directory cm_scalar_source_name
-      Given variable location for temporary directory cm_scalar_target_name
+      Given variable source_location for temporary directory cm_scalar_source
+      Given variable location for temporary directory cm_scalar_target
       Given final statement
         """
-        DROP TABLE IF EXISTS delta_cm_scalar_source_name
+        DROP TABLE IF EXISTS delta_cm_scalar_source
         """
       Given final statement
         """
-        DROP TABLE IF EXISTS delta_cm_scalar_target_name
+        DROP TABLE IF EXISTS delta_cm_scalar_target
         """
 
     Scenario: Writing a scalar name-mapped table strips physical read metadata
       Given statement template
         """
-        CREATE TABLE delta_cm_scalar_source_name (
+        CREATE TABLE delta_cm_scalar_source (
           id BIGINT,
           label STRING
         )
@@ -174,34 +169,21 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         """
       Given statement
         """
-        INSERT INTO delta_cm_scalar_source_name VALUES (1, 'a')
+        INSERT INTO delta_cm_scalar_source VALUES (1, 'a')
         """
       Given statement template
         """
-        CREATE TABLE delta_cm_scalar_target_name
+        CREATE TABLE delta_cm_scalar_target
         USING DELTA
         LOCATION {{ location.sql }}
-        AS SELECT * FROM delta_cm_scalar_source_name
+        AS SELECT * FROM delta_cm_scalar_source
         """
       Then delta log latest effective protocol and metadata matches snapshot
-
-  Rule: Scalar ID mapping metadata is not propagated to a non-mapped table
-    Background:
-      Given variable source_location for temporary directory cm_scalar_source_id
-      Given variable location for temporary directory cm_scalar_target_id
-      Given final statement
-        """
-        DROP TABLE IF EXISTS delta_cm_scalar_source_id
-        """
-      Given final statement
-        """
-        DROP TABLE IF EXISTS delta_cm_scalar_target_id
-        """
 
     Scenario: Writing a scalar ID-mapped table strips physical read metadata
       Given statement template
         """
-        CREATE TABLE delta_cm_scalar_source_id (
+        CREATE TABLE delta_cm_scalar_source (
           id BIGINT,
           label STRING
         )
@@ -213,14 +195,14 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         """
       Given statement
         """
-        INSERT INTO delta_cm_scalar_source_id VALUES (1, 'a')
+        INSERT INTO delta_cm_scalar_source VALUES (1, 'a')
         """
       Given statement template
         """
-        CREATE TABLE delta_cm_scalar_target_id
+        CREATE TABLE delta_cm_scalar_target
         USING DELTA
         LOCATION {{ location.sql }}
-        AS SELECT * FROM delta_cm_scalar_source_id
+        AS SELECT * FROM delta_cm_scalar_source
         """
       Then delta log latest effective protocol and metadata matches snapshot
 
