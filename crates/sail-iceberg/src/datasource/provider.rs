@@ -569,7 +569,10 @@ impl IcebergTableProvider {
             vec![None; self.arrow_schema.fields().len()];
         let mut max_scalars: Vec<Option<ScalarValue>> =
             vec![None; self.arrow_schema.fields().len()];
-        let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
+        let mut min_complete = vec![true; self.arrow_schema.fields().len()];
+        let mut max_complete = vec![true; self.arrow_schema.fields().len()];
+        let mut null_counts: Vec<Option<usize>> =
+            vec![Some(0); self.arrow_schema.fields().len()];
 
         for df in data_files {
             total_rows = total_rows.saturating_add(df.record_count() as usize);
@@ -581,7 +584,13 @@ impl IcebergTableProvider {
                 };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
-                    null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
+                    null_counts[col_idx] = null_counts[col_idx].and_then(|count| {
+                        usize::try_from(*c)
+                            .ok()
+                            .and_then(|value| count.checked_add(value))
+                    });
+                } else {
+                    null_counts[col_idx] = None;
                 }
 
                 // min
@@ -595,6 +604,8 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    min_complete[col_idx] = false;
                 }
 
                 // max
@@ -608,21 +619,33 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    max_complete[col_idx] = false;
                 }
             }
         }
 
         let column_statistics = (0..self.arrow_schema.fields().len())
             .map(|i| ColumnStatistics {
-                null_count: Precision::Exact(null_counts[i]),
-                max_value: max_scalars[i]
-                    .clone()
+                null_count: null_counts[i]
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent),
-                min_value: min_scalars[i]
-                    .clone()
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent),
+                max_value: if max_complete[i] {
+                    max_scalars[i]
+                        .clone()
+                        .map(Precision::Exact)
+                        .unwrap_or(Precision::Absent)
+                } else {
+                    Precision::Absent
+                },
+                min_value: if min_complete[i] {
+                    min_scalars[i]
+                        .clone()
+                        .map(Precision::Exact)
+                        .unwrap_or(Precision::Absent)
+                } else {
+                    Precision::Absent
+                },
                 distinct_count: Precision::Absent,
                 sum_value: Precision::Absent,
                 byte_size: Precision::Absent,
@@ -1318,6 +1341,25 @@ mod tests {
             aggregate.column_statistics[1].min_value,
             Precision::Exact(ScalarValue::Int64(Some(10)))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_statistics_require_metrics_from_every_file() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        let complete = data_file_with_long_bounds();
+        let mut missing = data_file_with_long_bounds();
+        missing.file_path = "data/missing-metrics.parquet".to_string();
+        missing.null_value_counts.remove(&2);
+        missing.lower_bounds.remove(&2);
+        missing.upper_bounds.remove(&2);
+
+        let statistics = provider.aggregate_statistics(&[complete, missing]);
+        let value_statistics = &statistics.column_statistics[0];
+
+        assert_eq!(value_statistics.null_count, Precision::Absent);
+        assert_eq!(value_statistics.min_value, Precision::Absent);
+        assert_eq!(value_statistics.max_value, Precision::Absent);
         Ok(())
     }
 }
