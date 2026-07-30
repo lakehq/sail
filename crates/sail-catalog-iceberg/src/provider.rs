@@ -411,6 +411,49 @@ impl IcebergRestCatalogProvider {
         Ok(())
     }
 
+    fn is_commit_state_unknown_status(status: Option<reqwest::StatusCode>) -> bool {
+        matches!(
+            status,
+            Some(
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                    | reqwest::StatusCode::BAD_GATEWAY
+                    | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    | reqwest::StatusCode::GATEWAY_TIMEOUT
+            )
+        )
+    }
+
+    fn snapshot_id_for_simple_commit_reconciliation(
+        updates: &[crate::r#gen::TableUpdate],
+    ) -> Option<i64> {
+        let mut added_snapshot_id = None;
+        let mut main_ref_snapshot_id = None;
+
+        for update in updates {
+            match update {
+                crate::r#gen::TableUpdate::AddSnapshot { snapshot }
+                    if added_snapshot_id.is_none() =>
+                {
+                    added_snapshot_id = Some(snapshot.snapshot_id);
+                }
+                crate::r#gen::TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    snapshot_id,
+                    ..
+                } if ref_name == "main" && main_ref_snapshot_id.is_none() => {
+                    main_ref_snapshot_id = Some(*snapshot_id);
+                }
+                _ => return None,
+            }
+        }
+
+        let added_snapshot_id = added_snapshot_id?;
+        if main_ref_snapshot_id.is_some_and(|snapshot_id| snapshot_id != added_snapshot_id) {
+            return None;
+        }
+        Some(added_snapshot_id)
+    }
+
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
     fn load_table_result_to_status(
         catalog: &str,
@@ -1210,6 +1253,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| {
                 CatalogError::External(format!("Failed to parse Iceberg REST commit updates: {e}"))
             })?;
+        let expected_snapshot_id =
+            Self::snapshot_id_for_simple_commit_reconciliation(updates.as_slice());
         let request = crate::r#gen::CommitTableRequest {
             identifier: Some(Box::new(crate::r#gen::TableIdentifier {
                 namespace: Box::new(database.clone().into()),
@@ -1218,7 +1263,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             requirements,
             updates,
         };
-        let response = client
+        let response = match client
             .update_table(
                 catalog_config.prefix().map(ToOwned::to_owned),
                 namespace,
@@ -1226,51 +1271,90 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 request,
             )
             .await
-            .map(|response| response.inner)
-            .map_err(|e| match e {
-                e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                    CatalogObject::Table,
-                    format!(
-                        "{}.{}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ),
-                ),
-                e if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
-                    CatalogError::Conflict(format!(
-                        "Iceberg REST catalog commit conflict for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
-                    CatalogError::Unauthorized(format!(
-                        "Iceberg REST catalog commit unauthorized for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
-                    CatalogError::Forbidden(format!(
-                        "Iceberg REST catalog commit forbidden for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
-                    CatalogError::RateLimited(format!(
-                        "Iceberg REST catalog commit rate limited for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status().is_some() => CatalogError::External(format!(
-                    "Failed to commit Iceberg table {}.{}: {e}",
+        {
+            Ok(response) => response.inner,
+            Err(error) if Self::is_commit_state_unknown_status(error.status()) => {
+                let message = format!(
+                    "Iceberg REST catalog commit state is unknown for {}.{}: {error}",
                     quote_namespace_if_needed(database),
                     quote_name_if_needed(table)
-                )),
-                e => CatalogError::External(format!("Failed to commit table: {e}")),
-            })?;
+                );
+                if let Some(expected_snapshot_id) = expected_snapshot_id {
+                    match self.load_table_result(database, table, None).await {
+                        Ok(result)
+                            if result.metadata.snapshots.as_ref().is_some_and(|snapshots| {
+                                snapshots
+                                    .iter()
+                                    .any(|snapshot| snapshot.snapshot_id == expected_snapshot_id)
+                            }) =>
+                        {
+                            let reconciled_payload = payload
+                                .clone()
+                                .or_else(|| serde_json::to_value(result).ok());
+                            return Ok(LakehouseCommitOutcome::Committed {
+                                context,
+                                payload: reconciled_payload,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(reconcile_error) => {
+                            log::warn!(
+                                "Failed to reconcile {message} by reloading the table: {reconcile_error}"
+                            );
+                        }
+                    }
+                }
+                return Ok(LakehouseCommitOutcome::StateUnknown { message });
+            }
+            Err(e) => {
+                return Err(match e {
+                    e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+                        CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!(
+                                "{}.{}",
+                                quote_namespace_if_needed(database),
+                                quote_name_if_needed(table)
+                            ),
+                        )
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
+                        CatalogError::Conflict(format!(
+                            "Iceberg REST catalog commit conflict for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
+                        CatalogError::Unauthorized(format!(
+                            "Iceberg REST catalog commit unauthorized for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
+                        CatalogError::Forbidden(format!(
+                            "Iceberg REST catalog commit forbidden for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+                        CatalogError::RateLimited(format!(
+                            "Iceberg REST catalog commit rate limited for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status().is_some() => CatalogError::External(format!(
+                        "Failed to commit Iceberg table {}.{}: {e}",
+                        quote_namespace_if_needed(database),
+                        quote_name_if_needed(table)
+                    )),
+                    e => CatalogError::External(format!("Failed to commit table: {e}")),
+                });
+            }
+        };
         let payload = match payload {
             Some(payload) => Some(payload),
             None => Some(serde_json::to_value(response).map_err(|e| {
@@ -2090,6 +2174,83 @@ mod tests {
         let mut result = create_table_response_with_access_session_hints();
         result["config"]["scan-planning-mode"] = serde_json::json!("server");
         result
+    }
+
+    fn rest_commit_context() -> LakehouseExecutionContext {
+        LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("test".to_string()),
+            vec!["test".to_string(), "db1".to_string(), "table1".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        )
+    }
+
+    fn snapshot_add_commit_request(snapshot_id: i64) -> LakehouseCommitRequest {
+        LakehouseCommitRequest {
+            context: rest_commit_context(),
+            format: "iceberg".to_string(),
+            requirements: vec![],
+            updates: vec![
+                serde_json::json!({
+                    "action": "add-snapshot",
+                    "snapshot": {
+                        "snapshot-id": snapshot_id,
+                        "sequence-number": 1,
+                        "timestamp-ms": 1_725_000_000_000_i64,
+                        "manifest-list": "s3://bucket/table/metadata/snap.avro",
+                        "summary": {
+                            "operation": "append"
+                        }
+                    }
+                }),
+                serde_json::json!({
+                    "action": "set-snapshot-ref",
+                    "ref-name": "main",
+                    "snapshot-id": snapshot_id,
+                    "type": "branch"
+                }),
+            ],
+            payload: None,
+        }
+    }
+
+    fn load_table_response_with_snapshots(snapshot_ids: &[i64]) -> serde_json::Value {
+        let snapshots = snapshot_ids
+            .iter()
+            .map(|snapshot_id| {
+                serde_json::json!({
+                    "snapshot-id": snapshot_id,
+                    "sequence-number": 1,
+                    "timestamp-ms": 1_725_000_000_000_i64,
+                    "manifest-list": "s3://bucket/table/metadata/snap.avro",
+                    "summary": {
+                        "operation": "append"
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut metadata = serde_json::json!({
+            "format-version": 2,
+            "table-uuid": "12345678-1234-1234-1234-123456789012",
+            "snapshots": snapshots
+        });
+        if let Some(snapshot_id) = snapshot_ids.last() {
+            metadata["current-snapshot-id"] = serde_json::json!(snapshot_id);
+        }
+        serde_json::json!({
+            "metadata-location": "s3://bucket/table/metadata/v2.metadata.json",
+            "metadata": metadata
+        })
     }
 
     async fn load_merged_test_config(
@@ -3139,6 +3300,128 @@ mod tests {
         assert!(!serialized.contains("session-token-secret"));
         assert!(!serialized.contains("AKIA-SECRET"));
         assert!(!serialized.contains("storage-secret"));
+    }
+
+    #[tokio::test]
+    async fn commit_server_failures_preserve_state_unknown() {
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        for status in [500, 502, 503, 504] {
+            let ctx = TestContext::new(Some("test")).await;
+            Mock::given(method("POST"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                        "error": {
+                            "message": "response lost after commit",
+                            "type": "CommitStateUnknownException",
+                            "code": status
+                        }
+                    })),
+                )
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(load_table_response_with_snapshots(&[])),
+                )
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+
+            let outcome = ctx
+                .catalog
+                .commit_lakehouse_table(&namespace, "table1", snapshot_add_commit_request(101))
+                .await
+                .unwrap();
+
+            assert!(
+                matches!(outcome, LakehouseCommitOutcome::StateUnknown { .. }),
+                "status {status} must preserve an unknown commit outcome"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_server_failure_reconciles_an_observed_snapshot() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let snapshot_id = 101;
+
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(ResponseTemplate::new(504).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "response lost after commit",
+                    "type": "CommitStateUnknownException",
+                    "code": 504
+                }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(load_table_response_with_snapshots(&[snapshot_id])),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let outcome = ctx
+            .catalog
+            .commit_lakehouse_table(
+                &namespace,
+                "table1",
+                snapshot_add_commit_request(snapshot_id),
+            )
+            .await
+            .unwrap();
+
+        match outcome {
+            LakehouseCommitOutcome::Committed { payload, .. } => {
+                assert_eq!(
+                    payload
+                        .as_ref()
+                        .and_then(|value| value.get("metadata-location"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("s3://bucket/table/metadata/v2.metadata.json")
+                );
+            }
+            other => panic!("expected reconciled commit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_conflict_remains_distinct_from_state_unknown() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "requirement failed",
+                    "type": "CommitFailedException",
+                    "code": 409
+                }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let error = ctx
+            .catalog
+            .commit_lakehouse_table(&namespace, "table1", snapshot_add_commit_request(101))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, CatalogError::Conflict(_)));
     }
 
     async fn test_get_view_impl(name: Option<&str>) {

@@ -745,6 +745,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                 }
                                 continue;
                             }
+                            CatalogCommitOutcome::StateUnknown { message } => {
+                                return Err(commit_state_unknown_error(message));
+                            }
                         }
                     }
 
@@ -926,6 +929,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                 return Err(commit_conflict_error());
                             }
                             continue;
+                        }
+                        CatalogCommitOutcome::StateUnknown { message } => {
+                            return Err(commit_state_unknown_error(message));
                         }
                     }
                 }
@@ -1118,6 +1124,12 @@ impl DisplayAs for IcebergCommitExec {
 fn commit_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
+    ))
+}
+
+fn commit_state_unknown_error(message: String) -> DataFusionError {
+    DataFusionError::Execution(format!(
+        "Iceberg catalog commit state is unknown; the commit was not retried and its files were preserved: {message}"
     ))
 }
 

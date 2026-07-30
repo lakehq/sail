@@ -24,6 +24,7 @@ pub(crate) enum CatalogCommitOutcome {
     Committed(CatalogCommittedTable),
     NotSupported,
     Conflict,
+    StateUnknown { message: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -202,13 +203,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
                     Ok(CatalogCommitOutcome::Conflict)
                 }
                 LakehouseCommitOutcome::StateUnknown { message } => {
-                    // TODO: Preserve recovery and cleanup policy for Iceberg
-                    // commit-state-unknown instead of reducing it to an execution error.
-                    // REST requirements/updates, metadata-location CAS, and provider-native
-                    // updates need distinct reconciliation paths.
-                    Err(DataFusionError::Execution(format!(
-                        "Iceberg catalog commit state is unknown: {message}"
-                    )))
+                    Ok(CatalogCommitOutcome::StateUnknown { message })
                 }
                 LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::Execution(
                     format!("Iceberg catalog commit was rejected: {message}"),
