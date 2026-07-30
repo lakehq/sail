@@ -22,11 +22,10 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
-};
 use url::Url;
 
+use crate::datasource::provider::iceberg_schema_evolution_expr_adapter;
+use crate::datasource::type_converter::arrow_schema_to_iceberg;
 use crate::io::StoreContext;
 use crate::physical_plan::manifest_scan_exec::{COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES};
 
@@ -43,6 +42,8 @@ struct ScanByDataFilesState {
     table_url: Url,
     /// The Arrow schema of the actual user data.
     output_schema: SchemaRef,
+    /// Iceberg field-ID matching and initial-default handling for Parquet files.
+    expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
     pending_files: Vec<(String, u64)>,
     /// Currently active scan stream (draining Parquet data).
@@ -59,12 +60,14 @@ impl ScanByDataFilesState {
         context: Arc<TaskContext>,
         table_url: Url,
         output_schema: SchemaRef,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     ) -> Self {
         Self {
             input,
             context,
             table_url,
             output_schema,
+            expr_adapter_factory,
             pending_files: Vec::new(),
             current_scan: None,
             input_done: false,
@@ -170,11 +173,7 @@ impl ScanByDataFilesState {
 
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
-            .with_expr_adapter(Some(Arc::new(
-                SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                    StructFieldMatching::FieldId,
-                ),
-            ) as Arc<dyn PhysicalExprAdapterFactory>))
+            .with_expr_adapter(Some(Arc::clone(&self.expr_adapter_factory)))
             .build();
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
@@ -313,9 +312,16 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         let table_url =
             Url::parse(&self.table_url).map_err(|e| DataFusionError::External(Box::new(e)))?;
         let output_schema = self.output_schema.clone();
+        let iceberg_schema = arrow_schema_to_iceberg(&output_schema)?;
+        let expr_adapter_factory = iceberg_schema_evolution_expr_adapter(&iceberg_schema)?;
 
-        let state =
-            ScanByDataFilesState::new(input_stream, context, table_url, Arc::clone(&output_schema));
+        let state = ScanByDataFilesState::new(
+            input_stream,
+            context,
+            table_url,
+            Arc::clone(&output_schema),
+            expr_adapter_factory,
+        );
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {

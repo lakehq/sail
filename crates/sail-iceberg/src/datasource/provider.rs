@@ -42,7 +42,8 @@ use datafusion::physical_plan::union::UnionExec;
 use object_store::ObjectMeta;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    SchemaEvolutionFieldDefaults, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use url::Url;
 
@@ -85,6 +86,47 @@ pub struct IcebergTableProvider {
     arrow_schema: Arc<ArrowSchema>,
     /// Whether to use the metadata-as-data read path (lazy manifest scanning)
     metadata_as_data_read: bool,
+}
+
+pub(crate) fn iceberg_schema_evolution_expr_adapter(
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExprAdapterFactory>> {
+    fn collect_initial_defaults(
+        field: &crate::spec::types::NestedField,
+        defaults: &mut SchemaEvolutionFieldDefaults,
+    ) -> Result<()> {
+        if let Some(initial_default) = &field.initial_default {
+            defaults.insert(
+                field.id.to_string(),
+                to_scalar(initial_default, field.field_type.as_ref())?,
+            );
+        }
+        match field.field_type.as_ref() {
+            Type::Struct(struct_type) => {
+                for child in struct_type.fields() {
+                    collect_initial_defaults(child, defaults)?;
+                }
+            }
+            Type::List(list_type) => {
+                collect_initial_defaults(&list_type.element_field, defaults)?;
+            }
+            Type::Map(map_type) => {
+                collect_initial_defaults(&map_type.key_field, defaults)?;
+                collect_initial_defaults(&map_type.value_field, defaults)?;
+            }
+            Type::Primitive(_) => {}
+        }
+        Ok(())
+    }
+
+    let mut field_defaults = SchemaEvolutionFieldDefaults::new();
+    for field in schema.fields() {
+        collect_initial_defaults(field, &mut field_defaults)?;
+    }
+    Ok(Arc::new(
+        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(StructFieldMatching::FieldId)
+            .with_field_defaults(field_defaults),
+    ))
 }
 
 impl IcebergTableProvider {
@@ -891,6 +933,7 @@ impl TableProvider for IcebergTableProvider {
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
+        let expr_adapter_factory = iceberg_schema_evolution_expr_adapter(&self.schema)?;
 
         if dirty_units.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
@@ -914,12 +957,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(
-                    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                        StructFieldMatching::FieldId,
-                    ),
-                )
-                    as Arc<dyn PhysicalExprAdapterFactory>))
+                .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                 .build();
             return Ok(DataSourceExec::from_data_source(file_scan_config));
         }
@@ -947,12 +985,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(Arc::new(
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                            StructFieldMatching::FieldId,
-                        ),
-                    )
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
         }
@@ -965,12 +998,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    .with_expr_adapter(Some(Arc::new(
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                            StructFieldMatching::FieldId,
-                        ),
-                    )
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);
@@ -1342,6 +1370,31 @@ mod tests {
             .add_field(1, "part", Transform::Identity)
             .build();
         IcebergTableProvider::new_empty("memory://table", schema, vec![spec], 0)
+    }
+
+    #[test]
+    fn read_adapter_uses_initial_default_not_write_default() -> Result<()> {
+        let field = NestedField::required(1, "added", Type::Primitive(PrimitiveType::Int))
+            .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(42)))
+            .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(99)));
+        let schema = Schema::builder()
+            .with_fields(vec![Arc::new(field)])
+            .build()
+            .map_err(datafusion::common::DataFusionError::Execution)?;
+        let logical_schema = Arc::new(iceberg_schema_to_arrow(&schema)?);
+        let adapter = iceberg_schema_evolution_expr_adapter(&schema)?
+            .create(logical_schema, Arc::new(ArrowSchema::empty()))?;
+
+        let expression = adapter.rewrite(Arc::new(Column::new("added", 0)))?;
+        let default_literal = expression
+            .downcast_ref::<datafusion::physical_expr::expressions::Literal>()
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "missing field was not rewritten to its initial default".to_string(),
+                )
+            })?;
+        assert_eq!(default_literal.value(), &ScalarValue::Int32(Some(42)));
+        Ok(())
     }
 
     fn data_file_with_long_bounds() -> DataFile {
