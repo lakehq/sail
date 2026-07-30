@@ -57,11 +57,11 @@ use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
-use crate::spec::types::values::Literal;
+use crate::spec::types::values::{Datum, Literal};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
-use crate::utils::conversions::primitive_to_scalar_default;
+use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 /// Iceberg table provider for DataFusion
@@ -92,6 +92,15 @@ impl IcebergTableProvider {
             .metadata()
             .get(PARQUET_FIELD_ID_META_KEY)
             .and_then(|value| value.parse().ok())
+    }
+
+    fn bound_scalar_for_field(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+        let field = self.schema.field_by_id(field_id)?;
+        to_scalar(
+            &Literal::Primitive(datum.literal.clone()),
+            field.field_type.as_ref(),
+        )
+        .ok()
     }
 
     /// Create a new Iceberg table provider
@@ -594,8 +603,11 @@ impl IcebergTableProvider {
                 }
 
                 // min
-                if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(sv) = df
+                    .lower_bounds()
+                    .get(field_id)
+                    .and_then(|datum| self.bound_scalar_for_field(*field_id, datum))
+                {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -609,8 +621,11 @@ impl IcebergTableProvider {
                 }
 
                 // max
-                if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(sv) = df
+                    .upper_bounds()
+                    .get(field_id)
+                    .and_then(|datum| self.bound_scalar_for_field(*field_id, datum))
+                {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -685,14 +700,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -1308,6 +1323,52 @@ mod tests {
         }
     }
 
+    fn date_provider() -> Result<IcebergTableProvider> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                3,
+                "event_date",
+                Type::Primitive(PrimitiveType::Date),
+            ))])
+            .build()
+            .map_err(datafusion::common::DataFusionError::Execution)?;
+        IcebergTableProvider::new_empty(
+            "memory://date-table",
+            schema,
+            vec![PartitionSpec::unpartitioned_spec()],
+            0,
+        )
+    }
+
+    fn data_file_with_date_bounds() -> DataFile {
+        let date = Datum::new(PrimitiveType::Date, PrimitiveLiteral::Int(19_000));
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "data/date.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![],
+            record_count: 1,
+            file_size_in_bytes: 100,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::from([(3, 0)]),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::from([(3, date.clone())]),
+            upper_bounds: HashMap::from([(3, date)]),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
     #[test]
     fn file_statistics_follow_arrow_field_ids_after_partition_reorder() -> Result<()> {
         let provider = reordered_identity_provider()?;
@@ -1360,6 +1421,33 @@ mod tests {
         assert_eq!(value_statistics.null_count, Precision::Absent);
         assert_eq!(value_statistics.min_value, Precision::Absent);
         assert_eq!(value_statistics.max_value, Precision::Absent);
+        Ok(())
+    }
+
+    #[test]
+    fn lower_and_upper_bounds_keep_their_logical_type() -> Result<()> {
+        let provider = date_provider()?;
+        let data_file = data_file_with_date_bounds();
+
+        let file_statistics = provider.create_file_statistics(&data_file);
+        assert_eq!(
+            file_statistics.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Date32(Some(19_000)))
+        );
+        assert_eq!(
+            file_statistics.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Date32(Some(19_000)))
+        );
+
+        let aggregate = provider.aggregate_statistics(&[data_file]);
+        assert_eq!(
+            aggregate.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Date32(Some(19_000)))
+        );
+        assert_eq!(
+            aggregate.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Date32(Some(19_000)))
+        );
         Ok(())
     }
 }
