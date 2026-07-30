@@ -76,6 +76,9 @@ impl IcebergWriterExec {
         if let Some(spec) = spec {
             let mut cols = Vec::with_capacity(spec.fields().len());
             for f in spec.fields() {
+                if f.transform == crate::spec::transform::Transform::Void {
+                    continue;
+                }
                 let field = iceberg_schema.field_by_id(f.source_id).ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Partition column mismatch: field id {} missing in schema",
