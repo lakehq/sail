@@ -17,6 +17,17 @@ use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
+fn explain_job_graph(plan: Arc<dyn ExecutionPlan>, use_blocking_shuffle: bool) -> Result<String> {
+    JobGraph::try_new(
+        plan,
+        JobGraphOptions {
+            use_blocking_shuffle,
+        },
+    )
+    .map(|graph| graph.to_string())
+    .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
     stopped: AtomicBool,
@@ -46,6 +57,10 @@ impl StateObservable<JobRunnerObserver> for LocalJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        explain_job_graph(plan, false)
+    }
+
     async fn execute(
         &self,
         ctx: &SessionContext,
@@ -114,18 +129,11 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
-    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        JobGraph::try_new(
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        explain_job_graph(
             plan,
-            JobGraphOptions {
-                use_blocking_shuffle: matches!(
-                    &self.shuffle_backend,
-                    ShuffleBackendKind::Storage { .. }
-                ),
-            },
+            matches!(&self.shuffle_backend, ShuffleBackendKind::Storage { .. }),
         )
-        .map(|graph| Some(graph.to_string()))
-        .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.
