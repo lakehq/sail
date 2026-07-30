@@ -7830,6 +7830,7 @@ dependencies = [
  "arrow-schema",
  "async-stream",
  "async-trait",
+ "base64",
  "bytes",
  "chrono",
  "datafusion",
