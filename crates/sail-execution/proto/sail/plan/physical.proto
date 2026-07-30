@@ -649,6 +649,7 @@ message ParquetExecNode {
   bytes options = 2;
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
+  StructFieldMatching struct_field_matching = 5;
 }
 
 message ArrowExecNode {

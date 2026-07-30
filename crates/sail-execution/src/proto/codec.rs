@@ -86,7 +86,8 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionCastColumnExpr, StructFieldMatching,
+    SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -109,7 +110,9 @@ use sail_delta_lake::physical_plan::{
     DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
     RelaxedTzCastExec,
 };
-use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
+use sail_delta_lake::spec::{
+    Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
+};
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -570,6 +573,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 predicate,
                 output_partitioning,
+                struct_field_matching,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
@@ -604,6 +608,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
                 )?;
+                let struct_field_matching =
+                    Self::try_decode_struct_field_matching(struct_field_matching)?;
+                let source = FileScanConfigBuilder::from(source)
+                    .with_expr_adapter(Some(Arc::new(
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                            struct_field_matching,
+                        ),
+                    )))
+                    .build();
                 let scan = DataSourceExec::new(Arc::new(source));
                 let scan = if output_partitioning.is_empty() {
                     scan
@@ -1780,6 +1793,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         options,
                         predicate,
                         output_partitioning,
+                        struct_field_matching: Self::try_encode_struct_field_matching(
+                            Self::parquet_struct_field_matching(file_scan),
+                        ),
                     })
                 } else if file_source.is::<JsonSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -3547,6 +3563,32 @@ impl RemoteExecutionCodec {
         }) as i32
     }
 
+    fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
+        let fields = file_scan
+            .file_source()
+            .table_schema()
+            .file_schema()
+            .fields();
+        let has_column_mapping = fields.iter().any(|field| {
+            field
+                .metadata()
+                .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+        });
+        if !has_column_mapping {
+            return StructFieldMatching::Name;
+        }
+
+        if fields.iter().any(|field| {
+            field
+                .metadata()
+                .contains_key(ColumnMetadataKey::ParquetFieldId.as_ref())
+        }) {
+            StructFieldMatching::FieldId
+        } else {
+            StructFieldMatching::PhysicalName
+        }
+    }
+
     fn try_decode_physical_sink_mode(
         &self,
         proto_mode: &r#gen::PhysicalSinkMode,
@@ -4598,6 +4640,103 @@ mod tests {
             StructFieldMatching::Name
         );
         assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_scan_preserves_delta_struct_field_matching() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::datasource::table_schema::TableSchema;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_expr::expressions::Column;
+
+        for matching in [
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            let mut target_metadata = HashMap::from([(
+                ColumnMetadataKey::ColumnMappingPhysicalName
+                    .as_ref()
+                    .to_string(),
+                "details".to_string(),
+            )]);
+            let mut target_child_metadata = HashMap::from([(
+                ColumnMetadataKey::ColumnMappingPhysicalName
+                    .as_ref()
+                    .to_string(),
+                "stored-value".to_string(),
+            )]);
+            let mut source_child_metadata = HashMap::new();
+            if matching == StructFieldMatching::FieldId {
+                target_metadata.insert(
+                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
+                    "1".to_string(),
+                );
+                target_child_metadata.insert(
+                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
+                    "2".to_string(),
+                );
+                source_child_metadata.insert(
+                    ColumnMetadataKey::ParquetFieldId.as_ref().to_string(),
+                    "2".to_string(),
+                );
+            }
+
+            let target_child = Arc::new(
+                Field::new("current-value", DataType::Int64, true)
+                    .with_metadata(target_child_metadata),
+            );
+            let target_schema = Arc::new(Schema::new(vec![
+                Field::new("details", DataType::Struct(vec![target_child].into()), true)
+                    .with_metadata(target_metadata),
+            ]));
+            let source_child = Arc::new(
+                Field::new("stored-value", DataType::Int64, true)
+                    .with_metadata(source_child_metadata),
+            );
+            let source_schema = Arc::new(Schema::new(vec![Field::new(
+                "details",
+                DataType::Struct(vec![source_child].into()),
+                true,
+            )]));
+
+            let parquet_source = Arc::new(ParquetSource::new(TableSchema::from_file_schema(
+                Arc::clone(&target_schema),
+            )));
+            let file_scan =
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), parquet_source)
+                    .with_expr_adapter(Some(Arc::new(
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching),
+                    )))
+                    .build();
+            let scan = DataSourceExec::from_data_source(file_scan);
+            let remote_scan = RemoteDataSourceExec::new(scan.as_ref());
+            let codec = RemoteExecutionCodec;
+
+            let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded_scan = decoded
+                .downcast_ref::<DataSourceExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+            let decoded_file_scan = decoded_scan
+                .data_source()
+                .downcast_ref::<FileScanConfig>()
+                .ok_or_else(|| plan_datafusion_err!("decoded source is not a file scan"))?;
+            let adapter_factory = decoded_file_scan
+                .expr_adapter_factory
+                .as_ref()
+                .ok_or_else(|| plan_datafusion_err!("decoded scan is missing its adapter"))?;
+            let adapter =
+                adapter_factory.create(Arc::clone(&target_schema), source_schema.clone())?;
+            let rewritten = adapter.rewrite(Arc::new(Column::new("details", 0)))?;
+            let cast = rewritten
+                .downcast_ref::<SchemaEvolutionCastColumnExpr>()
+                .ok_or_else(|| plan_datafusion_err!("rewritten expression is not a cast"))?;
+
+            assert_eq!(cast.matching(), matching);
+        }
+
         Ok(())
     }
 
