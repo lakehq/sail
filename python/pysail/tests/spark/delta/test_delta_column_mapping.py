@@ -207,6 +207,30 @@ def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
     assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
 
 
+@pytest.mark.parametrize("mapping_mode", ["name", "id"])
+def test_scalar_column_mapping_read_does_not_leak_parquet_field_ids(
+    spark: SparkSession,
+    tmp_path: Path,
+    mapping_mode: str,
+):
+    source_path = tmp_path / f"delta_cm_scalar_source_{mapping_mode}"
+    target_path = tmp_path / f"delta_cm_scalar_target_{mapping_mode}"
+    source = spark.createDataFrame([Row(id=1, label="a")])
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", mapping_mode)
+        .save(str(source_path))
+    )
+
+    loaded = spark.read.format("delta").load(str(source_path))
+    loaded.write.format("delta").mode("overwrite").save(str(target_path))
+
+    target_schema = _latest_metadata(target_path)["schemaString"]
+    assert "PARQUET:field_id" not in target_schema
+    assert "parquet.field.id" not in target_schema
+
+
 def test_merge_schema_with_column_mapping_name(spark, tmp_path: Path):
     base = tmp_path / "delta_cm_merge_name"
 

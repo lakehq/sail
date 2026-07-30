@@ -295,7 +295,7 @@ pub(crate) async fn plan_delta_scan(
             let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
                 return true;
             };
-            input_field.data_type() != field.data_type()
+            input_field != field.as_ref()
         });
         if needs_wrapping {
             return Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
