@@ -20,7 +20,7 @@ use crate::schema::{
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_column_defaults,
-    schema_has_generated_columns, schema_has_identity_columns,
+    schema_has_generated_columns, schema_has_identity_columns, strip_column_mapping_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
@@ -145,10 +145,11 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(&apply_target_nullability(
-        &schema_without_writer_metric_columns(input_schema),
-        &options.target_nullability,
-    ));
+    let input_schema =
+        strip_column_mapping_metadata(&normalize_delta_schema(&apply_target_nullability(
+            &schema_without_writer_metric_columns(input_schema),
+            &options.target_nullability,
+        )));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
