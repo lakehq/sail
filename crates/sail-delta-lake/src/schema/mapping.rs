@@ -51,8 +51,23 @@ pub fn annotate_new_fields_for_column_mapping(
 
 /// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
 pub fn compute_max_column_id(schema: &StructType) -> i64 {
+    fn max_in_data_type(data_type: &DataType) -> i64 {
+        match data_type {
+            DataType::Struct(struct_type) => struct_type
+                .fields()
+                .map(max_in_field)
+                .max()
+                .unwrap_or_default(),
+            DataType::Array(array_type) => max_in_data_type(array_type.element_type()),
+            DataType::Map(map_type) => {
+                max_in_data_type(map_type.key_type()).max(max_in_data_type(map_type.value_type()))
+            }
+            _ => 0,
+        }
+    }
+
     fn max_in_field(field: &StructField) -> i64 {
-        let mut max_id = field
+        let field_id = field
             .metadata()
             .get("delta.columnMapping.id")
             .and_then(|v| match v {
@@ -61,42 +76,10 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
             })
             .unwrap_or_default();
 
-        match field.data_type() {
-            DataType::Struct(st) => {
-                for f in st.fields() {
-                    max_id = max_id.max(max_in_field(f));
-                }
-            }
-            DataType::Array(at) => {
-                if let DataType::Struct(st) = at.element_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-            }
-            DataType::Map(mt) => {
-                if let DataType::Struct(st) = mt.key_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-                if let DataType::Struct(st) = mt.value_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        max_id
+        field_id.max(max_in_data_type(field.data_type()))
     }
 
-    let mut max_id = 0i64;
-    for f in schema.fields() {
-        max_id = max_id.max(max_in_field(f));
-    }
-    max_id
+    schema.fields().map(max_in_field).max().unwrap_or_default()
 }
 
 fn column_mapping_id(field: &StructField) -> Option<i64> {
@@ -319,5 +302,24 @@ mod tests {
             );
             assert!(field.metadata().contains_key("delta.columnMapping.id"));
         }
+    }
+
+    #[test]
+    fn max_column_id_traverses_consecutive_collection_types() {
+        let value = StructField::new("value", DataType::LONG, true)
+            .with_metadata([("delta.columnMapping.id", MetadataValue::Number(7))]);
+        let nested = StructType::try_new(vec![value]).expect("nested schema");
+        let nested_arrays = DataType::Array(Box::new(ArrayType::new(
+            DataType::Array(Box::new(ArrayType::new(
+                DataType::Struct(Box::new(nested)),
+                true,
+            ))),
+            true,
+        )));
+        let payload = StructField::new("payload", nested_arrays, true)
+            .with_metadata([("delta.columnMapping.id", MetadataValue::Number(1))]);
+        let schema = StructType::try_new(vec![payload]).expect("schema");
+
+        assert_eq!(compute_max_column_id(&schema), 7);
     }
 }

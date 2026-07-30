@@ -27,6 +27,29 @@ def _latest_metadata(base: Path) -> dict:
     raise AssertionError(message)
 
 
+def _column_mapping_ids(delta_type: dict | str) -> list[int]:
+    if not isinstance(delta_type, dict):
+        return []
+
+    type_name = delta_type["type"]
+    if type_name == "struct":
+        ids = []
+        for field in delta_type["fields"]:
+            column_id = field["metadata"].get("delta.columnMapping.id")
+            if column_id is not None:
+                ids.append(column_id)
+            ids.extend(_column_mapping_ids(field["type"]))
+        return ids
+    if type_name == "array":
+        return _column_mapping_ids(delta_type["elementType"])
+    if type_name == "map":
+        return [
+            *_column_mapping_ids(delta_type["keyType"]),
+            *_column_mapping_ids(delta_type["valueType"]),
+        ]
+    return []
+
+
 def _physical_name_for_column(metadata: dict, column_name: str) -> str:
     schema = json.loads(metadata["schemaString"])
     for field in schema["fields"]:
@@ -60,28 +83,24 @@ def _assert_parquet_struct_matches_delta(
         arrow_metadata = {key.decode(): value.decode() for key, value in (arrow_field.metadata or {}).items()}
         assert arrow_metadata["PARQUET:field_id"] == str(metadata["delta.columnMapping.id"])
 
-        nested_type = delta_field["type"]
-        if not isinstance(nested_type, dict):
-            continue
-        if nested_type["type"] == "struct":
-            _assert_parquet_struct_matches_delta(arrow_field.type, nested_type)
-        elif nested_type["type"] == "array" and isinstance(nested_type["elementType"], dict):
-            element_type = nested_type["elementType"]
-            if element_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(
-                    arrow_field.type.value_type,
-                    element_type,
-                )
-        elif nested_type["type"] == "map":
-            key_type = nested_type["keyType"]
-            value_type = nested_type["valueType"]
-            if isinstance(key_type, dict) and key_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(arrow_field.type.key_type, key_type)
-            if isinstance(value_type, dict) and value_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(
-                    arrow_field.type.item_type,
-                    value_type,
-                )
+        _assert_parquet_type_matches_delta(arrow_field.type, delta_field["type"])
+
+
+def _assert_parquet_type_matches_delta(
+    arrow_type: pa.DataType,
+    delta_type: dict | str,
+) -> None:
+    if not isinstance(delta_type, dict):
+        return
+
+    type_name = delta_type["type"]
+    if type_name == "struct":
+        _assert_parquet_struct_matches_delta(arrow_type, delta_type)
+    elif type_name == "array":
+        _assert_parquet_type_matches_delta(arrow_type.value_type, delta_type["elementType"])
+    elif type_name == "map":
+        _assert_parquet_type_matches_delta(arrow_type.key_type, delta_type["keyType"])
+        _assert_parquet_type_matches_delta(arrow_type.item_type, delta_type["valueType"])
 
 
 def _assert_parquet_files_match_delta_schema(
@@ -338,6 +357,30 @@ def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
 
     rows = [r.asDict(recursive=True) for r in spark.read.format("delta").load(str(base)).collect()]
     assert {"ts": 2, "kind": "x"} in [event for row in rows for event in row["events"]]
+    _assert_parquet_files_match_delta_schema(base, latest_only=True)
+
+
+def test_merge_schema_after_consecutive_arrays_allocates_unique_column_ids(
+    spark: SparkSession,
+    tmp_path: Path,
+):
+    base = tmp_path / "delta_cm_consecutive_arrays"
+    initial = spark.createDataFrame([Row(matrix=[[Row(value=1)]])])
+    (initial.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    initial_metadata = _latest_metadata(base)
+    initial_ids = _column_mapping_ids(json.loads(initial_metadata["schemaString"]))
+    assert len(initial_ids) == len(set(initial_ids))
+
+    appended = spark.createDataFrame([Row(matrix=[[Row(value=2)]], label="new")])
+    appended.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+    final_metadata = _latest_metadata(base)
+    final_ids = _column_mapping_ids(json.loads(final_metadata["schemaString"]))
+    assert len(final_ids) == len(set(final_ids))
+    assert int(initial_metadata["configuration"]["delta.columnMapping.maxColumnId"]) == max(initial_ids)
+    assert max(final_ids) > max(initial_ids)
+    assert int(final_metadata["configuration"]["delta.columnMapping.maxColumnId"]) == max(final_ids)
     _assert_parquet_files_match_delta_schema(base, latest_only=True)
 
 
