@@ -82,7 +82,17 @@ pub fn apply_transform(
                 Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_int(v, n))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(v, n))))
+                let value = if matches!(
+                    field_type,
+                    Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+                ) {
+                    v.div_euclid(1_000)
+                } else {
+                    v
+                };
+                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(
+                    value, n,
+                ))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => Some(Literal::Primitive(
                 PrimitiveLiteral::Int(bucket_decimal(v, n)),
@@ -401,6 +411,20 @@ mod tests {
             Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
                 b"abcd".to_vec()
             ))))
+        );
+    }
+
+    #[test]
+    fn timestamp_ns_bucket_uses_microsecond_precision() {
+        assert_eq!(
+            apply_transform(
+                Transform::Bucket(16),
+                &Type::Primitive(PrimitiveType::TimestampNs),
+                Some(Literal::Primitive(PrimitiveLiteral::Long(
+                    1_510_871_468_000_001_001,
+                ))),
+            ),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(6))))
         );
     }
 }
