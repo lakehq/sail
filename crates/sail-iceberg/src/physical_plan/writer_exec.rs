@@ -42,6 +42,7 @@ use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
+    assign_replacement_partition_spec,
 };
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
@@ -421,9 +422,6 @@ impl ExecutionPlan for IcebergWriterExec {
                     if !partition_columns.is_empty() {
                         let current_schema = schema_outcome.iceberg_schema.clone();
                         let mut builder = crate::spec::partition::PartitionSpec::builder();
-                        if let Some(existing) = &default_spec {
-                            builder = builder.with_spec_id(existing.spec_id());
-                        }
                         for field in &partition_columns {
                             let fid = current_schema.field_id_by_name(&field.column).ok_or_else(
                                 || {
@@ -439,7 +437,16 @@ impl ExecutionPlan for IcebergWriterExec {
                                 iceberg_transform_from_partition_field(field),
                             );
                         }
-                        default_spec = Some(builder.build());
+                        default_spec = Some(
+                            assign_replacement_partition_spec(
+                                table_meta.format_version,
+                                &table_meta.partition_specs,
+                                table_meta.default_spec_id,
+                                table_meta.last_partition_id,
+                                &builder.build(),
+                            )
+                            .map_err(DataFusionError::Plan)?,
+                        );
                     }
                 } else {
                     let table_partition_columns = {

@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::metadata::FormatVersion;
 use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
 
-#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
@@ -131,17 +131,17 @@ impl PartitionSpec {
 
         for partition_field in self.fields.iter() {
             let source_id = partition_field.source_id()?;
-            let source_field = schema
-                .field_by_id(source_id)
-                .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
-
-            // Prefer logical date type for Day transform to align with Iceberg writers
-            let result_type = if matches!(partition_field.transform, Transform::Day) {
-                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
+            let result_type = if let Some(source_field) = schema.field_by_id(source_id) {
+                // Prefer logical date type for Day transform to align with Iceberg writers
+                if matches!(partition_field.transform, Transform::Day) {
+                    crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
+                } else {
+                    partition_field
+                        .transform
+                        .result_type(&source_field.field_type)?
+                }
             } else {
-                partition_field
-                    .transform
-                    .result_type(&source_field.field_type)?
+                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Unknown)
             };
 
             let nested_field = NestedField::new(
@@ -212,6 +212,136 @@ impl PartitionSpec {
     }
 }
 
+/// Assign a replacement spec without changing historical specs or reusing incompatible IDs.
+pub fn assign_replacement_partition_spec(
+    format_version: FormatVersion,
+    partition_specs: &[PartitionSpec],
+    default_spec_id: i32,
+    last_partition_id: i32,
+    requested: &PartitionSpec,
+) -> Result<PartitionSpec, String> {
+    if let Some(existing) = partition_specs
+        .iter()
+        .find(|spec| spec.is_compatible_with(requested))
+    {
+        return Ok(existing.clone());
+    }
+
+    let next_spec_id = partition_specs
+        .iter()
+        .map(PartitionSpec::spec_id)
+        .max()
+        .unwrap_or(-1)
+        .checked_add(1)
+        .ok_or_else(|| "Iceberg partition spec ID overflow".to_string())?;
+
+    if format_version == FormatVersion::V1 {
+        let current = partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == default_spec_id);
+        let mut requested_used = vec![false; requested.fields().len()];
+        let mut fields = Vec::new();
+
+        if let Some(current) = current {
+            for current_field in current.fields() {
+                let requested_index =
+                    requested
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, requested_field)| {
+                            (!requested_used[index]
+                                && current_field.compatibility_source_id()
+                                    == requested_field.compatibility_source_id()
+                                && current_field.name == requested_field.name
+                                && current_field.transform == requested_field.transform)
+                                .then_some(index)
+                        });
+                let transform = if let Some(index) = requested_index {
+                    requested_used[index] = true;
+                    current_field.transform
+                } else {
+                    Transform::Void
+                };
+                fields.push((
+                    current_field.source_id()?,
+                    current_field.name.clone(),
+                    transform,
+                ));
+            }
+        }
+
+        for (index, requested_field) in requested.fields().iter().enumerate() {
+            if !requested_used[index] {
+                fields.push((
+                    requested_field.source_id()?,
+                    requested_field.name.clone(),
+                    requested_field.transform,
+                ));
+            }
+        }
+
+        let mut builder = PartitionSpec::builder().with_spec_id(next_spec_id);
+        for (index, (source_id, name, transform)) in fields.into_iter().enumerate() {
+            let field_id = i32::try_from(index)
+                .ok()
+                .and_then(|index| 1000_i32.checked_add(index))
+                .ok_or_else(|| "Iceberg v1 partition field ID overflow".to_string())?;
+            builder = builder.add_field_with_id(source_id, field_id, name, transform);
+        }
+        let candidate = builder.build();
+        if let Some(existing) = partition_specs
+            .iter()
+            .find(|spec| spec.is_compatible_with(&candidate))
+        {
+            Ok(existing.clone())
+        } else {
+            Ok(candidate)
+        }
+    } else {
+        let historical_highest = partition_specs
+            .iter()
+            .filter_map(PartitionSpec::highest_field_id)
+            .max()
+            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID);
+        let mut next_field_id = last_partition_id
+            .max(historical_highest)
+            .max(UNPARTITIONED_LAST_ASSIGNED_ID)
+            .checked_add(1)
+            .ok_or_else(|| "Iceberg partition field ID overflow".to_string())?;
+        let mut builder = PartitionSpec::builder().with_spec_id(next_spec_id);
+
+        for requested_field in requested.fields() {
+            let source_id = requested_field.source_id()?;
+            let historical_field_id = partition_specs
+                .iter()
+                .flat_map(|spec| spec.fields())
+                .find(|historical_field| {
+                    historical_field.compatibility_source_id() == Some(source_id)
+                        && historical_field.name == requested_field.name
+                        && historical_field.transform == requested_field.transform
+                })
+                .map(|field| field.field_id);
+            let field_id = if let Some(field_id) = historical_field_id {
+                field_id
+            } else {
+                let assigned = next_field_id;
+                next_field_id = next_field_id
+                    .checked_add(1)
+                    .ok_or_else(|| "Iceberg partition field ID overflow".to_string())?;
+                assigned
+            };
+            builder = builder.add_field_with_id(
+                source_id,
+                field_id,
+                &requested_field.name,
+                requested_field.transform,
+            );
+        }
+        Ok(builder.build())
+    }
+}
+
 /// Builder for partition spec.
 #[derive(Debug)]
 pub struct PartitionSpecBuilder {
@@ -270,5 +400,115 @@ impl PartitionSpecBuilder {
 impl Default for PartitionSpecBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::types::{PrimitiveType, Type};
+
+    fn original_spec() -> PartitionSpec {
+        PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(1, 1000, "x", Transform::Identity)
+            .add_field_with_id(2, 1001, "y", Transform::Identity)
+            .build()
+    }
+
+    fn requested_replacement() -> PartitionSpec {
+        PartitionSpec::builder()
+            .add_field(3, "z_bucket", Transform::Bucket(8))
+            .add_field(1, "x", Transform::Identity)
+            .build()
+    }
+
+    #[test]
+    fn v2_replacement_reuses_historical_field_ids() {
+        let replacement = assign_replacement_partition_spec(
+            FormatVersion::V2,
+            &[original_spec()],
+            0,
+            1001,
+            &requested_replacement(),
+        )
+        .expect("replacement spec");
+
+        assert_eq!(replacement.spec_id(), 1);
+        assert_eq!(
+            replacement
+                .fields()
+                .iter()
+                .map(|field| (
+                    field.source_id,
+                    field.field_id,
+                    field.name.as_str(),
+                    field.transform,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (3, 1002, "z_bucket", Transform::Bucket(8)),
+                (1, 1000, "x", Transform::Identity),
+            ]
+        );
+    }
+
+    #[test]
+    fn v1_replacement_keeps_removed_fields_as_void() {
+        let replacement = assign_replacement_partition_spec(
+            FormatVersion::V1,
+            &[original_spec()],
+            0,
+            1001,
+            &requested_replacement(),
+        )
+        .expect("replacement spec");
+
+        assert_eq!(replacement.spec_id(), 1);
+        assert_eq!(
+            replacement
+                .fields()
+                .iter()
+                .map(|field| (
+                    field.source_id,
+                    field.field_id,
+                    field.name.as_str(),
+                    field.transform,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, 1000, "x", Transform::Identity),
+                (2, 1001, "y", Transform::Void),
+                (3, 1002, "z_bucket", Transform::Bucket(8)),
+            ]
+        );
+
+        let current_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::required(
+                    3,
+                    "z",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .expect("valid schema");
+        let partition_type = replacement
+            .partition_type(&current_schema)
+            .expect("partition type");
+        assert_eq!(
+            partition_type.fields()[1].field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Unknown)
+        );
     }
 }

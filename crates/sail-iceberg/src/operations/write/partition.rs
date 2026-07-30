@@ -274,6 +274,10 @@ pub fn compute_partition_values(
     let _ = partition_columns; // not used in single-group fallback
     let mut values = Vec::with_capacity(spec.fields.len());
     for f in &spec.fields {
+        if f.transform == crate::spec::transform::Transform::Void {
+            values.push(None);
+            continue;
+        }
         let col_name = field_name_from_id(iceberg_schema, f.source_id)
             .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
         let col_index = batch
@@ -319,6 +323,10 @@ pub fn split_record_batch_by_partition(
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
         for f in &spec.fields {
+            if f.transform == crate::spec::transform::Transform::Void {
+                vals.push(None);
+                continue;
+            }
             let col_name = field_name_from_id(iceberg_schema, f.source_id)
                 .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
             let col_index = batch

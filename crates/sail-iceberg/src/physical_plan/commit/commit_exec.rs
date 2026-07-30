@@ -127,23 +127,31 @@ impl IcebergCommitExec {
             .max(format_version_for_schema(&new_schema));
     }
 
-    fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
+    fn apply_partition_spec_update(
+        table_meta: &mut TableMetadata,
+        new_spec: PartitionSpec,
+    ) -> Result<PartitionSpec> {
         let spec_id = new_spec.spec_id();
-        let mut replaced = false;
-        for spec in table_meta.partition_specs.iter_mut() {
-            if spec.spec_id() == spec_id {
-                *spec = new_spec.clone();
-                replaced = true;
-                break;
+        if let Some(existing) = table_meta
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == spec_id)
+            .cloned()
+        {
+            if !existing.is_compatible_with(&new_spec) {
+                return Err(DataFusionError::Plan(format!(
+                    "Iceberg partition spec ID {spec_id} is already assigned to an incompatible spec"
+                )));
             }
+            table_meta.default_spec_id = spec_id;
+            return Ok(existing);
         }
-        if !replaced {
-            table_meta.partition_specs.push(new_spec.clone());
-        }
+        table_meta.partition_specs.push(new_spec.clone());
         table_meta.default_spec_id = spec_id;
         if let Some(highest) = new_spec.highest_field_id() {
             table_meta.last_partition_id = table_meta.last_partition_id.max(highest);
         }
+        Ok(new_spec)
     }
 
     fn validate_requirements(
@@ -631,19 +639,15 @@ impl ExecutionPlan for IcebergCommitExec {
                     .cloned()
                     .unwrap_or_else(PartitionSpec::unpartitioned_spec);
                 if let Some(new_spec) = commit_info.partition_spec.clone() {
-                    let spec = if new_spec.spec_id() == 0 && table_meta.default_spec_id != 0 {
-                        new_spec.with_spec_id(table_meta.default_spec_id)
-                    } else {
-                        new_spec
-                    };
+                    let spec = new_spec;
                     let spec_id = spec.spec_id();
                     let should_add_spec = !table_meta
                         .partition_specs
                         .iter()
                         .any(|partition_spec| partition_spec.spec_id() == spec_id);
                     let should_set_default_spec = table_meta.default_spec_id != spec_id;
-                    Self::apply_partition_spec_update(&mut table_meta, spec.clone());
-                    partition_spec_for_commit = spec;
+                    partition_spec_for_commit =
+                        Self::apply_partition_spec_update(&mut table_meta, spec)?;
                     if should_add_spec {
                         metadata_updates.push(TableUpdate::AddSpec {
                             spec: Self::unbound_partition_spec(&partition_spec_for_commit),
@@ -1115,4 +1119,71 @@ fn commit_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::spec::metadata::FormatVersion;
+    use crate::spec::transform::Transform;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    fn table_metadata_with_spec(spec: PartitionSpec) -> TableMetadata {
+        let schema = IcebergSchema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .expect("valid schema");
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: "file:///tmp/table".to_string(),
+            last_sequence_number: 0,
+            last_updated_ms: 0,
+            last_column_id: 1,
+            schemas: vec![schema],
+            current_schema_id: 0,
+            partition_specs: vec![spec],
+            default_spec_id: 0,
+            last_partition_id: 1000,
+            properties: HashMap::new(),
+            current_snapshot_id: None,
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        }
+    }
+
+    #[test]
+    fn incompatible_spec_id_does_not_replace_history() {
+        let historical = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(1, 1000, "id", Transform::Identity)
+            .build();
+        let incompatible = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(1, 1000, "id_bucket", Transform::Bucket(8))
+            .build();
+        let mut metadata = table_metadata_with_spec(historical.clone());
+
+        let result = IcebergCommitExec::apply_partition_spec_update(&mut metadata, incompatible);
+
+        assert!(result.is_err());
+        assert_eq!(metadata.partition_specs, vec![historical]);
+    }
 }
