@@ -101,12 +101,7 @@ impl SchemaEvolver {
 
             let has_default = iceberg_schema
                 .field_by_name(field.name())
-                .and_then(|nested| {
-                    nested
-                        .write_default
-                        .as_ref()
-                        .or(nested.initial_default.as_ref())
-                })
+                .and_then(|nested| nested.write_default.as_ref())
                 .is_some();
 
             if !field.is_nullable() && !has_default {
@@ -145,8 +140,8 @@ impl SchemaEvolver {
         ) || Self::nested_types_equivalent(table_type, input_type)
     }
 
-    fn field_has_default(field: &NestedField) -> bool {
-        field.write_default.is_some() || field.initial_default.is_some()
+    fn field_has_write_default(field: &NestedField) -> bool {
+        field.write_default.is_some()
     }
 
     fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
@@ -317,7 +312,7 @@ impl SchemaEvolver {
                     merged_fields.push(Arc::new(merged_field));
                 }
                 Err(_) => {
-                    if existing.required && !Self::field_has_default(existing) {
+                    if existing.required && !Self::field_has_write_default(existing) {
                         return Err(DataFusionError::Plan(format!(
                             "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
                             existing.name
@@ -500,7 +495,7 @@ impl SchemaEvolver {
         // 2. Handle fields that exist in Iceberg but not in Input (i.e., omitted old fields)
         // These fields should be preserved and placed at the end
         for remaining_field in existing_pool.values() {
-            if remaining_field.required && !Self::field_has_default(remaining_field) {
+            if remaining_field.required && !Self::field_has_write_default(remaining_field) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' is required in the Iceberg schema and must be present in the input data.",
                     remaining_field.name
@@ -982,6 +977,34 @@ mod tests {
 
         SchemaEvolver::validate_exact_schema(table_schema.as_ref(), &iceberg_schema, &input_schema)
             .expect("write defaults should allow omission");
+    }
+
+    #[test]
+    fn validate_exact_schema_rejects_initial_default_for_new_writes() {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(
+                NestedField::new(
+                    1,
+                    "historical_col",
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(42))),
+            )])
+            .build()
+            .expect("schema");
+        let table_schema =
+            Arc::new(iceberg_schema_to_arrow(&iceberg_schema).expect("arrow schema"));
+        let input_schema = Schema::new(Vec::<Field>::new());
+
+        let error = SchemaEvolver::validate_exact_schema(
+            table_schema.as_ref(),
+            &iceberg_schema,
+            &input_schema,
+        )
+        .expect_err("initial defaults only apply to historical rows");
+        assert!(format!("{error}").contains("historical_col"));
     }
 
     #[test]

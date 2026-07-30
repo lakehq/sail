@@ -370,11 +370,7 @@ impl IcebergTableWriter {
         field: &NestedField,
         num_rows: usize,
     ) -> Result<Option<ArrayRef>, DataFusionError> {
-        let literal = field
-            .write_default
-            .as_ref()
-            .or(field.initial_default.as_ref());
-        if let Some(lit) = literal {
+        if let Some(lit) = field.write_default.as_ref() {
             let scalar = to_scalar(lit, field.field_type.as_ref())?;
             let array = scalar
                 .to_array_of_size(num_rows)
@@ -382,5 +378,38 @@ impl IcebergTableWriter {
             return Ok(Some(array));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::Int32Array;
+
+    use super::*;
+    use crate::spec::types::{PrimitiveLiteral, PrimitiveType, Type};
+
+    #[test]
+    fn new_writes_do_not_fallback_to_initial_defaults() -> Result<()> {
+        let initial_only = NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int))
+            .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(42)));
+
+        assert!(IcebergTableWriter::default_array_for_field(&initial_only, 1)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn new_writes_apply_write_defaults() -> Result<()> {
+        let field = NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int))
+            .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(42)))
+            .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(99)));
+
+        let default_array = IcebergTableWriter::default_array_for_field(&field, 2)?
+            .ok_or_else(|| DataFusionError::Execution("missing write default array".to_string()))?;
+        let array = default_array
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| DataFusionError::Execution("write default is not int32".to_string()))?;
+        assert_eq!(array.values(), &[99, 99]);
+        Ok(())
     }
 }
