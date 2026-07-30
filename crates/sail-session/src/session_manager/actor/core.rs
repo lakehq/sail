@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use log::info;
+use log::{info, warn};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
@@ -51,6 +51,7 @@ impl Actor for SessionManagerActor {
             drivers: Default::default(),
             gateway,
             driver_id_generator: IdGenerator::new(),
+            shutdown_notifier: None,
         }
     }
 
@@ -91,13 +92,28 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::GetDriver { driver_id, result } => {
                 self.handle_get_driver(driver_id, result)
             }
+            SessionManagerEvent::Shutdown { result } => {
+                self.shutdown_notifier = Some(result);
+                ActorAction::Stop
+            }
         }
     }
 
-    async fn stop(self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, _ctx: &mut ActorContext<Self>) {
+        // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
+        // active task stream connections, which are owned by the drivers.
+        let drivers = self.drivers.drain().collect::<Vec<_>>();
+        for (driver_id, driver) in drivers {
+            if let Err(e) = driver.shutdown_and_wait().await {
+                warn!("failed to shut down driver {driver_id}: {e}");
+            }
+        }
         if let Some(mut gateway) = self.gateway {
             gateway.stop().await;
             info!("driver server has stopped");
+        }
+        if let Some(result) = self.shutdown_notifier {
+            let _ = result.send(());
         }
     }
 }

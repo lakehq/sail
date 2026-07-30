@@ -16,4 +16,5 @@ pub struct SessionManagerActor {
     drivers: DriverRegistry,
     gateway: Option<DriverGateway>,
     driver_id_generator: IdGenerator<DriverId>,
+    shutdown_notifier: Option<tokio::sync::oneshot::Sender<()>>,
 }
