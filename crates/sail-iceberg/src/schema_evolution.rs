@@ -134,7 +134,7 @@ impl SchemaEvolver {
                         .find(|field| field.name() == input_child.name())
                         .ok_or_else(|| {
                             DataFusionError::Plan(format!(
-                                "Column '{path}.{}' is not present in the Iceberg table schema",
+                                "Column '{path}.{}' is not present in the Iceberg table schema. Set mergeSchema=true to add nested columns.",
                                 input_child.name()
                             ))
                         })?;
