@@ -387,25 +387,25 @@ impl IcebergRestCatalogProvider {
             ));
         }
 
-        let mut configured_storage_fallbacks = Vec::new();
+        let mut unsupported_access_requirements = Vec::new();
         if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
-            configured_storage_fallbacks.push("remote signing");
+            unsupported_access_requirements.push("remote signing");
         }
         if result
             .storage_credentials
             .as_ref()
             .is_some_and(|credentials| !credentials.is_empty())
         {
-            configured_storage_fallbacks.push("vended credentials");
+            unsupported_access_requirements.push("vended credentials");
         }
-        if !configured_storage_fallbacks.is_empty() {
-            log::warn!(
-                "Iceberg REST catalog {} create_table for {}.{} returned {}; using configured object-store credentials for create+write",
+        if !unsupported_access_requirements.is_empty() {
+            return Err(CatalogError::UnsupportedCapability(format!(
+                "Iceberg REST catalog {} create_table for {}.{} requires {}, which Sail cannot materialize for create+write yet",
                 catalog,
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table),
-                configured_storage_fallbacks.join(", "),
-            );
+                unsupported_access_requirements.join(" and "),
+            )));
         }
 
         Ok(())
@@ -2971,7 +2971,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_table_allows_rest_access_session_hints() {
+    async fn create_table_rejects_unmaterialized_rest_storage_access() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
@@ -2981,13 +2981,16 @@ mod tests {
         )
         .await;
 
-        let status = ctx
+        let error = ctx
             .catalog
             .create_table(&namespace, "table1", simple_create_table_options())
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(status.name, "table1");
+        assert!(matches!(error, CatalogError::UnsupportedCapability(_)));
+        let message = error.to_string();
+        assert!(message.contains("remote signing"));
+        assert!(message.contains("vended credentials"));
     }
 
     #[tokio::test]

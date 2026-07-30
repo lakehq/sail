@@ -23,7 +23,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use log::warn;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
@@ -707,9 +706,8 @@ fn validate_iceberg_lakehouse_storage_access(
         .as_ref()
         .is_some_and(|session| session.remote_signing_enabled)
     {
-        // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
-        warn!(
-            "Iceberg REST catalog table {} advertises remote signing, which is not implemented yet",
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -718,9 +716,8 @@ fn validate_iceberg_lakehouse_storage_access(
         .as_ref()
         .is_some_and(|session| session.storage_credential_count > 0)
     {
-        // TODO: Apply REST vended credentials to operation-scoped storage access.
-        warn!(
-            "Iceberg REST catalog table {} advertises vended storage credentials, which is not implemented yet",
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires vended storage credentials, which are not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -1235,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_access_allows_required_rest_remote_signing() {
+    fn storage_access_rejects_required_rest_remote_signing() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1260,11 +1257,14 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(result.is_ok());
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires remote signing")
+        ));
     }
 
     #[test]
-    fn storage_access_allows_required_rest_vended_credentials() {
+    fn storage_access_rejects_required_rest_vended_credentials() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1289,6 +1289,9 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(result.is_ok());
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires vended storage credentials")
+        ));
     }
 }
