@@ -25,13 +25,19 @@ where
     F: Future<Output = ()>,
 {
     let session_manager = create_flight_session_manager(config, runtime).await?;
-    let service = SailFlightSqlService::new(session_manager);
-    let flight_service = FlightServiceServer::new(service);
+    let result = {
+        let service = SailFlightSqlService::new(session_manager.clone());
+        let flight_service = FlightServiceServer::new(service);
 
-    let builder = ServerBuilder::new("flight_sql", ServerBuilderOptions::default())
-        .add_service(flight_service, None)
-        .await;
+        let builder = ServerBuilder::new("flight_sql", ServerBuilderOptions::default())
+            .add_service(flight_service, None)
+            .await;
 
-    builder.serve(listener, signal).await?;
-    Ok(())
+        builder
+            .serve(listener, signal)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    };
+    session_manager.shutdown().await?;
+    result.map_err(Into::into)
 }

@@ -25,6 +25,7 @@ pub use crate::session_manager::options::SessionManagerOptions;
 pub type ServerSessionFactoryFn =
     fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
 
+#[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
 }
@@ -67,6 +68,18 @@ impl SessionManager {
         self.handle.send(event).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
+    }
+
+    /// Shut down the session manager and all resources it owns.
+    pub async fn shutdown(&self) -> SessionResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.handle
+            .send(SessionManagerEvent::Shutdown { result: tx })
+            .await?;
+        rx.await.map_err(|e| {
+            SessionError::internal(format!("failed to shut down session manager: {e}"))
+        })?;
+        Ok(())
     }
 }
 
