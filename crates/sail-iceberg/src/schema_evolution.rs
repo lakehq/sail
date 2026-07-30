@@ -82,16 +82,13 @@ impl SchemaEvolver {
                     field.name()
                 ))
             })?;
-            if !Self::field_types_equivalent(table_field.data_type(), field.data_type())
-                && !Self::is_safe_write_cast(table_field.data_type(), field.data_type())
-            {
-                return Err(DataFusionError::Plan(format!(
-                    "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
-                    field.name(),
-                    table_field.data_type(),
-                    field.data_type(),
-                )));
-            }
+            let iceberg_field = iceberg_schema.field_by_name(field.name()).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' is missing from the Iceberg schema",
+                    field.name()
+                ))
+            })?;
+            Self::validate_write_field(table_field, iceberg_field.as_ref(), field, field.name())?;
         }
 
         for field in table_schema.fields() {
@@ -113,6 +110,134 @@ impl SchemaEvolver {
         }
 
         Ok(())
+    }
+
+    fn validate_write_field(
+        table_field: &Field,
+        iceberg_field: &NestedField,
+        input_field: &Field,
+        path: &str,
+    ) -> Result<()> {
+        match (
+            table_field.data_type(),
+            iceberg_field.field_type.as_ref(),
+            input_field.data_type(),
+        ) {
+            (
+                DataType::Struct(table_fields),
+                Type::Struct(iceberg_struct),
+                DataType::Struct(input_fields),
+            ) => {
+                for input_child in input_fields {
+                    let table_child = table_fields
+                        .iter()
+                        .find(|field| field.name() == input_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is not present in the Iceberg table schema",
+                                input_child.name()
+                            ))
+                        })?;
+                    let iceberg_child = iceberg_struct
+                        .field_by_name(input_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is missing from the Iceberg schema",
+                                input_child.name()
+                            ))
+                        })?;
+                    Self::validate_write_field(
+                        table_child,
+                        iceberg_child.as_ref(),
+                        input_child,
+                        &format!("{path}.{}", input_child.name()),
+                    )?;
+                }
+
+                for table_child in table_fields {
+                    if input_fields
+                        .iter()
+                        .any(|field| field.name() == table_child.name())
+                    {
+                        continue;
+                    }
+                    let iceberg_child = iceberg_struct
+                        .field_by_name(table_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is missing from the Iceberg schema",
+                                table_child.name()
+                            ))
+                        })?;
+                    if !table_child.is_nullable() && iceberg_child.write_default.is_none() {
+                        return Err(DataFusionError::Plan(format!(
+                            "Column '{path}.{}' is required in the Iceberg table schema and must be present in the input data.",
+                            table_child.name()
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            (
+                DataType::List(table_child)
+                | DataType::ListView(table_child)
+                | DataType::LargeList(table_child)
+                | DataType::LargeListView(table_child),
+                Type::List(iceberg_list),
+                DataType::List(input_child)
+                | DataType::ListView(input_child)
+                | DataType::LargeList(input_child)
+                | DataType::LargeListView(input_child),
+            ) => Self::validate_write_field(
+                table_child,
+                iceberg_list.element_field.as_ref(),
+                input_child,
+                &format!("{path}.element"),
+            ),
+            (
+                DataType::Map(table_entries, _),
+                Type::Map(iceberg_map),
+                DataType::Map(input_entries, _),
+            ) => {
+                let (DataType::Struct(table_entry_fields), DataType::Struct(input_entry_fields)) =
+                    (table_entries.data_type(), input_entries.data_type())
+                else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{path}' has invalid map entry types"
+                    )));
+                };
+                if table_entry_fields.len() != 2 || input_entry_fields.len() != 2 {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{path}' map entries must contain key and value fields"
+                    )));
+                }
+                Self::validate_write_field(
+                    &table_entry_fields[0],
+                    iceberg_map.key_field.as_ref(),
+                    &input_entry_fields[0],
+                    &format!("{path}.key"),
+                )?;
+                Self::validate_write_field(
+                    &table_entry_fields[1],
+                    iceberg_map.value_field.as_ref(),
+                    &input_entry_fields[1],
+                    &format!("{path}.value"),
+                )
+            }
+            _ => {
+                if Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
+                    || Self::is_safe_write_cast(table_field.data_type(), input_field.data_type())
+                {
+                    Ok(())
+                } else {
+                    Err(DataFusionError::Plan(format!(
+                        "Column '{path}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
+                        table_field.data_type(),
+                        input_field.data_type(),
+                    )))
+                }
+            }
+        }
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
@@ -1093,6 +1218,40 @@ mod tests {
         )
         .expect_err("initial defaults only apply to historical rows");
         assert!(format!("{error}").contains("historical_col"));
+    }
+
+    #[test]
+    fn validate_exact_schema_allows_missing_nested_write_default() {
+        let payload_type = StructType::new(vec![
+            Arc::new(NestedField::required(
+                2,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(
+                NestedField::required(3, "score", Type::Primitive(PrimitiveType::Int))
+                    .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(99))),
+            ),
+        ]);
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "payload",
+                Type::Struct(payload_type),
+            ))])
+            .build()
+            .expect("schema");
+        let table_schema =
+            Arc::new(iceberg_schema_to_arrow(&iceberg_schema).expect("arrow schema"));
+        let input_schema = Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(vec![Field::new("id", DataType::Int32, false)].into()),
+            false,
+        )]);
+
+        SchemaEvolver::validate_exact_schema(table_schema.as_ref(), &iceberg_schema, &input_schema)
+            .expect("nested write default should allow omission");
     }
 
     #[test]

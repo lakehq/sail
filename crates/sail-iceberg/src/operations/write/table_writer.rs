@@ -13,14 +13,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, new_null_array};
-use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion::arrow::array::{
+    Array, ArrayRef, LargeListArray, ListArray, MapArray, StructArray, new_null_array,
+};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::array::record_batch::{
+    cast_array_recursively, cast_record_batch_relaxed_tz,
+};
 use url::Url;
 
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
@@ -324,8 +328,25 @@ impl IcebergTableWriter {
         for field in table_schema.fields() {
             match batch.schema().index_of(field.name()) {
                 Ok(idx) => {
-                    columns.push(batch.column(idx).clone());
-                    schema_fields.push(Arc::new(batch.schema().field(idx).clone()));
+                    let iceberg_field =
+                        iceberg_schema.field_by_name(field.name()).ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{}' missing from Iceberg schema during alignment",
+                                field.name()
+                            ))
+                        })?;
+                    let array = Self::align_nested_write_defaults(
+                        batch.column(idx),
+                        field,
+                        iceberg_field.as_ref(),
+                    )?;
+                    let schema_field = if array.data_type() == field.data_type() {
+                        field.clone()
+                    } else {
+                        Arc::new(batch.schema().field(idx).clone())
+                    };
+                    columns.push(array);
+                    schema_fields.push(schema_field);
                 }
                 Err(_) => {
                     let array =
@@ -338,6 +359,183 @@ impl IcebergTableWriter {
 
         let aligned_schema = Arc::new(Schema::new(schema_fields));
         Ok(RecordBatch::try_new(aligned_schema, columns)?)
+    }
+
+    fn align_nested_write_defaults(
+        source: &ArrayRef,
+        target_field: &FieldRef,
+        iceberg_field: &NestedField,
+    ) -> Result<ArrayRef, DataFusionError> {
+        match (
+            source.data_type(),
+            target_field.data_type(),
+            iceberg_field.field_type.as_ref(),
+        ) {
+            (
+                DataType::Struct(_),
+                DataType::Struct(target_fields),
+                crate::spec::types::Type::Struct(iceberg_struct),
+            ) => {
+                let source = source
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Column '{}' is not a struct array",
+                            target_field.name()
+                        ))
+                    })?;
+                let mut children = Vec::with_capacity(target_fields.len());
+                for child_field in target_fields {
+                    let iceberg_child = iceberg_struct
+                        .field_by_name(child_field.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Nested column '{}.{}' missing from Iceberg schema during alignment",
+                                target_field.name(),
+                                child_field.name()
+                            ))
+                        })?;
+                    let child = match source.column_by_name(child_field.name()) {
+                        Some(child) => Self::align_nested_write_defaults(
+                            child,
+                            child_field,
+                            iceberg_child.as_ref(),
+                        )?,
+                        None => Self::build_missing_nested_array(
+                            child_field,
+                            iceberg_child.as_ref(),
+                            source.len(),
+                        )?,
+                    };
+                    children.push(cast_array_recursively(&child, child_field.data_type())?);
+                }
+                Ok(Arc::new(StructArray::try_new(
+                    target_fields.clone(),
+                    children,
+                    source.nulls().cloned(),
+                )?))
+            }
+            (
+                DataType::List(_),
+                DataType::List(target_element),
+                crate::spec::types::Type::List(iceberg_list),
+            ) => {
+                let source = source.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Column '{}' is not a list array",
+                        target_field.name()
+                    ))
+                })?;
+                let values = Self::align_nested_write_defaults(
+                    source.values(),
+                    target_element,
+                    iceberg_list.element_field.as_ref(),
+                )?;
+                let values = cast_array_recursively(&values, target_element.data_type())?;
+                Ok(Arc::new(ListArray::try_new(
+                    target_element.clone(),
+                    source.offsets().clone(),
+                    values,
+                    source.nulls().cloned(),
+                )?))
+            }
+            (
+                DataType::LargeList(_),
+                DataType::LargeList(target_element),
+                crate::spec::types::Type::List(iceberg_list),
+            ) => {
+                let source = source
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Column '{}' is not a large-list array",
+                            target_field.name()
+                        ))
+                    })?;
+                let values = Self::align_nested_write_defaults(
+                    source.values(),
+                    target_element,
+                    iceberg_list.element_field.as_ref(),
+                )?;
+                let values = cast_array_recursively(&values, target_element.data_type())?;
+                Ok(Arc::new(LargeListArray::try_new(
+                    target_element.clone(),
+                    source.offsets().clone(),
+                    values,
+                    source.nulls().cloned(),
+                )?))
+            }
+            (
+                DataType::Map(_, _),
+                DataType::Map(target_entries, sorted),
+                crate::spec::types::Type::Map(iceberg_map),
+            ) => {
+                let source = source.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Column '{}' is not a map array",
+                        target_field.name()
+                    ))
+                })?;
+                let DataType::Struct(target_entry_fields) = target_entries.data_type() else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{}' has invalid map entry type",
+                        target_field.name()
+                    )));
+                };
+                if target_entry_fields.len() != 2 {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{}' map entries must contain key and value fields",
+                        target_field.name()
+                    )));
+                }
+                let source_entries = source.entries();
+                let key = Self::align_nested_write_defaults(
+                    source_entries.column(0),
+                    &target_entry_fields[0],
+                    iceberg_map.key_field.as_ref(),
+                )?;
+                let value = Self::align_nested_write_defaults(
+                    source_entries.column(1),
+                    &target_entry_fields[1],
+                    iceberg_map.value_field.as_ref(),
+                )?;
+                let entries = StructArray::try_new(
+                    target_entry_fields.clone(),
+                    vec![
+                        cast_array_recursively(&key, target_entry_fields[0].data_type())?,
+                        cast_array_recursively(&value, target_entry_fields[1].data_type())?,
+                    ],
+                    source_entries.nulls().cloned(),
+                )?;
+                Ok(Arc::new(MapArray::try_new(
+                    target_entries.clone(),
+                    source.offsets().clone(),
+                    entries,
+                    source.nulls().cloned(),
+                    *sorted,
+                )?))
+            }
+            _ => Ok(source.clone()),
+        }
+    }
+
+    fn build_missing_nested_array(
+        field: &FieldRef,
+        iceberg_field: &NestedField,
+        num_rows: usize,
+    ) -> Result<ArrayRef, DataFusionError> {
+        if let Some(array) = Self::default_array_for_field(iceberg_field, num_rows)? {
+            return Ok(array);
+        }
+        if field.is_nullable() {
+            return Ok(new_null_array(field.data_type(), num_rows));
+        }
+        Err(DataFusionError::Plan(format!(
+            "Nested column '{}' is required but missing in input batch and has no write default",
+            field.name()
+        )))
     }
 
     fn build_missing_column_array(
@@ -383,10 +581,13 @@ impl IcebergTableWriter {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::array::{Int32Array, ListArray, StructArray};
+    use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields};
 
     use super::*;
-    use crate::spec::types::{PrimitiveLiteral, PrimitiveType, Type};
+    use crate::datasource::type_converter::iceberg_schema_to_arrow;
+    use crate::spec::types::{ListType, PrimitiveLiteral, PrimitiveType, StructType, Type};
 
     #[test]
     fn new_writes_do_not_fallback_to_initial_defaults() -> Result<()> {
@@ -410,6 +611,141 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .ok_or_else(|| DataFusionError::Execution("write default is not int32".to_string()))?;
         assert_eq!(array.values(), &[99, 99]);
+        Ok(())
+    }
+
+    #[test]
+    fn new_writes_apply_nested_write_defaults() -> Result<()> {
+        let payload_type = StructType::new(vec![
+            Arc::new(NestedField::required(
+                2,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(
+                NestedField::required(3, "score", Type::Primitive(PrimitiveType::Int))
+                    .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(99))),
+            ),
+        ]);
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "payload",
+                Type::Struct(payload_type),
+            ))])
+            .build()
+            .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+        let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
+
+        let input_fields: Fields = vec![Arc::new(Field::new("id", DataType::Int32, false))].into();
+        let input_payload = Arc::new(StructArray::new(
+            input_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+            None,
+        ));
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(input_fields),
+            false,
+        )]));
+        let input = RecordBatch::try_new(input_schema, vec![input_payload])?;
+
+        let padded = IcebergTableWriter::align_batch_with_table_schema(
+            &input,
+            &table_schema,
+            &iceberg_schema,
+        )?;
+        let aligned = cast_record_batch_relaxed_tz(&padded, &table_schema)?;
+        let payload = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Execution("payload is not a struct".to_string()))?;
+        let score = payload
+            .column_by_name("score")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DataFusionError::Execution("score is not int32".to_string()))?;
+        assert_eq!(score.values(), &[99, 99]);
+        Ok(())
+    }
+
+    #[test]
+    fn new_writes_apply_defaults_inside_list_elements() -> Result<()> {
+        let element_type = StructType::new(vec![
+            Arc::new(NestedField::required(
+                3,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(
+                NestedField::required(4, "score", Type::Primitive(PrimitiveType::Int))
+                    .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(99))),
+            ),
+        ]);
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "items",
+                Type::List(ListType::new(Arc::new(NestedField::list_element(
+                    2,
+                    Type::Struct(element_type),
+                    false,
+                )))),
+            ))])
+            .build()
+            .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+        let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
+
+        let source_struct_fields: Fields =
+            vec![Arc::new(Field::new("id", DataType::Int32, false))].into();
+        let source_values = Arc::new(StructArray::new(
+            source_struct_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+            None,
+        ));
+        let source_element = Arc::new(Field::new(
+            "item",
+            DataType::Struct(source_struct_fields),
+            false,
+        ));
+        let source_items = Arc::new(ListArray::try_new(
+            source_element.clone(),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            source_values,
+            None,
+        )?);
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(source_element),
+            false,
+        )]));
+        let input = RecordBatch::try_new(input_schema, vec![source_items])?;
+
+        let padded = IcebergTableWriter::align_batch_with_table_schema(
+            &input,
+            &table_schema,
+            &iceberg_schema,
+        )?;
+        let aligned = cast_record_batch_relaxed_tz(&padded, &table_schema)?;
+        let items = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| DataFusionError::Execution("items is not a list".to_string()))?;
+        let elements = items
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("list element is not a struct".to_string())
+            })?;
+        let score = elements
+            .column_by_name("score")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DataFusionError::Execution("score is not int32".to_string()))?;
+        assert_eq!(score.values(), &[99, 99]);
         Ok(())
     }
 }
