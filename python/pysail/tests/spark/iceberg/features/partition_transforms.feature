@@ -28,7 +28,7 @@ Feature: Iceberg Partition Transforms
           (3, 1003, 'purchase'),
           (4, 1004, 'logout')
         """
-      Then iceberg metadata matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       Then iceberg snapshot operation is append
       When query
         """
@@ -101,8 +101,7 @@ Feature: Iceberg Partition Transforms
           (3, 'DEF789', 30.0),
           (4, 'DEF012', 40.0)
         """
-      Then iceberg metadata matches snapshot
-      Then iceberg partition spec matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       When query
         """
         SELECT * FROM truncate_test ORDER BY id
@@ -205,7 +204,7 @@ Feature: Iceberg Partition Transforms
           (3, DATE '2024-01-10', 'login'),
           (4, DATE '2024-06-25', 'view')
         """
-      Then iceberg metadata matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       Then iceberg snapshot operation is append
       Then file tree in location matches
         """
@@ -250,8 +249,7 @@ Feature: Iceberg Partition Transforms
           (3, DATE '2024-02-10', 'completed'),
           (4, DATE '2024-03-05', 'cancelled')
         """
-      Then iceberg metadata matches snapshot
-      Then iceberg current snapshot summary matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       When query
         """
         SELECT * FROM month_partition_test 
@@ -283,8 +281,8 @@ Feature: Iceberg Partition Transforms
           (3, DATE '2024-01-02', 300),
           (4, DATE '2024-01-03', 400)
         """
-      Then iceberg metadata matches snapshot
       Then iceberg snapshot count is 1
+      Then iceberg current snapshot graph matches snapshot
       When query
         """
         SELECT * FROM day_partition_test 
@@ -392,7 +390,7 @@ Feature: Iceberg Partition Transforms
           (3, TIMESTAMP '2024-01-01 11:00:00', 'milestone'),
           (4, TIMESTAMP '2024-01-01 12:00:00', 'complete')
         """
-      Then iceberg metadata matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       Then iceberg snapshot operation is append
       When query
         """
@@ -502,8 +500,7 @@ Feature: Iceberg Partition Transforms
           (3, DATE '2024-01-10', 'A', 30.0),
           (4, DATE '2024-06-25', 'B', 40.0)
         """
-      Then iceberg metadata matches snapshot
-      Then iceberg partition spec matches snapshot
+      Then iceberg current snapshot graph matches snapshot
       Then file tree in location matches
         """
         📂 data
@@ -531,6 +528,129 @@ Feature: Iceberg Partition Transforms
       Then query result ordered
         | id | event_date | category | value |
         | 3  | 2024-01-10 | A        | 30.0  |
+
+  Rule: Transform edge cases follow Iceberg reference semantics
+    Background:
+      Given variable location for temporary directory iceberg_transform_edge_cases
+      Given final statement
+        """
+        DROP TABLE IF EXISTS transform_edge_case_test
+        """
+
+    Scenario: Decimal bucket uses canonical two's-complement bytes
+      Given statement template
+        """
+        CREATE TABLE transform_edge_case_test (
+          id INT,
+          amount DECIMAL(9, 2)
+        )
+        USING iceberg
+        PARTITIONED BY (bucket(16, amount))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO transform_edge_case_test VALUES
+          (1, CAST(-1234.56 AS DECIMAL(9, 2))),
+          (2, CAST(-1.00 AS DECIMAL(9, 2))),
+          (3, CAST(0.00 AS DECIMAL(9, 2))),
+          (4, CAST(1234.56 AS DECIMAL(9, 2)))
+        """
+      Then iceberg current snapshot graph matches snapshot
+      When query
+        """
+        SELECT id, amount FROM transform_edge_case_test ORDER BY id
+        """
+      Then query result ordered
+        | id | amount   |
+        | 1  | -1234.56 |
+        | 2  | -1.00    |
+        | 3  | 0.00     |
+        | 4  | 1234.56  |
+
+    Scenario: Decimal truncate produces transformed partitions
+      Given statement template
+        """
+        CREATE TABLE transform_edge_case_test (
+          id INT,
+          amount DECIMAL(9, 2)
+        )
+        USING iceberg
+        PARTITIONED BY (truncate(10, amount))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO transform_edge_case_test VALUES
+          (1, CAST(-12.34 AS DECIMAL(9, 2))),
+          (2, CAST(-12.31 AS DECIMAL(9, 2))),
+          (3, CAST(12.34 AS DECIMAL(9, 2)))
+        """
+      Then iceberg current snapshot graph matches snapshot
+      When query
+        """
+        SELECT id, amount FROM transform_edge_case_test ORDER BY id
+        """
+      Then query result ordered
+        | id | amount |
+        | 1  | -12.34 |
+        | 2  | -12.31 |
+        | 3  | 12.34  |
+
+    Scenario: Date transforms support days before the Unix epoch
+      Given statement template
+        """
+        CREATE TABLE transform_edge_case_test (
+          id INT,
+          event_date DATE
+        )
+        USING iceberg
+        PARTITIONED BY (years(event_date), months(event_date), days(event_date))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO transform_edge_case_test VALUES
+          (1, DATE '1968-02-29'),
+          (2, DATE '1969-12-31'),
+          (3, DATE '1970-01-01')
+        """
+      Then iceberg current snapshot graph matches snapshot
+      When query
+        """
+        SELECT id, event_date FROM transform_edge_case_test ORDER BY id
+        """
+      Then query result ordered
+        | id | event_date |
+        | 1  | 1968-02-29 |
+        | 2  | 1969-12-31 |
+        | 3  | 1970-01-01 |
+
+    Scenario: Invalid transform widths fail before writing data
+      Given statement template
+        """
+        CREATE TABLE transform_edge_case_test (id INT)
+        USING iceberg
+        PARTITIONED BY (bucket(0, id))
+        LOCATION {{ location.uri }}
+        """
+      Given statement with error (?i)(bucket|width|positive|invalid)
+        """
+        INSERT INTO transform_edge_case_test VALUES (1)
+        """
+
+    Scenario: Invalid truncate widths fail before writing data
+      Given statement template
+        """
+        CREATE TABLE transform_edge_case_test (id INT)
+        USING iceberg
+        PARTITIONED BY (truncate(0, id))
+        LOCATION {{ location.uri }}
+        """
+      Given statement with error (?i)(truncate|width|positive|invalid)
+        """
+        INSERT INTO transform_edge_case_test VALUES (1)
+        """
 
   Rule: Partition evolution changes transform strategy
     Background:

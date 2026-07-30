@@ -72,6 +72,7 @@ Feature: Iceberg Basic IO
         INSERT INTO test_table VALUES (2, 'second')
         """
       Then iceberg snapshot count is 2
+      Then iceberg current snapshot graph matches snapshot
       When query
         """
         SELECT * FROM test_table ORDER BY id

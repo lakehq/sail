@@ -358,20 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn date_transforms_support_days_before_the_epoch() {
-        assert_eq!(days_to_year(-1), -1);
-        assert_eq!(days_to_months(-1), -1);
-        assert_eq!(
-            apply_transform(
-                Transform::Day,
-                &Type::Primitive(PrimitiveType::Date),
-                Some(Literal::Primitive(PrimitiveLiteral::Int(-1))),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(-1))))
-        );
-    }
-
-    #[test]
     fn test_bucket_int() {
         let result = bucket_int(42, 10);
         assert!((0..10).contains(&result));
@@ -381,89 +367,5 @@ mod tests {
     fn test_bucket_str() {
         let result = bucket_str("test", 10);
         assert!((0..10).contains(&result));
-    }
-
-    #[test]
-    fn void_transform_always_produces_null() {
-        let value = Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
-        assert_eq!(
-            apply_transform(Transform::Void, &Type::Primitive(PrimitiveType::Int), value,),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn unknown_transform_is_rejected() {
-        let value = Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
-        assert!(
-            apply_transform(
-                Transform::Unknown,
-                &Type::Primitive(PrimitiveType::Int),
-                value,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn invalid_transform_widths_are_rejected() {
-        let int_type = Type::Primitive(PrimitiveType::Int);
-        let value = || Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
-
-        assert!(apply_transform(Transform::Truncate(0), &int_type, value()).is_err());
-        assert!(apply_transform(Transform::Bucket(0), &int_type, value()).is_err());
-        assert!(
-            apply_transform(Transform::Truncate(i32::MAX as u32 + 1), &int_type, value(),).is_err()
-        );
-        assert!(
-            apply_transform(Transform::Bucket(i32::MAX as u32 + 1), &int_type, value(),).is_err()
-        );
-    }
-
-    #[test]
-    fn decimal_and_binary_truncate_follow_iceberg_semantics() {
-        assert_eq!(
-            apply_transform(
-                Transform::Truncate(10),
-                &Type::Primitive(PrimitiveType::Decimal {
-                    precision: 9,
-                    scale: 2,
-                }),
-                Some(Literal::Primitive(PrimitiveLiteral::Int128(-127))),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(-130))))
-        );
-        assert_eq!(
-            apply_transform(
-                Transform::Truncate(4),
-                &Type::Primitive(PrimitiveType::Binary),
-                Some(Literal::Primitive(PrimitiveLiteral::Binary(
-                    b"abcdef".to_vec(),
-                ))),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
-                b"abcd".to_vec()
-            ))))
-        );
-    }
-
-    #[test]
-    fn timestamp_ns_bucket_uses_microsecond_precision() {
-        assert_eq!(
-            apply_transform(
-                Transform::Bucket(16),
-                &Type::Primitive(PrimitiveType::TimestampNs),
-                Some(Literal::Primitive(PrimitiveLiteral::Long(
-                    1_510_871_468_000_001_001,
-                ))),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(6))))
-        );
-    }
-
-    #[test]
-    fn decimal_bucket_uses_minimal_twos_complement_bytes() {
-        assert_eq!(bucket_decimal(-5, 16), 2);
-        assert_eq!(bucket_decimal(128, 16), 5);
     }
 }

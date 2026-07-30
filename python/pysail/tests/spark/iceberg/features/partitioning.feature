@@ -101,6 +101,46 @@ Feature: Iceberg Partitioning
           📄 snap-*.avro
         """
 
+  Rule: Identity partition paths preserve typed values
+    Background:
+      Given variable location for temporary directory iceberg_part_identity_paths
+      Given final statement
+        """
+        DROP TABLE IF EXISTS part_identity_paths
+        """
+
+    Scenario: Identity string paths match Iceberg human and URL encoding
+      Given statement template
+        """
+        CREATE TABLE part_identity_paths (id INT, category STRING)
+        USING iceberg
+        PARTITIONED BY (category)
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO part_identity_paths VALUES
+          (1, NULL),
+          (2, 'null'),
+          (3, 'a/b'),
+          (4, 'a=b'),
+          (5, '100%'),
+          (6, '雪')
+        """
+      Then iceberg current snapshot graph matches snapshot
+      When query
+        """
+        SELECT id, category FROM part_identity_paths ORDER BY id
+        """
+      Then query result ordered
+        | id | category |
+        | 1  | NULL     |
+        | 2  | null     |
+        | 3  | a/b      |
+        | 4  | a=b      |
+        | 5  | 100%     |
+        | 6  | 雪       |
+
   Rule: Bucket transform partitioning
     Background:
       Given variable location for temporary directory iceberg_part_bucket

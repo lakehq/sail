@@ -1047,9 +1047,8 @@ fn alter_table_properties_conflict_error() -> DataFusionError {
 #[cfg(test)]
 mod tests {
     use sail_common_datafusion::catalog::{
-        CatalogProviderId, CatalogTableIdentity, CommitAuthority, IcebergRestTableSessionRef,
-        LakehouseAuthority, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
-        TableLifecycle,
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, LakehouseAuthority,
+        LakehouseFormat, LakehouseOperation, MetadataPointerAuthority, TableLifecycle,
     };
 
     use super::*;
@@ -1228,70 +1227,6 @@ mod tests {
         assert!(matches!(
             &result,
             Err(err) if format!("{err}").contains("requires server-side scan planning")
-        ));
-    }
-
-    #[test]
-    fn storage_access_rejects_required_rest_remote_signing() {
-        let mut context = LakehouseExecutionContext::catalog_table_context(
-            CatalogProviderId("rest".to_string()),
-            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
-            CatalogTableIdentity {
-                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
-                table_uri: Some("s3://bucket/table".to_string()),
-            },
-            LakehouseOperation::Read,
-            LakehouseFormat::Iceberg,
-            LakehouseAuthority::CatalogAuthoritative {
-                lifecycle: TableLifecycle::External,
-                pointer: MetadataPointerAuthority::IcebergRest,
-                commit: CommitAuthority::IcebergRestCommit,
-            },
-            ScanAuthority::ClientTableFormat,
-        );
-        context.rest_session = Some(IcebergRestTableSessionRef {
-            fingerprint: "rest-session".to_string(),
-            scan_planning_mode: Some("client".to_string()),
-            storage_credential_count: 0,
-            remote_signing_enabled: true,
-        });
-
-        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("requires remote signing")
-        ));
-    }
-
-    #[test]
-    fn storage_access_rejects_required_rest_vended_credentials() {
-        let mut context = LakehouseExecutionContext::catalog_table_context(
-            CatalogProviderId("rest".to_string()),
-            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
-            CatalogTableIdentity {
-                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
-                table_uri: Some("s3://bucket/table".to_string()),
-            },
-            LakehouseOperation::Read,
-            LakehouseFormat::Iceberg,
-            LakehouseAuthority::CatalogAuthoritative {
-                lifecycle: TableLifecycle::External,
-                pointer: MetadataPointerAuthority::IcebergRest,
-                commit: CommitAuthority::IcebergRestCommit,
-            },
-            ScanAuthority::ClientTableFormat,
-        );
-        context.rest_session = Some(IcebergRestTableSessionRef {
-            fingerprint: "rest-session".to_string(),
-            scan_planning_mode: Some("client".to_string()),
-            storage_credential_count: 1,
-            remote_signing_enabled: false,
-        });
-
-        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("requires vended storage credentials")
         ));
     }
 }

@@ -2,230 +2,293 @@
 ---
 name: "test_append_a_variant_column_with_mergeschema_upgrades_the_table_format_version"
 data:
-  current-schema-id: 0
-  current-snapshot-id: <snapshot-id>
-  default-sort-order-id: 0
-  default-spec-id: 0
-  format-version: 2
-  last-column-id: 1
-  last-partition-id: 0
-  last-sequence-number: 1
-  last-updated-ms: <timestamp>
-  location: file://<root>/iceberg_variant_schema_evolution/
-  metadata-log:
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
-    timestamp-ms: <timestamp>
-  partition-specs:
-  - fields: []
-    spec-id: 0
-  properties: {}
-  refs:
-    main:
-      snapshot-id: <snapshot-id>
-      type: branch
-  schemas:
-  - fields:
-    - id: 1
-      name: id
-      required: false
-      type: int
-    schema-id: 0
-    type: struct
-  snapshot-log:
-  - snapshot-id: <snapshot-id>
-    timestamp-ms: <timestamp>
-  snapshots:
-  - manifest-list: file://<root>/metadata/snap-<id>.avro
-    schema-id: 0
-    sequence-number: 1
-    snapshot-id: <snapshot-id>
-    summary:
-      operation: append
-    timestamp-ms: <timestamp>
-  sort-orders:
-  - fields: []
-    order-id: 0
-  table-uuid: <uuid>
----
-name: "test_append_a_variant_column_with_mergeschema_upgrades_the_table_format_version.1"
-data:
-  current-schema-id: 1
-  current-snapshot-id: <snapshot-id>
-  default-sort-order-id: 0
-  default-spec-id: 0
-  format-version: 3
-  last-column-id: 2
-  last-partition-id: 0
-  last-sequence-number: 2
-  last-updated-ms: <timestamp>
-  location: file://<root>/iceberg_variant_schema_evolution/
-  metadata-log:
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
-    timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
-    timestamp-ms: <timestamp>
-  next-row-id: 2
-  partition-specs:
-  - fields: []
-    spec-id: 0
-  properties: {}
-  refs:
-    main:
-      snapshot-id: <snapshot-id>
-      type: branch
-  schemas:
-  - fields:
-    - id: 1
-      name: id
-      required: false
-      type: int
-    schema-id: 0
-    type: struct
-  - fields:
-    - id: 1
-      name: id
-      required: false
-      type: int
-    - id: 2
-      name: payload
-      required: false
-      type: variant
-    schema-id: 1
-    type: struct
-  snapshot-log:
-  - snapshot-id: <snapshot-id>
-    timestamp-ms: <timestamp>
-  - snapshot-id: <snapshot-id>
-    timestamp-ms: <timestamp>
-  snapshots:
-  - manifest-list: file://<root>/metadata/snap-<id>.avro
-    schema-id: 0
-    sequence-number: 1
-    snapshot-id: <snapshot-id>
-    summary:
-      operation: append
-    timestamp-ms: <timestamp>
-  - added-rows: 2
+  current-snapshot:
+    added-rows: 2
     first-row-id: 0
     manifest-list: file://<root>/metadata/snap-<id>.avro
-    parent-snapshot-id: <parent-snapshot-id>
+    parent-snapshot-id: <snapshot-1>
     schema-id: 1
     sequence-number: 2
-    snapshot-id: <snapshot-id>
+    snapshot-id: <snapshot-2>
     summary:
       operation: append
     timestamp-ms: <timestamp>
-  sort-orders:
-  - fields: []
-    order-id: 0
-  table-uuid: <uuid>
----
-name: "test_append_a_variant_column_with_mergeschema_upgrades_the_table_format_version.2"
-data:
   manifests:
-  - added-files-count: 1
-    added-rows-count: 1
-    added-snapshot-id: <snapshot-id>
-    content: data
-    deleted-files-count: 0
-    deleted-rows-count: 0
-    existing-files-count: 0
-    existing-rows-count: 0
-    first-row-id: 0
-    key-metadata: null
-    manifest-length: <bytes>
-    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
-    partition-spec-id: 0
-    partitions: null
-    sequence-number: 1
-  - added-files-count: 1
-    added-rows-count: 1
-    added-snapshot-id: <snapshot-id>
-    content: data
-    deleted-files-count: 0
-    deleted-rows-count: 0
-    existing-files-count: 0
-    existing-rows-count: 0
-    first-row-id: 1
-    key-metadata: null
-    manifest-length: <bytes>
-    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 2
-    partition-spec-id: 0
-    partitions: null
-    sequence-number: 2
+  - entries:
+    - data-file:
+        column-sizes:
+          1: <bytes>
+        content: data
+        content-offset: null
+        content-size-in-bytes: null
+        equality-ids: null
+        file-format: parquet
+        file-path: file://<root>/data/part-data-<uuid>.parquet
+        file-size-in-bytes: <bytes>
+        first-row-id: null
+        key-metadata: null
+        lower-bounds: {}
+        nan-value-counts: {}
+        null-value-counts:
+          1: 0
+        partition: {}
+        record-count: 1
+        referenced-data-file: null
+        sort-order-id: null
+        split-offsets:
+        - <offset>
+        upper-bounds: {}
+        value-counts:
+          1: 1
+      file-sequence-number: 1
+      sequence-number: 1
+      snapshot-id: <snapshot-1>
+      status: added
+    manifest:
+      added-files-count: 1
+      added-rows-count: 1
+      added-snapshot-id: <snapshot-1>
+      content: data
+      deleted-files-count: 0
+      deleted-rows-count: 0
+      existing-files-count: 0
+      existing-rows-count: 0
+      first-row-id: 0
+      key-metadata: null
+      manifest-length: <bytes>
+      manifest-path: file://<root>/metadata/manifest-1.avro
+      min-sequence-number: 1
+      partition-spec-id: 0
+      partitions: null
+      sequence-number: 1
+  - entries:
+    - data-file:
+        column-sizes:
+          1: <bytes>
+        content: data
+        content-offset: null
+        content-size-in-bytes: null
+        equality-ids: null
+        file-format: parquet
+        file-path: file://<root>/data/part-data-<uuid>.parquet
+        file-size-in-bytes: <bytes>
+        first-row-id: null
+        key-metadata: null
+        lower-bounds: {}
+        nan-value-counts: {}
+        null-value-counts:
+          1: 0
+        partition: {}
+        record-count: 1
+        referenced-data-file: null
+        sort-order-id: null
+        split-offsets:
+        - <offset>
+        upper-bounds: {}
+        value-counts:
+          1: 1
+      file-sequence-number: 2
+      sequence-number: 2
+      snapshot-id: <snapshot-2>
+      status: added
+    manifest:
+      added-files-count: 1
+      added-rows-count: 1
+      added-snapshot-id: <snapshot-2>
+      content: data
+      deleted-files-count: 0
+      deleted-rows-count: 0
+      existing-files-count: 0
+      existing-rows-count: 0
+      first-row-id: 1
+      key-metadata: null
+      manifest-length: <bytes>
+      manifest-path: file://<root>/metadata/manifest-2.avro
+      min-sequence-number: 2
+      partition-spec-id: 0
+      partitions: null
+      sequence-number: 2
+  table-metadata:
+    current-schema-id: 1
+    current-snapshot-id: <snapshot-2>
+    default-sort-order-id: 0
+    default-spec-id: 0
+    format-version: 3
+    last-column-id: 2
+    last-partition-id: 0
+    last-sequence-number: 2
+    last-updated-ms: <timestamp>
+    location: file://<root>/iceberg_variant_schema_evolution/
+    metadata-log:
+    - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+      timestamp-ms: <timestamp>
+    - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
+      timestamp-ms: <timestamp>
+    next-row-id: 2
+    partition-specs:
+    - fields: []
+      spec-id: 0
+    properties: {}
+    refs:
+      main:
+        snapshot-id: <snapshot-2>
+        type: branch
+    schemas:
+    - fields:
+      - id: 1
+        name: id
+        required: false
+        type: int
+      schema-id: 0
+      type: struct
+    - fields:
+      - id: 1
+        name: id
+        required: false
+        type: int
+      - id: 2
+        name: payload
+        required: false
+        type: variant
+      schema-id: 1
+      type: struct
+    snapshot-log:
+    - snapshot-id: <snapshot-1>
+      timestamp-ms: <timestamp>
+    - snapshot-id: <snapshot-2>
+      timestamp-ms: <timestamp>
+    snapshots:
+    - manifest-list: file://<root>/metadata/snap-<id>.avro
+      schema-id: 0
+      sequence-number: 1
+      snapshot-id: <snapshot-1>
+      summary:
+        operation: append
+      timestamp-ms: <timestamp>
+    - added-rows: 2
+      first-row-id: 0
+      manifest-list: file://<root>/metadata/snap-<id>.avro
+      parent-snapshot-id: <snapshot-1>
+      schema-id: 1
+      sequence-number: 2
+      snapshot-id: <snapshot-2>
+      summary:
+        operation: append
+      timestamp-ms: <timestamp>
+    sort-orders:
+    - fields: []
+      order-id: 0
+    table-uuid: <uuid>
 ---
 name: "test_write_and_read_a_variant_column"
 data:
-  current-schema-id: 0
-  current-snapshot-id: <snapshot-id>
-  default-sort-order-id: 0
-  default-spec-id: 0
-  format-version: 3
-  last-column-id: 2
-  last-partition-id: 0
-  last-sequence-number: 1
-  last-updated-ms: <timestamp>
-  location: file://<root>/iceberg_variant/
-  metadata-log:
-  - metadata-file: <tmp>/iceberg_variant/metadata/v1.metadata.json
-    timestamp-ms: <timestamp>
-  next-row-id: 1
-  partition-specs:
-  - fields: []
-    spec-id: 0
-  properties: {}
-  refs:
-    main:
-      snapshot-id: <snapshot-id>
-      type: branch
-  schemas:
-  - fields:
-    - id: 1
-      name: id
-      required: false
-      type: int
-    - id: 2
-      name: payload
-      required: false
-      type: variant
-    schema-id: 0
-    type: struct
-  snapshot-log:
-  - snapshot-id: <snapshot-id>
-    timestamp-ms: <timestamp>
-  snapshots:
-  - added-rows: 1
+  current-snapshot:
+    added-rows: 1
     first-row-id: 0
     manifest-list: file://<root>/metadata/snap-<id>.avro
     schema-id: 0
     sequence-number: 1
-    snapshot-id: <snapshot-id>
+    snapshot-id: <snapshot-1>
     summary:
       operation: append
     timestamp-ms: <timestamp>
-  sort-orders:
-  - fields: []
-    order-id: 0
-  table-uuid: <uuid>
----
-name: "test_write_and_read_a_variant_column.1"
-data:
   manifests:
-  - added-files-count: 1
-    added-rows-count: 1
-    added-snapshot-id: <snapshot-id>
-    content: data
-    deleted-files-count: 0
-    deleted-rows-count: 0
-    existing-files-count: 0
-    existing-rows-count: 0
-    first-row-id: 0
-    key-metadata: null
-    manifest-length: <bytes>
-    manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
-    partition-spec-id: 0
-    partitions: null
-    sequence-number: 1
+  - entries:
+    - data-file:
+        column-sizes:
+          1: <bytes>
+        content: data
+        content-offset: null
+        content-size-in-bytes: null
+        equality-ids: null
+        file-format: parquet
+        file-path: file://<root>/data/part-data-<uuid>.parquet
+        file-size-in-bytes: <bytes>
+        first-row-id: null
+        key-metadata: null
+        lower-bounds: {}
+        nan-value-counts: {}
+        null-value-counts:
+          1: 0
+        partition: {}
+        record-count: 1
+        referenced-data-file: null
+        sort-order-id: null
+        split-offsets:
+        - <offset>
+        upper-bounds: {}
+        value-counts:
+          1: 1
+      file-sequence-number: 1
+      sequence-number: 1
+      snapshot-id: <snapshot-1>
+      status: added
+    manifest:
+      added-files-count: 1
+      added-rows-count: 1
+      added-snapshot-id: <snapshot-1>
+      content: data
+      deleted-files-count: 0
+      deleted-rows-count: 0
+      existing-files-count: 0
+      existing-rows-count: 0
+      first-row-id: 0
+      key-metadata: null
+      manifest-length: <bytes>
+      manifest-path: file://<root>/metadata/manifest-1.avro
+      min-sequence-number: 1
+      partition-spec-id: 0
+      partitions: null
+      sequence-number: 1
+  table-metadata:
+    current-schema-id: 0
+    current-snapshot-id: <snapshot-1>
+    default-sort-order-id: 0
+    default-spec-id: 0
+    format-version: 3
+    last-column-id: 2
+    last-partition-id: 0
+    last-sequence-number: 1
+    last-updated-ms: <timestamp>
+    location: file://<root>/iceberg_variant/
+    metadata-log:
+    - metadata-file: <tmp>/iceberg_variant/metadata/v1.metadata.json
+      timestamp-ms: <timestamp>
+    next-row-id: 1
+    partition-specs:
+    - fields: []
+      spec-id: 0
+    properties: {}
+    refs:
+      main:
+        snapshot-id: <snapshot-1>
+        type: branch
+    schemas:
+    - fields:
+      - id: 1
+        name: id
+        required: false
+        type: int
+      - id: 2
+        name: payload
+        required: false
+        type: variant
+      schema-id: 0
+      type: struct
+    snapshot-log:
+    - snapshot-id: <snapshot-1>
+      timestamp-ms: <timestamp>
+    snapshots:
+    - added-rows: 1
+      first-row-id: 0
+      manifest-list: file://<root>/metadata/snap-<id>.avro
+      schema-id: 0
+      sequence-number: 1
+      snapshot-id: <snapshot-1>
+      summary:
+        operation: append
+      timestamp-ms: <timestamp>
+    sort-orders:
+    - fields: []
+      order-id: 0
+    table-uuid: <uuid>

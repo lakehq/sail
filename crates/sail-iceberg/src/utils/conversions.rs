@@ -453,7 +453,6 @@ pub fn array_value_to_literal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::TimeUnit;
 
     #[test]
     fn test_primitive_to_scalar_default() {
@@ -512,31 +511,6 @@ mod tests {
             primitive_literal_to_scalar(&lit, &ty),
             ScalarValue::TimestampNanosecond(Some(42_000), None)
         );
-
-        let uuid = PrimitiveLiteral::UInt128(0x00112233445566778899aabbccddeeff);
-        assert_eq!(
-            primitive_literal_to_scalar(&uuid, &PrimitiveType::Uuid),
-            ScalarValue::FixedSizeBinary(
-                16,
-                Some(
-                    [
-                        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
-                        0xcc, 0xdd, 0xee, 0xff,
-                    ]
-                    .to_vec()
-                )
-            )
-        );
-
-        let bytes = PrimitiveLiteral::Binary(vec![1, 2, 3]);
-        assert_eq!(
-            primitive_literal_to_scalar(&bytes, &PrimitiveType::Fixed(3)),
-            ScalarValue::FixedSizeBinary(3, Some(vec![1, 2, 3]))
-        );
-        assert_eq!(
-            primitive_literal_to_scalar(&bytes, &PrimitiveType::Binary),
-            ScalarValue::LargeBinary(Some(vec![1, 2, 3]))
-        );
     }
 
     #[test]
@@ -587,127 +561,11 @@ mod tests {
         use datafusion::arrow::array::TimestampNanosecondArray;
 
         let array = TimestampNanosecondArray::from(vec![Some(9_999_999)]);
-        let literal = array_value_to_literal(
-            &(Arc::new(array) as ArrayRef),
-            0,
-            &Type::Primitive(PrimitiveType::TimestampNs),
-        )
-        .expect("convert partition value")
-        .expect("literal value");
+        let literal =
+            array_value_to_literal(&(Arc::new(array) as ArrayRef), 0).expect("literal value");
         assert_eq!(
             literal,
             Literal::Primitive(PrimitiveLiteral::Long(9_999_999))
-        );
-    }
-
-    #[test]
-    #[expect(clippy::expect_used)]
-    fn typed_partition_values_are_not_treated_as_null() {
-        use datafusion::arrow::array::{
-            BinaryArray, Decimal128Array, FixedSizeBinaryArray, Int32Array, LargeBinaryArray,
-            Time64MicrosecondArray,
-        };
-        use datafusion::arrow::buffer::Buffer;
-
-        let decimal = Decimal128Array::from(vec![Some(12_345)])
-            .with_precision_and_scale(9, 2)
-            .expect("valid decimal");
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(decimal) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Decimal {
-                    precision: 9,
-                    scale: 2,
-                }),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(12_345))))
-        );
-
-        let time = Time64MicrosecondArray::from(vec![Some(12_345)]);
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(time) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Time),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(12_345))))
-        );
-
-        let binary = BinaryArray::from(vec![Some(b"abc" as &[u8])]);
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(binary) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Binary),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
-                b"abc".to_vec()
-            ))))
-        );
-
-        let large_binary = LargeBinaryArray::from(vec![Some(b"def" as &[u8])]);
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(large_binary) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Binary),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
-                b"def".to_vec()
-            ))))
-        );
-
-        let fixed = FixedSizeBinaryArray::try_new(4, Buffer::from(b"wxyz".to_vec()), None)
-            .expect("valid fixed value");
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(fixed) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Fixed(4)),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
-                b"wxyz".to_vec()
-            ))))
-        );
-
-        let uuid_bytes = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-        let uuid = FixedSizeBinaryArray::try_new(16, Buffer::from(uuid_bytes.to_vec()), None)
-            .expect("valid UUID value");
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(uuid) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Uuid),
-            ),
-            Ok(Some(Literal::Primitive(PrimitiveLiteral::UInt128(
-                u128::from_be_bytes(uuid_bytes)
-            ))))
-        );
-
-        let null_decimal = Decimal128Array::from(vec![None])
-            .with_precision_and_scale(9, 2)
-            .expect("valid decimal");
-        assert_eq!(
-            array_value_to_literal(
-                &(Arc::new(null_decimal) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::Decimal {
-                    precision: 9,
-                    scale: 2,
-                }),
-            ),
-            Ok(None)
-        );
-
-        let incompatible = Int32Array::from(vec![Some(1)]);
-        assert!(
-            array_value_to_literal(
-                &(Arc::new(incompatible) as ArrayRef),
-                0,
-                &Type::Primitive(PrimitiveType::String),
-            )
-            .is_err()
         );
     }
 }

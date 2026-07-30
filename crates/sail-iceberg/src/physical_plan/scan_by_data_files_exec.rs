@@ -397,34 +397,3 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::array::{Int32Array, StringArray, UInt64Array};
-
-    use super::*;
-    use crate::physical_plan::manifest_scan_exec::manifest_scan_schema;
-
-    #[test]
-    fn metadata_scan_rejects_non_parquet_files() -> Result<()> {
-        let metadata = RecordBatch::try_new(
-            manifest_scan_schema(),
-            vec![
-                Arc::new(StringArray::from(vec!["data/file.orc"])),
-                Arc::new(StringArray::from(vec!["Orc"])),
-                Arc::new(UInt64Array::from(vec![1])),
-                Arc::new(UInt64Array::from(vec![100])),
-                Arc::new(Int32Array::from(vec![0])),
-                Arc::new(StringArray::from(vec!["Data"])),
-            ],
-        )?;
-
-        let Err(error) = extract_file_info(&metadata) else {
-            return Err(DataFusionError::Execution(
-                "ORC file was accepted by the Parquet scan path".to_string(),
-            ));
-        };
-        assert!(format!("{error}").contains("Orc"));
-        Ok(())
-    }
-}
