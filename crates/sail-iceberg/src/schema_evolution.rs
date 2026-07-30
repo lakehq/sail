@@ -11,7 +11,6 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::mem::discriminant;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
@@ -20,6 +19,7 @@ use sail_common_datafusion::variant::variant_storage_types_equivalent;
 
 use crate::spec::TableMetadata;
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
+use crate::spec::types::values::Literal;
 use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,8 +144,90 @@ impl SchemaEvolver {
         field.write_default.is_some()
     }
 
-    fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
-        discriminant(existing) == discriminant(candidate)
+    fn types_can_reuse_field_id(existing: &Type, candidate: &Type) -> bool {
+        match (existing, candidate) {
+            (Type::Primitive(existing), Type::Primitive(candidate)) => {
+                existing == candidate
+                    || matches!(
+                        (existing, candidate),
+                        (PrimitiveType::Int, PrimitiveType::Long)
+                            | (PrimitiveType::Float, PrimitiveType::Double)
+                    )
+                    || matches!(
+                        (existing, candidate),
+                        (
+                            PrimitiveType::Decimal {
+                                precision: existing_precision,
+                                scale: existing_scale,
+                            },
+                            PrimitiveType::Decimal {
+                                precision: candidate_precision,
+                                scale: candidate_scale,
+                            },
+                        ) if existing_scale == candidate_scale
+                            && existing_precision <= candidate_precision
+                    )
+            }
+            (Type::Struct(_), Type::Struct(_)) => true,
+            (Type::List(existing), Type::List(candidate)) => Self::types_can_reuse_field_id(
+                existing.element_field.field_type.as_ref(),
+                candidate.element_field.field_type.as_ref(),
+            ),
+            (Type::Map(existing), Type::Map(candidate)) => {
+                existing.key_field.field_type == candidate.key_field.field_type
+                    && Self::types_can_reuse_field_id(
+                        existing.value_field.field_type.as_ref(),
+                        candidate.value_field.field_type.as_ref(),
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    fn convert_preserved_default(
+        default: Option<&Literal>,
+        existing_type: &Type,
+        candidate_type: &Type,
+    ) -> Result<Option<Literal>> {
+        let Some(default) = default else {
+            return Ok(None);
+        };
+        if existing_type == candidate_type {
+            return Ok(Some(default.clone()));
+        }
+
+        let json = default.try_into_json(existing_type).map_err(|error| {
+            DataFusionError::Plan(format!(
+                "Failed to preserve Iceberg field default during schema overwrite: {error}"
+            ))
+        })?;
+        Literal::try_from_json(json, candidate_type)
+            .map_err(|error| {
+                DataFusionError::Plan(format!(
+                    "Failed to promote Iceberg field default during schema overwrite: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Iceberg field default became null during schema overwrite".to_string(),
+                )
+            })
+            .map(Some)
+    }
+
+    fn preserve_field_metadata(existing: &NestedField, candidate: &mut NestedField) -> Result<()> {
+        candidate.doc.clone_from(&existing.doc);
+        candidate.initial_default = Self::convert_preserved_default(
+            existing.initial_default.as_ref(),
+            existing.field_type.as_ref(),
+            candidate.field_type.as_ref(),
+        )?;
+        candidate.write_default = Self::convert_preserved_default(
+            existing.write_default.as_ref(),
+            existing.field_type.as_ref(),
+            candidate.field_type.as_ref(),
+        )?;
+        Ok(())
     }
 
     fn is_allowed_type_promotion(table_type: &DataType, input_type: &DataType) -> bool {
@@ -622,7 +704,15 @@ impl SchemaEvolver {
                 let mut updated_fields = Vec::with_capacity(candidate_struct.fields().len());
                 for child in candidate_struct.fields() {
                     let mut new_child = child.as_ref().clone();
-                    if let Some(existing_child) = existing_struct.field_by_name(&new_child.name) {
+                    if let Some(existing_child) = existing_struct
+                        .field_by_name(&new_child.name)
+                        .filter(|existing_child| {
+                            Self::types_can_reuse_field_id(
+                                existing_child.field_type.as_ref(),
+                                new_child.field_type.as_ref(),
+                            )
+                        })
+                    {
                         new_child.id = existing_child.id;
                         Self::reuse_nested_ids_from_existing(
                             existing_child.as_ref(),
@@ -650,7 +740,7 @@ impl SchemaEvolver {
             }
             (Type::Map(existing_map), Type::Map(candidate_map)) => {
                 let mut new_key = candidate_map.key_field.as_ref().clone();
-                if Self::types_share_shape(
+                if Self::types_can_reuse_field_id(
                     existing_map.key_field.field_type.as_ref(),
                     new_key.field_type.as_ref(),
                 ) {
@@ -667,7 +757,7 @@ impl SchemaEvolver {
                 }
 
                 let mut new_value = candidate_map.value_field.as_ref().clone();
-                if Self::types_share_shape(
+                if Self::types_can_reuse_field_id(
                     existing_map.value_field.field_type.as_ref(),
                     new_value.field_type.as_ref(),
                 ) {
@@ -688,6 +778,7 @@ impl SchemaEvolver {
             }
             _ => {}
         }
+        Self::preserve_field_metadata(existing, candidate)?;
         Ok(())
     }
 
@@ -713,7 +804,7 @@ impl SchemaEvolver {
         current_schema: &IcebergSchema,
         input_schema: &ArrowSchema,
     ) -> Result<SchemaEvolutionOutcome> {
-        use crate::datasource::type_converter::{arrow_type_to_iceberg, iceberg_schema_to_arrow};
+        use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
 
         let mut identifier_names = HashSet::new();
         for id in current_schema.identifier_field_ids() {
@@ -726,33 +817,30 @@ impl SchemaEvolver {
         let mut new_fields = Vec::new();
 
         for field in input_schema.fields() {
-            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+            let mut nested = arrow_field_to_iceberg(field).map_err(|e| {
                 DataFusionError::Plan(format!(
                     "Failed to convert column '{}' to an Iceberg type: {e}",
                     field.name()
                 ))
             })?;
-            let existing_field = current_schema.field_by_name(field.name());
-            let field_id = if let Some(existing) = existing_field {
-                existing.id
-            } else {
-                let id = next_field_id;
-                next_field_id += 1;
-                id
-            };
-            let mut nested = NestedField::new(
-                field_id,
-                field.name().clone(),
-                iceberg_type,
-                !field.is_nullable(),
-            );
-            if let Some(existing) = existing_field {
+            let reusable_field = current_schema
+                .field_by_name(field.name())
+                .filter(|existing| {
+                    Self::types_can_reuse_field_id(
+                        existing.field_type.as_ref(),
+                        nested.field_type.as_ref(),
+                    )
+                });
+            if let Some(existing) = reusable_field {
+                nested.id = existing.id;
                 Self::reuse_nested_ids_from_existing(
                     existing.as_ref(),
                     &mut nested,
                     &mut next_field_id,
                 )?;
             } else {
+                nested.id = next_field_id;
+                next_field_id += 1;
                 Self::assign_nested_ids(&mut nested, &mut next_field_id);
             }
             new_fields.push(Arc::new(nested));
@@ -1131,6 +1219,98 @@ mod tests {
             identifiers,
             vec![2],
             "identifier should remain nested field id"
+        );
+    }
+
+    #[test]
+    fn overwrite_schema_preserves_metadata_for_reused_field_ids() {
+        let initial_default = Literal::Primitive(PrimitiveLiteral::String("initial".to_string()));
+        let write_default = Literal::Primitive(PrimitiveLiteral::String("write".to_string()));
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(
+                NestedField::optional(1, "value", Type::Primitive(PrimitiveType::String))
+                    .with_doc("stable meaning")
+                    .with_initial_default(initial_default.clone())
+                    .with_write_default(write_default.clone()),
+            )])
+            .build()
+            .expect("schema");
+        let table_meta = test_table_metadata(schema.clone(), None);
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Utf8, true)]);
+
+        let result = SchemaEvolver::overwrite_schema(&table_meta, &schema, &input_schema)
+            .expect("overwrite");
+        let value = result
+            .iceberg_schema
+            .field_by_name("value")
+            .expect("value field");
+        assert_eq!(value.id, 1);
+        assert_eq!(value.doc.as_deref(), Some("stable meaning"));
+        assert_eq!(value.initial_default, Some(initial_default));
+        assert_eq!(value.write_default, Some(write_default));
+    }
+
+    #[test]
+    fn overwrite_schema_assigns_fresh_id_for_incompatible_type() {
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::optional(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::String),
+            ))])
+            .build()
+            .expect("schema");
+        let table_meta = test_table_metadata(schema.clone(), None);
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Int32, true)]);
+
+        let result = SchemaEvolver::overwrite_schema(&table_meta, &schema, &input_schema)
+            .expect("overwrite");
+        let value = result
+            .iceberg_schema
+            .field_by_name("value")
+            .expect("value field");
+        assert_ne!(value.id, 1);
+        assert_eq!(value.id, table_meta.last_column_id + 1);
+        assert_eq!(
+            value.field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Int)
+        );
+    }
+
+    #[test]
+    fn overwrite_schema_promotes_defaults_with_reused_field_id() {
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(
+                NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int))
+                    .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(23)))
+                    .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(34))),
+            )])
+            .build()
+            .expect("schema");
+        let table_meta = test_table_metadata(schema.clone(), None);
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
+
+        let result = SchemaEvolver::overwrite_schema(&table_meta, &schema, &input_schema)
+            .expect("overwrite");
+        let value = result
+            .iceberg_schema
+            .field_by_name("value")
+            .expect("value field");
+        assert_eq!(value.id, 1);
+        assert_eq!(
+            value.field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Long)
+        );
+        assert_eq!(
+            value.initial_default,
+            Some(Literal::Primitive(PrimitiveLiteral::Long(23)))
+        );
+        assert_eq!(
+            value.write_default,
+            Some(Literal::Primitive(PrimitiveLiteral::Long(34)))
         );
     }
 
