@@ -30,11 +30,46 @@ struct ParseState {
     timezone: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AdjacentNumericRun {
+    #[default]
+    None,
+    FixedWidth,
+    HasVariableWidth,
+    HasVariableWidthAcrossOptional,
+}
+
+impl AdjacentNumericRun {
+    fn include(self, variable_width: bool) -> Self {
+        match self {
+            Self::HasVariableWidthAcrossOptional => Self::HasVariableWidthAcrossOptional,
+            Self::HasVariableWidth if !variable_width => Self::HasVariableWidth,
+            _ if variable_width => Self::HasVariableWidth,
+            _ => Self::FixedWidth,
+        }
+    }
+
+    fn cross_optional(self) -> Self {
+        match self {
+            Self::HasVariableWidth | Self::HasVariableWidthAcrossOptional => {
+                Self::HasVariableWidthAcrossOptional
+            }
+            other => other,
+        }
+    }
+}
+
 impl DateTimeFormat {
     pub fn parse_datetime_value(&self, value: &str) -> Result<ParsedDateTime> {
         let mut state = ParseState::default();
-        let (position, _) =
-            parse_items(&self.items, value, 0, self.locale.data(), &mut state, false)?;
+        let (position, _) = parse_items(
+            &self.items,
+            value,
+            0,
+            self.locale.data(),
+            &mut state,
+            AdjacentNumericRun::None,
+        )?;
         if position != value.len() {
             return Err(exec_datafusion_err!(
                 "datetime value does not match format at byte offset {position}: {value}"
@@ -54,56 +89,68 @@ fn parse_items(
     mut position: usize,
     locale: &LocaleData,
     state: &mut ParseState,
-    mut previous_item_is_numeric_field: bool,
-) -> Result<(usize, bool)> {
+    mut adjacent_numeric_run: AdjacentNumericRun,
+) -> Result<(usize, AdjacentNumericRun)> {
     for item in items {
         match item {
             DateTimeItem::Literal(literal) => {
                 position = consume_literal(value, position, literal)?;
-                previous_item_is_numeric_field = false;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Field(field_spec) => {
                 position = parse_field_spec(field_spec, value, position, locale, state)?;
-                previous_item_is_numeric_field = matches!(
+                if matches!(
                     field_spec.style,
                     FieldStyle::Numeric | FieldStyle::LocalizedNumeric
-                );
+                ) {
+                    adjacent_numeric_run = adjacent_numeric_run
+                        .include(field_has_variable_width_in_numeric_run(field_spec));
+                } else {
+                    adjacent_numeric_run = AdjacentNumericRun::None;
+                }
             }
             DateTimeItem::Fraction(fraction_spec) => {
-                if previous_item_is_numeric_field {
+                if adjacent_numeric_run == AdjacentNumericRun::HasVariableWidthAcrossOptional
+                    || (adjacent_numeric_run == AdjacentNumericRun::HasVariableWidth
+                        && fraction_spec.min_width < fraction_spec.max_width)
+                {
                     return Err(exec_datafusion_err!(
-                        "seconds fraction cannot directly follow a numeric datetime field"
+                        "seconds fraction is ambiguous after a variable-width numeric datetime field"
                     ));
                 }
                 position = parse_fraction_spec(fraction_spec, value, position, state)?;
-                previous_item_is_numeric_field = false;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Zone(zone_spec) => {
                 position = parse_zone_spec(zone_spec, value, position, state)?;
-                previous_item_is_numeric_field = false;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Optional(items) => {
                 let snapshot = state.clone();
-                match parse_items(
-                    items,
-                    value,
-                    position,
-                    locale,
-                    state,
-                    previous_item_is_numeric_field,
-                ) {
-                    Ok((next, next_item_is_numeric_field)) => {
+                match parse_items(items, value, position, locale, state, adjacent_numeric_run) {
+                    Ok((next, next_numeric_run)) => {
                         position = next;
-                        previous_item_is_numeric_field = next_item_is_numeric_field;
+                        adjacent_numeric_run = next_numeric_run.cross_optional();
                     }
                     Err(_) => {
                         *state = snapshot;
+                        adjacent_numeric_run = adjacent_numeric_run.cross_optional();
                     }
                 }
             }
         }
     }
-    Ok((position, previous_item_is_numeric_field))
+    Ok((position, adjacent_numeric_run))
+}
+
+fn field_has_variable_width_in_numeric_run(spec: &DateTimeFieldSpec) -> bool {
+    match spec.kind {
+        DateTimeField::YearOfEra | DateTimeField::ProlepticYear | DateTimeField::WeekBasedYear => {
+            spec.width != 2
+        }
+        DateTimeField::DayOfYear => spec.width < 3,
+        _ => spec.width == 1,
+    }
 }
 
 fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize> {

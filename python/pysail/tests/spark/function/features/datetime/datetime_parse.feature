@@ -844,6 +844,31 @@ Feature: datetime parsing with format strings
         | adjacent_date       | adjacent_datetime   |
         | 2026-06-15 00:00:00 | 2026-06-15 14:30:45 |
 
+    Scenario: `to_timestamp` parses a fraction adjacent to fixed-width seconds
+      When query
+        """
+        SELECT
+          to_timestamp(
+            '20181202.210400123',
+            'yyyyMMdd.HHmmssSSS'
+          ) AS literal_boundary,
+          to_timestamp(
+            '260615143045123',
+            'yyMMddHHmmssSSS'
+          ) AS fixed_run,
+          to_timestamp(
+            '202606151430451',
+            'yyyyMMddHHmmssS'
+          ) AS fixed_fraction,
+          to_timestamp(
+            '20260615.1430451',
+            'yyyyMMdd[.HHmmss]S'
+          ) AS optional_literal_boundary
+        """
+      Then query result
+        | literal_boundary        | fixed_run               | fixed_fraction         | optional_literal_boundary |
+        | 2018-12-02 21:04:00.123 | 2026-06-15 14:30:45.123 | 2026-06-15 14:30:45.1 | 2026-06-15 14:30:45.1 |
+
     Scenario Outline: `to_timestamp` rejects adjacent fractional seconds under strict input consumption: <case>
       Given config spark.sql.ansi.enabled = true
       When query
@@ -856,6 +881,9 @@ Feature: datetime parsing with format strings
         | case                                      | in                   | fmt                    |
         | adjacent millisecond fraction with SSS    | 20260615143045123     | yyyyMMddHHmmssSSS      |
         | adjacent microsecond fraction with SSSSSS | 20260615143045123456  | yyyyMMddHHmmssSSSSSS   |
+        | present numeric optional before fraction  | 20260615143045123     | yyyyMMdd[HHmmss]SSS    |
+        | absent numeric optional before fraction   | 20260615123           | yyyyMMdd[HHmmss]SSS    |
+        | numeric optional before fixed fraction     | 202606151430451       | yyyyMMdd[HHmmss]S      |
 
   Rule: Spark-specific deviation tests
 

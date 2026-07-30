@@ -113,6 +113,25 @@ Feature: to_date with an argument coming from a column
         | DATE      | DATE '2024-01-15'                    |
         | TIMESTAMP | TIMESTAMP '2024-01-15 23:45:00'      |
 
+    Scenario: To date typed DATE rejects a complex format
+      When query
+        """
+        SELECT to_date(
+          DATE '2024-01-15',
+          array('yyyy-MM-dd')
+        )
+        """
+      Then query error (?i)(DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE|format.*string.*(array|list)|expects.*STRING.*(array|list)|requires.*STRING.*(array|list))
+
+    Scenario: To date typed DATE accepts an atomic format through string coercion
+      When query
+        """
+        SELECT to_date(DATE '2024-01-15', 123) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-15 |
+
     Scenario Outline: To date NULL format semantics short-circuits a bad value with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -130,6 +149,43 @@ Feature: to_date with an argument coming from a column
 
   @spark_null
   Rule: Output schema
+
+    Scenario Outline: a typed DATE with a literal format respects ANSI <ansi> nullability
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_date(DATE '2024-01-15', 'yyyy-MM-dd') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = <nullable>)
+        """
+
+      Examples:
+        | ansi  | nullable |
+        | false | true     |
+        | true  | false    |
+
+    Scenario: a typed DATE with a nullable format stays nullable in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(DATE '2024-01-15', format) AS result
+        FROM VALUES
+          ('yyyy-MM-dd'),
+          (CAST(NULL AS STRING))
+          AS t(format)
+        """
+      Then query result
+        | result     |
+        | 2024-01-15 |
+        | 2024-01-15 |
+      And query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
 
     Scenario: a non-null string literal yields a date
       When query

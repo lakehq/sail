@@ -5645,6 +5645,7 @@ mod tests {
 
         let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(decoded.ansi_mode());
 
         Ok(())
     }

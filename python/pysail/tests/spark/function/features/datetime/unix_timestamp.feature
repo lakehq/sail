@@ -189,6 +189,42 @@ Feature: unix_timestamp with an argument coming from a column
         | TIMESTAMP     | TIMESTAMP '2024-01-15 01:02:03'      | 1705280523 |
         | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-15 01:02:03'  | 1705280523 |
 
+    Scenario Outline: Unix timestamp parsing contract rejects a <case> format for a typed DATE input
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_timestamp(
+          DATE '2024-01-15',
+          <format>
+        )
+        """
+      Then query error (?i)(DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE|expects.*STRING|requires.*STRING|must.*STRING)
+
+      Examples:
+        | case       | format             |
+        | atomic     | 123                |
+        | collection | array('yyyy-MM-dd') |
+
+    Scenario Outline: Unix timestamp parsing contract does not evaluate an ignored format for <case>
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_timestamp(
+          <input>,
+          CAST(raise_error(CAST(id AS STRING)) AS STRING)
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case       | input             | result |
+        | typed DATE | DATE '1970-01-01' | 0      |
+        | NULL       | NULL              | NULL   |
+
     Scenario: Unix timestamp parsing contract applies the session zone to typed inputs
       Given config spark.sql.session.timeZone = America/Los_Angeles
       Given config spark.sql.ansi.enabled = true

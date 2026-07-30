@@ -15,6 +15,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
 
 const DEFAULT_PATTERN: &str = "yyyy-MM-dd HH:mm:ss";
@@ -34,7 +35,7 @@ pub struct SparkUnixTimestamp {
 impl SparkUnixTimestamp {
     pub fn new(session_timezone: Arc<str>, ansi_mode: bool) -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             session_timezone,
             ansi_mode,
         }
@@ -60,6 +61,44 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int64)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !matches!(arg_types.len(), 1 | 2) {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 2),
+                arg_types.len(),
+            ));
+        }
+        match &arg_types[0] {
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
+            | DataType::Null => {}
+            other => {
+                return Err(unsupported_data_type_exec_err(
+                    self.name(),
+                    "STRING, DATE, TIMESTAMP or NULL",
+                    other,
+                ));
+            }
+        }
+
+        let mut coerced = arg_types.to_vec();
+        if let Some(format) = arg_types.get(1) {
+            match format {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
+                DataType::Null => coerced[1] = DataType::Utf8,
+                other => {
+                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
+                }
+            }
+        }
+        Ok(coerced)
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
