@@ -443,7 +443,11 @@ impl DataFileSerde {
             "AVRO" => DataFileFormat::Avro,
             "ORC" => DataFileFormat::Orc,
             "PUFFIN" => DataFileFormat::Puffin,
-            _ => DataFileFormat::Parquet,
+            value => {
+                return Err(format!(
+                    "Invalid Iceberg data file `file_format` value {value}"
+                ));
+            }
         };
         let (lower_bounds, raw_lower_bounds) = bytes_map_into(self.lower_bounds, schema);
         let (upper_bounds, raw_upper_bounds) = bytes_map_into(self.upper_bounds, schema);
@@ -628,6 +632,18 @@ mod tests {
         assert!(matches!(
             data_file.into_data_file(0, &partition_type, None),
             Err(message) if message.contains("content") && message.contains("99")
+        ));
+    }
+
+    #[test]
+    fn invalid_data_file_format_is_rejected() {
+        let partition_type = StructType::new(vec![]);
+        let mut data_file = data_file_serde_with_historical_bounds();
+        data_file.file_format = "CSV".to_string();
+
+        assert!(matches!(
+            data_file.into_data_file(0, &partition_type, None),
+            Err(message) if message.contains("file_format") && message.contains("CSV")
         ));
     }
 }
