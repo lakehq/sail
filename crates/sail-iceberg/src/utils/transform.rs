@@ -231,11 +231,24 @@ pub fn apply_transform(
 // ==== Helpers for temporal transforms ====
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
+fn civil_year_month(days_since_epoch: i32) -> (i32, i32) {
+    // Convert an epoch-day to a proleptic Gregorian year/month without an unsigned date offset.
+    let shifted_days = i64::from(days_since_epoch) + 719_468;
+    let era = shifted_days.div_euclid(146_097);
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let provisional_year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_phase = (5 * day_of_year + 2) / 153;
+    let month = month_phase + if month_phase < 10 { 3 } else { -9 };
+    let year = provisional_year + i64::from(month <= 2);
+    (year as i32, month as i32)
+}
+
 pub fn days_to_year(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    date.year() - UNIX_EPOCH_YEAR
+    let (year, _) = civil_year_month(days);
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn micros_to_year(micros: i64) -> i32 {
@@ -245,10 +258,8 @@ pub fn micros_to_year(micros: i64) -> i32 {
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
+    let (year, month) = civil_year_month(days);
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 pub fn micros_to_months(micros: i64) -> i32 {
@@ -344,6 +355,20 @@ mod tests {
         assert_eq!(days_to_year(365), 1);
         // 730 days = 1972
         assert_eq!(days_to_year(730), 2);
+    }
+
+    #[test]
+    fn date_transforms_support_days_before_the_epoch() {
+        assert_eq!(days_to_year(-1), -1);
+        assert_eq!(days_to_months(-1), -1);
+        assert_eq!(
+            apply_transform(
+                Transform::Day,
+                &Type::Primitive(PrimitiveType::Date),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(-1))),
+            ),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(-1))))
+        );
     }
 
     #[test]
