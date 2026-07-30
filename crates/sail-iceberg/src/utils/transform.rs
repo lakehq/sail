@@ -65,6 +65,15 @@ pub fn apply_transform(
                 let rem = v.rem_euclid(w);
                 Some(Literal::Primitive(PrimitiveLiteral::Long(v - rem)))
             }
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => {
+                let width = i128::from(w);
+                let remainder = v.rem_euclid(width);
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(v - remainder)))
+            }
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(mut value))) => {
+                value.truncate(w as usize);
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(value)))
+            }
             other => other,
         },
         Transform::Bucket(n) => match value {
@@ -365,6 +374,33 @@ mod tests {
         );
         assert!(
             apply_transform(Transform::Bucket(i32::MAX as u32 + 1), &int_type, value(),).is_err()
+        );
+    }
+
+    #[test]
+    fn decimal_and_binary_truncate_follow_iceberg_semantics() {
+        assert_eq!(
+            apply_transform(
+                Transform::Truncate(10),
+                &Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(-127))),
+            ),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(-130))))
+        );
+        assert_eq!(
+            apply_transform(
+                Transform::Truncate(4),
+                &Type::Primitive(PrimitiveType::Binary),
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                    b"abcdef".to_vec(),
+                ))),
+            ),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                b"abcd".to_vec()
+            ))))
         );
     }
 }
