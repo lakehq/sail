@@ -1,3 +1,21 @@
+- name: "is_valid_variant"
+  scope: "sql_builtin"
+  group: "variant_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.variant.IsValidVariant"
+  signatures:
+    - "is_valid_variant(v)"
+  usage: "is_valid_variant(v) - Returns true if the variant is valid, false if it is malformed, NULL if `v` is NULL."
+  examples: |2-
+    
+        Examples:
+          > SELECT is_valid_variant(parse_json('null'));
+           true
+          > SELECT is_valid_variant(parse_json('[{"b":true,"a":0}]'));
+           true
+      
+  since: "4.2.0"
+
 - name: "is_variant_null"
   scope: "sql_builtin"
   group: "variant_funcs"
@@ -171,4 +189,3 @@
   signatures:
     - "variant_to_json(expr), variant_to_json(expr, options)"
   usage: "variant_to_json(expr), variant_to_json(expr, options) - Returns a JSON string representation of a VARIANT expression."
-

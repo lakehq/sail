@@ -262,7 +262,6 @@ impl AggFunctionBuilder {
         Arc::new(f)
     }
 
-    #[expect(dead_code)]
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
         Arc::new(move |_| {
