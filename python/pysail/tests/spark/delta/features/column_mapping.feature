@@ -113,6 +113,117 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         """
       Then delta log first commit protocol and metadata matches snapshot
 
+  Rule: Column IDs remain unique through consecutive collection types
+    Background:
+      Given variable location for temporary directory cm_consecutive_arrays
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_consecutive_arrays
+        """
+
+    Scenario: mergeSchema allocates a new ID after array of array of struct
+      Given statement template
+        """
+        CREATE TABLE delta_cm_consecutive_arrays (
+          matrix ARRAY<ARRAY<STRUCT<value: BIGINT>>>
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.columnMapping.mode' = 'name'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cm_consecutive_arrays
+        SELECT array(array(named_struct('value', CAST(1 AS BIGINT))))
+        """
+      Given append query to delta table in location with mergeSchema
+        """
+        SELECT
+          array(array(named_struct('value', CAST(2 AS BIGINT)))) AS matrix,
+          'new' AS label
+        """
+      Then delta log latest effective protocol and metadata matches snapshot
+
+  Rule: Scalar name mapping metadata is not propagated to a non-mapped table
+    Background:
+      Given variable source_location for temporary directory cm_scalar_source_name
+      Given variable location for temporary directory cm_scalar_target_name
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_scalar_source_name
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_scalar_target_name
+        """
+
+    Scenario: Writing a scalar name-mapped table strips physical read metadata
+      Given statement template
+        """
+        CREATE TABLE delta_cm_scalar_source_name (
+          id BIGINT,
+          label STRING
+        )
+        USING DELTA
+        LOCATION {{ source_location.sql }}
+        TBLPROPERTIES (
+          'delta.columnMapping.mode' = 'name'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cm_scalar_source_name VALUES (1, 'a')
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_cm_scalar_target_name
+        USING DELTA
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM delta_cm_scalar_source_name
+        """
+      Then delta log latest effective protocol and metadata matches snapshot
+
+  Rule: Scalar ID mapping metadata is not propagated to a non-mapped table
+    Background:
+      Given variable source_location for temporary directory cm_scalar_source_id
+      Given variable location for temporary directory cm_scalar_target_id
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_scalar_source_id
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_scalar_target_id
+        """
+
+    Scenario: Writing a scalar ID-mapped table strips physical read metadata
+      Given statement template
+        """
+        CREATE TABLE delta_cm_scalar_source_id (
+          id BIGINT,
+          label STRING
+        )
+        USING DELTA
+        LOCATION {{ source_location.sql }}
+        TBLPROPERTIES (
+          'delta.columnMapping.mode' = 'id'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cm_scalar_source_id VALUES (1, 'a')
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_cm_scalar_target_id
+        USING DELTA
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM delta_cm_scalar_source_id
+        """
+      Then delta log latest effective protocol and metadata matches snapshot
+
   Rule: Column mapping preserves special characters in column names
     Background:
       Given variable location for temporary directory cm_special_chars
