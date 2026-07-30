@@ -100,6 +100,7 @@ impl Table {
 
     /// Build an Iceberg table provider that reflects the requested snapshot options.
     pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
+        validate_snapshot_selection(options)?;
         if self.metadata.current_snapshot().is_none()
             && options.snapshot_id.is_none()
             && options.use_ref.is_none()
@@ -136,6 +137,7 @@ impl Table {
     }
 
     fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {
+        validate_snapshot_selection(options)?;
         let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = options.snapshot_id {
             (
                 self.metadata
@@ -229,6 +231,26 @@ impl Table {
     }
 }
 
+fn validate_snapshot_selection(options: &IcebergReadOptions) -> Result<()> {
+    let mut selectors = Vec::with_capacity(3);
+    if options.snapshot_id.is_some() {
+        selectors.push("snapshot-id");
+    }
+    if options.use_ref.is_some() {
+        selectors.push("ref");
+    }
+    if options.timestamp_as_of.is_some() {
+        selectors.push("timestamp-as-of");
+    }
+    if selectors.len() > 1 {
+        return Err(DataFusionError::Plan(format!(
+            "Iceberg snapshot selection is ambiguous: specify only one of snapshot-id, ref, or timestamp-as-of; received {}",
+            selectors.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
     let rfc3339_result = DateTime::parse_from_rfc3339(s);
     if let Ok(dt) = rfc3339_result {
@@ -288,4 +310,112 @@ fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
                     .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::spec::metadata::format::FormatVersion;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    fn table_with_snapshot() -> Table {
+        let table_url = Url::parse("memory:///iceberg/table/").expect("table URL");
+        let store_ctx =
+            StoreContext::new(Arc::new(InMemory::new()), &table_url).expect("store context");
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .expect("schema");
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(7)
+            .with_sequence_number(1)
+            .with_timestamp_ms(1_000)
+            .with_manifest_list("metadata/snap-7.avro")
+            .with_schema_id(1)
+            .build()
+            .expect("snapshot");
+        let metadata = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: table_url.to_string(),
+            last_sequence_number: 1,
+            last_updated_ms: 1_000,
+            last_column_id: 1,
+            schemas: vec![schema],
+            current_schema_id: 1,
+            partition_specs: vec![],
+            default_spec_id: 0,
+            last_partition_id: 0,
+            properties: HashMap::new(),
+            current_snapshot_id: Some(7),
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![snapshot],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        };
+        Table {
+            table_url,
+            store_ctx,
+            metadata,
+        }
+    }
+
+    fn options(
+        snapshot_id: Option<i64>,
+        use_ref: Option<&str>,
+        timestamp_as_of: Option<&str>,
+    ) -> IcebergReadOptions {
+        IcebergReadOptions {
+            use_ref: use_ref.map(ToString::to_string),
+            snapshot_id,
+            timestamp_as_of: timestamp_as_of.map(ToString::to_string),
+            metadata_as_data_read: false,
+        }
+    }
+
+    #[test]
+    fn rejects_snapshot_id_with_ref() {
+        let error = table_with_snapshot()
+            .select_snapshot(&options(Some(7), Some(MAIN_BRANCH), None))
+            .expect_err("snapshot ID and ref must be mutually exclusive");
+        assert!(format!("{error}").contains("snapshot"));
+    }
+
+    #[test]
+    fn rejects_snapshot_id_with_timestamp() {
+        let error = table_with_snapshot()
+            .select_snapshot(&options(Some(7), None, Some("2024-01-01T00:00:00Z")))
+            .expect_err("snapshot ID and timestamp must be mutually exclusive");
+        assert!(format!("{error}").contains("snapshot"));
+    }
+
+    #[test]
+    fn rejects_ref_with_timestamp() {
+        let error = table_with_snapshot()
+            .select_snapshot(&options(
+                None,
+                Some(MAIN_BRANCH),
+                Some("2024-01-01T00:00:00Z"),
+            ))
+            .expect_err("ref and timestamp must be mutually exclusive");
+        assert!(format!("{error}").contains("snapshot"));
+    }
 }

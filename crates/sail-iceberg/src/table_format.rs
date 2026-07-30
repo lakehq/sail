@@ -724,7 +724,7 @@ fn validate_iceberg_lakehouse_storage_access(
     Ok(())
 }
 
-/// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
+/// Load metadata and pick a snapshot from one explicit selector or the current table state.
 #[expect(dead_code)]
 pub(crate) async fn load_table_metadata_with_options(
     ctx: &dyn Session,
