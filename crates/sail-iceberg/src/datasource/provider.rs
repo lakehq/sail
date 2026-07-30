@@ -129,6 +129,17 @@ pub(crate) fn iceberg_schema_evolution_expr_adapter(
     ))
 }
 
+fn pre_delete_file_pruning_limit(
+    requested_limit: Option<usize>,
+    delete_index: &DeleteFileIndex,
+) -> Option<usize> {
+    if delete_index.is_empty() {
+        requested_limit
+    } else {
+        None
+    }
+}
+
 impl IcebergTableProvider {
     fn iceberg_field_id_for_arrow_field(
         field: &datafusion::arrow::datatypes::Field,
@@ -867,10 +878,18 @@ impl TableProvider for IcebergTableProvider {
             .await?;
         log::trace!("Loaded {} data files", data_files_with_seq.len());
 
+        // A file's manifest record count is an upper bound before row-level deletes. Build the
+        // delete index first so LIMIT can only shorten the file list when no deletes exist.
+        log::trace!("Building delete file index...");
+        let delete_index = self
+            .build_delete_file_index(&store_ctx, &manifest_list)
+            .await?;
+        let file_pruning_limit = pre_delete_file_pruning_limit(limit, &delete_index);
+
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
         // Preserve per-file sequence numbers through the prune.
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        if filter_expr.is_some() || file_pruning_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -881,7 +900,7 @@ impl TableProvider for IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_pruning_limit,
                 self.rebuild_logical_schema_for_filters(projection, filters),
                 files_only,
                 &self.schema,
@@ -898,12 +917,6 @@ impl TableProvider for IcebergTableProvider {
                 data_files_with_seq.len()
             );
         }
-
-        // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
-        log::trace!("Building delete file index...");
-        let delete_index = self
-            .build_delete_file_index(&store_ctx, &manifest_list)
-            .await?;
 
         // Partition each data file into "clean" (no matching deletes) vs "dirty"
         // (one or more matching deletes) buckets. We only pay the cost of
@@ -1348,6 +1361,7 @@ mod tests {
     use crate::spec::manifest::{DataContentType, DataFileFormat};
     use crate::spec::types::values::{Datum, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
+    use datafusion::prelude::SessionContext;
 
     fn reordered_identity_provider() -> Result<IcebergTableProvider> {
         let schema = Schema::builder()
@@ -1394,6 +1408,70 @@ mod tests {
                 )
             })?;
         assert_eq!(default_literal.value(), &ScalarValue::Int32(Some(42)));
+        Ok(())
+    }
+
+    #[test]
+    fn delete_files_disable_record_count_limit_pruning() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        let mut first = data_file_with_long_bounds();
+        first.file_path = "data/first.parquet".to_string();
+        first.record_count = 100;
+        let mut second = first.clone();
+        second.file_path = "data/second.parquet".to_string();
+        let files = vec![first.clone(), second];
+        let context = SessionContext::new();
+
+        let (baseline, _) = prune_files(
+            &context.state(),
+            &[],
+            Some(10),
+            Arc::clone(&provider.arrow_schema),
+            files.clone(),
+            &provider.schema,
+        )?;
+        assert_eq!(
+            baseline
+                .iter()
+                .map(|file| file.file_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["data/first.parquet"]
+        );
+
+        let mut delete_file = first;
+        delete_file.content = DataContentType::EqualityDeletes;
+        delete_file.equality_ids = vec![1];
+        let mut delete_index = DeleteFileIndex::new();
+        delete_index
+            .insert(DeleteFileRef {
+                data_file: delete_file,
+                data_sequence_number: 2,
+                partition_spec_id: 0,
+                is_unpartitioned_spec: true,
+            })
+            .map_err(|error| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to build test delete index: {error:?}"
+                ))
+            })?;
+        let file_pruning_limit = pre_delete_file_pruning_limit(Some(10), &delete_index);
+        assert_eq!(file_pruning_limit, None);
+
+        let (fixed, _) = prune_files(
+            &context.state(),
+            &[],
+            file_pruning_limit,
+            Arc::clone(&provider.arrow_schema),
+            files,
+            &provider.schema,
+        )?;
+        assert_eq!(
+            fixed
+                .iter()
+                .map(|file| file.file_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["data/first.parquet", "data/second.parquet"]
+        );
         Ok(())
     }
 
