@@ -22,6 +22,8 @@ use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use super::{PrimitiveType, Type};
+
 /// Literal values used in Iceberg
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -829,7 +831,160 @@ impl Literal {
 /// field-name to optional `Literal` mapping; type validation is deferred to
 /// the caller that provides the `StructType`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral(pub Vec<(String, Option<Literal>)>);
+pub struct RawLiteral {
+    values: Vec<(String, Option<Literal>)>,
+    field_types: Vec<Type>,
+}
+
+struct AvroPartitionLiteral<'a> {
+    literal: &'a Literal,
+    field_type: &'a Type,
+}
+
+struct AvroPartitionValue(Literal);
+
+impl<'de> Deserialize<'de> for AvroPartitionValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct AvroPartitionValueVisitor;
+
+        impl serde::de::Visitor<'_> for AvroPartitionValueVisitor {
+            type Value = AvroPartitionValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an Iceberg primitive partition value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Boolean(value),
+                )))
+            }
+
+            fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Int(value),
+                )))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Long(value),
+                )))
+            }
+
+            fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Float(OrderedFloat(value)),
+                )))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Double(OrderedFloat(value)),
+                )))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::String(value.to_string()),
+                )))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::String(value),
+                )))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Binary(value.to_vec()),
+                )))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(AvroPartitionValue(Literal::Primitive(
+                    PrimitiveLiteral::Binary(value),
+                )))
+            }
+        }
+
+        deserializer.deserialize_any(AvroPartitionValueVisitor)
+    }
+}
+
+impl Serialize for AvroPartitionLiteral<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::Error;
+
+        match (self.literal, self.field_type) {
+            (
+                Literal::Primitive(PrimitiveLiteral::Int128(value)),
+                Type::Primitive(PrimitiveType::Decimal { precision, .. }),
+            ) => {
+                let width = usize::try_from(
+                    Type::decimal_required_bytes(*precision).map_err(Error::custom)?,
+                )
+                .map_err(Error::custom)?;
+                let bytes = value.to_be_bytes();
+                serializer.serialize_bytes(&bytes[bytes.len() - width..])
+            }
+            (
+                Literal::Primitive(PrimitiveLiteral::UInt128(value)),
+                Type::Primitive(PrimitiveType::Uuid),
+            ) => serializer.serialize_str(&uuid::Uuid::from_u128(*value).hyphenated().to_string()),
+            (
+                Literal::Primitive(PrimitiveLiteral::Boolean(value)),
+                Type::Primitive(PrimitiveType::Boolean),
+            ) => serializer.serialize_bool(*value),
+            (
+                Literal::Primitive(PrimitiveLiteral::Int(value)),
+                Type::Primitive(PrimitiveType::Int | PrimitiveType::Date),
+            ) => serializer.serialize_i32(*value),
+            (
+                Literal::Primitive(PrimitiveLiteral::Long(value)),
+                Type::Primitive(
+                    PrimitiveType::Long
+                    | PrimitiveType::Time
+                    | PrimitiveType::Timestamp
+                    | PrimitiveType::Timestamptz
+                    | PrimitiveType::TimestampNs
+                    | PrimitiveType::TimestamptzNs,
+                ),
+            ) => serializer.serialize_i64(*value),
+            (
+                Literal::Primitive(PrimitiveLiteral::Float(value)),
+                Type::Primitive(PrimitiveType::Float),
+            ) => serializer.serialize_f32(value.0),
+            (
+                Literal::Primitive(PrimitiveLiteral::Double(value)),
+                Type::Primitive(PrimitiveType::Double),
+            ) => serializer.serialize_f64(value.0),
+            (
+                Literal::Primitive(PrimitiveLiteral::String(value)),
+                Type::Primitive(PrimitiveType::String),
+            ) => serializer.serialize_str(value),
+            (
+                Literal::Primitive(PrimitiveLiteral::Binary(value)),
+                Type::Primitive(
+                    PrimitiveType::Fixed(_)
+                    | PrimitiveType::Binary
+                    | PrimitiveType::Geometry { .. }
+                    | PrimitiveType::Geography { .. },
+                ),
+            ) => serializer.serialize_bytes(value),
+            (literal, field_type) => Err(Error::custom(format!(
+                "partition literal {literal:?} is incompatible with Iceberg type {field_type}"
+            ))),
+        }
+    }
+}
 
 impl RawLiteral {
     /// Build from a positional vector of values and a struct type; positions
@@ -847,21 +1002,82 @@ impl RawLiteral {
             ));
         }
         let mut out = Vec::with_capacity(values.len());
+        let mut field_types = Vec::with_capacity(values.len());
         for (i, f) in fields.iter().enumerate() {
             out.push((f.name.clone(), values[i].clone()));
+            field_types.push(f.field_type.as_ref().clone());
         }
-        Ok(RawLiteral(out))
+        Ok(RawLiteral {
+            values: out,
+            field_types,
+        })
     }
 
     /// Convert back to positional vector based on the struct type's field order.
-    pub fn into_struct_values(self, ty: &crate::spec::types::StructType) -> Vec<Option<Literal>> {
-        let mut by_name = std::collections::HashMap::with_capacity(self.0.len());
-        for (k, v) in self.0.into_iter() {
-            by_name.insert(k, v);
+    pub fn into_struct_values(
+        self,
+        ty: &crate::spec::types::StructType,
+    ) -> Result<Vec<Option<Literal>>, String> {
+        fn signed_i128(bytes: &[u8]) -> Result<i128, String> {
+            if bytes.is_empty() || bytes.len() > 16 {
+                return Err(format!(
+                    "decimal partition value must contain between 1 and 16 bytes, got {}",
+                    bytes.len()
+                ));
+            }
+            let mut value = [if bytes[0] & 0x80 == 0 { 0 } else { 0xff }; 16];
+            value[16 - bytes.len()..].copy_from_slice(bytes);
+            Ok(i128::from_be_bytes(value))
+        }
+
+        fn normalize(value: Literal, field_type: &Type) -> Result<Literal, String> {
+            match (value, field_type) {
+                (
+                    Literal::Primitive(PrimitiveLiteral::Binary(bytes)),
+                    Type::Primitive(PrimitiveType::Decimal { .. }),
+                ) => Ok(Literal::Primitive(PrimitiveLiteral::Int128(signed_i128(
+                    &bytes,
+                )?))),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String(value)),
+                    Type::Primitive(PrimitiveType::Uuid),
+                ) => uuid::Uuid::parse_str(&value)
+                    .map(|value| Literal::Primitive(PrimitiveLiteral::UInt128(value.as_u128())))
+                    .map_err(|error| format!("invalid UUID partition value: {error}")),
+                (
+                    Literal::Primitive(PrimitiveLiteral::Binary(value)),
+                    Type::Primitive(PrimitiveType::Uuid),
+                ) => value
+                    .as_slice()
+                    .try_into()
+                    .map(u128::from_be_bytes)
+                    .map(PrimitiveLiteral::UInt128)
+                    .map(Literal::Primitive)
+                    .map_err(|_| "UUID partition value must contain 16 bytes".to_string()),
+                (Literal::Primitive(value), Type::Primitive(primitive))
+                    if primitive.compatible(&value) =>
+                {
+                    Ok(Literal::Primitive(value))
+                }
+                (value, field_type) => Err(format!(
+                    "partition literal {value:?} is incompatible with Iceberg type {field_type}"
+                )),
+            }
+        }
+
+        let mut by_name = std::collections::HashMap::with_capacity(self.values.len());
+        for (key, value) in self.values {
+            by_name.insert(key, value);
         }
         ty.fields()
             .iter()
-            .map(|f| by_name.remove(&f.name).unwrap_or(None))
+            .map(|field| {
+                by_name
+                    .remove(&field.name)
+                    .unwrap_or(None)
+                    .map(|value| normalize(value, field.field_type.as_ref()))
+                    .transpose()
+            })
             .collect()
     }
 }
@@ -872,10 +1088,19 @@ impl Serialize for RawLiteral {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut ss = serializer.serialize_struct("", self.0.len())?;
-        for (k, v) in &self.0 {
+        if self.values.len() != self.field_types.len() {
+            return Err(serde::ser::Error::custom(
+                "partition literal is missing field type information",
+            ));
+        }
+        let mut ss = serializer.serialize_struct("", self.values.len())?;
+        for ((key, value), field_type) in self.values.iter().zip(&self.field_types) {
             // Avro's serde requires &'static str for field names
-            ss.serialize_field(Box::leak(k.clone().into_boxed_str()), v)?;
+            let encoded = value.as_ref().map(|literal| AvroPartitionLiteral {
+                literal,
+                field_type,
+            });
+            ss.serialize_field(Box::leak(key.clone().into_boxed_str()), &encoded)?;
         }
         ss.end()
     }
@@ -898,10 +1123,14 @@ impl<'de> Deserialize<'de> for RawLiteral {
                 M: MapAccess<'de>,
             {
                 let mut out: Vec<(String, Option<Literal>)> = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, Option<Literal>>()? {
-                    out.push((k, v));
+                while let Some(key) = map.next_key::<String>()? {
+                    let value = map.next_value::<Option<AvroPartitionValue>>()?;
+                    out.push((key, value.map(|value| value.0)));
                 }
-                Ok(RawLiteral(out))
+                Ok(RawLiteral {
+                    values: out,
+                    field_types: Vec::new(),
+                })
             }
         }
         deserializer.deserialize_map(RLVisitor)

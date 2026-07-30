@@ -463,6 +463,7 @@ impl DataFileSerde {
             partition: self
                 .partition
                 .map(|p| p.into_struct_values(partition_type))
+                .transpose()?
                 .unwrap_or_default(),
             record_count,
             file_size_in_bytes,
