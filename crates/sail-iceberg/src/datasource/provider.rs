@@ -346,6 +346,38 @@ impl IcebergTableProvider {
         }
     }
 
+    fn apply_requested_projection(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(projection) = projection else {
+            return Ok(input);
+        };
+        let requested_schema = self.projected_arrow_schema(Some(projection))?;
+        if input.schema() == requested_schema {
+            return Ok(input);
+        }
+
+        let input_schema = input.schema();
+        let expressions = projection
+            .iter()
+            .map(|index| {
+                let field = self.arrow_schema.field(*index);
+                let input_index = input_schema.index_of(field.name()).map_err(|_| {
+                    datafusion::common::DataFusionError::Internal(format!(
+                        "Iceberg scan is missing requested column '{}'",
+                        field.name()
+                    ))
+                })?;
+                let column: Arc<dyn PhysicalExpr> =
+                    Arc::new(Column::new(field.name(), input_index));
+                Ok((column, field.name().to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+    }
+
     /// Load manifest list from snapshot
     async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
         let snapshot = self.snapshot.as_ref().ok_or_else(|| {
@@ -972,7 +1004,8 @@ impl TableProvider for IcebergTableProvider {
                 .with_limit(limit)
                 .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                 .build();
-            return Ok(DataSourceExec::from_data_source(file_scan_config));
+            let scan = DataSourceExec::from_data_source(file_scan_config);
+            return self.apply_requested_projection(scan, projection);
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
@@ -1055,20 +1088,7 @@ impl TableProvider for IcebergTableProvider {
         };
 
         // Apply projection above.
-        let after_projection: Arc<dyn ExecutionPlan> = if let Some(proj) = projection {
-            let projected_schema = self.arrow_schema.clone();
-            let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = proj
-                .iter()
-                .map(|&idx| {
-                    let field = projected_schema.field(idx);
-                    let col: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), idx));
-                    (col, field.name().to_string())
-                })
-                .collect();
-            Arc::new(ProjectionExec::try_new(proj_exprs, after_filter)?)
-        } else {
-            after_filter
-        };
+        let after_projection = self.apply_requested_projection(after_filter, projection)?;
 
         // Apply limit above (may over-scan; correctness is preserved because
         // GlobalLimitExec stops streaming once the row count is reached).
@@ -1351,7 +1371,7 @@ impl IcebergTableProvider {
             ),
         );
 
-        Ok(scan_exec)
+        self.apply_requested_projection(scan_exec, projection)
     }
 }
 
@@ -1361,7 +1381,7 @@ mod tests {
     use crate::spec::manifest::{DataContentType, DataFileFormat};
     use crate::spec::types::values::{Datum, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionContext, col, lit};
 
     fn reordered_identity_provider() -> Result<IcebergTableProvider> {
         let schema = Schema::builder()
@@ -1408,6 +1428,50 @@ mod tests {
                 )
             })?;
         assert_eq!(default_literal.value(), &ScalarValue::Int32(Some(42)));
+        Ok(())
+    }
+
+    #[test]
+    fn filter_columns_expand_the_physical_projection() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        let requested_projection = vec![0];
+        let filters = vec![col("part").eq(lit(10_i64))];
+
+        assert_eq!(
+            provider.expanded_projection(Some(&requested_projection), &filters),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            provider
+                .projected_arrow_schema(Some(&requested_projection))?
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["value"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scan_output_removes_filter_only_columns() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        let requested_projection = vec![0];
+        let expanded_scan: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&provider.arrow_schema)));
+
+        let output =
+            provider.apply_requested_projection(expanded_scan, Some(&requested_projection))?;
+
+        assert_eq!(
+            output
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["value"]
+        );
         Ok(())
     }
 
