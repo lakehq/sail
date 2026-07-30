@@ -434,7 +434,9 @@ impl DataFileSerde {
             0 => DataContentType::Data,
             1 => DataContentType::PositionDeletes,
             2 => DataContentType::EqualityDeletes,
-            _ => DataContentType::Data,
+            value => {
+                return Err(format!("Invalid Iceberg data file `content` value {value}"));
+            }
         };
         let file_format = match self.file_format.as_str() {
             "PARQUET" => DataFileFormat::Parquet,
@@ -614,6 +616,18 @@ mod tests {
         assert!(matches!(
             negative_file_size.into_data_file(0, &partition_type, None),
             Err(message) if message.contains("file_size_in_bytes") && message.contains("-1")
+        ));
+    }
+
+    #[test]
+    fn invalid_data_file_content_is_rejected() {
+        let partition_type = StructType::new(vec![]);
+        let mut data_file = data_file_serde_with_historical_bounds();
+        data_file.content = 99;
+
+        assert!(matches!(
+            data_file.into_data_file(0, &partition_type, None),
+            Err(message) if message.contains("content") && message.contains("99")
         ));
     }
 }
