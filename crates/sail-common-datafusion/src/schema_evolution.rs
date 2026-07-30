@@ -73,7 +73,7 @@ fn create_schema_evolution_adapter(
     matching: StructFieldMatching,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema);
+        create_column_mapping(&logical_file_schema, &physical_file_schema, matching)?;
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
@@ -87,35 +87,30 @@ fn create_schema_evolution_adapter(
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
-) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
+    matching: StructFieldMatching,
+) -> Result<(Vec<Option<usize>>, Vec<Option<ScalarValue>>)> {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
-        match physical_schema.index_of(logical_field.name()) {
-            Ok(physical_index) => {
+        match find_matching_struct_field(physical_schema.fields(), logical_field, matching) {
+            Some((physical_index, _)) => {
                 column_mapping.push(Some(physical_index));
                 default_values.push(None);
             }
-            Err(_) => {
+            None => {
                 column_mapping.push(None);
                 let default_value = if logical_field.is_nullable() {
-                    Some(
-                        ScalarValue::try_from(logical_field.data_type())
-                            .unwrap_or(ScalarValue::Null),
-                    )
+                    Some(ScalarValue::try_from(logical_field.data_type())?)
                 } else {
-                    Some(
-                        ScalarValue::new_zero(logical_field.data_type())
-                            .unwrap_or(ScalarValue::Null),
-                    )
+                    None
                 };
                 default_values.push(default_value);
             }
         }
     }
 
-    (column_mapping, default_values)
+    Ok((column_mapping, default_values))
 }
 
 #[derive(Debug, Clone)]
@@ -302,13 +297,13 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
             (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
             }
         }
@@ -971,6 +966,73 @@ mod tests {
             Field::new(name, DataType::Int64, true)
                 .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
         )
+    }
+
+    #[test]
+    fn adapter_maps_top_level_columns_by_field_id() -> Result<()> {
+        let logical_schema = Arc::new(Schema::new(vec![
+            field_with_id("renamed", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("reused", PARQUET_FIELD_ID_META_KEY, 2),
+        ]));
+        let physical_schema = Arc::new(Schema::new(vec![
+            field_with_id("renamed", PARQUET_FIELD_ID_META_KEY, 2),
+            field_with_id("old_name", PARQUET_FIELD_ID_META_KEY, 1),
+        ]));
+        let name_adapter = create_schema_evolution_adapter(
+            Arc::clone(&logical_schema),
+            Arc::clone(&physical_schema),
+            StructFieldMatching::Name,
+        )?;
+        let adapter = create_schema_evolution_adapter(
+            Arc::clone(&logical_schema),
+            Arc::clone(&physical_schema),
+            StructFieldMatching::FieldId,
+        )?;
+
+        let name_bound = name_adapter.rewrite(Arc::new(Column::new("renamed", 0)))?;
+        let name_bound = name_bound
+            .downcast_ref::<Column>()
+            .expect("name-bound column expression");
+        assert_eq!(name_bound.name(), "renamed");
+        assert_eq!(name_bound.index(), 0);
+
+        let renamed = adapter.rewrite(Arc::new(Column::new("renamed", 0)))?;
+        let renamed = renamed
+            .downcast_ref::<Column>()
+            .expect("renamed column expression");
+        assert_eq!(renamed.name(), "old_name");
+        assert_eq!(renamed.index(), 1);
+
+        let reused = adapter.rewrite(Arc::new(Column::new("reused", 1)))?;
+        let reused = reused
+            .downcast_ref::<Column>()
+            .expect("reused column expression");
+        assert_eq!(reused.name(), "renamed");
+        assert_eq!(reused.index(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn adapter_rejects_missing_required_column_without_default() -> Result<()> {
+        let logical_field = Arc::new(
+            Field::new("required", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        );
+        let logical_schema = Arc::new(Schema::new(vec![logical_field]));
+        let physical_schema = Arc::new(Schema::empty());
+        let adapter = create_schema_evolution_adapter(
+            logical_schema,
+            physical_schema,
+            StructFieldMatching::FieldId,
+        )?;
+
+        let error = adapter
+            .rewrite(Arc::new(Column::new("required", 0)))
+            .expect_err("required historical field must not be filled with a zero value");
+        assert!(error.to_string().contains("no default value provided"));
+        Ok(())
     }
 
     #[test]
