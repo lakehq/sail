@@ -17,7 +17,7 @@ Feature: Lakehouse commits in distributed execution
     Scenario: Delta commit runs on the driver after parallel file writing
       When query
         """
-        EXPLAIN
+        EXPLAIN CODEGEN
         INSERT INTO distributed_delta_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
@@ -55,7 +55,7 @@ Feature: Lakehouse commits in distributed execution
     Scenario: Iceberg commit runs on the driver after parallel file writing
       When query
         """
-        EXPLAIN
+        EXPLAIN CODEGEN
         INSERT INTO distributed_iceberg_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
