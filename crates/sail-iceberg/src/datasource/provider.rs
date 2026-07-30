@@ -58,6 +58,7 @@ use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
+use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
@@ -101,6 +102,33 @@ impl IcebergTableProvider {
             field.field_type.as_ref(),
         )
         .ok()
+    }
+
+    /// String and binary bounds may be truncated, while floating bounds exclude NaN values.
+    fn bounds_are_exact(&self, field_id: i32, data_file: &DataFile) -> bool {
+        let Some(field) = self.schema.field_by_id(field_id) else {
+            return false;
+        };
+        match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::String | PrimitiveType::Binary) => false,
+            Type::Primitive(PrimitiveType::Float | PrimitiveType::Double) => {
+                data_file.nan_value_counts().get(&field_id) == Some(&0)
+            }
+            _ => true,
+        }
+    }
+
+    fn bound_precision(
+        &self,
+        field_id: i32,
+        data_file: &DataFile,
+        scalar: ScalarValue,
+    ) -> Precision<ScalarValue> {
+        if self.bounds_are_exact(field_id, data_file) {
+            Precision::Exact(scalar)
+        } else {
+            Precision::Inexact(scalar)
+        }
     }
 
     /// Create a new Iceberg table provider
@@ -580,6 +608,7 @@ impl IcebergTableProvider {
             vec![None; self.arrow_schema.fields().len()];
         let mut min_complete = vec![true; self.arrow_schema.fields().len()];
         let mut max_complete = vec![true; self.arrow_schema.fields().len()];
+        let mut bounds_exact = vec![true; self.arrow_schema.fields().len()];
         let mut null_counts: Vec<Option<usize>> = vec![Some(0); self.arrow_schema.fields().len()];
 
         for df in data_files {
@@ -590,6 +619,7 @@ impl IcebergTableProvider {
                 let Some(field_id) = field_id else {
                     continue;
                 };
+                bounds_exact[col_idx] &= self.bounds_are_exact(*field_id, df);
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].and_then(|count| {
@@ -645,18 +675,24 @@ impl IcebergTableProvider {
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent),
                 max_value: if max_complete[i] {
-                    max_scalars[i]
-                        .clone()
-                        .map(Precision::Exact)
-                        .unwrap_or(Precision::Absent)
+                    max_scalars[i].clone().map_or(Precision::Absent, |scalar| {
+                        if bounds_exact[i] {
+                            Precision::Exact(scalar)
+                        } else {
+                            Precision::Inexact(scalar)
+                        }
+                    })
                 } else {
                     Precision::Absent
                 },
                 min_value: if min_complete[i] {
-                    min_scalars[i]
-                        .clone()
-                        .map(Precision::Exact)
-                        .unwrap_or(Precision::Absent)
+                    min_scalars[i].clone().map_or(Precision::Absent, |scalar| {
+                        if bounds_exact[i] {
+                            Precision::Exact(scalar)
+                        } else {
+                            Precision::Inexact(scalar)
+                        }
+                    })
                 } else {
                     Precision::Absent
                 },
@@ -700,14 +736,14 @@ impl IcebergTableProvider {
                     .lower_bounds()
                     .get(&field_id)
                     .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
-                    .map(Precision::Exact)
+                    .map(|scalar| self.bound_precision(field_id, data_file, scalar))
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
                     .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
-                    .map(Precision::Exact)
+                    .map(|scalar| self.bound_precision(field_id, data_file, scalar))
                     .unwrap_or(Precision::Absent);
 
                 ColumnStatistics {
@@ -1372,6 +1408,68 @@ mod tests {
         }
     }
 
+    fn uncertain_bounds_provider() -> Result<IcebergTableProvider> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    4,
+                    "text",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+                Arc::new(NestedField::required(
+                    5,
+                    "measurement",
+                    Type::Primitive(PrimitiveType::Double),
+                )),
+            ])
+            .build()
+            .map_err(datafusion::common::DataFusionError::Execution)?;
+        IcebergTableProvider::new_empty(
+            "memory://uncertain-bounds",
+            schema,
+            vec![PartitionSpec::unpartitioned_spec()],
+            0,
+        )
+    }
+
+    fn data_file_with_uncertain_bounds(nan_count: u64) -> DataFile {
+        let text = Datum::new(
+            PrimitiveType::String,
+            PrimitiveLiteral::String("prefix".to_string()),
+        );
+        let measurement = Datum::new(
+            PrimitiveType::Double,
+            PrimitiveLiteral::Double(ordered_float::OrderedFloat(1.0)),
+        );
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "data/uncertain.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![],
+            record_count: 2,
+            file_size_in_bytes: 100,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::from([(4, 0), (5, 0)]),
+            nan_value_counts: HashMap::from([(5, nan_count)]),
+            lower_bounds: HashMap::from([(4, text.clone()), (5, measurement.clone())]),
+            upper_bounds: HashMap::from([(4, text), (5, measurement)]),
+            raw_lower_bounds: HashMap::new(),
+            raw_upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
     #[test]
     fn file_statistics_follow_arrow_field_ids_after_partition_reorder() -> Result<()> {
         let provider = reordered_identity_provider()?;
@@ -1450,6 +1548,39 @@ mod tests {
         assert_eq!(
             aggregate.column_statistics[0].max_value,
             Precision::Exact(ScalarValue::Date32(Some(19_000)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn potentially_truncated_and_nan_bounds_are_inexact() -> Result<()> {
+        let provider = uncertain_bounds_provider()?;
+        let uncertain = data_file_with_uncertain_bounds(1);
+
+        let file_statistics = provider.create_file_statistics(&uncertain);
+        assert_eq!(
+            file_statistics.column_statistics[0].min_value,
+            Precision::Inexact(ScalarValue::Utf8(Some("prefix".to_string())))
+        );
+        assert_eq!(
+            file_statistics.column_statistics[1].max_value,
+            Precision::Inexact(ScalarValue::Float64(Some(1.0)))
+        );
+
+        let aggregate = provider.aggregate_statistics(&[uncertain]);
+        assert_eq!(
+            aggregate.column_statistics[0].max_value,
+            Precision::Inexact(ScalarValue::Utf8(Some("prefix".to_string())))
+        );
+        assert_eq!(
+            aggregate.column_statistics[1].min_value,
+            Precision::Inexact(ScalarValue::Float64(Some(1.0)))
+        );
+
+        let exact_float = provider.create_file_statistics(&data_file_with_uncertain_bounds(0));
+        assert_eq!(
+            exact_float.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Float64(Some(1.0)))
         );
         Ok(())
     }
