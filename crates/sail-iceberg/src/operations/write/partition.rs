@@ -175,7 +175,7 @@ pub fn compute_partition_values(
             .map(|nf| nf.field_type.as_ref())
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
         let lit = scalar_to_literal(batch.column(col_index), 0, field_type)?;
-        values.push(apply_transform(f.transform, field_type, lit));
+        values.push(apply_transform(f.transform, field_type, lit)?);
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values)?;
     Ok((values, dir))
@@ -220,7 +220,7 @@ pub fn split_record_batch_by_partition(
                 .map(|nf| nf.field_type.as_ref())
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
             let lit = scalar_to_literal(batch.column(col_index), row, field_type)?;
-            vals.push(apply_transform(f.transform, field_type, lit));
+            vals.push(apply_transform(f.transform, field_type, lit)?);
         }
         let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
         let entry = groups.entry(dir).or_insert_with(|| Group {

@@ -28,9 +28,13 @@ pub fn apply_transform(
     transform: Transform,
     field_type: &Type,
     value: Option<Literal>,
-) -> Option<Literal> {
-    match transform {
-        Transform::Identity | Transform::Unknown | Transform::Void => value,
+) -> Result<Option<Literal>, String> {
+    let transformed = match transform {
+        Transform::Identity => value,
+        Transform::Void => None,
+        Transform::Unknown => {
+            return Err("cannot write an unknown Iceberg partition transform".to_string());
+        }
         Transform::Truncate(w) => match value {
             Some(Literal::Primitive(PrimitiveLiteral::String(s))) => {
                 let taken = s.chars().take(w as usize).collect::<String>();
@@ -186,7 +190,8 @@ pub fn apply_transform(
             }
             _ => value,
         },
-    }
+    };
+    Ok(transformed)
 }
 
 // ==== Helpers for temporal transforms ====
@@ -309,5 +314,27 @@ mod tests {
     fn test_bucket_str() {
         let result = bucket_str("test", 10);
         assert!((0..10).contains(&result));
+    }
+
+    #[test]
+    fn void_transform_always_produces_null() {
+        let value = Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
+        assert_eq!(
+            apply_transform(Transform::Void, &Type::Primitive(PrimitiveType::Int), value,),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn unknown_transform_is_rejected() {
+        let value = Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
+        assert!(
+            apply_transform(
+                Transform::Unknown,
+                &Type::Primitive(PrimitiveType::Int),
+                value,
+            )
+            .is_err()
+        );
     }
 }

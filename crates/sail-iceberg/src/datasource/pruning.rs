@@ -523,7 +523,7 @@ fn transform_primitive_literal(
     source_type: &Type,
     literal: PrimitiveLiteral,
 ) -> Option<PrimitiveLiteral> {
-    match apply_transform(transform, source_type, Some(Literal::Primitive(literal))) {
+    match apply_transform(transform, source_type, Some(Literal::Primitive(literal))).ok()? {
         Some(Literal::Primitive(value)) => Some(value),
         _ => None,
     }
