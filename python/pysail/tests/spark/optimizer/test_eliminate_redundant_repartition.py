@@ -29,7 +29,7 @@ def test_p1_eliminates_rr_repartition_above_hash_explicit_plan(spark, snapshot):
 
 @pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
-def test_p1_eliminates_rr_repartition_above_unkown_explicit_plan(spark, snapshot):
+def test_p1_eliminates_rr_repartition_above_unknown_explicit_plan(spark, snapshot):
     df = spark.range(6).filter(F.col("id") % 2 == 0).coalesce(1).filter(F.col("id") == 4)  # noqa: PLR2004
     plan = normalized_plan(df, mode="codegen")
 
@@ -112,7 +112,7 @@ def test_p2_collapses_hash_over_hash_plan(spark, snapshot):
 
 @pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
-def test_p2_collapses_hash_over_unkown_plan(spark, snapshot):
+def test_p2_collapses_hash_over_unknown_plan(spark, snapshot):
     df = spark.range(6).filter(F.col("id") % 2 == 0).coalesce(1).repartition(5, "id")
     plan = normalized_plan(df)
 
