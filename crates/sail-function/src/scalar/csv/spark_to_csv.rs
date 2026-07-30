@@ -18,19 +18,19 @@ use crate::scalar::datetime::format::{
 
 fn default_timestamp_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
-    DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
+    DateTimeFormat::for_formatting(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
         .expect("default timestamp format should be valid")
 }
 
 fn default_date_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
-    DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
+    DateTimeFormat::for_formatting(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
         .expect("default date format should be valid")
 }
 
 fn default_ltz_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
-    DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+    DateTimeFormat::for_formatting("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
         .expect("default timestamp LTZ format should be valid")
 }
 
@@ -138,13 +138,13 @@ impl SparkToCsvOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.clone());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| DEFAULT_DATE_FORMAT.clone());
 
@@ -1486,7 +1486,7 @@ mod tests {
 
         // Manually construct options with custom format
         let options = SparkToCsvOptions {
-            timestamp_format: DateTimeFormat::parse("dd/MM/yyyy")?,
+            timestamp_format: DateTimeFormat::for_formatting("dd/MM/yyyy")?,
             ..SparkToCsvOptions::default()
         };
 

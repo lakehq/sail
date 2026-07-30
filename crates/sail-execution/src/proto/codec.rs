@@ -85,7 +85,9 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionCastColumnExpr, StructFieldMatching,
+};
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -160,7 +162,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -259,6 +260,9 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::remote_checkpoint::{
+    CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
+};
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -437,6 +441,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 show_sizes,
                 sort_information,
                 limit,
+                output_partitioning,
             }) => {
                 let schema = try_decode_schema(&schema)?;
                 let partitions = partitions
@@ -452,7 +457,67 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .with_show_sizes(show_sizes)
                         .try_with_sort_information(sort_information)?
                         .with_limit(limit.map(|x| x as usize));
-                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+                let scan = DataSourceExec::new(Arc::new(source));
+                let scan = if output_partitioning.is_empty() {
+                    scan
+                } else {
+                    let output_partitioning =
+                        self.try_decode_partitioning(&output_partitioning, &scan.schema(), ctx)?;
+                    scan.with_partitioning(output_partitioning)
+                };
+                Ok(Arc::new(scan))
+            }
+            NodeKind::RemoteCheckpointWrite(r#gen::RemoteCheckpointWriteExecNode {
+                input,
+                object_store_url,
+                prefix,
+                storage_schema,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let prefix = object_store::path::Path::parse(prefix)
+                    .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
+                let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
+                    input,
+                    object_store_url,
+                    prefix,
+                    storage_schema,
+                )?))
+            }
+            NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
+                input,
+                relation_id,
+                object_store_url,
+                prefix,
+                logical_schema,
+                storage_schema,
+                output_partitioning,
+                output_ordering,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let prefix = object_store::path::Path::parse(prefix)
+                    .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
+                let logical_schema = Arc::new(try_decode_schema(&logical_schema)?);
+                let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let output_partitioning =
+                    self.try_decode_partitioning(&output_partitioning, &storage_schema, ctx)?;
+                let output_ordering = output_ordering
+                    .map(|ordering| self.try_decode_lex_ordering(&ordering, &storage_schema, ctx))
+                    .transpose()?;
+                Ok(Arc::new(RemoteCheckpointCommitExec::new(
+                    input,
+                    relation_id,
+                    object_store_url,
+                    prefix,
+                    logical_schema,
+                    storage_schema,
+                    output_partitioning,
+                    output_ordering,
+                )))
             }
             NodeKind::Values(r#gen::ValuesExecNode { data, schema }) => {
                 let schema = try_decode_schema(&schema)?;
@@ -504,6 +569,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 options,
                 predicate,
+                output_partitioning,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
@@ -538,7 +604,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
                 )?;
-                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+                let scan = DataSourceExec::new(Arc::new(source));
+                let scan = if output_partitioning.is_empty() {
+                    scan
+                } else {
+                    let output_partitioning =
+                        self.try_decode_partitioning(&output_partitioning, &scan.schema(), ctx)?;
+                    scan.with_partitioning(output_partitioning)
+                };
+                Ok(Arc::new(scan))
             }
             NodeKind::Arrow(r#gen::ArrowExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
@@ -614,11 +688,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 static_term,
                 recursive_term,
                 is_distinct,
+                output_schema,
             }) => {
                 let static_term = try_decode_physical_plan(ctx, self, &static_term)?;
                 let recursive_term = try_decode_physical_plan(ctx, self, &recursive_term)?;
+                let output_schema = Arc::new(try_decode_schema(&output_schema)?);
                 Ok(Arc::new(RecursiveQueryExec::try_new(
                     name,
+                    output_schema,
                     static_term,
                     recursive_term,
                     is_distinct,
@@ -1147,10 +1224,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan(ctx, self, &input)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode { input, schema }) => {
+            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
+                input,
+                schema,
+                column_mapping_mode,
+            }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let schema = Arc::new(try_decode_schema(&schema)?);
-                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+                let column_mapping_mode =
+                    self.try_decode_delta_column_mapping_mode(column_mapping_mode)?;
+                Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
+                    input,
+                    schema,
+                    column_mapping_mode,
+                )))
             }
             NodeKind::DeletionVectorWriter(r#gen::DeletionVectorWriterExecNode {
                 input,
@@ -1507,6 +1594,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 udf: Some(udf),
                 schema,
             })
+        } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointWriteExec>() {
+            NodeKind::RemoteCheckpointWrite(r#gen::RemoteCheckpointWriteExecNode {
+                input: try_encode_physical_plan(self, checkpoint.input().clone())?,
+                object_store_url: checkpoint.object_store_url().as_str().to_string(),
+                prefix: checkpoint.prefix().to_string(),
+                storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+            })
+        } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
+            NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
+                input: try_encode_physical_plan(self, checkpoint.input().clone())?,
+                relation_id: checkpoint.relation_id().to_string(),
+                object_store_url: checkpoint.object_store_url().as_str().to_string(),
+                prefix: checkpoint.prefix().to_string(),
+                logical_schema: try_encode_schema(checkpoint.logical_schema().as_ref())?,
+                storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                output_partitioning: self
+                    .try_encode_partitioning(checkpoint.checkpoint_partitioning())?,
+                output_ordering: checkpoint
+                    .checkpoint_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering))
+                    .transpose()?,
+            })
         } else if let Some(work_table) = node.downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
             let schema = try_encode_schema(work_table.schema().as_ref())?;
@@ -1518,11 +1627,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let recursive_term =
                 try_encode_physical_plan(self, recursive_query.recursive_term().clone())?;
             let is_distinct = recursive_query.is_distinct();
+            let output_schema = try_encode_schema(recursive_query.schema().as_ref())?;
             NodeKind::RecursiveQuery(r#gen::RecursiveQueryExecNode {
                 name,
                 static_term,
                 recursive_term,
                 is_distinct,
+                output_schema,
             })
         } else if let Some(sort_merge_join) = node.downcast_ref::<SortMergeJoinExec>() {
             let left = try_encode_physical_plan(self, sort_merge_join.left().clone())?;
@@ -1592,7 +1703,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 common_prefix_length,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
-            let source = data_source.data_source();
+            let data_source = data_source.data_source();
+            let (source, output_partitioning) =
+                if let Some(checkpoint) = data_source.downcast_ref::<CheckpointDataSource>() {
+                    (
+                        checkpoint.source(),
+                        self.try_encode_partitioning(checkpoint.checkpoint_partitioning())?,
+                    )
+                } else {
+                    (data_source, Vec::new())
+                };
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if let Some(text_source) = file_source.downcast_ref::<TextSource>() {
@@ -1659,6 +1779,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         options,
                         predicate,
+                        output_partitioning,
                     })
                 } else if file_source.is::<JsonSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -1713,6 +1834,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     show_sizes: memory.show_sizes(),
                     sort_information,
                     limit: memory.fetch().map(|x| x as u64),
+                    output_partitioning,
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
@@ -2021,7 +2143,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(relaxed_tz_cast) = node.downcast_ref::<RelaxedTzCastExec>() {
             let input = try_encode_physical_plan(self, relaxed_tz_cast.input().clone())?;
             let schema = try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode { input, schema })
+            let column_mapping_mode =
+                Self::try_encode_delta_column_mapping_mode(relaxed_tz_cast.column_mapping_mode())?;
+            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
+                input,
+                schema,
+                column_mapping_mode,
+            })
         } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
             let input = try_encode_physical_plan(self, dv_writer_exec.input().clone())?;
             let condition = try_encode_physical_expr(self, dv_writer_exec.condition())?;
@@ -2329,8 +2457,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { session_timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone));
+            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
@@ -2608,7 +2739,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_timestamp" | "try_to_timestamp" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
-            "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
@@ -2826,7 +2956,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
             let session_timezone = func.session_timezone().to_string();
-            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { session_timezone })
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone })
@@ -3264,16 +3398,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
             ExprKind::SchemaEvolutionCast(node) => {
-                let (input, input_field, target_field) = self.try_decode_cast_column_expr(
-                    &node,
-                    inputs,
-                    "SchemaEvolutionCastColumnExpr",
-                )?;
-                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new(
+                let (input, input_field, target_field, matching) = self
+                    .try_decode_cast_column_expr(&node, inputs, "SchemaEvolutionCastColumnExpr")?;
+                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
                     input,
                     input_field,
                     target_field,
                     None,
+                    matching,
                 )))
             }
             // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
@@ -3306,6 +3438,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),
+                cast.matching(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
@@ -3337,10 +3470,16 @@ impl RemoteExecutionCodec {
         node: &CastColumnExprNode,
         inputs: &[Arc<dyn PhysicalExpr>],
         expr_name: &str,
-    ) -> Result<(Arc<dyn PhysicalExpr>, Arc<Field>, Arc<Field>)> {
+    ) -> Result<(
+        Arc<dyn PhysicalExpr>,
+        Arc<Field>,
+        Arc<Field>,
+        StructFieldMatching,
+    )> {
         let CastColumnExprNode {
             input_schema,
             target_schema,
+            struct_field_matching,
         } = node;
         if inputs.len() != 1 {
             return plan_err!(
@@ -3369,6 +3508,7 @@ impl RemoteExecutionCodec {
             inputs[0].clone(),
             Arc::new(input_field),
             Arc::new(target_field),
+            Self::try_decode_struct_field_matching(*struct_field_matching)?,
         ))
     }
 
@@ -3376,6 +3516,7 @@ impl RemoteExecutionCodec {
         &self,
         input_field: &Field,
         target_field: &Field,
+        matching: StructFieldMatching,
     ) -> Result<CastColumnExprNode> {
         let input_schema = Schema::new(vec![input_field.clone()]);
         let input_schema = try_encode_schema(&input_schema)?;
@@ -3384,7 +3525,26 @@ impl RemoteExecutionCodec {
         Ok(CastColumnExprNode {
             input_schema,
             target_schema,
+            struct_field_matching: Self::try_encode_struct_field_matching(matching),
         })
+    }
+
+    fn try_decode_struct_field_matching(mode: i32) -> Result<StructFieldMatching> {
+        match r#gen::StructFieldMatching::try_from(mode)
+            .map_err(|_| plan_datafusion_err!("invalid struct field matching mode"))?
+        {
+            r#gen::StructFieldMatching::Name => Ok(StructFieldMatching::Name),
+            r#gen::StructFieldMatching::PhysicalName => Ok(StructFieldMatching::PhysicalName),
+            r#gen::StructFieldMatching::FieldId => Ok(StructFieldMatching::FieldId),
+        }
+    }
+
+    fn try_encode_struct_field_matching(mode: StructFieldMatching) -> i32 {
+        (match mode {
+            StructFieldMatching::Name => r#gen::StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName => r#gen::StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId => r#gen::StructFieldMatching::FieldId,
+        }) as i32
     }
 
     fn try_decode_physical_sink_mode(
@@ -4228,6 +4388,8 @@ impl RemoteExecutionCodec {
             python_udf_pandas_int_to_decimal_coercion_enabled: config
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
+            python_udf_pandas_prefer_int_extension_dtype: config
+                .python_udf_pandas_prefer_int_extension_dtype,
         };
         Ok(config)
     }
@@ -4248,6 +4410,8 @@ impl RemoteExecutionCodec {
             python_udf_pandas_int_to_decimal_coercion_enabled: config
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
+            python_udf_pandas_prefer_int_extension_dtype: config
+                .python_udf_pandas_prefer_int_extension_dtype,
         };
         Ok(config)
     }
@@ -4371,6 +4535,70 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_recursive_query_preserves_output_schema() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let static_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+        let static_term: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&static_schema)));
+        let recursive_term: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&output_schema)));
+        let plan = Arc::new(RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&output_schema),
+            static_term,
+            recursive_term,
+            false,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let recursive_query = decoded
+            .downcast_ref::<RecursiveQueryExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a RecursiveQueryExec"))?;
+
+        assert_eq!(recursive_query.schema(), output_schema);
+        assert_eq!(recursive_query.static_term().schema(), output_schema);
+        assert_eq!(recursive_query.recursive_term().schema(), output_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_field_matching_proto_round_trip_and_default() -> Result<()> {
+        for mode in [
+            StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            let encoded = RemoteExecutionCodec::try_encode_struct_field_matching(mode);
+            assert_eq!(
+                RemoteExecutionCodec::try_decode_struct_field_matching(encoded)?,
+                mode
+            );
+        }
+
+        assert_eq!(
+            RemoteExecutionCodec::try_decode_struct_field_matching(
+                r#gen::CastColumnExprNode::default().struct_field_matching,
+            )?,
+            StructFieldMatching::Name
+        );
+        assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
+        Ok(())
     }
 
     #[test]
@@ -4798,6 +5026,124 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_remote_checkpoint_write_plan() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "logical_name",
+            DataType::Int64,
+            true,
+        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let checkpoint = RemoteCheckpointWriteExec::try_new(
+            Arc::new(EmptyExec::new(input_schema)),
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
+            object_store::path::Path::from("checkpoints/session/relation"),
+            Arc::clone(&storage_schema),
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RemoteCheckpointWriteExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a checkpoint writer"))?;
+
+        assert_eq!(
+            decoded.object_store_url().as_str(),
+            "s3://checkpoint-bucket/"
+        );
+        assert_eq!(
+            decoded.prefix(),
+            &object_store::path::Path::from("checkpoints/session/relation")
+        );
+        assert_eq!(decoded.storage_schema(), &storage_schema);
+        assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_remote_checkpoint_commit_plan() -> Result<()> {
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let metadata_schema = Arc::new(Schema::new(vec![Field::new(
+            "metadata",
+            DataType::Utf8,
+            false,
+        )]));
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "logical_name",
+            DataType::Int64,
+            true,
+        )]));
+        let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let key = Arc::new(Column::new("_c0", 0)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&key))])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty checkpoint ordering"))?;
+        let checkpoint = RemoteCheckpointCommitExec::new(
+            Arc::new(EmptyExec::new(metadata_schema)),
+            "relation".to_string(),
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
+            object_store::path::Path::from("checkpoints/session/relation"),
+            Arc::clone(&logical_schema),
+            Arc::clone(&storage_schema),
+            Partitioning::Hash(vec![key], 4),
+            Some(ordering),
+        );
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(checkpoint))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RemoteCheckpointCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a checkpoint commit"))?;
+
+        assert_eq!(decoded.relation_id(), "relation");
+        assert_eq!(decoded.logical_schema(), &logical_schema);
+        assert_eq!(decoded.storage_schema(), &storage_schema);
+        let Partitioning::Hash(expressions, 4) = decoded.checkpoint_partitioning() else {
+            return plan_err!("expected checkpoint hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("checkpoint hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "_c0");
+        assert_eq!(partition_column.index(), 0);
+        assert!(decoded.checkpoint_ordering().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_checkpoint_data_source_partitioning() -> Result<()> {
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let source = MemorySourceConfig::try_new(&[vec![], vec![]], Arc::clone(&schema), None)?;
+        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
+        let source = Arc::new(CheckpointDataSource::new(
+            Arc::new(source),
+            Partitioning::Hash(vec![key], 2),
+        ));
+        let scan = DataSourceExec::new(source);
+        let remote_scan = RemoteDataSourceExec::new(&scan);
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+
+        assert!(decoded.is::<DataSourceExec>());
+        assert!(matches!(
+            decoded.output_partitioning(),
+            Partitioning::Hash(_, 2)
+        ));
+        Ok(())
     }
 
     #[test]
@@ -5292,12 +5638,14 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_unix_timestamp_preserves_options() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(Arc::from(
-            "America/Los_Angeles",
-        ))))?;
+        let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(
+            Arc::from("America/Los_Angeles"),
+            true,
+        )))?;
 
         let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(decoded.ansi_mode());
 
         Ok(())
     }

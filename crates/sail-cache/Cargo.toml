@@ -8,10 +8,14 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-object-store = { path = "../sail-object-store" }
 
 thiserror = { workspace = true }
 object_store = { workspace = true }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true }
+uuid = { workspace = true }

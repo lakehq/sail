@@ -35,7 +35,6 @@ pub enum TaskInputLocator {
         keys: Vec<Vec<(WorkerId, TaskInputKey)>>,
     },
     Remote {
-        uri: String,
         stage: usize,
         keys: Vec<Vec<TaskInputKey>>,
     },
@@ -71,7 +70,7 @@ pub enum TaskOutputDistribution {
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
     Local { replicas: usize },
-    Remote { uri: String },
+    Remote,
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -154,9 +153,8 @@ impl From<TaskInputLocator> for r#gen::TaskInputLocator {
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
-            TaskInputLocator::Remote { uri, stage, keys } => {
+            TaskInputLocator::Remote { stage, keys } => {
                 r#gen::task_input_locator::Kind::Remote(r#gen::TaskInputRemoteLocator {
-                    uri,
                     stage: stage as u64,
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
@@ -198,7 +196,6 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
                 })
             }
             Some(r#gen::task_input_locator::Kind::Remote(r#gen::TaskInputRemoteLocator {
-                uri,
                 stage,
                 keys,
             })) => {
@@ -207,7 +204,6 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
                     .map(|x| x.try_into())
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(TaskInputLocator::Remote {
-                    uri,
                     stage: stage as usize,
                     keys,
                 })
@@ -471,8 +467,8 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
                     replicas: replicas as u64,
                 })
             }
-            TaskOutputLocator::Remote { uri } => {
-                r#gen::task_output_locator::Kind::Remote(r#gen::TaskOutputRemoteLocator { uri })
+            TaskOutputLocator::Remote => {
+                r#gen::task_output_locator::Kind::Remote(r#gen::TaskOutputRemoteLocator {})
             }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
@@ -489,9 +485,7 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
             })) => Ok(TaskOutputLocator::Local {
                 replicas: replicas as usize,
             }),
-            Some(r#gen::task_output_locator::Kind::Remote(r#gen::TaskOutputRemoteLocator {
-                uri,
-            })) => Ok(TaskOutputLocator::Remote { uri }),
+            Some(r#gen::task_output_locator::Kind::Remote(_)) => Ok(TaskOutputLocator::Remote),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
@@ -535,12 +529,11 @@ impl TaskInput {
                         .collect()
                 })
                 .collect(),
-            TaskInputLocator::Remote { uri, stage, keys } => keys
+            TaskInputLocator::Remote { stage, keys } => keys
                 .iter()
                 .map(|keys| {
                     keys.iter()
                         .map(|key| TaskReadLocation::Remote {
-                            uri: uri.clone(),
                             key: TaskStreamKey {
                                 job_id,
                                 stage: *stage,
@@ -582,9 +575,8 @@ impl TaskOutput {
                     },
                 })
                 .collect(),
-            TaskOutputLocator::Remote { uri } => (0..channels)
+            TaskOutputLocator::Remote => (0..channels)
                 .map(|channel| TaskWriteLocation::Remote {
-                    uri: uri.clone(),
                     key: TaskStreamKey {
                         job_id: key.job_id,
                         stage: key.stage,

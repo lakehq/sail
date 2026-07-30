@@ -18,7 +18,6 @@ pub enum TaskReadLocation {
         key: TaskStreamKey,
     },
     Remote {
-        uri: String,
         key: TaskStreamKey,
     },
 }
@@ -32,8 +31,8 @@ impl fmt::Display for TaskReadLocation {
             TaskReadLocation::Worker { worker_id, key } => {
                 write!(f, "Worker({worker_id}, {})", TaskStreamKeyDenseDisplay(key))
             }
-            TaskReadLocation::Remote { uri, key } => {
-                write!(f, "Remote({uri}, {})", TaskStreamKeyDenseDisplay(key))
+            TaskReadLocation::Remote { key } => {
+                write!(f, "Remote({})", TaskStreamKeyDenseDisplay(key))
             }
         }
     }
