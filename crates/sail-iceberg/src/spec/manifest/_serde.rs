@@ -243,6 +243,16 @@ fn int_long_map_into(
         .collect()
 }
 
+fn data_file_long_into_u64(name: &str, value: i64) -> Result<u64, String> {
+    u64::try_from(value)
+        .map_err(|_| format!("Invalid negative Iceberg data file `{name}` value {value}"))
+}
+
+fn data_file_u64_into_long(name: &str, value: u64) -> Result<i64, String> {
+    i64::try_from(value)
+        .map_err(|_| format!("Iceberg data file `{name}` value {value} exceeds Avro long range"))
+}
+
 fn i128_to_min_big_endian(value: i128) -> Vec<u8> {
     let bytes = value.to_be_bytes();
     let mut start = 0;
@@ -364,6 +374,9 @@ impl DataFileSerde {
         df: super::DataFile,
         partition_type: &StructType,
     ) -> Result<Self, String> {
+        let record_count = data_file_u64_into_long("record_count", df.record_count)?;
+        let file_size_in_bytes =
+            data_file_u64_into_long("file_size_in_bytes", df.file_size_in_bytes)?;
         Ok(Self {
             content: match df.content {
                 DataContentType::Data => 0,
@@ -381,8 +394,8 @@ impl DataFileSerde {
                 &df.partition,
                 partition_type,
             )?),
-            record_count: df.record_count as i64,
-            file_size_in_bytes: df.file_size_in_bytes as i64,
+            record_count,
+            file_size_in_bytes,
             column_sizes: int_long_map_from(df.column_sizes),
             value_counts: int_long_map_from(df.value_counts),
             null_value_counts: int_long_map_from(df.null_value_counts),
@@ -414,6 +427,9 @@ impl DataFileSerde {
         partition_type: &StructType,
         schema: Option<&Schema>,
     ) -> Result<super::DataFile, String> {
+        let record_count = data_file_long_into_u64("record_count", self.record_count)?;
+        let file_size_in_bytes =
+            data_file_long_into_u64("file_size_in_bytes", self.file_size_in_bytes)?;
         let content = match self.content {
             0 => DataContentType::Data,
             1 => DataContentType::PositionDeletes,
@@ -437,8 +453,8 @@ impl DataFileSerde {
                 .partition
                 .map(|p| p.into_struct_values(partition_type))
                 .unwrap_or_default(),
-            record_count: self.record_count as u64,
-            file_size_in_bytes: self.file_size_in_bytes as u64,
+            record_count,
+            file_size_in_bytes,
             column_sizes: int_long_map_into("column_sizes", self.column_sizes)?,
             value_counts: int_long_map_into("value_counts", self.value_counts)?,
             null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
@@ -580,5 +596,24 @@ mod tests {
                 (99, vec![0x04, 0x05, 0x06]),
             ])
         );
+    }
+
+    #[test]
+    fn negative_data_file_sizes_are_rejected() {
+        let partition_type = StructType::new(vec![]);
+
+        let mut negative_record_count = data_file_serde_with_historical_bounds();
+        negative_record_count.record_count = -1;
+        assert!(matches!(
+            negative_record_count.into_data_file(0, &partition_type, None),
+            Err(message) if message.contains("record_count") && message.contains("-1")
+        ));
+
+        let mut negative_file_size = data_file_serde_with_historical_bounds();
+        negative_file_size.file_size_in_bytes = -1;
+        assert!(matches!(
+            negative_file_size.into_data_file(0, &partition_type, None),
+            Err(message) if message.contains("file_size_in_bytes") && message.contains("-1")
+        ));
     }
 }
