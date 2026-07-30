@@ -935,30 +935,44 @@ Feature: CSV expression functions handle Spark's CSV options
 
   Rule: String options with a validated domain are checked
 
-    # Spark validates the charset, time zone, and codec names eagerly in the CSVOptions
-    # constructor, so a non-null input makes them throw. Sail now validates the charset (`encoding`
-    # /`charset`) and the `compression` codec against Spark's fixed sets. `timeZone` stays deferred:
-    # Spark accepts offset forms like `+05:00`/`GMT+5`/`Z` and is case-sensitive (`UTC` yes, `utc`
-    # no), which chrono_tz would over-reject.
+    # Spark validates the charset (`encoding`, alias `charset`), codec (`compression`, alias
+    # `codec`), and time zone eagerly in the CSVOptions constructor, so a non-null input throws.
+    # Sail now validates the charset and codec against Spark's fixed sets. Each aliased option
+    # validates only its EFFECTIVE value: Spark reads the primary key, falling back to the alias,
+    # and a bad alias is ignored when the primary is valid. The error class diverges by Spark
+    # version (3.5 throws java.io.UnsupportedEncodingException / a plain "not available" message;
+    # 4.x uses INVALID_PARAMETER_VALUE.CHARSET / CODEC_NOT_AVAILABLE), so assert a value or message
+    # fragment common to every version and to Sail.
 
-    Scenario: from_csv rejects an unknown encoding
-      # Every Spark version rejects an unknown charset, but the error class diverges (3.5 throws a
-      # java.io.UnsupportedEncodingException; 4.x reports INVALID_PARAMETER_VALUE.CHARSET). The only
-      # fragment common to every version and to Sail's message is the rejected value itself.
+    Scenario Outline: from_csv rejects a bad effective value of an aliased option: <case>
       When query
         """
-        SELECT from_csv('1', 'a INT', map('encoding', 'utf-99')) AS result
+        SELECT from_csv('1', 'a INT', map(<opts>)) AS result
         """
-      Then query error utf-99
+      Then query error <error>
 
-    Scenario: from_csv rejects an unknown charset
-      # `charset` is Spark's alias for `encoding` and validates identically; the error class
-      # likewise diverges by version, so assert the rejected value (common to every version).
+      Examples:
+        | case                                     | opts                                      | error            |
+        | unknown encoding                         | 'encoding', 'utf-99'                      | utf-99           |
+        | unknown charset (encoding's alias)       | 'charset', 'utf-99'                       | utf-99           |
+        | charset ignored when encoding is invalid | 'encoding', 'utf-99', 'charset', 'utf-8'  | utf-99           |
+        | unknown compression codec                | 'compression', 'garbage'                  | is not available |
+        | unknown codec (compression's alias)      | 'codec', 'garbage'                        | is not available |
+        | codec ignored when compression invalid   | 'compression', 'garbage', 'codec', 'gzip' | is not available |
+
+    Scenario Outline: from_csv ignores a bad alias when the primary option is valid: <case>
       When query
         """
-        SELECT from_csv('1', 'a INT', map('charset', 'utf-99')) AS result
+        SELECT from_csv('1', 'a INT', map(<opts>)) AS result
         """
-      Then query error utf-99
+      Then query result
+        | result |
+        | {1}    |
+
+      Examples:
+        | case                          | opts                                      |
+        | encoding shadows bad charset  | 'encoding', 'utf-8', 'charset', 'utf-99'  |
+        | compression shadows bad codec | 'compression', 'gzip', 'codec', 'garbage' |
 
     @sail-bug
     Scenario: from_csv rejects an unknown timeZone
@@ -967,15 +981,6 @@ Feature: CSV expression functions handle Spark's CSV options
         SELECT from_csv('1', 'a INT', map('timeZone', 'garbage')) AS result
         """
       Then query error INVALID_TIMEZONE
-
-    Scenario: from_csv rejects an unknown compression codec
-      # Spark rejects an unknown codec on every version, but the error class differs (3.5 has no
-      # `CODEC_NOT_AVAILABLE` class), so assert the version-stable message fragment instead.
-      When query
-        """
-        SELECT from_csv('1', 'a INT', map('compression', 'garbage')) AS result
-        """
-      Then query error is not available
 
     Scenario: from_csv skips charset validation when the input is NULL
       # The domain check is lazy too: a NULL input never reaches the parser, so a bad charset is

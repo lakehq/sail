@@ -71,10 +71,10 @@ const LINE_SEP_OPTION: &str = "lineSep";
 const MODE_OPTION: &str = "mode";
 const DROP_MALFORMED_MODE: &str = "DROPMALFORMED";
 
-/// Spark validates the charset (`encoding`, and its alias `charset`) against a fixed set in
-/// `CSVOptions`, reporting `[INVALID_PARAMETER_VALUE.CHARSET]` for anything else. The set is
-/// narrower than Java's — `Shift_JIS`, for instance, is rejected.
-const CHARSET_OPTIONS: [&str; 2] = ["encoding", "charset"];
+/// The charset values Spark's `CSVOptions` accepts. Spark reads `encoding`, falling back to its
+/// alias `charset`, and validates only the effective value against this set (reporting
+/// `[INVALID_PARAMETER_VALUE.CHARSET]` otherwise) — narrower than Java's, e.g. `Shift_JIS` is
+/// rejected.
 const VALID_CHARSETS: [&str; 7] = [
     "iso-8859-1",
     "us-ascii",
@@ -85,9 +85,9 @@ const VALID_CHARSETS: [&str; 7] = [
     "utf-8",
 ];
 
-/// Spark validates `compression` against its registered codecs, reporting `[CODEC_NOT_AVAILABLE]`
-/// for anything else. There is no `gz` alias and `zstd` is not among them.
-const COMPRESSION_OPTION: &str = "compression";
+/// The codecs Spark accepts for `compression` (and its fallback alias `codec`), validating only
+/// the effective value and reporting `[CODEC_NOT_AVAILABLE]` otherwise. There is no `gz` alias and
+/// `zstd` is not among them.
 const VALID_CODECS: [&str; 7] = [
     "bzip2",
     "deflate",
@@ -268,19 +268,19 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
             "The function `from_csv` doesn't support the {DROP_MALFORMED_MODE} mode. Acceptable modes are PERMISSIVE and FAILFAST."
         );
     }
-    // Spark's `CSVOptions` validates the charset against a fixed set, matched case-insensitively
-    // (Spark lower-cases with `Locale.ROOT`), and rejects everything else — narrower than Java's.
-    for option in CHARSET_OPTIONS {
-        if let Some(value) = find_option(map, option)
-            && !VALID_CHARSETS.iter().any(|c| value.eq_ignore_ascii_case(c))
-        {
-            return exec_err!(
-                "[INVALID_PARAMETER_VALUE.CHARSET] The value of parameter(s) `charset` in `CSVOptions` is invalid: expects one of the iso-8859-1, us-ascii, utf-16, utf-16be, utf-16le, utf-32, utf-8, but got {value}."
-            );
-        }
+    // Spark reads `encoding`, falling back to its alias `charset`; only the value it would read is
+    // validated, so a bad `charset` is ignored when `encoding` is present. Matched
+    // case-insensitively (Spark lower-cases with `Locale.ROOT`) against a set narrower than Java's.
+    if let Some(value) = find_option(map, "encoding").or_else(|| find_option(map, "charset"))
+        && !VALID_CHARSETS.iter().any(|c| value.eq_ignore_ascii_case(c))
+    {
+        return exec_err!(
+            "[INVALID_PARAMETER_VALUE.CHARSET] The value of parameter(s) `charset` in `CSVOptions` is invalid: expects one of the iso-8859-1, us-ascii, utf-16, utf-16be, utf-16le, utf-32, utf-8, but got {value}."
+        );
     }
-    // Spark validates `compression` against its registered codecs, case-insensitively.
-    if let Some(value) = find_option(map, COMPRESSION_OPTION)
+    // Spark reads `compression`, falling back to its alias `codec`; only the effective value is
+    // validated against the registered codecs, case-insensitively.
+    if let Some(value) = find_option(map, "compression").or_else(|| find_option(map, "codec"))
         && !VALID_CODECS.iter().any(|c| value.eq_ignore_ascii_case(c))
     {
         return exec_err!(
