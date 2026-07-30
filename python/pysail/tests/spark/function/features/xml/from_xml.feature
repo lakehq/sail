@@ -217,6 +217,57 @@ Feature: from_xml parses an XML string into a struct value
         | result              |
         | 2026-06-17 18:00:00 |
 
+    Scenario: From XML Java datetime pattern contract for quoted literals and fractions
+      When query
+        """
+        SELECT
+          CAST(from_xml(
+            '<p><d>2026B06B17</d></p>',
+            'd DATE',
+            map(
+              'dateFormat',
+              concat(
+                'yyyy', chr(39), 'B', chr(39),
+                'MM', chr(39), 'B', chr(39), 'dd'
+              )
+            )
+          ).d AS STRING) AS date_result,
+          CAST(from_xml(
+            '<p><ts>2026-06-17 18:00:01.1</ts></p>',
+            'ts TIMESTAMP',
+            map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS')
+          ).ts AS STRING) AS timestamp_result
+        """
+      Then query result
+        | date_result | timestamp_result      |
+        | 2026-06-17  | 2026-06-17 18:00:01.1 |
+
+    Scenario: From XML Java datetime pattern contract for timestamp zones
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CAST(from_xml(
+            '<p><ts>2026-06-17T18:00:00+02:00</ts></p>',
+            'ts TIMESTAMP',
+            map(
+              'timestampFormat',
+              concat('yyyy-MM-dd', chr(39), 'T', chr(39), 'HH:mm:ssXXX')
+            )
+          ).ts AS STRING) AS timestamp_ltz,
+          CAST(from_xml(
+            '<p><ts>2026-06-17T18:00:00</ts></p>',
+            'ts TIMESTAMP_NTZ',
+            map(
+              'timestampNTZFormat',
+              concat('yyyy-MM-dd', chr(39), 'T', chr(39), 'HH:mm:ss')
+            )
+          ).ts AS STRING) AS timestamp_ntz
+        """
+      Then query result
+        | timestamp_ltz       | timestamp_ntz       |
+        | 2026-06-17 09:00:00 | 2026-06-17 18:00:00 |
+
   Rule: XML entity unescaping
 
     Scenario Outline: Entity: <case>
