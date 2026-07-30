@@ -20,7 +20,7 @@ use datafusion::catalog::Session;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{Result, ToDFSchema, plan_err};
+use datafusion::common::{Result, ToDFSchema, not_impl_err, plan_err};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -63,7 +63,8 @@ use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
-    DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
+    DataFile, DataFileFormat, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec,
+    Schema, Snapshot,
 };
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
@@ -141,6 +142,17 @@ fn pre_delete_file_pruning_limit(
 }
 
 impl IcebergTableProvider {
+    fn require_parquet_file(data_file: &DataFile, role: &str) -> Result<()> {
+        if data_file.file_format() != DataFileFormat::Parquet {
+            return not_impl_err!(
+                "reading Iceberg {role} file '{}' in {} format; only Parquet is currently supported",
+                data_file.file_path(),
+                data_file.file_format().as_action_str()
+            );
+        }
+        Ok(())
+    }
+
     fn iceberg_field_id_for_arrow_field(
         field: &datafusion::arrow::datatypes::Field,
     ) -> Option<i32> {
@@ -534,6 +546,7 @@ impl IcebergTableProvider {
                         file_ref.data_file.file_path
                     );
                 }
+                Self::require_parquet_file(&file_ref.data_file, "delete")?;
                 index.insert(file_ref).map_err(|e| {
                     datafusion::common::DataFusionError::Plan(format!(
                         "failed to index Iceberg delete file: {e}"
@@ -552,6 +565,7 @@ impl IcebergTableProvider {
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
+            Self::require_parquet_file(&data_file, "data")?;
             let raw_path = data_file.file_path();
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             log::trace!("Processing data file: {}", file_path);
@@ -1377,6 +1391,8 @@ impl IcebergTableProvider {
 
 #[cfg(test)]
 mod tests {
+    use object_store::memory::InMemory;
+
     use super::*;
     use crate::spec::manifest::{DataContentType, DataFileFormat};
     use crate::spec::types::values::{Datum, PrimitiveLiteral};
@@ -1567,6 +1583,24 @@ mod tests {
             content_offset: None,
             content_size_in_bytes: None,
         }
+    }
+
+    #[test]
+    fn rejects_non_parquet_data_files_before_scan() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        let table_url = Url::parse("memory:///iceberg/table/")
+            .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let store_ctx = StoreContext::new(Arc::new(InMemory::new()), &table_url)?;
+        let mut data_file = data_file_with_long_bounds();
+        data_file.file_format = DataFileFormat::Avro;
+
+        let Err(error) = provider.create_partitioned_files(&store_ctx, vec![data_file]) else {
+            return Err(datafusion::common::DataFusionError::Execution(
+                "Avro file was accepted by the Parquet scan path".to_string(),
+            ));
+        };
+        assert!(format!("{error}").contains("Avro"));
+        Ok(())
     }
 
     fn date_provider() -> Result<IcebergTableProvider> {
