@@ -30,9 +30,13 @@ pub struct PartitionBatchResult {
     pub spec_id: i32,
 }
 
-pub fn scalar_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
+pub fn scalar_to_literal(
+    array: &ArrayRef,
+    row: usize,
+    iceberg_type: &Type,
+) -> Result<Option<Literal>, String> {
     // Delegate to the unified conversion function
-    array_value_to_literal(array, row)
+    array_value_to_literal(array, row, iceberg_type)
 }
 
 pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<String> {
@@ -166,11 +170,11 @@ pub fn compute_partition_values(
             .schema()
             .index_of(&col_name)
             .map_err(|e| e.to_string())?;
-        let lit = scalar_to_literal(batch.column(col_index), 0);
         let field_type = iceberg_schema
             .field_by_id(f.source_id)
             .map(|nf| nf.field_type.as_ref())
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
+        let lit = scalar_to_literal(batch.column(col_index), 0, field_type)?;
         values.push(apply_transform(f.transform, field_type, lit));
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values)?;
@@ -211,11 +215,11 @@ pub fn split_record_batch_by_partition(
                 .schema()
                 .index_of(&col_name)
                 .map_err(|e| e.to_string())?;
-            let lit = scalar_to_literal(batch.column(col_index), row);
             let field_type = iceberg_schema
                 .field_by_id(f.source_id)
                 .map(|nf| nf.field_type.as_ref())
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
+            let lit = scalar_to_literal(batch.column(col_index), row, field_type)?;
             vals.push(apply_transform(f.transform, field_type, lit));
         }
         let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
