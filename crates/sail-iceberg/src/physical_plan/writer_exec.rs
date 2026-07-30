@@ -93,6 +93,34 @@ impl IcebergWriterExec {
         }
     }
 
+    fn existing_table_commit_requirements(
+        table_meta: &TableMetadata,
+        write_spec: Option<&BoundPartitionSpec>,
+    ) -> Vec<TableRequirement> {
+        let mut requirements = vec![
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: table_meta.last_column_id,
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: table_meta.current_schema_id,
+            },
+            TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: table_meta.default_spec_id,
+            },
+        ];
+        if write_spec.is_some_and(|write_spec| {
+            !table_meta
+                .partition_specs
+                .iter()
+                .any(|spec| spec.spec_id() == write_spec.spec_id())
+        }) {
+            requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: table_meta.last_partition_id,
+            });
+        }
+        requirements
+    }
+
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -475,14 +503,8 @@ impl ExecutionPlan for IcebergWriterExec {
                 let commit_schema = schema_outcome
                     .changed
                     .then(|| schema_outcome.iceberg_schema.clone());
-                let requirements = vec![
-                    TableRequirement::LastAssignedFieldIdMatch {
-                        last_assigned_field_id: table_meta.last_column_id,
-                    },
-                    TableRequirement::CurrentSchemaIdMatch {
-                        current_schema_id: table_meta.current_schema_id,
-                    },
-                ];
+                let requirements =
+                    Self::existing_table_commit_requirements(&table_meta, default_spec.as_ref());
                 (
                     schema_outcome.iceberg_schema,
                     schema_outcome.arrow_schema,
@@ -657,5 +679,81 @@ impl DisplayAs for IcebergWriterExec {
                 write!(f, "table_path={}", self.table_url)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::spec::metadata::FormatVersion;
+    use crate::spec::transform::Transform;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    fn table_metadata_with_spec(spec: BoundPartitionSpec) -> TableMetadata {
+        let schema = IcebergSchema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .expect("valid schema");
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: "file:///tmp/table".to_string(),
+            last_sequence_number: 0,
+            last_updated_ms: 0,
+            last_column_id: 1,
+            schemas: vec![schema],
+            current_schema_id: 0,
+            partition_specs: vec![spec],
+            default_spec_id: 0,
+            last_partition_id: 1000,
+            properties: HashMap::new(),
+            current_snapshot_id: None,
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        }
+    }
+
+    #[test]
+    fn write_requirements_guard_partition_spec_state() {
+        let current = BoundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field_with_id(1, 1000, "id", Transform::Identity)
+            .build();
+        let metadata = table_metadata_with_spec(current.clone());
+
+        let requirements =
+            IcebergWriterExec::existing_table_commit_requirements(&metadata, Some(&current));
+        assert!(
+            requirements.contains(&TableRequirement::DefaultSpecIdMatch { default_spec_id: 0 })
+        );
+
+        let replacement = BoundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_field_with_id(1, 1001, "id_bucket", Transform::Bucket(8))
+            .build();
+        let replacement_requirements =
+            IcebergWriterExec::existing_table_commit_requirements(&metadata, Some(&replacement));
+        assert!(replacement_requirements.contains(
+            &TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: 1000,
+            }
+        ));
     }
 }
