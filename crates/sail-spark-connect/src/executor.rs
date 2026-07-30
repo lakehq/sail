@@ -62,6 +62,7 @@ impl ExecutorOutput {
 pub type ExecutorOutputStream = Pin<Box<dyn Stream<Item = SparkResult<ExecutorOutput>> + Send>>;
 
 struct ExecutorBuffer {
+    capacity: usize,
     inner: VecDeque<ExecutorOutput>,
 }
 
@@ -72,15 +73,19 @@ const EXECUTOR_BUFFER_CAPACITY: usize = 128;
 impl ExecutorBuffer {
     fn new(capacity: usize) -> Self {
         Self {
+            capacity,
             inner: VecDeque::with_capacity(capacity),
         }
     }
 
     fn add(&mut self, output: ExecutorOutput) {
-        self.inner.push_back(output);
-        if self.inner.len() > self.inner.capacity() {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.inner.len() >= self.capacity {
             self.inner.pop_front();
         }
+        self.inner.push_back(output);
     }
 
     fn remove_until(&mut self, id: &str) {
@@ -180,7 +185,10 @@ impl ExecutorTaskContext {
         let span = Span::enter_with_local_parent("ExecutorTaskContext::next");
         tokio::select! {
             batch = stream.next().in_span(span) => Ok(ExecutorTaskItem::Batch(batch.transpose()?)),
-            _ = tokio::time::sleep(heartbeat_interval) => Ok(ExecutorTaskItem::Heartbeat),
+            _ = tokio::time::sleep(heartbeat_interval) => {
+                // FIXME: non-reattachable clients cannot refresh session activity by releasing heartbeat responses
+                Ok(ExecutorTaskItem::Heartbeat)
+            }
         }
     }
 
@@ -282,7 +290,6 @@ impl Executor {
                                 ExecutorOutput::new(ExecutorBatch::Heartbeat),
                             )
                             .await?;
-                            empty = false;
                         }
                     }
                 }
@@ -364,6 +371,7 @@ impl Executor {
             Err(SparkError::SendError(_)) => ExecutorTaskResult::Paused(context),
             Err(e) => {
                 let _ = tx.send(Err(e)).await;
+                // TODO: track the original error in the task result
                 ExecutorTaskResult::Failed(SparkError::internal(
                     "task failed while executing the plan",
                 ))

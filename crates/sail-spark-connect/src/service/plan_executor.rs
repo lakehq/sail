@@ -633,6 +633,7 @@ pub(crate) async fn handle_release_execute(
 ) -> SparkResult<()> {
     let spark = ctx.extension::<SparkSession>()?;
     let executor = spark.get_executor(operation_id.as_str())?;
+    // TODO: clean up non-reattachable executors which the client does not release explicitly
     let Some(executor) = executor.filter(|executor| executor.metadata.reattachable) else {
         return Ok(());
     };
