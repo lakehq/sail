@@ -29,6 +29,21 @@ pub fn apply_transform(
     field_type: &Type,
     value: Option<Literal>,
 ) -> Result<Option<Literal>, String> {
+    match transform {
+        Transform::Bucket(count) if count == 0 || count > i32::MAX as u32 => {
+            return Err(format!(
+                "invalid Iceberg bucket count {count}: expected 1..={}",
+                i32::MAX
+            ));
+        }
+        Transform::Truncate(width) if width == 0 || width > i32::MAX as u32 => {
+            return Err(format!(
+                "invalid Iceberg truncate width {width}: expected 1..={}",
+                i32::MAX
+            ));
+        }
+        _ => {}
+    }
     let transformed = match transform {
         Transform::Identity => value,
         Transform::Void => None,
@@ -335,6 +350,21 @@ mod tests {
                 value,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_transform_widths_are_rejected() {
+        let int_type = Type::Primitive(PrimitiveType::Int);
+        let value = || Some(Literal::Primitive(PrimitiveLiteral::Int(7)));
+
+        assert!(apply_transform(Transform::Truncate(0), &int_type, value()).is_err());
+        assert!(apply_transform(Transform::Bucket(0), &int_type, value()).is_err());
+        assert!(
+            apply_transform(Transform::Truncate(i32::MAX as u32 + 1), &int_type, value(),).is_err()
+        );
+        assert!(
+            apply_transform(Transform::Bucket(i32::MAX as u32 + 1), &int_type, value(),).is_err()
         );
     }
 }
