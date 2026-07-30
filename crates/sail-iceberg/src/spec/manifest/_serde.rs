@@ -192,9 +192,14 @@ impl ManifestEntryV2 {
         schema: Option<&Schema>,
     ) -> Result<super::ManifestEntry, String> {
         let status = match self.status {
+            0 => super::ManifestStatus::Existing,
             1 => super::ManifestStatus::Added,
             2 => super::ManifestStatus::Deleted,
-            _ => super::ManifestStatus::Existing,
+            value => {
+                return Err(format!(
+                    "Invalid Iceberg manifest entry `status` value {value}"
+                ));
+            }
         };
         Ok(super::ManifestEntry::new(
             status,
@@ -644,6 +649,23 @@ mod tests {
         assert!(matches!(
             data_file.into_data_file(0, &partition_type, None),
             Err(message) if message.contains("file_format") && message.contains("CSV")
+        ));
+    }
+
+    #[test]
+    fn invalid_manifest_entry_status_is_rejected() {
+        let entry = ManifestEntryV2 {
+            status: 99,
+            snapshot_id: Some(10),
+            sequence_number: Some(1),
+            file_sequence_number: Some(1),
+            data_file: data_file_serde_with_historical_bounds(),
+        };
+        let partition_type = StructType::new(vec![]);
+
+        assert!(matches!(
+            entry.into_entry(0, &partition_type, Some(&current_schema())),
+            Err(message) if message.contains("status") && message.contains("99")
         ));
     }
 }
