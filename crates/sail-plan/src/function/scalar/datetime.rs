@@ -26,7 +26,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -39,9 +38,6 @@ use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn to_chrono_fmt(format: Expr) -> Expr {
-    ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
-}
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
         expr_fn::date_part(lit(part.to_uppercase()), expr),
@@ -508,7 +504,8 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 /// Shared `to_time` / `try_to_time` planner. Routes through `SparkTime`, which
-/// parses strings (with an optional chrono format) or casts time/timestamp args.
+/// parses strings (with an optional Spark Java datetime pattern) or casts
+/// time/timestamp args.
 /// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
@@ -522,7 +519,6 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         // cast to Utf8 here would route non-string inputs through string parsing,
         // bypassing the coercion checks and diverging from the 1-arg behavior.
         let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
         let name = if is_try { "try_to_time" } else { "to_time" };
