@@ -254,6 +254,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
   

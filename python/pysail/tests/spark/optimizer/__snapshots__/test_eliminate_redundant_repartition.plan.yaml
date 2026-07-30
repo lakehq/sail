@@ -325,6 +325,26 @@ data:
       FilterExec: #0@0 % 2 = 0
         RepartitionExec: partitioning=Hash([#0@0], 3), input_partitions=1
           RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#0@0], channels=3)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=3
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        StageInputExec: input=0, partitioning=Hash([#0@0], 3)
 ---
 name: "test_p1_eliminates_rr_repartition_above_rr_explicit_plan"
 data:
@@ -639,6 +659,26 @@ data:
       FilterExec: #0@0 % 2 = 0
         ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
           RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinRow(channels=3)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=3
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        StageInputExec: input=0, partitioning=RoundRobinBatch(3)
 ---
 name: "test_p1_eliminates_rr_repartition_above_unkown_explicit_plan"
 data:
@@ -976,6 +1016,35 @@ data:
           FilterExec: #0@0 % 2 = 0
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    FilterExec: #0@0 % 2 = 0
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 = 4
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_p1_keeps_hash_repartition_plan"
 data:
