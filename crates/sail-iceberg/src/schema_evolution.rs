@@ -254,6 +254,9 @@ impl SchemaEvolver {
         if variant_storage_types_equivalent(table_type, input_type) {
             return true;
         }
+        if Self::is_binary_storage_type(table_type) && Self::is_binary_storage_type(input_type) {
+            return true;
+        }
 
         matches!(
             (table_type, input_type),
@@ -421,6 +424,9 @@ impl SchemaEvolver {
         if table_type == input_type {
             return true;
         }
+        if Self::is_binary_storage_type(table_type) && Self::is_binary_storage_type(input_type) {
+            return true;
+        }
         if let (
             DataType::Timestamp(table_unit, table_tz),
             DataType::Timestamp(input_unit, input_tz),
@@ -473,6 +479,13 @@ impl SchemaEvolver {
             }
             _ => false,
         }
+    }
+
+    fn is_binary_storage_type(data_type: &DataType) -> bool {
+        matches!(
+            data_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
     }
 
     fn timestamp_timezone_compatible(
