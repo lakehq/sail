@@ -412,12 +412,12 @@ impl DriverActor {
     pub(super) fn handle_shutdown(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        history: Option<oneshot::Sender<JobRunnerHistory>>,
+        result: Option<oneshot::Sender<()>>,
     ) -> ActorAction {
-        if self.history.is_some() {
-            warn!("overriding existing history sender");
+        if self.shutdown_notifier.is_some() {
+            warn!("overriding existing shutdown notifier");
         }
-        self.history = history;
+        self.shutdown_notifier = result;
         ActorAction::Stop
     }
 

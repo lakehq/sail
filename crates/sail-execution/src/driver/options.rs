@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
 use sail_server::RetryStrategy;
 
 use crate::id::DriverId;
@@ -31,6 +32,7 @@ pub struct DriverOptions {
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
+    pub history_reporter: Option<Box<dyn JobRunnerHistoryReporter>>,
 }
 
 impl DriverOptions {
@@ -40,6 +42,7 @@ impl DriverOptions {
         driver_id: DriverId,
         driver_server_port: u16,
         worker_manager: Arc<dyn WorkerManager>,
+        history_reporter: Box<dyn JobRunnerHistoryReporter>,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
@@ -68,6 +71,11 @@ impl DriverOptions {
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
             worker_manager,
+            history_reporter: Some(history_reporter),
         }
+    }
+
+    pub(crate) fn take_history_reporter(&mut self) -> Option<Box<dyn JobRunnerHistoryReporter>> {
+        self.history_reporter.take()
     }
 }
