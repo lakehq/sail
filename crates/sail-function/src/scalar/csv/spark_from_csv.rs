@@ -21,7 +21,7 @@ use sail_sql_analyzer::parser as sail_parser;
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
-    CsvFunction, find_option, reject_null_entries, validate_options,
+    CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
 use crate::scalar::datetime::format::DateTimeFormat;
 
@@ -69,8 +69,7 @@ impl SparkFromCSVOptions {
         validate_options(map, CsvFunction::From)?;
 
         // Read through the case-insensitive, sep-before-delimiter path; `sep` wins over `delimiter`.
-        let sep = find_option(map, Self::SEP_OPTION)
-            .or_else(|| find_option(map, Self::DELIMITER_OPTION))
+        let sep = find_option_with_alias(map, Self::SEP_OPTION, Self::DELIMITER_OPTION)
             .unwrap_or(Self::SEP_DEFAULT)
             .to_string();
 

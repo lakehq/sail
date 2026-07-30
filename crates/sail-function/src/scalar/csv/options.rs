@@ -143,6 +143,20 @@ pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
         .flatten()
 }
 
+/// Returns the effective value of an option that has a fallback alias.
+///
+/// Spark reads the `primary` key, falling back to `alias` (`parameters.get(primary).orElse(alias)`),
+/// and validates or uses ONLY that effective value — a shadowed invalid `alias` is ignored when
+/// `primary` is present. This is the single source of truth for the `sep`/`delimiter`,
+/// `encoding`/`charset`, and `compression`/`codec` precedence pairs.
+pub(super) fn find_option_with_alias<'a>(
+    map: &'a MapArray,
+    primary: &str,
+    alias: &str,
+) -> Option<&'a str> {
+    find_option(map, primary).or_else(|| find_option(map, alias))
+}
+
 /// Rejects a structurally invalid options map — a NULL key or value — the way Spark does during
 /// map conversion, before any input row is evaluated.
 ///
@@ -207,7 +221,7 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
         }
     }
     // Spark reads `sep`, falling back to `delimiter`; only the value it would read is validated.
-    if let Some(value) = find_option(map, "sep").or_else(|| find_option(map, "delimiter"))
+    if let Some(value) = find_option_with_alias(map, "sep", "delimiter")
         && value.is_empty()
     {
         return exec_err!("Delimiter cannot be empty");
@@ -271,7 +285,7 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
     // Spark reads `encoding`, falling back to its alias `charset`; only the value it would read is
     // validated, so a bad `charset` is ignored when `encoding` is present. Matched
     // case-insensitively (Spark lower-cases with `Locale.ROOT`) against a set narrower than Java's.
-    if let Some(value) = find_option(map, "encoding").or_else(|| find_option(map, "charset"))
+    if let Some(value) = find_option_with_alias(map, "encoding", "charset")
         && !VALID_CHARSETS.iter().any(|c| value.eq_ignore_ascii_case(c))
     {
         return exec_err!(
@@ -280,7 +294,7 @@ pub(super) fn validate_options(map: &MapArray, function: CsvFunction) -> Result<
     }
     // Spark reads `compression`, falling back to its alias `codec`; only the effective value is
     // validated against the registered codecs, case-insensitively.
-    if let Some(value) = find_option(map, "compression").or_else(|| find_option(map, "codec"))
+    if let Some(value) = find_option_with_alias(map, "compression", "codec")
         && !VALID_CODECS.iter().any(|c| value.eq_ignore_ascii_case(c))
     {
         return exec_err!(

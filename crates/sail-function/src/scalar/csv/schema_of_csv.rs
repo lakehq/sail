@@ -12,7 +12,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::scalar::csv::options::{
-    CsvFunction, find_option, reject_null_entries, validate_options,
+    CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
 use crate::scalar::datetime::format::DateTimeFormat;
 
@@ -178,9 +178,6 @@ impl Default for SparkSchemaOfCsvOptions {
 impl SparkSchemaOfCsvOptions {
     fn from_map(map_array: &MapArray) -> Result<Self> {
         let mut options = Self::default();
-        if map_array.is_empty() || map_array.is_null(0) {
-            return Ok(options);
-        }
         // `schema_of_csv` takes only literal arguments, so it is always evaluated eagerly: both the
         // structural NULL-entry check and the value validation run unconditionally here.
         reject_null_entries(map_array, CsvFunction::SchemaOf)?;
@@ -188,9 +185,7 @@ impl SparkSchemaOfCsvOptions {
 
         // Read through the same case-insensitive, sep-before-delimiter path as `from_csv`/`to_csv`,
         // so a duplicated key resolves to the last variant and `sep` wins over `delimiter`.
-        if let Some(sep) =
-            find_option(map_array, "sep").or_else(|| find_option(map_array, "delimiter"))
-        {
+        if let Some(sep) = find_option_with_alias(map_array, "sep", "delimiter") {
             options.sep = sep.to_string();
         }
         if let Some(format) = find_option(map_array, "timestampFormat") {

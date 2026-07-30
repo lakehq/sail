@@ -879,6 +879,27 @@ Feature: CSV expression functions handle Spark's CSV options
         | result |
         | {1}    |
 
+    @sail-only
+    Scenario: from_csv ignores the writer-only extension option
+      # Deliberate divergence, NOT a @sail-bug — do not "fix" this by validating `extension`.
+      #
+      # `extension` is a file-DataSource WRITER option (SPARK-50616, choosing `.tsv`/`.psv`), not an
+      # expression option. Passing a non-letter value to the EXPRESSION path behaves as:
+      #   Spark: `[INTERNAL_ERROR]` — the expression path does not handle a writer-only option and a
+      #          non-letter value trips an internal assertion. That is a crash, not a designed
+      #          validation (no stable error class/message). Note `ab`/`abcd` are ACCEPTED, so the
+      #          "extension must be exactly 3 letters" rule does not even apply to this path.
+      #   Sail:  ignores the unknown option (as it does every writer-only option), so the row parses.
+      #
+      # Matching Spark would mean replicating an INTERNAL_ERROR, so this is `@sail-only`.
+      When query
+        """
+        SELECT from_csv('1', 'a INT', map('extension', 'a1')) AS result
+        """
+      Then query result
+        | result |
+        | {1}    |
+
     @sail-bug
     Scenario: from_csv accepts a Unicode decimal digit in an integer option
       When query

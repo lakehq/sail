@@ -12,7 +12,8 @@ use lazy_static::lazy_static;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
-    CsvFunction, find_option, parse_bool_option, reject_null_entries, validate_options,
+    CsvFunction, find_option, find_option_with_alias, parse_bool_option, reject_null_entries,
+    validate_options,
 };
 use crate::scalar::datetime::format::{
     DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
@@ -100,8 +101,7 @@ impl SparkToCsvOptions {
     fn from_map(map: &MapArray) -> Result<Self> {
         validate_options(map, CsvFunction::To)?;
 
-        let sep = find_option(map, Self::SEP_OPTION)
-            .or_else(|| find_option(map, Self::DELIMITER_OPTION))
+        let sep = find_option_with_alias(map, Self::SEP_OPTION, Self::DELIMITER_OPTION)
             .unwrap_or(Self::SEP_DEFAULT)
             .to_string();
 
