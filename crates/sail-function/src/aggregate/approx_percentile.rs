@@ -7,12 +7,12 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field, FieldRef,
-    Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    i256,
+    DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType, DurationSecondType,
+    Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, IntervalUnit, IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type, i256,
 };
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -188,12 +188,12 @@ impl AggregateUDFImpl for SparkApproxPercentile {
         // `coerce_types` has already validated the input type and rewritten the
         // percentage argument to Float64 (scalar) or List<Float64> (array).
         // When the percentage is an array, the result is an array of percentiles
-        // whose element type matches the input; Spark reports it as non-nullable.
+        // whose element type matches the input.
         if matches!(arg_types.get(1), Some(DataType::List(_))) {
             Ok(DataType::List(Arc::new(Field::new(
                 "item",
                 arg_types[0].clone(),
-                false,
+                element_is_nullable(&arg_types[0]),
             ))))
         } else {
             Ok(arg_types[0].clone())
@@ -201,29 +201,21 @@ impl AggregateUDFImpl for SparkApproxPercentile {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let is_array = matches!(
-            args.exprs.get(1).map(|e| e.data_type(args.schema)),
-            Some(Ok(DataType::List(_)))
-        );
+        // `return_field` already encodes both facts this needs: the array form
+        // is exactly the one whose return type is a list, and its element type
+        // is the (coerced) input type.
+        let (is_array, data_type) = match args.return_field.data_type() {
+            DataType::List(field) => (true, field.data_type().clone()),
+            other => (false, other.clone()),
+        };
         let ResolvedArgs {
             percentiles,
             accuracy,
         } = Self::resolve_args(args.exprs, is_array)?;
 
-        let data_type = args
-            .exprs
-            .first()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "approx_percentile requires an input argument".to_string(),
-                )
-            })?
-            .data_type(args.schema)?;
-
         Ok(Box::new(ApproxPercentileAccumulator {
             data_type,
             summaries: QuantileSummaries::new(1.0 / accuracy as f64),
-            relative_error: 1.0 / accuracy as f64,
             percentiles,
             is_array,
         }))
@@ -256,7 +248,6 @@ impl AggregateUDFImpl for SparkApproxPercentile {
 struct ApproxPercentileAccumulator {
     data_type: DataType,
     summaries: QuantileSummaries,
-    relative_error: f64,
     percentiles: Vec<f64>,
     is_array: bool,
 }
@@ -271,22 +262,15 @@ impl Debug for ApproxPercentileAccumulator {
     }
 }
 
-impl ApproxPercentileAccumulator {
-    /// Spark's `PercentileDigest.quantileSummaries`: compress lazily, so the
-    /// sketch is readable without discarding anything.
-    fn compressed(&mut self) -> &QuantileSummaries {
+impl Accumulator for ApproxPercentileAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Spark's `PercentileDigest.quantileSummaries`: compress lazily, so the
+        // sketch is readable without discarding anything.
         if !self.summaries.is_compressed() {
             self.summaries.compress();
         }
-        &self.summaries
-    }
-}
-
-impl Accumulator for ApproxPercentileAccumulator {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let summaries = self.compressed();
-        let count = summaries.count();
-        let sampled = summaries.sampled();
+        let count = self.summaries.count();
+        let sampled = self.summaries.sampled();
 
         let values = Float64Array::from_iter_values(sampled.iter().map(|s| s.value));
         let g = Int64Array::from_iter_values(sampled.iter().map(|s| s.g));
@@ -325,9 +309,40 @@ impl Accumulator for ApproxPercentileAccumulator {
         let Some(input) = values.first() else {
             return Ok(());
         };
-        let doubles = spark_internal_as_f64(input)?;
-        for value in doubles.as_primitive::<Float64Type>().iter().flatten() {
-            self.summaries.insert(value);
+        // Decimals are widened exactly; everything else goes through the cast.
+        match input.data_type() {
+            DataType::Decimal32(_, scale) => {
+                let scale = *scale;
+                for unscaled in input.as_primitive::<Decimal32Type>().iter().flatten() {
+                    self.summaries
+                        .insert(decimal_to_f64(i128::from(unscaled), scale)?);
+                }
+            }
+            DataType::Decimal64(_, scale) => {
+                let scale = *scale;
+                for unscaled in input.as_primitive::<Decimal64Type>().iter().flatten() {
+                    self.summaries
+                        .insert(decimal_to_f64(i128::from(unscaled), scale)?);
+                }
+            }
+            DataType::Decimal128(_, scale) => {
+                let scale = *scale;
+                for unscaled in input.as_primitive::<Decimal128Type>().iter().flatten() {
+                    self.summaries.insert(decimal_to_f64(unscaled, scale)?);
+                }
+            }
+            DataType::Decimal256(_, scale) => {
+                let scale = *scale;
+                for unscaled in input.as_primitive::<Decimal256Type>().iter().flatten() {
+                    self.summaries.insert(unscaled_to_f64(unscaled, scale)?);
+                }
+            }
+            _ => {
+                let doubles = spark_internal_as_f64(input)?;
+                for value in doubles.as_primitive::<Float64Type>().iter().flatten() {
+                    self.summaries.insert(value);
+                }
+            }
         }
         Ok(())
     }
@@ -343,6 +358,9 @@ impl Accumulator for ApproxPercentileAccumulator {
         if !self.summaries.is_compressed() {
             self.summaries.compress();
         }
+        // Every accumulator in a query shares the same foldable `accuracy`, so
+        // the peer summary is rebuilt with our own relative error.
+        let relative_error = self.summaries.relative_error();
         for index in 0..sampled.len() {
             if sampled.is_null(index) {
                 continue;
@@ -373,8 +391,7 @@ impl Accumulator for ApproxPercentileAccumulator {
                     delta: delta.value(i),
                 })
                 .collect();
-            let other =
-                QuantileSummaries::from_parts(self.relative_error, stats, counts.value(index));
+            let other = QuantileSummaries::from_parts(relative_error, stats, counts.value(index));
             self.summaries.merge_with(&other);
         }
         Ok(())
@@ -383,45 +400,82 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Reads the sketch without consuming it: DataFusion calls `evaluate`
         // once per row on a shared accumulator for window frames.
-        let data_type = self.data_type.clone();
-        let percentiles = std::mem::take(&mut self.percentiles);
-        let queried = self.compressed().query(&percentiles);
-        self.percentiles = percentiles;
+        if !self.summaries.is_compressed() {
+            self.summaries.compress();
+        }
+        let data_type = &self.data_type;
+        let queried = self.summaries.query(&self.percentiles);
 
         if self.is_array {
-            let element_type =
-                DataType::List(Arc::new(Field::new_list_field(data_type.clone(), false)));
-            // No (non-null) input rows: Spark returns NULL for the whole array.
-            let Some(values) = queried else {
+            let element_field =
+                Field::new_list_field(data_type.clone(), element_is_nullable(data_type));
+            let element_type = DataType::List(Arc::new(element_field.clone()));
+            // Spark collapses BOTH an empty result set and an empty percentage
+            // array to NULL: `if (result.length == 0) null`
+            // (ApproximatePercentile.scala:219-220).
+            let Some(values) = queried.filter(|values| !values.is_empty()) else {
                 return ScalarValue::try_from(&element_type);
             };
             let scalars = values
                 .into_iter()
-                .map(|value| f64_to_input_type(value, &data_type))
+                .map(|value| f64_to_input_type(value, data_type))
                 .collect::<Result<Vec<_>>>()?;
             let values_array = ScalarValue::iter_to_array(scalars)?;
             let offsets =
                 OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, values_array.len() as i32]));
-            let list_array = ListArray::new(
-                Arc::new(Field::new_list_field(data_type, false)),
-                offsets,
-                values_array,
-                None,
-            );
+            let list_array = ListArray::new(Arc::new(element_field), offsets, values_array, None);
             Ok(ScalarValue::List(Arc::new(list_array)))
         } else {
             match queried.as_ref().and_then(|values| values.first()) {
-                Some(value) => f64_to_input_type(*value, &data_type),
-                None => ScalarValue::try_from(&data_type),
+                Some(value) => f64_to_input_type(*value, data_type),
+                None => ScalarValue::try_from(data_type),
             }
         }
     }
 
     fn size(&self) -> usize {
         size_of_val(self)
-            + size_of_val(self.summaries.sampled())
+            + self.summaries.allocated_size()
             + self.percentiles.capacity() * size_of::<f64>()
     }
+}
+
+/// Widens one decimal to `f64` the way Spark's `Decimal.toDouble` does —
+/// `toBigDecimal.doubleValue`, a single correctly-rounded step from the exact
+/// value (`Decimal.scala:245`).
+///
+/// Arrow's decimal cast instead computes `unscaled as f64 / 10^scale`, which
+/// rounds twice and drifts: `CAST(123456789012345678.90 AS DECIMAL(38,2))`
+/// widens to `1.2345678901234566e17` rather than `…68e17`, and the error then
+/// propagates all the way to the returned quantile.
+fn unscaled_to_f64<T: std::fmt::Display>(unscaled: T, scale: i8) -> Result<f64> {
+    // Rust's float parser is correctly rounded, so routing the exact decimal
+    // through scientific notation gives the same single rounding as BigDecimal.
+    let rendered = format!("{unscaled}e{}", -(scale as i32));
+    rendered.parse::<f64>().map_err(|_| {
+        DataFusionError::Execution(format!("cannot widen decimal {rendered} to a double"))
+    })
+}
+
+/// The powers of ten that are exactly representable as an `f64`.
+const EXACT_POW10: [f64; 23] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+    1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+];
+
+/// [`unscaled_to_f64`] for the decimals whose unscaled value fits an `i128`,
+/// skipping the render-and-parse round trip when the division is already exact.
+///
+/// When both the unscaled value and `10^scale` are exactly representable, the
+/// quotient is a single correctly-rounded IEEE step — the same value the parser
+/// returns, without allocating per row.
+fn decimal_to_f64(unscaled: i128, scale: i8) -> Result<f64> {
+    if let Some(pow10) = usize::try_from(scale).ok().and_then(|s| EXACT_POW10.get(s)) {
+        if unscaled.unsigned_abs() <= 1u128 << f64::MANTISSA_DIGITS {
+            return Ok(unscaled as f64 / pow10);
+        }
+    }
+    unscaled_to_f64(unscaled, scale)
 }
 
 /// Widens an input array to `f64` using the same internal representation Spark
@@ -448,6 +502,23 @@ fn spark_internal_as_f64(array: &ArrayRef) -> Result<ArrayRef> {
         None => Arc::clone(array),
     };
     cast_to_type(&array, &DataType::Float64)
+}
+
+/// Whether an element of the array result can be NULL.
+///
+/// Spark declares the element non-nullable — `ArrayType(child.dataType, false)`
+/// (`ApproximatePercentile.scala:243`) — yet still writes NULLs into it for a
+/// decimal whose rescaled value overflows the declared precision, because
+/// `InternalRow` never checks. Arrow does check, so the declaration has to be
+/// honest for exactly the types [`f64_to_input_type`] can narrow to NULL.
+fn element_is_nullable(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
 }
 
 /// Narrows a quantile back to the input type, mirroring the match in Spark's
@@ -480,17 +551,31 @@ fn f64_to_input_type(value: f64, data_type: &DataType) -> Result<ScalarValue> {
             ScalarValue::new_primitive::<Float32Type>(Some(value as f32), data_type)
         }
         DataType::Float64 => ScalarValue::new_primitive::<Float64Type>(Some(value), data_type),
-        DataType::Decimal128(_, scale) => ScalarValue::new_primitive::<Decimal128Type>(
-            Some(decimal_unscaled(value, *scale) as i128),
-            data_type,
-        ),
-        DataType::Decimal256(_, scale) => {
-            let unscaled = i256::from_f64(decimal_unscaled(value, *scale)).ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "percentile_approx result {value} is out of range for {data_type}"
-                ))
-            })?;
-            ScalarValue::new_primitive::<Decimal256Type>(Some(unscaled), data_type)
+        DataType::Decimal32(precision, scale) => {
+            let unscaled = spark_decimal_unscaled(value, *scale)
+                .filter(|digits| fits_precision(digits, *precision))
+                .and_then(|digits| digits.parse::<i32>().ok());
+            ScalarValue::new_primitive::<Decimal32Type>(unscaled, data_type)
+        }
+        DataType::Decimal64(precision, scale) => {
+            let unscaled = spark_decimal_unscaled(value, *scale)
+                .filter(|digits| fits_precision(digits, *precision))
+                .and_then(|digits| digits.parse::<i64>().ok());
+            ScalarValue::new_primitive::<Decimal64Type>(unscaled, data_type)
+        }
+        DataType::Decimal128(precision, scale) => {
+            // Spark returns NULL when the rescaled value does not fit the
+            // declared precision (`changePrecision` fails).
+            let unscaled = spark_decimal_unscaled(value, *scale)
+                .filter(|digits| fits_precision(digits, *precision))
+                .and_then(|digits| digits.parse::<i128>().ok());
+            ScalarValue::new_primitive::<Decimal128Type>(unscaled, data_type)
+        }
+        DataType::Decimal256(precision, scale) => {
+            let unscaled = spark_decimal_unscaled(value, *scale)
+                .filter(|digits| fits_precision(digits, *precision))
+                .and_then(|digits| i256::from_string(&digits));
+            ScalarValue::new_primitive::<Decimal256Type>(unscaled, data_type)
         }
         DataType::Date32 => ScalarValue::new_primitive::<Date32Type>(Some(value as i32), data_type),
         DataType::Date64 => ScalarValue::new_primitive::<Date64Type>(Some(value as i64), data_type),
@@ -527,10 +612,100 @@ fn f64_to_input_type(value: f64, data_type: &DataType) -> Result<ScalarValue> {
     }
 }
 
-/// Rescales a quantile to a decimal's unscaled representation.
+/// Rescales a quantile to a decimal's unscaled representation, the way Spark
+/// does it in `ApproximatePercentile.eval`.
 ///
-/// `f64::round` rounds half away from zero, which is the `ROUND_HALF_UP` Spark
-/// applies when narrowing the `Double` result to the declared decimal type.
-fn decimal_unscaled(value: f64, scale: i8) -> f64 {
-    (value * 10f64.powi(scale as i32)).round()
+/// Spark narrows with `Decimal(double)` (`Decimal.scala:590`), which goes
+/// through `BigDecimal.valueOf(d)` — the double's **shortest round-trip decimal
+/// string** — and then rescales exactly with `changePrecision(p, s, HALF_UP)`
+/// (`Decimal.scala:352`). Everything past the double's significant digits is
+/// therefore zero.
+///
+/// Multiplying by `10^scale` in binary floating point does NOT reproduce that:
+/// both the power and the product are inexact, so the double's garbage bits
+/// leak into the result digits. This works on the decimal string instead, so
+/// the arithmetic is exact.
+///
+/// Arrow allows the negative scale that Spark rejects in
+/// `DecimalType.checkNegativeScale` (`Decimal.scala:395`); the rescale below
+/// still holds for it, where Spark would have raised instead.
+///
+/// Returns the unscaled digits, or `None` for a value with no decimal
+/// representation (NaN / infinity).
+fn spark_decimal_unscaled(value: f64, scale: i8) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+    // Rust's `Display` for `f64` is the shortest round-trip representation and
+    // never uses exponent notation, matching the digits `Double.toString` emits
+    // on JDK 19 and later. JDK 17 predates JDK-4511638 and can render a longer,
+    // non-shortest string — `Double.toString(2e23)` is `1.9999999999999998E23`
+    // there — so Spark on JDK 17 keeps trailing digits this drops.
+    let rendered = format!("{value}");
+    let (negative, magnitude) = match rendered.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, rendered.as_str()),
+    };
+    let (int_part, frac_part) = match magnitude.split_once('.') {
+        Some(parts) => parts,
+        None => (magnitude, ""),
+    };
+
+    let mut digits = String::with_capacity(int_part.len() + frac_part.len() + 40);
+    digits.push_str(int_part);
+    digits.push_str(frac_part);
+
+    let current_scale = frac_part.len() as i64;
+    let target_scale = scale as i64;
+    if target_scale >= current_scale {
+        for _ in 0..(target_scale - current_scale) {
+            digits.push('0');
+        }
+    } else {
+        let dropped = (current_scale - target_scale) as usize;
+        // HALF_UP looks only at the first digit being discarded.
+        let round_up = match digits.len().cmp(&dropped) {
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => digits.as_bytes().first() >= Some(&b'5'),
+            std::cmp::Ordering::Greater => {
+                digits.as_bytes().get(digits.len() - dropped) >= Some(&b'5')
+            }
+        };
+        let keep = digits.len().saturating_sub(dropped);
+        digits.truncate(keep);
+        if round_up {
+            digits = increment_digits(&digits);
+        }
+    }
+
+    let trimmed = digits.trim_start_matches('0');
+    Some(match (negative, trimmed.is_empty()) {
+        (_, true) => "0".to_string(),
+        (true, false) => format!("-{trimmed}"),
+        (false, false) => trimmed.to_string(),
+    })
+}
+
+/// Adds one to a non-negative decimal digit string.
+fn increment_digits(digits: &str) -> String {
+    let mut out: Vec<u8> = digits.as_bytes().to_vec();
+    for byte in out.iter_mut().rev() {
+        if *byte == b'9' {
+            *byte = b'0';
+        } else {
+            *byte += 1;
+            return String::from_utf8_lossy(&out).into_owned();
+        }
+    }
+    let mut carried = String::with_capacity(out.len() + 1);
+    carried.push('1');
+    carried.push_str(&String::from_utf8_lossy(&out));
+    carried
+}
+
+/// Whether the unscaled digits fit the declared decimal precision. Spark's
+/// `changePrecision` fails — yielding NULL — when they do not.
+fn fits_precision(digits: &str, precision: u8) -> bool {
+    let significant = digits.trim_start_matches('-').trim_start_matches('0');
+    significant.len() <= precision as usize
 }

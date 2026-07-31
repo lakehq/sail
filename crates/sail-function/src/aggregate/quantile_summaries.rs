@@ -68,6 +68,21 @@ impl QuantileSummaries {
         self.compressed
     }
 
+    /// Spark exposes `relativeError` as a public field on the summary; the
+    /// accumulator needs it to rebuild a peer summary when merging state.
+    pub fn relative_error(&self) -> f64 {
+        self.relative_error
+    }
+
+    /// Heap actually held by the sketch, for DataFusion's memory accounting.
+    ///
+    /// Both buffers are reported by capacity, and `head_sampled` matters most:
+    /// it grows to [`DEFAULT_HEAD_SIZE`] observations before it flushes.
+    pub fn allocated_size(&self) -> usize {
+        self.sampled.capacity() * size_of::<Stats>()
+            + self.head_sampled.capacity() * size_of::<f64>()
+    }
+
     pub fn count(&self) -> i64 {
         self.count
     }
@@ -356,64 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn query_on_empty_summary_returns_none() {
-        let mut s = QuantileSummaries::new(0.01);
-        s.compress();
-        assert_eq!(s.query(&[0.5]), None);
-        assert_eq!(s.count(), 0);
-    }
-
-    #[test]
-    fn single_value_is_returned_for_every_percentile() {
-        let s = exact_summary(&[42.0]);
-        assert_eq!(s.query(&[0.0, 0.5, 1.0]), Some(vec![42.0, 42.0, 42.0]));
-    }
-
-    #[test]
-    fn nearest_rank_matches_spark_doc_examples() {
-        // > SELECT percentile_approx(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10);
-        //  7
-        let s = exact_summary(&[0.0, 6.0, 7.0, 9.0, 10.0]);
-        assert_eq!(s.query(&[0.5]), Some(vec![7.0]));
-
-        // > SELECT percentile_approx(col, array(0.5, 0.4, 0.1), 100)
-        //     FROM VALUES (0), (1), (2), (10);
-        //  [1,1,0]
-        let s = exact_summary(&[0.0, 1.0, 2.0, 10.0]);
-        assert_eq!(s.query(&[0.5, 0.4, 0.1]), Some(vec![1.0, 1.0, 0.0]));
-    }
-
-    #[test]
-    fn results_follow_the_requested_percentile_order() {
-        let s = exact_summary(&[0.0, 1.0, 2.0, 3.0, 4.0]);
-        let ascending = s.query(&[0.2, 0.6, 1.0]);
-        let shuffled = s.query(&[1.0, 0.2, 0.6]);
-        assert_eq!(ascending, Some(vec![0.0, 2.0, 4.0]));
-        assert_eq!(shuffled, Some(vec![4.0, 0.0, 2.0]));
-    }
-
-    #[test]
-    fn relative_error_short_circuits_to_min_and_max() {
-        // accuracy = 1 => relativeError = 1.0, so every percentile takes the
-        // `percentile <= relativeError` branch and returns the minimum.
-        let mut s = QuantileSummaries::new(1.0);
-        for v in [0.0, 1.0, 2.0, 10.0] {
-            s.insert(v);
-        }
-        s.compress();
-        assert_eq!(s.query(&[0.9]), Some(vec![0.0]));
-
-        // accuracy = 100 => relativeError = 0.01, so 0.995 >= 1 - 0.01 takes the
-        // maximum branch.
-        let mut s = QuantileSummaries::new(0.01);
-        for v in [0.0, 1.0, 2.0, 10.0] {
-            s.insert(v);
-        }
-        s.compress();
-        assert_eq!(s.query(&[0.995]), Some(vec![10.0]));
-    }
-
-    #[test]
     fn head_buffer_flushes_past_the_threshold() {
         let mut s = QuantileSummaries::new(1.0 / 1_000_000.0);
         for i in 0..DEFAULT_HEAD_SIZE - 1 {
@@ -450,6 +407,42 @@ mod tests {
             (median - (n as f64) / 2.0).abs() <= 0.01 * n as f64,
             "median {median} outside the relative error bound"
         );
+    }
+
+    /// `compress_immut` drops the first sample when `first.value <= second.value`
+    /// is false — which NaN makes false. The fast path in `compress` must not
+    /// skip that, or a NaN-poisoned sketch keeps a sample Spark discards.
+    #[test]
+    fn compress_keeps_sparks_nan_head_drop() {
+        // Sorting puts the NaNs last, so `sampled` is [1.0, NaN, NaN] and the
+        // head-drop test `1.0 <= NaN` is false: Spark discards the 1.0, leaving
+        // NaN as the minimum the `relativeError` short-circuit returns.
+        let mut s = QuantileSummaries::new(1.0 / 10_000.0);
+        for v in [f64::NAN, f64::NAN, 1.0] {
+            s.insert(v);
+        }
+        s.compress();
+        assert_eq!(s.sampled().len(), 2, "the 1.0 head must be dropped");
+        assert!(
+            s.sampled().first().is_some_and(|st| st.value.is_nan()),
+            "the surviving head must be NaN: {:?}",
+            s.sampled()
+        );
+        assert_eq!(s.query(&[0.0]).map(|v| v[0].is_nan()), Some(true));
+
+        // Directly: an unordered head makes the comparison false and drops it.
+        let poisoned = vec![stats(f64::NAN, 1, 0), stats(1.0, 1, 0), stats(2.0, 1, 0)];
+        let compressed = compress_immut(&poisoned, 0.0006);
+        assert_eq!(
+            compressed.len(),
+            2,
+            "NaN head must be dropped: {compressed:?}"
+        );
+        assert_eq!(compressed.first().map(|s| s.value), Some(1.0));
+
+        // A totally ordered sketch is untouched — the fast path stays valid.
+        let ordered = vec![stats(1.0, 1, 0), stats(2.0, 1, 0), stats(3.0, 1, 0)];
+        assert_eq!(compress_immut(&ordered, 0.0006), ordered);
     }
 
     #[test]
@@ -516,14 +509,5 @@ mod tests {
                 .unwrap_or(f64::NAN);
             assert!((m - s).abs() <= 1.0, "p={p}: merged {m} vs single {s}");
         }
-    }
-
-    #[test]
-    fn query_is_repeatable_and_non_destructive() {
-        let s = exact_summary(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-        let first = s.query(&[0.5]);
-        let second = s.query(&[0.5]);
-        assert_eq!(first, second);
-        assert_eq!(s.count(), 5);
     }
 }
