@@ -796,3 +796,53 @@ Feature: approx_percentile / percentile_approx aggregate function
       Then query result
         | result     |
         | [NaN, NaN] |
+
+  Rule: Foldable arguments that are not literals
+
+    # Spark's rule for `percentage` and `accuracy` is FOLDABLE, not "is a
+    # literal": anything deterministic without column references qualifies and
+    # is evaluated at analysis time. Sail's argument handling matches on the
+    # resolved value, so a rewrite that only recognised `Expr::Literal` would
+    # silently take a different path here. Verified equal to Spark; these pin it.
+
+    Scenario Outline: a foldable percentage behaves like the literal: <case>
+      When query
+        """
+        SELECT percentile_approx(v, <percentage>) AS result
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                  | percentage                            | result |
+        | arithmetic            | 0.25 + 0.25                           | 5      |
+        | a cast from a string  | CAST('0.5' AS DOUBLE)                 | 5      |
+        | a folded CASE         | CASE WHEN true THEN 0.5 ELSE 0.9 END  | 5      |
+        | a cast over concat    | CAST(concat('0.', '5') AS DOUBLE)     | 5      |
+
+    Scenario: a foldable percentage array behaves like the literal array
+      When query
+        """
+        SELECT percentile_approx(v, array(0.25 + 0.25, 0.8 + 0.1)) AS result
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | result |
+        | [5, 9] |
+
+    Scenario Outline: a foldable accuracy behaves like the literal: <case>
+      When query
+        """
+        SELECT percentile_approx(v, 0.5, <accuracy>) AS result
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | result |
+        | 5      |
+
+      Examples:
+        | case                 | accuracy              |
+        | arithmetic           | 50 + 50               |
+        | a cast from a string | CAST('100' AS INT)    |
