@@ -362,7 +362,7 @@
     {
       "input": "TIME(6) WITHOUT TIME ZONE",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
@@ -400,7 +400,7 @@
     {
       "input": "TimE WiTHOUT TiME ZoNE",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found WiTHOUT at 12:19 expected ':', or data type"
       }
     },
     {
@@ -541,7 +541,7 @@
       "input": "it is not a data type",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'is'. SQLSTATE: 42601 (line 1, pos 3)\n\n== SQL ==\nit is not a data type\n---^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found is at 10:12 expected ':', or data type"
       }
     },
     {
@@ -703,28 +703,28 @@
       "input": "struct<x+y: int, 1.1:timestamp>",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '<'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\nstruct<x+y: int, 1.1:timestamp>\n------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found < at 13:14 expected ':', or data type"
       }
     },
     {
       "input": "struct<x: int",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '<'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\nstruct<x: int\n------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found < at 13:14 expected ':', or data type"
       }
     },
     {
       "input": "time(-1)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\ntime(-1)\n-----^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
       "input": "time(-100) WITHOUT TIME ZONE",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\ntime(-100) WITHOUT TIME ZONE\n-----^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
@@ -741,27 +741,27 @@
       "input": "time(0) WITH TIME ZONE",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\ntime(0) WITH TIME ZONE\n--------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
       "input": "time(0) WITHOUT TIMEZONE",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\ntime(0) WITHOUT TIMEZONE\n--------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
       "input": "time(0) without time zone",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
       "input": "time(8) without time zone",
       "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 8 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
@@ -802,7 +802,7 @@
       "input": "timestamp WITHOUT TIMEZONE",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'. SQLSTATE: 42601 (line 1, pos 10)\n\n== SQL ==\ntimestamp WITHOUT TIMEZONE\n----------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "failure": "parse error: error in SQL parser: found WITHOUT at 17:24 expected ':', or data type"
       }
     },
     {
@@ -859,14 +859,14 @@
       "input": "unknown",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN\". SQLSTATE: 0A000 (line 1, pos 0)\n\n== SQL ==\nunknown\n^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found > at 14:15 expected ':', or data type"
       }
     },
     {
       "input": "unknown(1,2,3)",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN(1,2,3)\". SQLSTATE: 0A000 (line 1, pos 0)\n\n== SQL ==\nunknown(1,2,3)\n^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found ( at 14:15 expected ':', or data type"
       }
     },
     {
