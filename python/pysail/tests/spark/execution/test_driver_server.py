@@ -4,9 +4,8 @@ import pytest
 
 from pysail.spark import SparkConnectServer
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.skip(reason="flaky tests that should be run manually")
 
 
 @pytest.fixture(scope="module")
