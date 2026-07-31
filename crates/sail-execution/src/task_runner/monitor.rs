@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::ExecutionPlan;
 use futures::StreamExt;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -7,12 +10,14 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::metrics::plan_metrics_json;
 use crate::task_runner::TaskRunnerMessage;
 
 pub struct TaskMonitor<T: Actor> {
     handle: ActorHandle<T>,
     key: TaskKey,
     stream: SendableRecordBatchStream,
+    plan: Arc<dyn ExecutionPlan>,
     signal: oneshot::Receiver<()>,
 }
 
@@ -21,12 +26,14 @@ impl<T: Actor> TaskMonitor<T> {
         handle: ActorHandle<T>,
         key: TaskKey,
         stream: SendableRecordBatchStream,
+        plan: Arc<dyn ExecutionPlan>,
         signal: oneshot::Receiver<()>,
     ) -> Self {
         Self {
             handle,
             key,
             stream,
+            plan,
             signal,
         }
     }
@@ -42,12 +49,13 @@ where
             handle,
             key,
             stream,
+            plan,
             signal,
         } = self;
         let event = Self::running(key.clone());
         let _ = handle.send(event).await;
         let event = tokio::select! {
-            x = Self::execute(key.clone(), stream) => x,
+            x = Self::execute(key.clone(), stream, plan) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
         let _ = handle.send(event).await;
@@ -55,7 +63,7 @@ where
 
     /// Builds a "task is running" status message.
     fn running(key: TaskKey) -> T::Message {
-        T::Message::report_task_status(key, TaskStatus::Running, None, None)
+        T::Message::report_task_status(key, TaskStatus::Running, None, None, None)
     }
 
     /// Waits for a cancellation signal and builds a canceled status message.
@@ -66,18 +74,25 @@ where
             TaskStatus::Canceled,
             Some(format!("{} canceled", TaskKeyDisplay(&key))),
             None,
+            None,
         )
     }
 
     /// Drains the output stream and builds a succeeded or failed status message.
-    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
+    async fn execute(
+        key: TaskKey,
+        mut stream: SendableRecordBatchStream,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> T::Message {
         loop {
             let Some(batch) = stream.next().await else {
+                let metrics_json = plan_metrics_json(plan);
                 break T::Message::report_task_status(
                     key.clone(),
                     TaskStatus::Succeeded,
                     None,
                     None,
+                    metrics_json,
                 );
             };
             let error = match &batch {
@@ -93,6 +108,7 @@ where
                     TaskStatus::Failed,
                     Some(message),
                     Some(cause),
+                    plan_metrics_json(plan),
                 );
             }
         }

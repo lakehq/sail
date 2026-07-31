@@ -99,6 +99,7 @@ impl DriverClient {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
         sequence: u64,
     ) -> ExecutionResult<()> {
         let cause = cause
@@ -117,6 +118,7 @@ impl DriverClient {
             status: r#gen::TaskStatus::from(status) as i32,
             message,
             cause,
+            metrics_json,
             sequence,
         });
         let response = self.inner.get().await?.report_task_status(request).await?;

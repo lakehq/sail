@@ -40,6 +40,8 @@ message ReportTaskStatusRequest {
   optional string message = 7;
   // An optional JSON string that contains the cause of the task failure.
   optional string cause = 8;
+  // An optional JSON string that contains runtime metrics collected from the task plan.
+  optional string metrics_json = 9;
   uint64 sequence = 101;
 }
 

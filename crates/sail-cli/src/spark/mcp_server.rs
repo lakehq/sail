@@ -49,7 +49,7 @@ pub fn run_spark_mcp_server(
             let shutdown = async {
                 let _ = rx.await;
             };
-            with_spark_connect_server(address, shutdown, |addr| async move {
+            with_spark_connect_server(address, None, shutdown, |addr| async move {
                 let _tx = tx;
                 _run_mcp_server(settings, format!("sc://127.0.0.1:{}", addr.port()))
             })

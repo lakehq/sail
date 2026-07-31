@@ -19,7 +19,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
         // even if no value is sent through the channel.
         let _ = rx.await;
     };
-    with_spark_connect_server(address, shutdown, |addr| async move {
+    with_spark_connect_server(address, None, shutdown, |addr| async move {
         // Move `tx` to the async block so that it will be dropped after running the PySpark shell,
         // which will signal the server to shut down.
         // Note: `let _ = tx;` does not work!!!

@@ -1,0 +1,18 @@
+[package]
+name = "sail-web-ui"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-session = { path = "../sail-session" }
+
+axum = { workspace = true }
+datafusion-common = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

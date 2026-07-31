@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
@@ -18,11 +19,24 @@ pub async fn serve<F>(
     signal: F,
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
+    ui_address: Option<SocketAddr>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = ()>,
 {
     let session_manager = create_spark_session_manager(config, runtime).await?;
+    let ui_task = if let Some(address) = ui_address {
+        let listener = TcpListener::bind(address).await?;
+        let session_manager = session_manager.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) = sail_web_ui::serve(listener, session_manager).await {
+                log::error!("Sail Web UI failed: {error}");
+            }
+        }))
+    } else {
+        None
+    };
+
     let result = {
         let server = SparkConnectServer::new(session_manager.clone());
         let service = SparkConnectServiceServer::new(server)
@@ -40,6 +54,10 @@ where
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))
     };
+
+    if let Some(task) = ui_task {
+        task.abort();
+    }
     session_manager.shutdown().await?;
     result.map_err(Into::into)
 }

@@ -39,6 +39,7 @@ pub enum WorkerEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
@@ -156,6 +157,7 @@ impl SpanAssociation for WorkerEvent {
                 status,
                 message,
                 cause,
+                metrics_json: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

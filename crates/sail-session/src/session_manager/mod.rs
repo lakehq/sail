@@ -27,7 +27,7 @@ pub type ServerSessionFactoryFn =
 
 #[derive(Clone)]
 pub struct SessionManager {
-    handle: ActorHandle<SessionManagerActor>,
+    pub(crate) handle: ActorHandle<SessionManagerActor>,
 }
 
 impl fmt::Debug for SessionManager {

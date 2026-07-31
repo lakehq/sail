@@ -151,6 +151,18 @@
           sql_type: STRING
           arrow_type: crate::system::types::string()
           nullable: false
+        - name: physical_plan
+          description: The physical execution plan for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: metrics_json
+          description: The JSON string containing aggregated runtime metrics for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
         - name: status
           description: The current status of the stage.
           rust_type: String
@@ -206,6 +218,12 @@
           nullable: false
         - name: status
           description: The current status of the task.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: metrics_json
+          description: The JSON string containing runtime metrics for the task attempt.
           rust_type: String
           sql_type: STRING
           arrow_type: crate::system::types::string()

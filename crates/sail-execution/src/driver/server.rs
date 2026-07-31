@@ -125,6 +125,7 @@ impl DriverService for DriverServer {
             status,
             message,
             cause,
+            metrics_json,
             sequence,
         } = request;
         let status = r#gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
@@ -142,6 +143,7 @@ impl DriverService for DriverServer {
             status: status.into(),
             message,
             cause,
+            metrics_json,
             sequence: Some(sequence),
         };
         self.registry

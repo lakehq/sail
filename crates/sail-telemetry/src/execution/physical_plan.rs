@@ -20,7 +20,7 @@ use datafusion::physical_plan::execution_plan::{
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
 };
-use datafusion::physical_plan::metrics::MetricsSet;
+use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -82,11 +82,16 @@ pub fn trace_execution_plan(
 pub struct TracingExec {
     inner: Arc<dyn ExecutionPlan>,
     options: TracingExecOptions,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl TracingExec {
     pub fn new(inner: Arc<dyn ExecutionPlan>, options: TracingExecOptions) -> Self {
-        Self { inner, options }
+        Self {
+            inner,
+            options,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
     }
 }
 
@@ -182,9 +187,10 @@ impl ExecutionPlan for TracingExec {
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
-                emitter: self.build_metric_emitter(),
+                baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
+                emitter: Some(self.build_metric_emitter()),
                 attributes: self.build_metric_attributes(),
-                registry: manager.registry.clone(),
+                registry: Some(manager.registry.clone()),
                 interval: manager.collection_interval,
                 last_emit: None,
             };
@@ -193,6 +199,16 @@ impl ExecutionPlan for TracingExec {
                 stream.in_span(span),
             )))
         } else {
+            let stream = MetricEmitterStream {
+                inner: stream,
+                plan: self.inner.clone(),
+                baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
+                emitter: None,
+                attributes: self.build_metric_attributes(),
+                registry: None,
+                interval: Duration::MAX,
+                last_emit: None,
+            };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
                 stream.in_span(span),
@@ -201,7 +217,7 @@ impl ExecutionPlan for TracingExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        self.inner.metrics()
+        Some(self.metrics.clone_inner())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -306,9 +322,10 @@ pin_project! {
         #[pin]
         inner: SendableRecordBatchStream,
         plan: Arc<dyn ExecutionPlan>,
-        emitter: Box<dyn MetricEmitter>,
+        baseline_metrics: BaselineMetrics,
+        emitter: Option<Box<dyn MetricEmitter>>,
         attributes: Vec<KeyValue>,
-        registry: Arc<MetricRegistry>,
+        registry: Option<Arc<MetricRegistry>>,
         interval: Duration,
         last_emit: Option<Instant>,
     }
@@ -319,19 +336,23 @@ impl Stream for MetricEmitterStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
+        let timer = this.baseline_metrics.elapsed_compute().timer();
         let poll = this.inner.poll_next(cx);
+        timer.done();
+        let poll = this.baseline_metrics.record_poll(poll);
         if poll.is_ready() {
             let is_done = matches!(poll, Poll::Ready(None));
             // Note: metrics are not emitted regularly if a batch takes long to be produced,
             // but this is acceptable for the purpose of execution metrics.
             let should_emit =
                 is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
-            if should_emit {
+            if should_emit
+                && let (Some(emitter), Some(registry)) =
+                    (this.emitter.as_ref(), this.registry.as_ref())
+            {
                 if let Some(metrics) = this.plan.metrics() {
                     for metric in metrics.iter() {
-                        let _ = this
-                            .emitter
-                            .try_emit(metric, this.attributes, this.registry);
+                        let _ = emitter.try_emit(metric, this.attributes, registry);
                     }
                 }
                 *this.last_emit = Some(Instant::now());

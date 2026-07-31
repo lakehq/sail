@@ -67,6 +67,11 @@ enum SparkCommand {
         )]
         port: u16,
         #[arg(
+            long,
+            help = "Start the Sail Web UI on the specified port, for example 4040"
+        )]
+        ui_port: Option<u16>,
+        #[arg(
             short = 'C',
             long,
             help = "The directory to change to before starting the server"
@@ -142,12 +147,13 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             SparkCommand::Server {
                 ip,
                 port,
+                ui_port,
                 directory,
             } => {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_spark_connect_server(ip.parse()?, port)
+                run_spark_connect_server(ip.parse()?, port, ui_port)
             }
             SparkCommand::Shell => {
                 // TODO: Why is there warning about leaked semaphore objects

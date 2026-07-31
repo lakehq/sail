@@ -6,7 +6,7 @@ use sail_common_datafusion::system::observable::{
 use sail_server::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 
-use crate::session_manager::{SessionManagerActor, SessionManagerEvent};
+use crate::session_manager::{SessionManager, SessionManagerActor, SessionManagerEvent};
 
 pub struct SessionManagerHandle {
     handle: ActorHandle<SessionManagerActor>,
@@ -20,6 +20,19 @@ impl SessionManagerHandle {
 
 #[async_trait]
 impl StateObservable<SessionManagerObserver> for SessionManagerHandle {
+    async fn observe(&self, observer: SessionManagerObserver) {
+        let result = self
+            .handle
+            .send(SessionManagerEvent::ObserveState { observer })
+            .await;
+        if let Err(SendError(SessionManagerEvent::ObserveState { observer })) = result {
+            observer.fail(exec_datafusion_err!("cannot observe session manager state"));
+        }
+    }
+}
+
+#[async_trait]
+impl StateObservable<SessionManagerObserver> for SessionManager {
     async fn observe(&self, observer: SessionManagerObserver) {
         let result = self
             .handle

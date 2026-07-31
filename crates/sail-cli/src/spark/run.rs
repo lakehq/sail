@@ -15,7 +15,7 @@ pub fn run_pyspark_script(file: String) -> Result<(), Box<dyn std::error::Error>
     let shutdown = async {
         let _ = rx.await;
     };
-    with_spark_connect_server(address, shutdown, |addr| async move {
+    with_spark_connect_server(address, None, shutdown, |addr| async move {
         let _tx = tx;
         Python::attach(|py| -> PyResult<_> {
             let runner = Modules::SPARK_RUN.load(py)?;
