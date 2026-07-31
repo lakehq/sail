@@ -197,10 +197,10 @@ fn stage_metrics_json(stage: &StageDescriptor, plan_metrics_json: Option<String>
     let plan_metrics = plan_metrics_json
         .and_then(|x| serde_json::from_str::<Value>(&x).ok())
         .unwrap_or_else(|| json!({}));
-    if tasks.is_empty() {
-        if let Some(plan_summary) = plan_metrics.get("summary") {
-            summary = plan_summary.clone();
-        }
+    if tasks.is_empty()
+        && let Some(plan_summary) = plan_metrics.get("summary")
+    {
+        summary = plan_summary.clone();
     }
     serde_json::to_string(&json!({
         "summary": summary,
