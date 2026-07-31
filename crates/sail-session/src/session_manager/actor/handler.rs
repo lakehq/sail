@@ -256,7 +256,6 @@ impl SessionManagerActor {
                 if let Some(driver_id) = driver_id.take() {
                     self.drivers.remove(driver_id);
                 }
-                session.deleted_at.get_or_insert_with(Utc::now);
                 session.state = ServerSessionState::Deleted {
                     history: Arc::new(history),
                 };
