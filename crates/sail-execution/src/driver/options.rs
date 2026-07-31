@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
@@ -31,8 +30,11 @@ pub struct DriverOptions {
     pub shuffle_backend: ShuffleBackendKind,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
-    pub worker_manager: Arc<dyn WorkerManager>,
-    pub history_reporter: Option<Box<dyn JobRunnerHistoryReporter>>,
+}
+
+pub struct DriverComponents {
+    pub worker_manager: Box<dyn WorkerManager>,
+    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
 }
 
 impl DriverOptions {
@@ -41,8 +43,6 @@ impl DriverOptions {
         runtime: RuntimeHandle,
         driver_id: DriverId,
         driver_server_port: u16,
-        worker_manager: Arc<dyn WorkerManager>,
-        history_reporter: Box<dyn JobRunnerHistoryReporter>,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
@@ -70,12 +70,6 @@ impl DriverOptions {
             task_max_attempts: config.cluster.task_max_attempts,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
-            worker_manager,
-            history_reporter: Some(history_reporter),
         }
-    }
-
-    pub(crate) fn take_history_reporter(&mut self) -> Option<Box<dyn JobRunnerHistoryReporter>> {
-        self.history_reporter.take()
     }
 }

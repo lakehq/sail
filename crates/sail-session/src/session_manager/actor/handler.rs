@@ -90,7 +90,7 @@ impl SessionManagerActor {
             };
             let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
                 driver_id,
-                driver_server_port: self.gateway.as_ref().map(|x| x.port()),
+                driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
                 history_reporter: Box::new(SessionJobRunnerHistoryReporter {
                     session_id: session_id.clone(),
                     session_manager: ctx.handle().clone(),
@@ -256,6 +256,7 @@ impl SessionManagerActor {
                 if let Some(driver_id) = driver_id.take() {
                     self.drivers.remove(driver_id);
                 }
+                session.deleted_at.get_or_insert_with(Utc::now);
                 session.state = ServerSessionState::Deleted {
                     history: Arc::new(history),
                 };
