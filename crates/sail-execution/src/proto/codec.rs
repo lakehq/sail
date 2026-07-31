@@ -32,6 +32,7 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
+use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
@@ -3564,21 +3565,46 @@ impl RemoteExecutionCodec {
     }
 
     fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
+        fn field_or_descendant_contains_metadata(field: &Field, keys: &[&str]) -> bool {
+            if keys.iter().any(|key| field.metadata().contains_key(*key)) {
+                return true;
+            }
+            match field.data_type() {
+                DataType::Struct(fields) => fields
+                    .iter()
+                    .any(|field| field_or_descendant_contains_metadata(field, keys)),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _)
+                | DataType::Map(field, _) => {
+                    field_or_descendant_contains_metadata(field.as_ref(), keys)
+                }
+                _ => false,
+            }
+        }
+
         let fields = file_scan
             .file_source()
             .table_schema()
             .file_schema()
             .fields();
-        let has_metadata = |key: &str| {
+        let has_metadata = |keys: &[&str]| {
             fields
                 .iter()
-                .any(|field| field.metadata().contains_key(key))
+                .any(|field| field_or_descendant_contains_metadata(field, keys))
         };
 
-        if has_metadata(ColumnMetadataKey::ParquetFieldId.as_ref()) {
+        // `PARQUET:field_id` is present in both Delta name and ID modes, so prefer
+        // the mode-specific Delta metadata before using it as a generic fallback.
+        if has_metadata(&[
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            ColumnMetadataKey::ParquetFieldId.as_ref(),
+        ]) {
             StructFieldMatching::FieldId
-        } else if has_metadata(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()) {
+        } else if has_metadata(&[ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()]) {
             StructFieldMatching::PhysicalName
+        } else if has_metadata(&[PARQUET_FIELD_ID_META_KEY]) {
+            StructFieldMatching::FieldId
         } else {
             StructFieldMatching::Name
         }
@@ -4636,6 +4662,71 @@ mod tests {
         );
         assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn test_parquet_struct_field_matching_from_nested_metadata() {
+        use datafusion::datasource::table_schema::TableSchema;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+
+        fn file_scan_with_nested_metadata(keys: &[&str]) -> FileScanConfig {
+            let nested_field = Arc::new(
+                Field::new("value", DataType::Int64, true).with_metadata(
+                    keys.iter()
+                        .map(|key| (key.to_string(), "1".to_string()))
+                        .collect(),
+                ),
+            );
+            let list_element = Arc::new(Field::new_list_field(
+                DataType::Struct(vec![nested_field].into()),
+                true,
+            ));
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "values",
+                DataType::List(list_element),
+                true,
+            )]));
+            let source = Arc::new(ParquetSource::new(TableSchema::from_file_schema(schema)));
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source).build()
+        }
+
+        for key in [
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            PARQUET_FIELD_ID_META_KEY,
+            ColumnMetadataKey::ParquetFieldId.as_ref(),
+        ] {
+            assert_eq!(
+                RemoteExecutionCodec::parquet_struct_field_matching(
+                    &file_scan_with_nested_metadata(&[key])
+                ),
+                StructFieldMatching::FieldId,
+            );
+        }
+        assert_eq!(
+            RemoteExecutionCodec::parquet_struct_field_matching(&file_scan_with_nested_metadata(
+                &[
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    PARQUET_FIELD_ID_META_KEY,
+                ],
+            )),
+            StructFieldMatching::PhysicalName,
+        );
+        assert_eq!(
+            RemoteExecutionCodec::parquet_struct_field_matching(&file_scan_with_nested_metadata(
+                &[
+                    ColumnMetadataKey::ColumnMappingId.as_ref(),
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    PARQUET_FIELD_ID_META_KEY,
+                ],
+            )),
+            StructFieldMatching::FieldId,
+        );
+        assert_eq!(
+            RemoteExecutionCodec::parquet_struct_field_matching(&file_scan_with_nested_metadata(
+                &["custom.metadata"],
+            )),
+            StructFieldMatching::Name,
+        );
     }
 
     #[test]
