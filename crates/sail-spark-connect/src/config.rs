@@ -241,6 +241,21 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.default_table_file_format = value;
         }
 
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_PARQUET_COMPRESSION_CODEC)
+            .map(|x| x.to_string())
+        {
+            output.parquet_compression_codec = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_FILES_MAX_RECORDS_PER_FILE)
+            .map(|x| x.trim().parse::<i64>())
+            .transpose()?
+        {
+            output.max_records_per_file = value;
+        }
+
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_WAREHOUSE_DIR) {
             output.default_warehouse_directory = value.to_string();
         }
@@ -392,5 +407,34 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_parquet_write_session_options() -> SparkResult<()> {
+        let mut config = SparkRuntimeConfig {
+            entries: &SPARK_CONFIG_V4_2,
+            config: HashMap::new(),
+        };
+        let defaults = PlanConfig::try_from(&config)?;
+        assert_eq!(defaults.parquet_compression_codec, "snappy");
+        assert_eq!(defaults.max_records_per_file, 0);
+
+        config.set(
+            SparkConfigKey::SPARK_SQL_PARQUET_COMPRESSION_CODEC.to_string(),
+            "gzip".to_string(),
+        )?;
+        config.set(
+            SparkConfigKey::SPARK_SQL_FILES_MAX_RECORDS_PER_FILE.to_string(),
+            "-1".to_string(),
+        )?;
+        let configured = PlanConfig::try_from(&config)?;
+        assert_eq!(configured.parquet_compression_codec, "gzip");
+        assert_eq!(configured.max_records_per_file, -1);
+        Ok(())
     }
 }

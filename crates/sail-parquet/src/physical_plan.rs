@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array};
@@ -29,8 +30,8 @@ use datafusion::physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, execute_input_stream,
+    DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, execute_input_stream,
 };
 use datafusion_common::{DataFusionError, Result, internal_err, not_impl_err, plan_datafusion_err};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSink, FileSinkConfig};
@@ -41,12 +42,12 @@ use uuid::Uuid;
 
 use crate::demux::start_demuxer_task;
 
-/// DataFusion execution settings that affect the physical shape and buffering
-/// of a Parquet write.
+/// Settings captured in the physical plan that affect file layout and writer buffering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParquetWriteExecutionOptions {
     pub minimum_parallel_output_files: usize,
     pub soft_max_rows_per_output_file: usize,
+    pub max_records_per_file: Option<NonZeroUsize>,
     pub max_buffered_batches_per_output_file: usize,
     pub objectstore_writer_buffer_size: usize,
 }
@@ -56,6 +57,7 @@ impl From<&ExecutionOptions> for ParquetWriteExecutionOptions {
         Self {
             minimum_parallel_output_files: options.minimum_parallel_output_files,
             soft_max_rows_per_output_file: options.soft_max_rows_per_output_file,
+            max_records_per_file: None,
             max_buffered_batches_per_output_file: options.max_buffered_batches_per_output_file,
             objectstore_writer_buffer_size: options.objectstore_writer_buffer_size,
         }
@@ -94,7 +96,7 @@ impl ParquetWriterExec {
             parquet_options,
             execution_options,
             sort_order,
-            Uuid::new_v4().simple().to_string(),
+            Uuid::new_v4().to_string(),
         )
     }
 
@@ -128,7 +130,7 @@ impl ParquetWriterExec {
         // path that happens to end in `.parquet`.
         sink_config.file_output_mode = FileOutputMode::Directory;
         let schema = count_schema();
-        let partition_count = input.output_partitioning().partition_count();
+        let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(
             PlanProperties::new(
                 EquivalenceProperties::new(Arc::clone(&schema)),
@@ -244,6 +246,7 @@ impl DisplayAs for ParquetWriterExec {
                 "ParquetWriterExec: output={}, input_partitions={}, partition_by=[{}], \
                  keep_partition_by_columns={}, sort_order={}, file_extension={}, \
                  minimum_parallel_output_files={}, soft_max_rows_per_output_file={}, \
+                 max_records_per_file={}, \
                  max_buffered_batches_per_output_file={}, object_store_writer_buffer_size={}, \
                  compression={}, max_row_group_size={}",
                 self.sink_config.original_url,
@@ -254,6 +257,9 @@ impl DisplayAs for ParquetWriterExec {
                 self.sink_config.file_extension,
                 self.execution_options.minimum_parallel_output_files,
                 self.execution_options.soft_max_rows_per_output_file,
+                self.execution_options
+                    .max_records_per_file
+                    .map_or_else(|| "unlimited".to_string(), |value| value.to_string()),
                 self.execution_options.max_buffered_batches_per_output_file,
                 self.execution_options.objectstore_writer_buffer_size,
                 compression,
@@ -278,6 +284,13 @@ impl DisplayAs for ParquetWriterExec {
                     f,
                     "soft_max_rows_per_output_file={}",
                     self.execution_options.soft_max_rows_per_output_file
+                )?;
+                writeln!(
+                    f,
+                    "max_records_per_file={}",
+                    self.execution_options
+                        .max_records_per_file
+                        .map_or_else(|| "unlimited".to_string(), |value| value.to_string())
                 )?;
                 write!(f, "compression={compression}")
             }
@@ -340,18 +353,25 @@ impl ExecutionPlan for ParquetWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let partition_count = self.input.output_partitioning().partition_count();
-        if partition >= partition_count {
+        let input_partition_count = self.input.output_partitioning().partition_count();
+        let output_partition_count = input_partition_count.max(1);
+        if partition >= output_partition_count {
             return internal_err!(
-                "ParquetWriterExec invalid partition {partition} (input partitions: {partition_count})"
+                "ParquetWriterExec invalid partition {partition} (output partitions: {output_partition_count})"
             );
         }
-        let input = execute_input_stream(
-            Arc::clone(&self.input),
-            Arc::clone(self.sink_config.output_schema()),
-            partition,
-            Arc::clone(&context),
-        )?;
+        let input = if input_partition_count == 0 {
+            Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                self.sink_config.output_schema(),
+            ))) as SendableRecordBatchStream
+        } else {
+            execute_input_stream(
+                Arc::clone(&self.input),
+                Arc::clone(self.sink_config.output_schema()),
+                partition,
+                Arc::clone(&context),
+            )?
+        };
         let sorting_columns = self.sort_order.as_ref().and_then(|requirements| {
             let ordering: LexOrdering = requirements.clone().into();
             lex_ordering_to_sorting_columns(&ordering, &self.sink_config).ok()
@@ -364,9 +384,15 @@ impl ExecutionPlan for ParquetWriterExec {
         let object_store = writer_context
             .runtime_env()
             .object_store(&self.sink_config.object_store_url)?;
-        let write_id = format!("{}-{partition:05}", self.write_id);
-        let (demux_task, file_streams) =
-            start_demuxer_task(&self.sink_config, input, &writer_context, write_id)?;
+        let file_prefix = format!("part-{partition:05}-{}", self.write_id);
+        let (demux_task, file_streams) = start_demuxer_task(
+            &self.sink_config,
+            input,
+            &writer_context,
+            file_prefix,
+            self.execution_options.max_records_per_file,
+            partition == 0,
+        )?;
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -485,6 +511,7 @@ fn count_batch(count: u64) -> Result<RecordBatch> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray, UInt64Array};
@@ -499,7 +526,9 @@ mod tests {
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{ExecutionPlan, collect_partitioned, displayable};
+    use datafusion::physical_plan::{
+        ExecutionPlan, ExecutionPlanProperties, collect_partitioned, displayable,
+    };
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_datasource::ListingTableUrl;
@@ -556,6 +585,20 @@ mod tests {
             .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
         paths.sort();
         Ok(paths)
+    }
+
+    async fn parquet_row_count(store: &Arc<InMemory>, path: &str) -> Result<i64> {
+        let bytes = store
+            .get(&Path::from(path))
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?
+            .bytes()
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
+        Ok(ParquetRecordBatchReaderBuilder::try_new(bytes)?
+            .metadata()
+            .file_metadata()
+            .num_rows())
     }
 
     #[test]
@@ -622,6 +665,7 @@ mod tests {
             ParquetWriteExecutionOptions {
                 minimum_parallel_output_files: 7,
                 soft_max_rows_per_output_file: 89,
+                max_records_per_file: NonZeroUsize::new(97),
                 max_buffered_batches_per_output_file: 11,
                 objectstore_writer_buffer_size: 13,
             },
@@ -636,6 +680,7 @@ mod tests {
              partition_by=[bucket:Utf8], keep_partition_by_columns=true, \
              sort_order=[value@1 DESC NULLS LAST], file_extension=parquet, \
              minimum_parallel_output_files=7, soft_max_rows_per_output_file=89, \
+             max_records_per_file=97, \
              max_buffered_batches_per_output_file=11, object_store_writer_buffer_size=13, \
              compression=snappy, max_row_group_size=123"
         );
@@ -667,6 +712,7 @@ mod tests {
         let execution_options = ParquetWriteExecutionOptions {
             minimum_parallel_output_files: 4,
             soft_max_rows_per_output_file: usize::MAX,
+            max_records_per_file: None,
             max_buffered_batches_per_output_file: 2,
             objectstore_writer_buffer_size: 64,
         };
@@ -689,16 +735,258 @@ mod tests {
         assert_eq!(first.len(), 2);
         assert_eq!(output_row_count(&first)?, 6);
         let expected_paths = vec![
-            "output/retry-write-00000_0.parquet".to_string(),
-            "output/retry-write-00000_1.parquet".to_string(),
-            "output/retry-write-00001_0.parquet".to_string(),
-            "output/retry-write-00001_1.parquet".to_string(),
+            "output/part-00000-retry-write-c000.parquet".to_string(),
+            "output/part-00000-retry-write-c001.parquet".to_string(),
+            "output/part-00001-retry-write-c000.parquet".to_string(),
+            "output/part-00001-retry-write-c001.parquet".to_string(),
         ];
         assert_eq!(object_paths(&store).await?, expected_paths);
 
         let second = collect_partitioned(writer, context.task_ctx()).await?;
         assert_eq!(output_row_count(&second)?, 6);
         assert_eq!(object_paths(&store).await?, expected_paths);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_one_schema_file_for_empty_input() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let input = MemorySourceConfig::try_new_exec(
+            &[Vec::<RecordBatch>::new(), Vec::new()],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let mut config = sink_config(Arc::clone(&schema), vec![])?;
+        config.file_extension = "snappy.parquet".to_string();
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            config,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 4,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: None,
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "empty-write".to_string(),
+        )?);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 0);
+        let paths = object_paths(&store).await?;
+        assert_eq!(
+            paths,
+            vec!["output/part-00000-empty-write-c000.snappy.parquet"]
+        );
+        assert_eq!(parquet_row_count(&store, &paths[0]).await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_one_schema_file_when_input_has_no_partitions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(0));
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config(schema, vec![])?,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 1,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: None,
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "zero-partitions".to_string(),
+        )?);
+        assert_eq!(writer.output_partitioning().partition_count(), 1);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 0);
+        assert_eq!(
+            object_paths(&store).await?,
+            vec!["output/part-00000-zero-partitions-c000.parquet"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partitioned_empty_input_writes_no_data_file() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("bucket", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let input = MemorySourceConfig::try_new_exec(
+            &[Vec::<RecordBatch>::new(), Vec::new()],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config(schema, vec![("bucket".to_string(), DataType::Utf8)])?,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 1,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: None,
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "empty-partitioned".to_string(),
+        )?);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 0);
+        assert!(object_paths(&store).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enforces_max_records_per_file_across_record_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let make_batch = |values: Vec<i64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values)) as ArrayRef],
+            )
+        };
+        let input = MemorySourceConfig::try_new_exec(
+            &[vec![make_batch(vec![1, 2, 3])?, make_batch(vec![4, 5])?]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config(schema, vec![])?,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 4,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: NonZeroUsize::new(2),
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "limited-write".to_string(),
+        )?);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 5);
+        let paths = object_paths(&store).await?;
+        assert_eq!(
+            paths,
+            vec![
+                "output/part-00000-limited-write-c000.parquet",
+                "output/part-00000-limited-write-c001.parquet",
+                "output/part-00000-limited-write-c002.parquet",
+            ]
+        );
+        let mut row_counts = Vec::new();
+        for path in &paths {
+            row_counts.push(parquet_row_count(&store, path).await?);
+        }
+        assert_eq!(row_counts, vec![2, 2, 1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enforces_max_records_per_file_within_each_hive_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("bucket", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "a", "a", "a", "a", "a", "b", "b", "b",
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8])) as ArrayRef,
+            ],
+        )?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config(schema, vec![("bucket".to_string(), DataType::Utf8)])?,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 4,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: NonZeroUsize::new(2),
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "limited-partitioned-write".to_string(),
+        )?);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 8);
+        let paths = object_paths(&store).await?;
+        assert_eq!(
+            paths,
+            vec![
+                "output/bucket=a/part-00000-limited-partitioned-write.c000.parquet",
+                "output/bucket=a/part-00000-limited-partitioned-write.c001.parquet",
+                "output/bucket=a/part-00000-limited-partitioned-write.c002.parquet",
+                "output/bucket=b/part-00000-limited-partitioned-write.c000.parquet",
+                "output/bucket=b/part-00000-limited-partitioned-write.c001.parquet",
+            ]
+        );
+        let mut total_rows = 0;
+        for path in &paths {
+            let row_count = parquet_row_count(&store, path).await?;
+            assert!(row_count <= 2);
+            total_rows += row_count;
+        }
+        assert_eq!(total_rows, 8);
         Ok(())
     }
 
@@ -740,6 +1028,7 @@ mod tests {
             ParquetWriteExecutionOptions {
                 minimum_parallel_output_files: 1,
                 soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: None,
                 max_buffered_batches_per_output_file: 2,
                 objectstore_writer_buffer_size: 64,
             },
@@ -759,10 +1048,10 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "output/bucket=a/partitioned-write-00000.parquet".to_string(),
-                "output/bucket=a/partitioned-write-00001.parquet".to_string(),
-                "output/bucket=b/partitioned-write-00000.parquet".to_string(),
-                "output/bucket=b/partitioned-write-00001.parquet".to_string(),
+                "output/bucket=a/part-00000-partitioned-write.c000.parquet".to_string(),
+                "output/bucket=a/part-00001-partitioned-write.c000.parquet".to_string(),
+                "output/bucket=b/part-00000-partitioned-write.c000.parquet".to_string(),
+                "output/bucket=b/part-00001-partitioned-write.c000.parquet".to_string(),
             ]
         );
         for path in paths {
@@ -822,6 +1111,7 @@ mod tests {
             ParquetWriteExecutionOptions {
                 minimum_parallel_output_files: 1,
                 soft_max_rows_per_output_file: usize::MAX,
+                max_records_per_file: None,
                 max_buffered_batches_per_output_file: 2,
                 objectstore_writer_buffer_size: 64,
             },
@@ -840,10 +1130,10 @@ mod tests {
         assert_eq!(
             object_paths(&store).await?,
             vec![
-                "output/bucket=__HIVE_DEFAULT_PARTITION__/partitioned-write-00000.parquet",
-                "output/bucket=a%2Fb/partitioned-write-00000.parquet",
-                "output/bucket=a%3Db/partitioned-write-00000.parquet",
-                "output/bucket=雪/partitioned-write-00000.parquet",
+                "output/bucket=__HIVE_DEFAULT_PARTITION__/part-00000-partitioned-write.c000.parquet",
+                "output/bucket=a%2Fb/part-00000-partitioned-write.c000.parquet",
+                "output/bucket=a%3Db/part-00000-partitioned-write.c000.parquet",
+                "output/bucket=雪/part-00000-partitioned-write.c000.parquet",
             ]
         );
         Ok(())

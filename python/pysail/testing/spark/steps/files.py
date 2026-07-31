@@ -11,7 +11,8 @@ from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_fil
 _SPARK_PART_FILE_RE = re.compile(
     r"^part-\d+-"
     r"(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
-    r"-c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
+    r"(?:-c|\.c)\d+(?:\.(?P<codec>snappy|gz|lzo|br|lz4hadoop|lz4raw|zstd))?\.parquet$",
+    flags=re.IGNORECASE,
 )
 
 # Iceberg-specific patterns
@@ -115,8 +116,7 @@ def _normalize_name(name: str) -> str | None:
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)
     if m is not None:
-        _ = m.group("codec")
-        return "part-<id>.<codec>.parquet"
+        return "part-<id>.<codec>.parquet" if m.group("codec") else "part-<id>.parquet"
 
     # Normalize UUID suffixes in directory names (e.g., `table-<uuid>` -> `table-<uuid>`).
     m = _UUID_SUFFIX_RE.match(name)

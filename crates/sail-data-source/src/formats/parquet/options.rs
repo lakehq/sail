@@ -84,6 +84,7 @@ impl ParquetReadOptions {
 impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetWritePartialOptions> {
         Ok(ParquetWritePartialOptions {
+            max_records_per_file: None,
             data_page_size_limit: Some(self.global.data_pagesize_limit),
             write_batch_size: Some(self.global.write_batch_size),
             writer_version: Some(self.global.writer_version.to_string()),
@@ -124,6 +125,7 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
 impl ParquetWriteOptions {
     pub fn into_table_options(self) -> DataSourceResult<TableParquetOptions> {
         let ParquetWriteOptions {
+            max_records_per_file: _,
             data_page_size_limit,
             write_batch_size,
             writer_version,
@@ -212,9 +214,9 @@ impl ParquetWriteOptions {
                         ))
                     }
                 }
-                "lz4_raw" => {
+                "lz4_raw" | "lz4raw" => {
                     check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok(v)
+                    Ok("lz4_raw".to_string())
                 }
                 _ => Err(DataSourceError::InvalidOption {
                     key: "compression".to_string(),
@@ -311,6 +313,7 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
+    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
@@ -403,6 +406,7 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[
+            ("maxRecordsPerFile", "17"),
             ("data_page_size_limit", "1024"),
             ("write_batch_size", "1000"),
             ("writer_version", "2.0"),
@@ -427,8 +431,10 @@ mod tests {
             ("content_defined_chunking_max_chunk_size", "8192"),
             ("content_defined_chunking_norm_level", "-1"),
         ]);
-        let options = ParquetWriteOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
+        let resolved = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(resolved.max_records_per_file, 17);
+        let options = resolved
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
@@ -477,6 +483,27 @@ mod tests {
         assert_eq!(options.global.statistics_truncate_length, None);
         assert_eq!(options.global.encoding, None);
 
+        let kv = option_list(&[("max_records_per_file", "-1")]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_records_per_file, -1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_max_records_per_file_layer_precedence() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let session = option_list(&[("maxRecordsPerFile", "2")]);
+        let table = OptionLayer::TablePropertyList {
+            items: vec![("option.max_records_per_file".to_string(), "3".to_string())],
+        };
+        let write = option_list(&[("max_records_per_file", "4")]);
+
+        let options = ParquetWriteOptions::resolve(&state, vec![session, table, write])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_records_per_file, 4);
         Ok(())
     }
 

@@ -1,13 +1,11 @@
-use std::str::FromStr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{DataFusionError, GetExt, Result};
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
 use sail_parquet::{ParquetWriteExecutionOptions, ParquetWriterExec};
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
@@ -31,49 +29,79 @@ impl WriteFormat for ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        let format = ParquetFormat::default().with_options(options);
-        input.sink.file_extension = self.file_extension()?;
+        input.sink.file_extension = parquet_file_extension(&options)?;
+        let mut execution_options =
+            ParquetWriteExecutionOptions::from(&ctx.config_options().execution);
+        execution_options.max_records_per_file = self.max_records_per_file()?;
         Ok(Arc::new(ParquetWriterExec::try_new(
             input.input,
             input.sink,
-            format.options().clone(),
-            ParquetWriteExecutionOptions::from(&ctx.config_options().execution),
+            options,
+            execution_options,
             input.sort_order,
         )?))
     }
 }
 
 impl ParquetWriteFormat {
-    fn file_extension(&self) -> Result<String> {
-        let options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        let compression = options.global.compression.clone();
-        let format = ParquetFormat::default().with_options(options);
-        if let Some(file_compression_type) = format.compression_type() {
-            return match format.get_ext_with_compression(&file_compression_type) {
-                Ok(ext) => Ok(ext),
-                Err(_) => Ok(format.get_ext()),
-            };
+    fn max_records_per_file(&self) -> Result<Option<NonZeroUsize>> {
+        if self.options.max_records_per_file <= 0 {
+            return Ok(None);
         }
-        let ext = format.get_ext();
-        let Some(compression) = compression else {
-            return Ok(ext);
-        };
-        if !matches!(ext.as_str(), ".parquet" | "parquet") {
-            return Ok(ext);
+        let value = usize::try_from(self.options.max_records_per_file)
+            .map_err(|_| plan_datafusion_err!("maxRecordsPerFile is too large"))?;
+        Ok(NonZeroUsize::new(value))
+    }
+}
+
+fn parquet_file_extension(options: &TableParquetOptions) -> Result<String> {
+    let compression = options.global.compression.as_deref().unwrap_or("snappy");
+    let (codec, _level) = split_parquet_compression_string(&compression.to_lowercase())?;
+    let suffix = match codec.as_str() {
+        "" | "none" | "uncompressed" => "",
+        "snappy" => "snappy",
+        "gzip" => "gz",
+        "lzo" => "lzo",
+        "brotli" => "br",
+        "lz4" => "lz4hadoop",
+        "lz4_raw" | "lz4raw" => "lz4raw",
+        "zstd" => "zstd",
+        _ => {
+            return Err(plan_datafusion_err!(
+                "unsupported Parquet compression codec: {codec}"
+            ));
         }
-        let ext = ext.strip_prefix('.').unwrap_or(&ext);
-        let compression = compression.strip_prefix('.').unwrap_or(&compression);
-        let (compression, _level) = split_parquet_compression_string(&compression.to_lowercase())?;
-        let file_compression_type = FileCompressionType::from_str(compression.as_str());
-        let compression = match file_compression_type {
-            Ok(compression) => compression.get_ext(),
-            Err(_) => compression,
-        };
-        let compression = compression.strip_prefix('.').unwrap_or(&compression);
-        Ok(format!("{compression}.{ext}"))
+    };
+    Ok(if suffix.is_empty() {
+        "parquet".to_string()
+    } else {
+        format!("{suffix}.parquet")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::config::TableParquetOptions;
+
+    use super::parquet_file_extension;
+
+    #[test]
+    fn uses_spark_parquet_compression_suffixes() -> datafusion_common::Result<()> {
+        for (compression, extension) in [
+            (None, "snappy.parquet"),
+            (Some("none"), "parquet"),
+            (Some("uncompressed"), "parquet"),
+            (Some("snappy"), "snappy.parquet"),
+            (Some("gzip(4)"), "gz.parquet"),
+            (Some("brotli(4)"), "br.parquet"),
+            (Some("lz4"), "lz4hadoop.parquet"),
+            (Some("lz4_raw"), "lz4raw.parquet"),
+            (Some("zstd(4)"), "zstd.parquet"),
+        ] {
+            let mut options = TableParquetOptions::default();
+            options.global.compression = compression.map(str::to_string);
+            assert_eq!(parquet_file_extension(&options)?, extension);
+        }
+        Ok(())
     }
 }

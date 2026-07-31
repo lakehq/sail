@@ -664,6 +664,7 @@ message ParquetWriterExecNode {
   uint64 soft_max_rows_per_output_file = 8;
   uint64 max_buffered_batches_per_output_file = 9;
   uint64 objectstore_writer_buffer_size = 10;
+  optional uint64 max_records_per_file = 11;
 }
 
 message ArrowExecNode {

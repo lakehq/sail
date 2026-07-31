@@ -525,6 +525,23 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         sink_info.input = input;
+        if write_format.eq_ignore_ascii_case("parquet") {
+            sink_info.options.insert(
+                0,
+                OptionLayer::OptionList {
+                    items: vec![
+                        (
+                            "compression".to_string(),
+                            self.config.parquet_compression_codec.clone(),
+                        ),
+                        (
+                            "maxRecordsPerFile".to_string(),
+                            self.config.max_records_per_file.to_string(),
+                        ),
+                    ],
+                },
+            );
+        }
         let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
         let plan = registry
             .get(&write_format)?

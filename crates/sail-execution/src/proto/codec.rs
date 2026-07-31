@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
@@ -1167,6 +1168,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 soft_max_rows_per_output_file,
                 max_buffered_batches_per_output_file,
                 objectstore_writer_buffer_size,
+                max_records_per_file,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let input_schema = input.schema();
@@ -1211,6 +1213,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .map_err(|_| {
                         plan_datafusion_err!("soft maximum rows per output file is too large")
                     })?,
+                    max_records_per_file: max_records_per_file
+                        .map(|value| {
+                            let value = usize::try_from(value).map_err(|_| {
+                                plan_datafusion_err!("maximum records per output file is too large")
+                            })?;
+                            NonZeroUsize::new(value).ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "maximum records per output file must be positive"
+                                )
+                            })
+                        })
+                        .transpose()?,
                     max_buffered_batches_per_output_file: usize::try_from(
                         max_buffered_batches_per_output_file,
                     )
@@ -2186,6 +2200,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map_err(|_| {
                     plan_datafusion_err!("object store writer buffer size is too large")
                 })?,
+                max_records_per_file: writer
+                    .execution_options()
+                    .max_records_per_file
+                    .map(|value| {
+                        u64::try_from(value.get()).map_err(|_| {
+                            plan_datafusion_err!("maximum records per output file is too large")
+                        })
+                    })
+                    .transpose()?,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan(self, data_sink.input().clone())?;
@@ -5267,6 +5290,7 @@ mod tests {
         let execution_options = ParquetWriteExecutionOptions {
             minimum_parallel_output_files: 7,
             soft_max_rows_per_output_file: 89,
+            max_records_per_file: NonZeroUsize::new(97),
             max_buffered_batches_per_output_file: 11,
             objectstore_writer_buffer_size: 13,
         };
