@@ -6,6 +6,7 @@ use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
 use sail_pyarrow::ToPyArrow;
 
+use crate::conversion::normalize_data_type;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub mod pyspark_udf;
@@ -150,7 +151,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
+fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> PyUdfResult<String> {
     Python::attach(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
@@ -164,9 +165,13 @@ fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
             .map(|(i, dt)| -> PyResult<_> {
                 // Arrow view types are internal representations, not Spark SQL types.
                 let arrow_type = match dt {
+                    DataType::BinaryView if large_var_types => {
+                        DataType::LargeBinary.to_pyarrow(py)?
+                    }
                     DataType::BinaryView => DataType::Binary.to_pyarrow(py)?,
+                    DataType::Utf8View if large_var_types => DataType::LargeUtf8.to_pyarrow(py)?,
                     DataType::Utf8View => DataType::Utf8.to_pyarrow(py)?,
-                    _ => dt.to_pyarrow(py)?,
+                    _ => normalize_data_type(dt, large_var_types).to_pyarrow(py)?,
                 };
                 let spark_type = from_arrow_type.call1((arrow_type,))?;
                 struct_field_cls.call1((format!("_{i}"), spark_type, true))

@@ -4390,6 +4390,7 @@ impl RemoteExecutionCodec {
             binary_as_bytes: config.binary_as_bytes,
             python_udf_pandas_prefer_int_extension_dtype: config
                 .python_udf_pandas_prefer_int_extension_dtype,
+            arrow_use_large_var_types: config.arrow_use_large_var_types,
         };
         Ok(config)
     }
@@ -4412,6 +4413,7 @@ impl RemoteExecutionCodec {
             binary_as_bytes: config.binary_as_bytes,
             python_udf_pandas_prefer_int_extension_dtype: config
                 .python_udf_pandas_prefer_int_extension_dtype,
+            arrow_use_large_var_types: config.arrow_use_large_var_types,
         };
         Ok(config)
     }

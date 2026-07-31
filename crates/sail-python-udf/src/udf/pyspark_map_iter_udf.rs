@@ -90,6 +90,7 @@ impl StreamUDF for PySparkMapIterUDF {
             rename_record_batch_stream(input, &self.input_names)?,
             function,
             self.output_schema.clone(),
+            self.config.arrow_use_large_var_types,
         )))
     }
 }
