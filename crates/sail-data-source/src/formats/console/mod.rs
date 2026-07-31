@@ -12,7 +12,8 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, not_impl_err, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common_datafusion::datasource::{SinkInfo, SinkMode, SourceInfo, TableFormat};
+use sail_common_datafusion::data_source_format::DataSourceFormat;
+use sail_common_datafusion::datasource::{SinkInfo, SinkMode, SourceInfo};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -22,10 +23,10 @@ use crate::options::r#gen::ConsoleWriteOptions;
 
 /// Write data to stdout for testing purposes.
 #[derive(Debug)]
-pub struct ConsoleTableFormat;
+pub struct ConsoleDataSourceFormat;
 
 #[async_trait]
-impl TableFormat for ConsoleTableFormat {
+impl DataSourceFormat for ConsoleDataSourceFormat {
     fn name(&self) -> &str {
         "console"
     }

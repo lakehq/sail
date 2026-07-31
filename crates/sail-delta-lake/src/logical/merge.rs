@@ -7,8 +7,10 @@ use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
-    MergeNotMatchedBySourceAction,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource,
+};
+use sail_common_datafusion::table_format::{
+    MergeInfo, MergeMatchedAction, MergeNotMatchedBySourceAction,
 };
 use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge};
 

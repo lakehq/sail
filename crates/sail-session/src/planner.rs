@@ -147,6 +147,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 object_store_url.clone(),
                 prefix.clone(),
                 Arc::clone(&storage_schema),
+                TableParquetOptions {
+                    global: session_state.config_options().execution.parquet.clone(),
+                    ..Default::default()
+                },
             )?);
             Arc::new(RemoteCheckpointCommitExec::new(
                 writer,

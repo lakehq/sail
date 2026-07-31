@@ -6,7 +6,7 @@ data:
     == Physical Plan ==
     BarrierExec
       CatalogCommandExec: CreateTable
-      DataSinkExec: sink=ParquetSink(file_groups=[])
+      ParquetWriterExec: output=file://<tmp>/explain_ctas/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=zst.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=zstd(3), max_row_group_size=1048576
         ProjectionExec: expr=[column1@0 as id, column2@1 as name]
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -14,6 +14,6 @@ name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
     == Physical Plan ==
-    DataSinkExec: sink=ParquetSink(file_groups=[])
+    ParquetWriterExec: output=file://<tmp>/explain_insert/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=zst.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=zstd(3), max_row_group_size=1048576
       ProjectionExec: expr=[column1@0 as id, column2@1 as name]
         DataSourceExec: partitions=1, partition_sizes=[1]

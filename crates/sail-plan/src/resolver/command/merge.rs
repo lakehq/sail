@@ -7,9 +7,11 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::table_format::{MergeInfo, TableFormat, TableFormatRegistry};
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
@@ -48,7 +50,7 @@ impl PlanResolver<'_> {
             with_schema_evolution,
         } = merge;
 
-        let target_metadata = self.get_merge_target_info(&target).await?;
+        let (target_metadata, target_table_format) = self.get_merge_target_info(&target).await?;
 
         let target_alias_string = target_alias
             .as_ref()
@@ -132,7 +134,6 @@ impl PlanResolver<'_> {
             )
             .await?;
 
-        let target_format = target_metadata.format.clone();
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
@@ -153,10 +154,8 @@ impl PlanResolver<'_> {
             check_constraint_exprs,
         };
 
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let format = registry.get(&target_format)?;
         let session_state = self.ctx.state();
-        Ok(format
+        Ok(target_table_format
             .create_merger(
                 &session_state,
                 MergeInfo {
@@ -500,15 +499,19 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+    async fn get_merge_target_info(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<(MergeTargetInfo, Arc<dyn TableFormat>)> {
         // Handle path-based table access like `delta.`/path/to/table``
         // where the first part is a registered table format name.
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if let Ok(table_format) = registry.get(&format) {
+            let data_source_registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
+            if let Some(data_source_format) = data_source_registry.get_optional(&format)? {
+                let table_format = self.ctx.extension::<TableFormatRegistry>()?.get(&format)?;
                 let location = path.as_ref().to_string();
-                let metadata = table_format
+                let metadata = data_source_format
                     .infer_metadata(
                         &self.ctx.state(),
                         SourceInfo {
@@ -524,16 +527,19 @@ impl PlanResolver<'_> {
                         },
                     )
                     .await?;
-                return Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
-                    format,
-                    location,
-                    partition_by: vec![],
-                    options: vec![OptionLayer::TablePropertyList {
-                        items: metadata.properties,
-                    }],
-                    lakehouse_table: None,
-                });
+                return Ok((
+                    MergeTargetInfo {
+                        table_name: table.clone().into(),
+                        format,
+                        location,
+                        partition_by: vec![],
+                        options: vec![OptionLayer::TablePropertyList {
+                            items: metadata.properties,
+                        }],
+                        lakehouse_table: None,
+                    },
+                    table_format,
+                ));
             }
         }
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
@@ -549,6 +555,7 @@ impl PlanResolver<'_> {
                 properties,
                 ..
             } => {
+                let table_format = self.ctx.extension::<TableFormatRegistry>()?.get(&format)?;
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
@@ -561,14 +568,17 @@ impl PlanResolver<'_> {
                         vec![],
                     )
                     .await?;
-                Ok(MergeTargetInfo {
-                    table_name,
-                    format,
-                    location,
-                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-                    options: vec![OptionLayer::TablePropertyList { items: properties }],
-                    lakehouse_table: Some(lakehouse_table),
-                })
+                Ok((
+                    MergeTargetInfo {
+                        table_name,
+                        format,
+                        location,
+                        partition_by: partition_by.into_iter().map(|field| field.column).collect(),
+                        options: vec![OptionLayer::TablePropertyList { items: properties }],
+                        lakehouse_table: Some(lakehouse_table),
+                    },
+                    table_format,
+                ))
             }
             _ => Err(PlanError::unsupported(
                 "MERGE is only supported against tables",

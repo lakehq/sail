@@ -1,6 +1,7 @@
 pub mod array;
 pub mod catalog;
 pub mod column_features;
+pub mod data_source_format;
 pub mod datasource;
 pub mod display;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod schema_evolution;
 pub mod session;
 pub mod streaming;
 pub mod system;
+pub mod table_format;
 pub mod udf;
 pub mod utils;
 pub mod variant;

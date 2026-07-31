@@ -21,6 +21,7 @@ sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-catalog-system = { path = "../sail-catalog-system" }
 sail-object-store = { path = "../sail-object-store" }
+sail-parquet = { path = "../sail-parquet" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

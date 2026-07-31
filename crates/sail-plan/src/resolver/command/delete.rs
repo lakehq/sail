@@ -7,13 +7,13 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
-use sail_common_datafusion::datasource::{
-    DeleteInfo, OptionLayer, SourceInfo, TableFormatRegistry,
-};
+use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
+use sail_common_datafusion::table_format::{DeleteInfo, TableFormatRegistry};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -38,6 +38,16 @@ impl PlanResolver<'_> {
             .get_table_or_view(table.parts())
             .await
             .map_err(PlanError::from)?;
+        let table_format = match &table_status.kind {
+            TableKind::Table { format, .. } => {
+                self.ctx.extension::<TableFormatRegistry>()?.get(format)?
+            }
+            _ => {
+                return Err(PlanError::unsupported(
+                    "DELETE is only supported on tables, not views",
+                ));
+            }
+        };
         let info = self
             .get_table_info_for_delete(&table_status, &table_name)
             .await?;
@@ -76,9 +86,7 @@ impl PlanResolver<'_> {
             }],
         };
 
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        registry
-            .get(&info.format)?
+        table_format
             .create_deleter(&self.ctx.state(), delete_info)
             .await
             .map_err(PlanError::from)
@@ -114,13 +122,13 @@ impl PlanResolver<'_> {
         let lakehouse_table = self
             .resolve_lakehouse_table_context(
                 table_name,
-                LakehouseOperation::Read,
+                LakehouseOperation::Write,
                 Some(&format),
                 vec![],
             )
             .await?;
 
-        let schema = if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") {
+        let schema = if columns.is_empty() {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
@@ -133,7 +141,7 @@ impl PlanResolver<'_> {
                 options: vec![],
                 read_case_sensitive: self.config.case_sensitive,
             };
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
             let table_format = registry.get(&format)?;
             let source = table_format
                 .create_source(&self.ctx.state(), source_info)
@@ -148,17 +156,15 @@ impl PlanResolver<'_> {
 
         Ok(TableInfo {
             location,
-            format,
             schema,
             properties,
-            lakehouse_table: Some(lakehouse_table.for_operation(LakehouseOperation::Write)),
+            lakehouse_table: Some(lakehouse_table),
         })
     }
 }
 
 struct TableInfo {
     location: String,
-    format: String,
     schema: DFSchemaRef,
     properties: Vec<(String, String)>,
     lakehouse_table: Option<LakehouseExecutionContext>,

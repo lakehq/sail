@@ -24,13 +24,19 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
+use sail_common_datafusion::data_source_format::{
+    DataSourceFormat, DataSourceFormatRegistry, DataSourceMetadata,
+};
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
-    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_common_datafusion::table_format::{
+    DeleteInfo, MergeInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
+    TableFormatRegistry,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
@@ -72,14 +78,19 @@ use crate::{DeltaTableError, create_delta_source};
 pub struct DeltaTableFormat;
 
 impl DeltaTableFormat {
-    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self))?;
+    pub fn register(
+        data_source_formats: &DataSourceFormatRegistry,
+        table_formats: &TableFormatRegistry,
+    ) -> Result<()> {
+        let format = Arc::new(Self);
+        data_source_formats.register(format.clone())?;
+        table_formats.register(format)?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl TableFormat for DeltaTableFormat {
+impl DataSourceFormat for DeltaTableFormat {
     fn name(&self) -> &str {
         "delta"
     }
@@ -126,7 +137,7 @@ impl TableFormat for DeltaTableFormat {
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<TableFormatMetadata> {
+    ) -> Result<DataSourceMetadata> {
         let SourceInfo {
             paths,
             lakehouse_table,
@@ -142,9 +153,47 @@ impl TableFormat for DeltaTableFormat {
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
             infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-        Ok(TableFormatMetadata { schema, properties })
+        Ok(DataSourceMetadata { schema, properties })
     }
 
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in Delta table options");
+        };
+        let SinkInfo {
+            input,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+            lakehouse_table,
+        } = info;
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for Delta format");
+        }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta format");
+        }
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(DeltaWriteNode::new(
+                Arc::new(input),
+                DeltaWriteNodeOptions {
+                    path,
+                    mode,
+                    partition_by,
+                    bucket_by,
+                    sort_order,
+                    options,
+                    lakehouse_table,
+                },
+            )),
+        }))
+    }
+}
+
+#[async_trait]
+impl TableFormat for DeltaTableFormat {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
@@ -394,41 +443,6 @@ impl TableFormat for DeltaTableFormat {
             .await
             .map(|_| TableFormatCreateTableResult::default())
             .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
-        let Some(path) = find_path_in_options(&info.options) else {
-            return plan_err!("missing path in Delta table options");
-        };
-        let SinkInfo {
-            input,
-            mode,
-            partition_by,
-            bucket_by,
-            sort_order,
-            options,
-            lakehouse_table,
-        } = info;
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for Delta format");
-        }
-        if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for Delta format");
-        }
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(DeltaWriteNode::new(
-                Arc::new(input),
-                DeltaWriteNodeOptions {
-                    path,
-                    mode,
-                    partition_by,
-                    bucket_by,
-                    sort_order,
-                    options,
-                    lakehouse_table,
-                },
-            )),
-        }))
     }
 
     async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {

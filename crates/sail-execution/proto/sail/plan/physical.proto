@@ -69,6 +69,7 @@ message ExtendedPhysicalPlanNode {
     ParquetExecNode parquet = 54;
     RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
     RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
+    ParquetWriterExecNode parquet_writer = 57;
   }
 }
 
@@ -77,6 +78,7 @@ message RemoteCheckpointWriteExecNode {
   string object_store_url = 2;
   string prefix = 3;
   bytes storage_schema = 4;
+  bytes parquet_options = 5;
 }
 
 message RemoteCheckpointCommitExecNode {
@@ -649,6 +651,19 @@ message ParquetExecNode {
   bytes options = 2;
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
+}
+
+message ParquetWriterExecNode {
+  bytes input = 1;
+  bytes base_config = 2;
+  bytes options = 3;
+  optional PhysicalSortExprNodeCollection sort_order = 4;
+  string original_url = 5;
+  string write_id = 6;
+  uint64 minimum_parallel_output_files = 7;
+  uint64 soft_max_rows_per_output_file = 8;
+  uint64 max_buffered_batches_per_output_file = 9;
+  uint64 objectstore_writer_buffer_size = 10;
 }
 
 message ArrowExecNode {

@@ -2,12 +2,12 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::{
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatRegistry, is_lakehouse_format,
-};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::table_format::{
+    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
+    TableFormatRegistry,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -470,25 +470,22 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
-                    // Non-lakehouse formats (e.g., plain Parquet/Hive tables) have no
-                    // storage-layer metadata — the catalog is the sole source of truth.
-                    // Skip straight to catalog-only update.
-                    // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
-                    // for Delta tables but plain tables fall through to SessionCatalog.
-                    if !is_lakehouse_format(&format) {
-                        manager.alter_table(&table, options).await?;
-                        return Ok(display.bools().to_record_batch(vec![true])?);
-                    }
                     let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
                         CatalogError::External(format!(
                             "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let Some(table_format) = registry.get_optional(&format).map_err(|e| {
                         CatalogError::External(format!(
-                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                            "failed to inspect table format '{format}' for ALTER TABLE: {e}"
                         ))
-                    })?;
+                    })?
+                    else {
+                        // Plain files and provider-owned data sources have no
+                        // storage protocol metadata; the catalog is authoritative.
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    };
                     let runtime = ctx.runtime_env();
                     let storage_operation = table_format_alter_operation(&options);
                     let lakehouse_table = manager
@@ -766,6 +763,19 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         )
         .await?;
 
+    if let LakehouseCreateMaterialization::AfterCatalogTableFormat { mode, .. } =
+        &create_plan.materialization
+        && !(matches!(
+            *mode,
+            crate::provider::TableFormatCreateMetadataMode::PathManaged
+        ) && options.is_external)
+    {
+        // Reject a missing client table-protocol implementation before the
+        // catalog object becomes visible. After-catalog materialization may
+        // still need the newly assigned catalog identity.
+        require_table_format(ctx, &options.format, "CREATE TABLE")?;
+    }
+
     let LakehouseCreateMaterialization::BeforeCatalogTableFormat { context, .. } =
         &create_plan.materialization
     else {
@@ -867,17 +877,8 @@ async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-) -> CatalogResult<sail_common_datafusion::datasource::TableFormatCreateTableResult> {
-    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
-        CatalogError::External(format!(
-            "missing TableFormatRegistry for CREATE TABLE on format '{format}': {e}"
-        ))
-    })?;
-    let table_format = registry.get(format).map_err(|e| {
-        CatalogError::External(format!(
-            "unknown table format '{format}' for CREATE TABLE: {e}"
-        ))
-    })?;
+) -> CatalogResult<sail_common_datafusion::table_format::TableFormatCreateTableResult> {
+    let table_format = require_table_format(ctx, format, "CREATE TABLE")?;
     table_format
         .create_table_metadata(
             ctx.runtime_env(),
@@ -904,6 +905,23 @@ async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
         )
         .await
         .map_err(CatalogError::DataFusionError)
+}
+
+fn require_table_format<C: SessionExtensionAccessor>(
+    ctx: &C,
+    format: &str,
+    operation: &str,
+) -> CatalogResult<std::sync::Arc<dyn sail_common_datafusion::table_format::TableFormat>> {
+    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        CatalogError::External(format!(
+            "missing TableFormatRegistry for {operation} on format '{format}': {e}"
+        ))
+    })?;
+    registry.get(format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown table format '{format}' for {operation}: {e}"
+        ))
+    })
 }
 
 trait CreateTableColumnView {
@@ -1089,8 +1107,10 @@ mod tests {
     use sail_common_datafusion::catalog::{
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
-    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+    use sail_common_datafusion::data_source_format::DataSourceFormat;
+    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
+    use sail_common_datafusion::table_format::TableFormat;
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -1304,7 +1324,7 @@ mod tests {
     struct TestTableFormat;
 
     #[async_trait]
-    impl TableFormat for TestTableFormat {
+    impl DataSourceFormat for TestTableFormat {
         fn name(&self) -> &str {
             "delta"
         }
@@ -1324,7 +1344,10 @@ mod tests {
         ) -> datafusion_common::Result<LogicalPlan> {
             not_impl_err!("unused in test")
         }
+    }
 
+    #[async_trait]
+    impl TableFormat for TestTableFormat {
         async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,

@@ -23,6 +23,7 @@
 //! - `commit_exec`: Single-partition commit/abort execution plan
 pub mod arrow_utils;
 mod commit_exec;
+mod data_source_format;
 mod datasource;
 mod discovery;
 mod error;
@@ -30,13 +31,14 @@ mod exec;
 mod executor;
 mod filter;
 mod stream;
-mod table_format;
 mod table_provider;
 mod write_exec;
+mod write_planner;
 
 // Public exports - always available
 // Public exports - require python feature
 pub use commit_exec::PythonDataSourceWriteCommitExec;
+pub use data_source_format::PythonDataSourceFormat;
 pub use datasource::PythonDataSource;
 pub use discovery::{
     DATA_SOURCE_REGISTRY, DataSourceEntry, PythonDataSourceRegistry, discover_data_sources,
@@ -47,6 +49,6 @@ pub use exec::PythonDataSourceExec;
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
 pub use filter::{ColumnPath, FilterValue, PythonFilter, exprs_to_python_filters};
 pub use stream::{DEFAULT_BATCH_SIZE, PythonDataSourceStream, RowBatchCollector};
-pub use table_format::{PythonPhysicalPlanner, PythonTableFormat};
 pub use table_provider::PythonTableProvider;
 pub use write_exec::PythonDataSourceWriteExec;
+pub use write_planner::PythonPhysicalPlanner;

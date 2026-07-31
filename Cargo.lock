@@ -7633,6 +7633,7 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-parquet",
  "sail-physical-plan",
  "sail-pyarrow",
  "sail-sql-analyzer",
@@ -7678,6 +7679,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-logical-plan",
+ "sail-parquet",
  "sail-physical-plan",
  "serde",
  "serde_arrow",
@@ -7718,6 +7720,7 @@ dependencies = [
  "sail-iceberg",
  "sail-logical-plan",
  "sail-object-store",
+ "sail-parquet",
  "sail-physical-plan",
  "sail-python-udf",
  "sail-server",
@@ -7852,10 +7855,12 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-parquet",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
+ "tokio",
  "url",
  "uuid",
 ]
@@ -7920,6 +7925,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-parquet"
+version = "0.6.6"
+dependencies = [
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
+ "futures",
+ "object_store",
+ "parquet",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "sail-physical-optimizer"
 version = "0.6.6"
 dependencies = [
@@ -7946,6 +7967,7 @@ dependencies = [
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",
+ "sail-parquet",
  "serde",
  "serde_json",
  "tokio",

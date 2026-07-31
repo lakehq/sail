@@ -10,20 +10,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod base_writer;
-pub mod config;
-pub mod file_writer;
-pub mod partition;
-pub mod table_writer;
-pub mod variant_shredding;
+//! Native Parquet writing infrastructure shared by listing data sources and
+//! table-format adapters.
 
-use crate::spec::DataFile;
+mod demux;
+mod file_writer;
+mod physical_plan;
 
-pub trait IcebergWriter<T> {
-    fn add(&mut self, data: T) -> Result<(), String>;
-    fn close(self) -> Result<Vec<DataFile>, String>;
-}
-
-pub struct WriteOutcome {
-    pub data_file: DataFile,
-}
+pub use file_writer::{ParquetFileWriter, WrittenParquetFile};
+pub use physical_plan::{ParquetWriteExecutionOptions, ParquetWriterExec};

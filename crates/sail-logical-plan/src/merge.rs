@@ -34,13 +34,13 @@ pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
-pub use sail_common_datafusion::datasource::{
-    DeltaCheckConstraintExpr, MERGE_SOURCE_METRIC_COLUMN, MergeAssignment, MergeInfo,
-    MergeIntoOptions, MergeMatchedAction, MergeMatchedClause, MergeNotMatchedBySourceAction,
-    MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction, MergeNotMatchedByTargetClause,
-    MergeTargetInfo, OPERATION_COLUMN,
-};
+pub use sail_common_datafusion::datasource::{MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN};
 use sail_common_datafusion::datasource::{OptionLayer, RowLevelOperationType};
+pub use sail_common_datafusion::table_format::{
+    DeltaCheckConstraintExpr, MergeAssignment, MergeInfo, MergeIntoOptions, MergeMatchedAction,
+    MergeMatchedClause, MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause,
+    MergeNotMatchedByTargetAction, MergeNotMatchedByTargetClause, MergeTargetInfo,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]

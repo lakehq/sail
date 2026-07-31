@@ -736,7 +736,18 @@ impl DeltaWriterExec {
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
-            let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
+            let object_store_buffer_size = context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size;
+            let mut writer = DeltaWriter::new_with_memory_pool(
+                object_store.clone(),
+                writer_path,
+                writer_config,
+                Arc::clone(context.memory_pool()),
+                object_store_buffer_size,
+            );
 
             let logical_schema_for_mapping = logical_kernel_for_mapping
                 .as_ref()

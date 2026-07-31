@@ -18,8 +18,9 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::data_source_format::DataSourceFormat;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, find_path_in_options,
+    OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
 use url::Url;
@@ -136,12 +137,12 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub struct ListingTableFormat<T: FormatFactory> {
+pub struct ListingDataSourceFormat<T: FormatFactory> {
     phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
+impl<T: FormatFactory> DataSourceFormat for ListingDataSourceFormat<T> {
     fn name(&self) -> &str {
         T::name()
     }
@@ -307,6 +308,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         }))
     }
 }
+
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file"

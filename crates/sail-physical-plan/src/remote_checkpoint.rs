@@ -7,13 +7,9 @@ use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::{ConfigOptions, TableParquetOptions};
-use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::datasource::sink::DataSink;
 use datafusion::datasource::source::{DataSource, OpenArgs};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr,
@@ -26,17 +22,18 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     SortOrderPushdownResult,
 };
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
-use datafusion_datasource_parquet::ParquetSink;
 use futures::{StreamExt, stream};
+use object_store::ObjectStore;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt};
 use sail_cache::remote_checkpoint::{
     RemoteCheckpointDescriptor, RemoteCheckpointFile, RemoteCheckpointPartition,
     RemoteCheckpointRegistry,
 };
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_parquet::ParquetFileWriter;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -382,6 +379,7 @@ pub struct RemoteCheckpointWriteExec {
     object_store_url: ObjectStoreUrl,
     prefix: Path,
     storage_schema: SchemaRef,
+    parquet_options: TableParquetOptions,
     properties: Arc<PlanProperties>,
 }
 
@@ -391,6 +389,7 @@ impl RemoteCheckpointWriteExec {
         object_store_url: ObjectStoreUrl,
         prefix: Path,
         storage_schema: SchemaRef,
+        parquet_options: TableParquetOptions,
     ) -> Result<Self> {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
             return Err(DataFusionError::NotImplemented(
@@ -420,6 +419,7 @@ impl RemoteCheckpointWriteExec {
             object_store_url,
             prefix,
             storage_schema,
+            parquet_options,
             properties,
         })
     }
@@ -438,6 +438,10 @@ impl RemoteCheckpointWriteExec {
 
     pub fn storage_schema(&self) -> &SchemaRef {
         &self.storage_schema
+    }
+
+    pub fn parquet_options(&self) -> &TableParquetOptions {
+        &self.parquet_options
     }
 }
 
@@ -482,6 +486,7 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
             self.object_store_url.clone(),
             self.prefix.clone(),
             Arc::clone(&self.storage_schema),
+            self.parquet_options.clone(),
         )?))
     }
 
@@ -497,16 +502,17 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
             .clone()
             .join(format!("part-{partition:05}-{}.parquet", Uuid::new_v4()));
         let storage_schema = Arc::clone(&self.storage_schema);
+        let parquet_options = self.parquet_options.clone();
         let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
         let output = stream::once(write_checkpoint_partition(
             partition,
             input,
             context,
-            self.object_store_url.clone(),
             store,
             location,
             storage_schema,
+            parquet_options,
             output_schema,
         ));
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -520,10 +526,10 @@ async fn write_checkpoint_partition(
     partition: usize,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
-    object_store_url: ObjectStoreUrl,
     store: Arc<dyn ObjectStore>,
     location: Path,
     storage_schema: SchemaRef,
+    parquet_options: TableParquetOptions,
     output_schema: SchemaRef,
 ) -> Result<RecordBatch> {
     let mut row_count = 0_u64;
@@ -545,41 +551,40 @@ async fn write_checkpoint_partition(
 
     // An empty partition stays in the descriptor but does not allocate an object.
     let (location, size, row_count) = if let Some(first_batch) = first_batch {
-        let stream_schema = Arc::clone(&storage_schema);
-        let batch_schema = Arc::clone(&storage_schema);
-        let batches = stream::once(async move { Ok(first_batch) })
-            .chain(input)
-            .map(move |batch| {
-                batch.and_then(|batch| record_batch_with_schema(batch, &batch_schema))
-            });
-        let batches: SendableRecordBatchStream =
-            Box::pin(RecordBatchStreamAdapter::new(stream_schema, batches));
-        let location_url = format!("{object_store_url}{location}");
-        let sink = ParquetSink::new(
-            FileSinkConfig {
-                original_url: location_url.clone(),
-                object_store_url,
-                file_group: Default::default(),
-                table_paths: vec![ListingTableUrl::parse(location_url)?],
-                output_schema: storage_schema,
-                table_partition_cols: vec![],
-                insert_op: InsertOp::Append,
-                keep_partition_by_columns: false,
-                file_extension: "parquet".to_string(),
-                file_output_mode: FileOutputMode::SingleFile,
-            },
-            TableParquetOptions {
-                global: context.session_config().options().execution.parquet.clone(),
-                ..Default::default()
-            },
-        );
-        let row_count = sink.write_all(batches, &context).await?;
-        let size = store
-            .head(&location)
-            .await
-            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?
-            .size;
-        (Some(location.to_string()), size, row_count)
+        let skip_arrow_metadata = parquet_options.global.skip_arrow_metadata;
+        let mut parquet_options = parquet_options;
+        if !skip_arrow_metadata {
+            parquet_options.arrow_schema(&storage_schema);
+        }
+        let writer_options = ParquetWriterOptions::try_from(&parquet_options)?;
+        let buffer_size = context
+            .session_config()
+            .options()
+            .execution
+            .objectstore_writer_buffer_size;
+        let mut writer = ParquetFileWriter::try_new_with_options(
+            Arc::clone(&store),
+            location.clone(),
+            Arc::clone(&storage_schema),
+            writer_options.writer_options().clone(),
+            skip_arrow_metadata,
+            buffer_size,
+            context.memory_pool(),
+        )?;
+        writer
+            .write(&record_batch_with_schema(first_batch, &storage_schema)?)
+            .await?;
+        while let Some(batch) = input.next().await {
+            writer
+                .write(&record_batch_with_schema(batch?, &storage_schema)?)
+                .await?;
+        }
+        let written = writer.finish().await?;
+        (
+            Some(location.to_string()),
+            written.file_size,
+            written.row_count,
+        )
     } else {
         (None, 0, row_count)
     };
@@ -793,6 +798,7 @@ mod tests {
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::prelude::{SessionConfig, SessionContext};
+    use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -854,6 +860,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             storage_schema,
+            TableParquetOptions::default(),
         )?;
         let context = SessionContext::new();
         context
@@ -901,6 +908,7 @@ mod tests {
             object_store_url.clone(),
             Path::from("checkpoint"),
             schema,
+            TableParquetOptions::default(),
         )?;
         let context = SessionContext::new();
         context
@@ -949,6 +957,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&schema),
+            TableParquetOptions::default(),
         )?);
         let checkpoint = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),
@@ -1006,6 +1015,7 @@ mod tests {
             object_store_url.clone(),
             prefix.clone(),
             Arc::clone(&storage_schema),
+            TableParquetOptions::default(),
         )?);
         let commit = RemoteCheckpointCommitExec::new(
             Arc::new(CoalescePartitionsExec::new(writer)),

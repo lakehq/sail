@@ -8,6 +8,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
+use sail_parquet::{ParquetWriteExecutionOptions, ParquetWriterExec};
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
 use crate::options::r#gen::ParquetWriteOptions;
@@ -32,9 +33,13 @@ impl WriteFormat for ParquetWriteFormat {
             .map_err(DataFusionError::from)?;
         let format = ParquetFormat::default().with_options(options);
         input.sink.file_extension = self.file_extension()?;
-        format
-            .create_writer_physical_plan(input.input, ctx, input.sink, input.sort_order)
-            .await
+        Ok(Arc::new(ParquetWriterExec::try_new(
+            input.input,
+            input.sink,
+            format.options().clone(),
+            ParquetWriteExecutionOptions::from(&ctx.config_options().execution),
+            input.sort_order,
+        )?))
     }
 }
 

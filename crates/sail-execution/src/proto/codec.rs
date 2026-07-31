@@ -252,6 +252,7 @@ use sail_iceberg::physical_plan::{
 };
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_parquet::{ParquetWriteExecutionOptions, ParquetWriterExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
@@ -472,6 +473,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 prefix,
                 storage_schema,
+                parquet_options,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let object_store_url =
@@ -479,11 +481,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let prefix = object_store::path::Path::parse(prefix)
                     .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
                 let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let parquet_options = try_decode_message::<
+                    gen_datafusion_common::TableParquetOptions,
+                >(&parquet_options)?;
+                let parquet_options: TableParquetOptions = (&parquet_options).try_into()?;
                 Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
                     input,
                     object_store_url,
                     prefix,
                     storage_schema,
+                    parquet_options,
                 )?))
             }
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -1149,6 +1156,81 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sort_order,
                 )))
             }
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input,
+                base_config,
+                options,
+                sort_order,
+                original_url,
+                write_id,
+                minimum_parallel_output_files,
+                soft_max_rows_per_output_file,
+                max_buffered_batches_per_output_file,
+                objectstore_writer_buffer_size,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let input_schema = input.schema();
+                let file_sink_config: datafusion_proto::protobuf::FileSinkConfig =
+                    try_decode_message(&base_config)?;
+                let mut file_sink_config = FileSinkConfig::try_from(&file_sink_config)?;
+                file_sink_config.original_url = original_url;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let options: TableParquetOptions = (&options).try_into()?;
+                let physical_sort_expr_nodes = if let Some(sort_order) = sort_order {
+                    let nodes: Vec<PhysicalSortExprNode> = sort_order
+                        .physical_sort_expr_nodes
+                        .iter()
+                        .map(|value| try_decode_message(value))
+                        .collect::<Result<_>>()?;
+                    Some(nodes)
+                } else {
+                    None
+                };
+                let sort_order = physical_sort_expr_nodes
+                    .as_ref()
+                    .map(|nodes| {
+                        parse_physical_sort_exprs(
+                            nodes,
+                            &PhysicalPlanDecodeContext::new(ctx, self),
+                            &input_schema,
+                            &RemotePhysicalProtoConverter {},
+                        )
+                        .map(|expressions| {
+                            LexRequirement::new(expressions.into_iter().map(Into::into))
+                        })
+                    })
+                    .transpose()?
+                    .flatten();
+                let execution_options = ParquetWriteExecutionOptions {
+                    minimum_parallel_output_files: usize::try_from(minimum_parallel_output_files)
+                        .map_err(|_| {
+                        plan_datafusion_err!("minimum parallel output files is too large")
+                    })?,
+                    soft_max_rows_per_output_file: usize::try_from(soft_max_rows_per_output_file)
+                        .map_err(|_| {
+                        plan_datafusion_err!("soft maximum rows per output file is too large")
+                    })?,
+                    max_buffered_batches_per_output_file: usize::try_from(
+                        max_buffered_batches_per_output_file,
+                    )
+                    .map_err(|_| {
+                        plan_datafusion_err!("maximum buffered output batches is too large")
+                    })?,
+                    objectstore_writer_buffer_size: usize::try_from(objectstore_writer_buffer_size)
+                        .map_err(|_| {
+                            plan_datafusion_err!("object store writer buffer size is too large")
+                        })?,
+                };
+                Ok(Arc::new(ParquetWriterExec::try_new_with_write_id(
+                    input,
+                    file_sink_config,
+                    options,
+                    execution_options,
+                    sort_order,
+                    write_id,
+                )?))
+            }
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
@@ -1600,6 +1682,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                parquet_options: try_encode_message(
+                    gen_datafusion_common::TableParquetOptions::try_from(
+                        checkpoint.parquet_options(),
+                    )?,
+                )?,
             })
         } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -2030,6 +2117,75 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 num_partitions,
                 schema,
                 projection,
+            })
+        } else if let Some(writer) = node.downcast_ref::<ParquetWriterExec>() {
+            let input = try_encode_physical_plan(self, writer.input().clone())?;
+            let base_config = try_encode_message(
+                datafusion_proto::protobuf::FileSinkConfig::try_from(writer.sink_config())
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to encode Parquet sink: {error}")
+                    })?,
+            )?;
+            let options = try_encode_message(
+                gen_datafusion_common::TableParquetOptions::try_from(writer.parquet_options())?,
+            )?;
+            let sort_order = writer
+                .sort_order()
+                .as_ref()
+                .map(|requirements| {
+                    requirements
+                        .iter()
+                        .map(|requirement| {
+                            let expression: PhysicalSortExpr = requirement.to_owned().into();
+                            let node = PhysicalSortExprNode {
+                                expr: Some(Box::new(physical_expr_to_proto(
+                                    self,
+                                    &expression.expr,
+                                )?)),
+                                asc: !expression.options.descending,
+                                nulls_first: expression.options.nulls_first,
+                            };
+                            try_encode_message(node)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                        .map(
+                            |physical_sort_expr_nodes| r#gen::PhysicalSortExprNodeCollection {
+                                physical_sort_expr_nodes,
+                            },
+                        )
+                })
+                .transpose()?;
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input,
+                base_config,
+                options,
+                sort_order,
+                original_url: writer.sink_config().original_url.clone(),
+                write_id: writer.write_id().to_string(),
+                minimum_parallel_output_files: u64::try_from(
+                    writer.execution_options().minimum_parallel_output_files,
+                )
+                .map_err(|_| plan_datafusion_err!("minimum parallel output files is too large"))?,
+                soft_max_rows_per_output_file: u64::try_from(
+                    writer.execution_options().soft_max_rows_per_output_file,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("soft maximum rows per output file is too large")
+                })?,
+                max_buffered_batches_per_output_file: u64::try_from(
+                    writer
+                        .execution_options()
+                        .max_buffered_batches_per_output_file,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("maximum buffered output batches is too large")
+                })?,
+                objectstore_writer_buffer_size: u64::try_from(
+                    writer.execution_options().objectstore_writer_buffer_size,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("object store writer buffer size is too large")
+                })?,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan(self, data_sink.input().clone())?;
@@ -5038,11 +5194,16 @@ mod tests {
             true,
         )]));
         let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let mut parquet_options = TableParquetOptions::default();
+        parquet_options.global.skip_arrow_metadata = true;
+        parquet_options.global.max_row_group_size = 321;
+        parquet_options.global.created_by = "checkpoint-codec-test".to_string();
         let checkpoint = RemoteCheckpointWriteExec::try_new(
             Arc::new(EmptyExec::new(input_schema)),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
             object_store::path::Path::from("checkpoints/session/relation"),
             Arc::clone(&storage_schema),
+            parquet_options,
         )?;
         let codec = RemoteExecutionCodec;
 
@@ -5062,6 +5223,101 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        assert!(decoded.parquet_options().global.skip_arrow_metadata);
+        assert_eq!(decoded.parquet_options().global.max_row_group_size, 321);
+        assert_eq!(
+            decoded.parquet_options().global.created_by,
+            "checkpoint-codec-test"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_writer_plan() -> Result<()> {
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::physical_plan::FileOutputMode;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_expr::PhysicalSortRequirement;
+        use datafusion::physical_expr::expressions::Column;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let input =
+            MemorySourceConfig::try_new_exec(&[vec![], vec![], vec![]], Arc::clone(&schema), None)?;
+        let sink_config = FileSinkConfig {
+            original_url: "memory:///codec/output".to_string(),
+            object_store_url: ObjectStoreUrl::parse("memory://")?,
+            file_group: Default::default(),
+            table_paths: vec![ListingTableUrl::parse("memory:///codec/output")?],
+            output_schema: Arc::clone(&schema),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".to_string(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+        let mut parquet_options = TableParquetOptions::default();
+        parquet_options.global.skip_arrow_metadata = true;
+        parquet_options.global.max_row_group_size = 456;
+        let execution_options = ParquetWriteExecutionOptions {
+            minimum_parallel_output_files: 7,
+            soft_max_rows_per_output_file: 89,
+            max_buffered_batches_per_output_file: 11,
+            objectstore_writer_buffer_size: 13,
+        };
+        let sort_options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let sort_order = LexRequirement::from([PhysicalSortRequirement::new(
+            Arc::new(Column::new("value", 0)),
+            Some(sort_options),
+        )]);
+        let writer = ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config,
+            parquet_options,
+            execution_options.clone(),
+            Some(sort_order),
+            "codec-write-id".to_string(),
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(writer))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ParquetWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet writer"))?;
+
+        assert_eq!(
+            decoded
+                .input()
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            3
+        );
+        assert_eq!(decoded.sink_config().original_url, "memory:///codec/output");
+        assert_eq!(decoded.write_id(), "codec-write-id");
+        assert_eq!(decoded.execution_options(), &execution_options);
+        assert!(decoded.parquet_options().global.skip_arrow_metadata);
+        assert_eq!(decoded.parquet_options().global.max_row_group_size, 456);
+        let requirement = decoded
+            .sort_order()
+            .as_ref()
+            .ok_or_else(|| plan_datafusion_err!("decoded writer lost its sort order"))?
+            .first();
+        let column = requirement.expr.downcast_ref::<Column>().ok_or_else(|| {
+            plan_datafusion_err!("decoded writer sort expression is not a column")
+        })?;
+        assert_eq!(column.name(), "value");
+        assert_eq!(column.index(), 0);
+        assert_eq!(requirement.options, Some(sort_options));
         Ok(())
     }
 
