@@ -10,21 +10,21 @@ use datafusion_expr::{
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TimestampNow {
     signature: Signature,
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
     time_unit: TimeUnit,
 }
 
 impl TimestampNow {
-    pub fn new(timezone: Arc<str>, time_unit: TimeUnit) -> Self {
+    pub fn new(session_timezone: Arc<str>, time_unit: TimeUnit) -> Self {
         Self {
             signature: Signature::nullary(Volatility::Stable),
-            timezone,
+            session_timezone,
             time_unit,
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 
     pub fn time_unit(&self) -> &TimeUnit {
@@ -44,7 +44,7 @@ impl ScalarUDFImpl for TimestampNow {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Timestamp(
             *self.time_unit(),
-            Some(self.timezone().into()),
+            Some(self.session_timezone().into()),
         ))
     }
 
@@ -62,7 +62,7 @@ impl ScalarUDFImpl for TimestampNow {
         };
         let expr = Expr::Cast(datafusion_expr::Cast::new(
             Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
-            DataType::Timestamp(*self.time_unit(), Some(self.timezone().into())),
+            DataType::Timestamp(*self.time_unit(), Some(self.session_timezone().into())),
         ));
         Ok(ExprSimplifyResult::Simplified(expr))
     }

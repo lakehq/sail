@@ -24,11 +24,14 @@ impl Actor for WorkerActor {
     }
 
     fn new(options: WorkerOptions) -> Self {
-        let driver_client_set = DriverClientSet::new(ClientOptions {
-            enable_tls: options.enable_tls,
-            host: options.driver_host.clone(),
-            port: options.driver_port,
-        });
+        let driver_client_set = DriverClientSet::new(
+            options.driver_id,
+            ClientOptions {
+                enable_tls: options.enable_tls,
+                host: options.driver_host.clone(),
+                port: options.driver_port,
+            },
+        );
         let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
         let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
@@ -85,11 +88,11 @@ impl Actor for WorkerActor {
                 result,
             } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             WorkerEvent::CreateRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
             WorkerEvent::FetchDriverStream {
                 key,
                 schema,
@@ -99,11 +102,11 @@ impl Actor for WorkerActor {
                 self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
             WorkerEvent::FetchRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             WorkerEvent::CleanUpJob { job_id, stage } => {
                 self.handle_clean_up_job(ctx, job_id, stage)
             }

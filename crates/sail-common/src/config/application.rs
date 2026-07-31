@@ -38,6 +38,16 @@ pub struct AppConfig {
     pub internal: (),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+}
+
 /// A configuration provider that injects placeholder internal configuration.
 struct InternalConfigPlaceholder;
 
@@ -181,6 +191,8 @@ pub struct ClusterConfig {
     pub driver_external_host: String,
     pub driver_external_port: u16,
     #[serde(skip_serializing)]
+    pub driver_id: u64,
+    #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
     pub worker_listen_port: u16,
@@ -198,6 +210,7 @@ pub struct ClusterConfig {
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_backend: ShuffleBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +296,78 @@ mod retry_strategy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "shuffle_backend::ShuffleBackend",
+    from = "shuffle_backend::ShuffleBackend"
+)]
+pub enum ShuffleBackend {
+    Streaming,
+    Storage(StorageShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageShuffleBackend {
+    pub path: String,
+    pub max_file_size: usize,
+    pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+mod shuffle_backend {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        Streaming,
+        Storage,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ShuffleBackend {
+        pub r#type: Type,
+        pub storage: super::StorageShuffleBackend,
+    }
+
+    impl From<ShuffleBackend> for super::ShuffleBackend {
+        fn from(value: ShuffleBackend) -> Self {
+            match value.r#type {
+                Type::Streaming => super::ShuffleBackend::Streaming,
+                Type::Storage => super::ShuffleBackend::Storage(value.storage),
+            }
+        }
+    }
+
+    impl From<super::ShuffleBackend> for ShuffleBackend {
+        fn from(value: super::ShuffleBackend) -> Self {
+            match value {
+                super::ShuffleBackend::Streaming => ShuffleBackend {
+                    r#type: Type::Streaming,
+                    storage: super::StorageShuffleBackend {
+                        path: String::new(),
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                },
+                super::ShuffleBackend::Storage(storage) => ShuffleBackend {
+                    r#type: Type::Storage,
+                    storage,
+                },
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
@@ -290,6 +375,7 @@ pub struct ExecutionConfig {
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
+    pub checkpoint: CheckpointConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,7 +595,7 @@ pub struct OptimizerConfig {
     pub expand_views_at_output: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OneLakeApi {
     Delta,
@@ -582,6 +668,8 @@ pub enum CatalogType {
     },
     Glue {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -665,6 +753,7 @@ impl ClusterConfigEnv {
         ENABLE_TLS,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
+        DRIVER_ID,
         WORKER_ID,
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,
@@ -672,5 +761,9 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__STORAGE__PATH,
+        SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
+        SHUFFLE_BACKEND__STORAGE__COMPRESSION,
     }
 }

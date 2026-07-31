@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
 import re
@@ -20,6 +19,7 @@ from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -109,25 +109,6 @@ def _spark_s3_options(endpoint: str) -> dict[str, str]:
         "spark.hadoop.fs.s3a.secret.key": _MINIO_PASSWORD,
         "spark.hadoop.fs.s3a.aws.credentials.provider": ("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"),
     }
-
-
-@contextlib.contextmanager
-def _classic_spark_mode() -> Generator[None, None, None]:
-    old_api_mode = os.environ.get("SPARK_API_MODE")
-    old_remote = os.environ.pop("SPARK_REMOTE", None)
-    old_connect_mode = os.environ.pop("SPARK_CONNECT_MODE_ENABLED", None)
-    os.environ["SPARK_API_MODE"] = "classic"
-    try:
-        yield
-    finally:
-        if old_api_mode is None:
-            os.environ.pop("SPARK_API_MODE", None)
-        else:
-            os.environ["SPARK_API_MODE"] = old_api_mode
-        if old_remote is not None:
-            os.environ["SPARK_REMOTE"] = old_remote
-        if old_connect_mode is not None:
-            os.environ["SPARK_CONNECT_MODE_ENABLED"] = old_connect_mode
 
 
 def _wait_for_port(host: str, port: int, timeout: float) -> None:
@@ -367,33 +348,14 @@ def _wait_for_hms_catalog(remote: str) -> None:
 # 4.x uses Scala 2.13) instead of hardcoding a single Spark minor.
 import pyspark as _pyspark  # noqa: E402
 
-_SPARK_VERSION = _pyspark.__version__  # e.g. "4.1.1", "3.5.7"
+_SPARK_VERSION = _pyspark.__version__
 _SPARK_MAJOR, _SPARK_MINOR_PART = _SPARK_VERSION.split(".")[:2]
 _SCALA_BINARY = "2.12" if _SPARK_MAJOR == "3" else "2.13"
-_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"  # e.g. "4.1", "3.5"
-# Delta Maven coordinates per Spark minor version. Delta renamed its artifact at
-# 4.1.0 to embed the Spark minor (``delta-spark_<spark-minor>_<scala>``); earlier
-# releases (3.3.x, 4.0.x) keep the legacy ``delta-spark_<scala>`` name. The previous
-# ``delta-spark_{minor}_{scala}`` rule for every Spark 4.x produced a 404 for 4.0
-# (``delta-spark_4.0_2.13`` does not exist at 4.0.1), so pin the full coordinate
-# explicitly per Spark version: a future Delta rename then cannot silently break
-# the JVM classpath. Each row was verified against Maven Central:
-#   Spark 3.5 -> io.delta:delta-spark_2.12:3.3.2
-#   Spark 4.0 -> io.delta:delta-spark_2.13:4.0.1   (legacy name; 4.0 minor not embedded)
-#   Spark 4.1 -> io.delta:delta-spark_4.1_2.13:4.1.0 (new name introduced at Delta 4.1.0)
-_DELTA_SPARK_COORDINATES: dict[str, tuple[str, str, str]] = {
-    "3.5": ("io.delta", "delta-spark_2.12", "3.3.2"),
-    "4.0": ("io.delta", "delta-spark_2.13", "4.0.1"),
-    "4.1": ("io.delta", "delta-spark_4.1_2.13", "4.1.0"),
-}
-if _SPARK_MINOR not in _DELTA_SPARK_COORDINATES:
-    raise RuntimeError(
-        f"No Delta Maven coordinate mapping for Spark {_SPARK_VERSION}; "
-        "add an entry to _DELTA_SPARK_COORDINATES in "
-        "python/pysail/tests/spark/catalog/hms/conftest.py."
-    )
-_DELTA_GROUP, _DELTA_ARTIFACT, _DELTA_VERSION = _DELTA_SPARK_COORDINATES[_SPARK_MINOR]
-_DELTA_SPARK_PACKAGE = f"{_DELTA_GROUP}:{_DELTA_ARTIFACT}:{_DELTA_VERSION}"
+_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"
+try:
+    _DELTA_SPARK_PACKAGE = delta_spark_maven_coordinate(_SPARK_VERSION)
+except RuntimeError as error:
+    pytest.skip(reason=str(error))
 # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar must
 # be on the classpath for `USING AVRO`.
 _AVRO_SPARK_PACKAGE = f"org.apache.spark:spark-avro_{_SCALA_BINARY}:{_SPARK_VERSION}"
@@ -450,7 +412,7 @@ def jvm_spark(
         _ICEBERG_SPARK_PACKAGE,
     ]
 
-    with _classic_spark_mode():
+    with classic_spark_mode():
         builder = (
             SparkSession.builder.master("local[1]")
             .appName("hms-jvm-unified")

@@ -1,0 +1,266 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);",
+        "result": [
+          "[2.0,3.0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_avg(col)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "float",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_avg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));",
+        "result": [
+          "0.9746319"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_cosine_similarity(array(1.0, 2.0, 3.0), array(4.0, 5.0, 6.0))",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_cosine_similarity"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_inner_product(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));",
+        "result": [
+          "32.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_inner_product(array(1.0, 2.0, 3.0), array(4.0, 5.0, 6.0))",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_inner_product"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));",
+        "result": [
+          "5.196152"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_l2_distance(array(1.0, 2.0, 3.0), array(4.0, 5.0, 6.0))",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_l2_distance"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_norm(array(3.0F, 4.0F), 1.0F);",
+        "result": [
+          "7.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_norm(array(3.0, 4.0), 1.0)",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_norm"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_norm(array(3.0F, 4.0F), 2.0F);",
+        "result": [
+          "5.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_norm(array(3.0, 4.0), 2.0)",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_norm"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_norm(array(3.0F, 4.0F), float('inf'));",
+        "result": [
+          "4.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_norm(array(3.0, 4.0), inf)",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_norm"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_normalize(array(3.0F, 4.0F), 1.0F);",
+        "result": [
+          "[0.42857143,0.5714286]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_normalize(array(3.0, 4.0), 1.0)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "float",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_normalize"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_normalize(array(3.0F, 4.0F), 2.0F);",
+        "result": [
+          "[0.6,0.8]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_normalize(array(3.0, 4.0), 2.0)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "float",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_normalize"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_normalize(array(3.0F, 4.0F), float('inf'));",
+        "result": [
+          "[0.75,1.0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_normalize(array(3.0, 4.0), inf)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "float",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_normalize"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT vector_sum(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);",
+        "result": [
+          "[4.0,6.0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "vector_sum(col)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "float",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: vector_sum"
+      }
+    }
+  ]
+}

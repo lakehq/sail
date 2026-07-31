@@ -76,6 +76,10 @@ impl PlanResolver<'_> {
                 (datetime.and_utc(), spec::TimestampType::WithoutTimeZone)
             }
         };
+        // Convert to microseconds.
+        // The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
+        // but Spark stores timestamps with microsecond precision (6 digits).
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior.
         let literal = spec::Literal::TimestampMicrosecond {
             microseconds: Some(datetime.timestamp_micros()),
             timestamp_type,
@@ -93,8 +97,10 @@ impl PlanResolver<'_> {
         // Convert to NaiveTime which validates hour (0-23), minute/second (0-59)
         let naive_time: NaiveTime = time.try_into()?;
 
-        // Use chrono methods to get microseconds since midnight
-        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior
+        // Convert to microseconds since midnight.
+        // The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
+        // but Spark stores timestamps with microsecond precision (6 digits).
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior.
         let seconds_from_midnight = naive_time.num_seconds_from_midnight() as i64;
         let nanoseconds = naive_time.nanosecond() as i64;
         let microseconds = seconds_from_midnight * 1_000_000 + nanoseconds / 1_000;

@@ -379,27 +379,36 @@ impl IcebergRestCatalogProvider {
         catalog_config: &CatalogConfig<'_>,
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<()> {
-        let rest_session =
-            Self::rest_table_session_ref(catalog, database, table, catalog_config, result)?;
-        let mut requirements = Vec::new();
-        if rest_session.scan_planning_mode.as_deref() == Some("server") {
-            requirements.push("server-side scan planning");
-        }
-        if rest_session.remote_signing_enabled {
-            requirements.push("remote signing");
-        }
-        if rest_session.storage_credential_count > 0 {
-            requirements.push("vended credentials");
+        let scan_planning_mode =
+            Self::effective_scan_planning_mode(result.config.as_ref(), catalog_config)?;
+        if scan_planning_mode.as_deref() == Some("server") {
+            return Err(CatalogError::UnsupportedCapability(
+                "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: server-side scan planning".to_string(),
+            ));
         }
 
-        if requirements.is_empty() {
-            Ok(())
-        } else {
-            Err(CatalogError::UnsupportedCapability(format!(
-                "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: {}",
-                requirements.join(", ")
-            )))
+        let mut configured_storage_fallbacks = Vec::new();
+        if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
+            configured_storage_fallbacks.push("remote signing");
         }
+        if result
+            .storage_credentials
+            .as_ref()
+            .is_some_and(|credentials| !credentials.is_empty())
+        {
+            configured_storage_fallbacks.push("vended credentials");
+        }
+        if !configured_storage_fallbacks.is_empty() {
+            log::warn!(
+                "Iceberg REST catalog {} create_table for {}.{} returned {}; using configured object-store credentials for create+write",
+                catalog,
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table),
+                configured_storage_fallbacks.join(", "),
+            );
+        }
+
+        Ok(())
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -2039,7 +2048,7 @@ mod tests {
         }
     }
 
-    fn create_table_response_with_access_session_requirements() -> serde_json::Value {
+    fn create_table_response_with_access_session_hints() -> serde_json::Value {
         serde_json::json!({
             "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
             "metadata": {
@@ -2063,7 +2072,6 @@ mod tests {
                 ]
             },
             "config": {
-                "scan-planning-mode": "server",
                 "s3.remote-signing-enabled": "true"
             },
             "storage-credentials": [
@@ -2076,6 +2084,12 @@ mod tests {
                 }
             ]
         })
+    }
+
+    fn create_table_response_with_server_side_scan_planning() -> serde_json::Value {
+        let mut result = create_table_response_with_access_session_hints();
+        result["config"]["scan-planning-mode"] = serde_json::json!("server");
+        result
     }
 
     async fn load_merged_test_config(
@@ -2957,13 +2971,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_table_rejects_rest_access_session_requirements() {
+    async fn create_table_allows_rest_access_session_hints() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_post_json(
             &ctx.path("/namespaces/db1/tables"),
-            create_table_response_with_access_session_requirements(),
+            create_table_response_with_access_session_hints(),
+        )
+        .await;
+
+        let status = ctx
+            .catalog
+            .create_table(&namespace, "table1", simple_create_table_options())
+            .await
+            .unwrap();
+
+        assert_eq!(status.name, "table1");
+    }
+
+    #[tokio::test]
+    async fn create_table_rejects_server_side_scan_planning() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables"),
+            create_table_response_with_server_side_scan_planning(),
         )
         .await;
 
@@ -2974,17 +3008,17 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, CatalogError::UnsupportedCapability(_)));
-        assert!(err.to_string().contains("Iceberg REST access session"));
+        assert!(err.to_string().contains("server-side scan planning"));
     }
 
     #[tokio::test]
-    async fn metadata_only_create_table_allows_rest_access_session_requirements() {
+    async fn metadata_only_create_table_allows_server_side_scan_planning() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_post_json(
             &ctx.path("/namespaces/db1/tables"),
-            create_table_response_with_access_session_requirements(),
+            create_table_response_with_server_side_scan_planning(),
         )
         .await;
 

@@ -35,7 +35,9 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+};
 
 use crate::conversion::ScalarConverter;
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
@@ -364,7 +366,15 @@ pub fn build_file_scan_config(
         .with_statistics(stats)
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+        .with_expr_adapter(Some(Arc::new(
+            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                match snapshot.effective_column_mapping_mode() {
+                    crate::spec::ColumnMappingMode::None => StructFieldMatching::Name,
+                    crate::spec::ColumnMappingMode::Name => StructFieldMatching::PhysicalName,
+                    crate::spec::ColumnMappingMode::Id => StructFieldMatching::FieldId,
+                },
+            ),
+        )))
         .build();
 
     Ok(file_scan_config)

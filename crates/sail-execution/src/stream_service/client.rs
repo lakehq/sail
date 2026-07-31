@@ -8,22 +8,30 @@ use prost::Message;
 use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 
 use crate::error::ExecutionResult;
-use crate::id::TaskStreamKey;
+use crate::id::{DriverId, TaskStreamKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::error::TaskStreamError;
-use crate::stream::r#gen::TaskStreamTicket;
+use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
+
+#[derive(Clone, Copy, Debug)]
+pub enum TaskStreamOwner {
+    Driver { driver_id: DriverId },
+    Worker,
+}
 
 #[derive(Clone)]
 pub struct TaskStreamFlightClient {
     inner: ClientHandle<FlightServiceClient<ClientService>>,
+    owner: TaskStreamOwner,
 }
 
 impl TaskStreamFlightClient {
-    pub fn new(options: ClientOptions) -> Self {
+    pub fn new(options: ClientOptions, owner: TaskStreamOwner) -> Self {
         Self {
             // TODO: share connection with driver/worker client
             inner: ClientHandle::new(options),
+            owner,
         }
     }
 
@@ -39,10 +47,15 @@ impl TaskStreamFlightClient {
             attempt: key.attempt as u64,
             channel: key.channel as u64,
         };
-        let ticket = {
-            let mut buf = Vec::with_capacity(ticket.encoded_len());
-            ticket.encode(&mut buf)?;
-            buf
+        let ticket = match self.owner {
+            TaskStreamOwner::Driver { driver_id } => {
+                let ticket = DriverTaskStreamTicket {
+                    driver_id: driver_id.into(),
+                    stream: Some(ticket),
+                };
+                ticket.encode_to_vec()
+            }
+            TaskStreamOwner::Worker => ticket.encode_to_vec(),
         };
         let request = arrow_flight::Ticket {
             ticket: ticket.into(),

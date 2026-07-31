@@ -10,8 +10,10 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
+import requests
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.testing.spark.session import spark_connect_server
@@ -20,6 +22,9 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
 
+LAKEKEEPER_IMAGE = "quay.io/lakekeeper/catalog:v0.12.1"
+LAKEKEEPER_DATABASE_URL = "postgresql://postgres:postgres@lakekeeper-db:5432/postgres"
+LAKEKEEPER_PROJECT_ID = "00000000-0000-0000-0000-000000000000"
 NESSIE_NAMESPACE_SEPARATOR = "-"
 
 
@@ -54,9 +59,9 @@ def seaweedfs_container(
         .with_exposed_ports(8333)
         .with_network(docker_network)
         .with_network_aliases("seaweedfs")
+        .waiting_for(LogMessageWaitStrategy("Start Seaweed S3 API").with_startup_timeout(120))
     )
     container.start()
-    wait_for_logs(container, "Start Seaweed S3 API", timeout=120)
     yield container
     container.stop()
 
@@ -100,6 +105,143 @@ def _create_s3_bucket(seaweedfs_host_endpoint: str) -> None:
             time.sleep(1)
         else:
             return
+
+
+def lakekeeper_command_container(
+    docker_network: Network,
+    command: str,
+) -> DockerContainer:
+    """Configure a Lakekeeper container for the test PostgreSQL database."""
+    return (
+        DockerContainer(LAKEKEEPER_IMAGE)
+        .with_command([command])
+        .with_env("LAKEKEEPER__PG_ENCRYPTION_KEY", "This-is-NOT-Secure!")
+        .with_env("LAKEKEEPER__PG_DATABASE_URL_READ", LAKEKEEPER_DATABASE_URL)
+        .with_env("LAKEKEEPER__PG_DATABASE_URL_WRITE", LAKEKEEPER_DATABASE_URL)
+        .with_network(docker_network)
+    )
+
+
+@pytest.fixture(scope="module")
+def lakekeeper_database_container(
+    docker_network: Network,
+) -> Generator[DockerContainer, None, None]:
+    """Start the PostgreSQL database used by Lakekeeper."""
+    container = (
+        DockerContainer("postgres:17")
+        .with_env("POSTGRES_PASSWORD", "postgres")
+        .with_network(docker_network)
+        .with_network_aliases("lakekeeper-db")
+        .waiting_for(LogMessageWaitStrategy("database system is ready to accept connections").with_startup_timeout(120))
+    )
+    container.start()
+    try:
+        yield container
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="module")
+def _lakekeeper_migration(
+    docker_network: Network,
+    lakekeeper_database_container: DockerContainer,  # noqa: ARG001
+) -> None:
+    """Apply Lakekeeper database migrations before starting the server."""
+    container = lakekeeper_command_container(docker_network, "migrate")
+    container.start()
+    try:
+        result = container.get_wrapped_container().wait(timeout=120)
+        if result["StatusCode"] != 0:
+            stdout, stderr = container.get_logs()
+            message = (stdout + stderr).decode(errors="replace")
+            msg = f"Lakekeeper database migration failed:\n{message}"
+            raise RuntimeError(msg)
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="module")
+def lakekeeper_container(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    _lakekeeper_migration: None,
+) -> Generator[DockerContainer, None, None]:
+    """Start Lakekeeper after its database has been migrated."""
+    container = (
+        lakekeeper_command_container(docker_network, "serve")
+        .with_exposed_ports(8181)
+        .with_network_aliases("lakekeeper")
+        .waiting_for(LogMessageWaitStrategy("Starting server on 0.0.0.0:8181").with_startup_timeout(120))
+    )
+    container.start()
+    try:
+        yield container
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="module")
+def lakekeeper_endpoint(lakekeeper_container: DockerContainer) -> str:
+    """Return a healthy host-accessible Lakekeeper endpoint."""
+    host = lakekeeper_container.get_container_host_ip()
+    port = lakekeeper_container.get_exposed_port(8181)
+    endpoint = f"http://{host}:{port}"
+
+    for attempt in range(30):
+        try:
+            response = requests.get(f"{endpoint}/health", timeout=10)
+            response.raise_for_status()
+        except requests.RequestException:
+            if attempt == 29:  # noqa: PLR2004
+                raise
+            time.sleep(1)
+        else:
+            return endpoint
+    msg = "unreachable"
+    raise AssertionError(msg)
+
+
+@pytest.fixture(scope="module")
+def lakekeeper_warehouse_id(
+    lakekeeper_endpoint: str,
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+) -> str:
+    """Bootstrap Lakekeeper and create the S3-compatible test warehouse."""
+    bootstrap = requests.post(
+        f"{lakekeeper_endpoint}/management/v1/bootstrap",
+        json={"accept-terms-of-use": True},
+        timeout=30,
+    )
+    bootstrap.raise_for_status()
+
+    warehouse = requests.post(
+        f"{lakekeeper_endpoint}/management/v1/warehouse",
+        json={
+            "warehouse-name": "demo",
+            "project-id": LAKEKEEPER_PROJECT_ID,
+            "storage-profile": {
+                "type": "s3",
+                "bucket": "icebergdata",
+                "key-prefix": "lakekeeper",
+                "endpoint": seaweedfs_internal_endpoint,
+                "region": "us-east-1",
+                "path-style-access": True,
+                "flavor": "s3-compat",
+                "sts-enabled": False,
+                "remote-signing-enabled": True,
+            },
+            "storage-credential": {
+                "type": "s3",
+                "credential-type": "access-key",
+                "access-key-id": "admin",
+                "secret-access-key": "password",
+            },
+        },
+        timeout=30,
+    )
+    warehouse.raise_for_status()
+    return warehouse.json()["warehouse-id"]
 
 
 @pytest.fixture(scope="module")

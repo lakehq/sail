@@ -1,12 +1,11 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::ScalarValue;
 use datafusion::common::cast::{as_float64_array, as_string_array};
+use datafusion::common::{HashMap, ScalarValue};
 use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
