@@ -23,5 +23,5 @@ pub(crate) use client::DriverClientSet;
 pub(crate) use event::{DriverEvent, TaskStatus};
 pub use gateway::{DriverGateway, DriverGatewayOptions};
 pub(crate) use r#gen::driver_service_client::DriverServiceClient;
-pub use options::DriverOptions;
+pub use options::{DriverComponents, DriverOptions};
 pub use registry::{DriverHandle, DriverRegistry, DriverRegistryAccessor};
