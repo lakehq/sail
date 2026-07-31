@@ -3,7 +3,6 @@ mod handler;
 
 use std::collections::HashMap;
 
-use sail_common_datafusion::session::job::JobRunnerHistory;
 use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::JobScheduler;
@@ -22,6 +21,6 @@ pub struct DriverActor {
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
-    /// An optional channel to send history when stopping the driver.
-    history: Option<oneshot::Sender<JobRunnerHistory>>,
+    /// An optional channel to signal that the driver has stopped.
+    shutdown_notifier: Option<oneshot::Sender<()>>,
 }

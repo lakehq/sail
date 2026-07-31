@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use datafusion::common::{Result, internal_err};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
-use sail_common_datafusion::session::job::JobRunner;
+use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistoryReporter};
 use sail_execution::DriverId;
 use sail_execution::driver::{DriverHandle, DriverOptions};
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
@@ -44,6 +44,7 @@ impl SessionJobRunner {
 pub struct SessionJobRunnerInfo {
     pub driver_id: DriverId,
     pub driver_server_port: Option<u16>,
+    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
 }
 
 pub trait SessionJobRunnerFactory: Send {
@@ -83,6 +84,7 @@ impl ServerSessionJobRunnerFactory {
             info.driver_id,
             port,
             worker_manager,
+            info.history_reporter,
         );
         let mut system = self
             .system
@@ -98,7 +100,9 @@ impl ServerSessionJobRunnerFactory {
 impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
     fn create(&mut self, info: SessionJobRunnerInfo) -> Result<SessionJobRunner> {
         match self.config.mode {
-            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new())),
+            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
+                info.history_reporter,
+            ))),
             ExecutionMode::LocalCluster => {
                 let worker_session =
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())

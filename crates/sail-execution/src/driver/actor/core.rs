@@ -35,7 +35,7 @@ impl Actor for DriverActor {
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
-            history: None,
+            shutdown_notifier: None,
         }
     }
 
@@ -109,7 +109,7 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
-            DriverEvent::Shutdown { history } => self.handle_shutdown(ctx, history),
+            DriverEvent::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
     }
 
@@ -119,8 +119,11 @@ impl Actor for DriverActor {
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }
-        if let Some(history) = self.history.take() {
-            let _ = history.send(self.build_history());
+        if let Some(history_reporter) = self.options.take_history_reporter() {
+            history_reporter.report(self.build_history()).await;
+        }
+        if let Some(result) = self.shutdown_notifier.take() {
+            let _ = result.send(());
         }
         info!("driver {} has stopped", self.options.driver_id);
     }
