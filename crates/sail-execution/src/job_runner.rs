@@ -13,7 +13,7 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
+use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverHandle, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
@@ -103,9 +103,13 @@ pub struct ClusterJobRunner {
 }
 
 impl ClusterJobRunner {
-    pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+    pub fn new(
+        system: &mut ActorSystem,
+        options: DriverOptions,
+        components: DriverComponents,
+    ) -> Self {
         let shuffle_backend = options.shuffle_backend.clone();
-        let driver = DriverHandle::new(system.spawn::<DriverActor>(options));
+        let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
         Self {
             driver,
             shuffle_backend,

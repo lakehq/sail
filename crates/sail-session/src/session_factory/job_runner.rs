@@ -6,7 +6,7 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistoryReporter};
 use sail_execution::DriverId;
-use sail_execution::driver::{DriverHandle, DriverOptions};
+use sail_execution::driver::{DriverComponents, DriverHandle, DriverOptions};
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
@@ -73,19 +73,16 @@ impl ServerSessionJobRunnerFactory {
     fn create_cluster_runner(
         &self,
         info: SessionJobRunnerInfo,
-        worker_manager: Arc<dyn sail_execution::worker_manager::WorkerManager>,
+        worker_manager: Box<dyn sail_execution::worker_manager::WorkerManager>,
     ) -> Result<SessionJobRunner> {
         let Some(port) = info.driver_server_port else {
             return internal_err!("driver gateway is not available");
         };
-        let options = DriverOptions::new(
-            &self.config,
-            self.runtime.clone(),
-            info.driver_id,
-            port,
+        let options = DriverOptions::new(&self.config, self.runtime.clone(), info.driver_id, port);
+        let components = DriverComponents {
             worker_manager,
-            info.history_reporter,
-        );
+            history_reporter: info.history_reporter,
+        };
         let mut system = self
             .system
             .lock()
@@ -93,6 +90,7 @@ impl ServerSessionJobRunnerFactory {
         Ok(SessionJobRunner::cluster(ClusterJobRunner::new(
             system.deref_mut(),
             options,
+            components,
         )))
     }
 }
@@ -109,7 +107,7 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
                         .create(())?;
                 self.create_cluster_runner(
                     info,
-                    Arc::new(LocalWorkerManager::new(
+                    Box::new(LocalWorkerManager::new(
                         self.runtime.clone(),
                         worker_session,
                     )),
@@ -129,7 +127,7 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
                 };
-                self.create_cluster_runner(info, Arc::new(KubernetesWorkerManager::new(options)))
+                self.create_cluster_runner(info, Box::new(KubernetesWorkerManager::new(options)))
             }
         }
     }
