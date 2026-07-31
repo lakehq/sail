@@ -1,0 +1,15 @@
+# serializer version: 1
+---
+name: "test_explain_order_by_floor_on_presorted_parquet_column_keeps_sortexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as c]
+      DataSourceExec: file_groups={1 group: [[<tmp>/floor_sort_parquet/<id>_0.zst.parquet]]}, projection=[CAST(col@0 AS Int64) as #1], file_type=parquet
+---
+name: "test_explain_order_by_on_presorted_parquet_column_eliminates_sortexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as c]
+      DataSourceExec: file_groups={1 group: [[<tmp>/ceil_sort_parquet/<id>_0.zst.parquet]]}, projection=[CAST(col@0 AS Int64) as #1], file_type=parquet
