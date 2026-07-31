@@ -470,10 +470,10 @@ const EXACT_POW10: [f64; 23] = [
 /// quotient is a single correctly-rounded IEEE step — the same value the parser
 /// returns, without allocating per row.
 fn decimal_to_f64(unscaled: i128, scale: i8) -> Result<f64> {
-    if let Some(pow10) = usize::try_from(scale).ok().and_then(|s| EXACT_POW10.get(s)) {
-        if unscaled.unsigned_abs() <= 1u128 << f64::MANTISSA_DIGITS {
-            return Ok(unscaled as f64 / pow10);
-        }
+    if let Some(pow10) = usize::try_from(scale).ok().and_then(|s| EXACT_POW10.get(s))
+        && unscaled.unsigned_abs() <= 1u128 << f64::MANTISSA_DIGITS
+    {
+        return Ok(unscaled as f64 / pow10);
     }
     unscaled_to_f64(unscaled, scale)
 }
