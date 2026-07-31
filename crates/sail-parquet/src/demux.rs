@@ -32,62 +32,117 @@ use sail_common_datafusion::hive_partition::{format_partition_values, partition_
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type FileStreamReceiver = UnboundedReceiver<(Path, Receiver<RecordBatch>)>;
+pub(crate) type FileManifestReceiver = UnboundedReceiver<ParquetFileManifest>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParquetFileManifest {
+    pub staging_path: Path,
+    pub final_path: Path,
+}
+
+struct ParquetFileRouter {
+    output_path: ListingTableUrl,
+    staging_prefix: Path,
+    file_prefix: String,
+    file_extension: String,
+    stream_sender: UnboundedSender<(Path, Receiver<RecordBatch>)>,
+    manifest_sender: UnboundedSender<ParquetFileManifest>,
+}
+
+impl ParquetFileRouter {
+    fn open_unpartitioned_file(
+        &self,
+        part_index: usize,
+        single_file_output: bool,
+        max_buffered_batches: usize,
+    ) -> Result<Sender<RecordBatch>> {
+        let final_path = if single_file_output {
+            self.output_path.prefix().to_owned()
+        } else {
+            self.output_path.prefix().clone().join(format!(
+                "{}-c{part_index:03}.{}",
+                self.file_prefix, self.file_extension
+            ))
+        };
+        self.open_file(final_path, max_buffered_batches.div_ceil(2).max(1))
+    }
+
+    fn open_file(&self, final_path: Path, channel_capacity: usize) -> Result<Sender<RecordBatch>> {
+        let staging_path =
+            staging_file_path(self.output_path.prefix(), &self.staging_prefix, &final_path)?;
+        let (file_sender, file_receiver) = mpsc::channel(channel_capacity.max(1));
+        self.stream_sender
+            .send((staging_path.clone(), file_receiver))
+            .map_err(|_| exec_datafusion_err!("failed to create Parquet file stream"))?;
+        self.manifest_sender
+            .send(ParquetFileManifest {
+                staging_path,
+                final_path,
+            })
+            .map_err(|_| exec_datafusion_err!("failed to record staged Parquet file"))?;
+        Ok(file_sender)
+    }
+}
 
 pub(crate) fn start_demuxer_task(
     config: &FileSinkConfig,
     data: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
+    staging_prefix: Path,
     file_prefix: String,
     max_records_per_file: Option<NonZeroUsize>,
     write_empty_file: bool,
-) -> Result<(SpawnedTask<Result<()>>, FileStreamReceiver)> {
+) -> Result<(
+    SpawnedTask<Result<()>>,
+    FileStreamReceiver,
+    FileManifestReceiver,
+)> {
     let base_output_path = config
         .table_paths
         .first()
         .cloned()
         .ok_or_else(|| plan_datafusion_err!("Parquet sink requires one output path"))?;
-    let (sender, receiver) = mpsc::unbounded_channel();
+    let (stream_sender, receiver) = mpsc::unbounded_channel();
+    let (manifest_sender, manifest_receiver) = mpsc::unbounded_channel();
     let context = Arc::clone(context);
-    let file_extension = config.file_extension.clone();
+    let router = ParquetFileRouter {
+        output_path: base_output_path.clone(),
+        staging_prefix,
+        file_prefix,
+        file_extension: config.file_extension.clone(),
+        stream_sender,
+        manifest_sender,
+    };
     let task = if config.table_partition_cols.is_empty() {
         let single_file_output = config
             .file_output_mode
             .single_file_output(&base_output_path);
         SpawnedTask::spawn(row_count_demuxer(
-            sender,
+            router,
             data,
             context,
-            base_output_path,
-            file_extension,
             single_file_output,
-            file_prefix,
             max_records_per_file,
             write_empty_file,
         ))
     } else {
         SpawnedTask::spawn(hive_style_partitions_demuxer(
-            sender,
+            router,
             data,
             context,
             config.table_partition_cols.clone(),
-            base_output_path,
-            file_extension,
             config.keep_partition_by_columns,
-            file_prefix,
             max_records_per_file,
         ))
     };
-    Ok((task, receiver))
+    Ok((task, receiver, manifest_receiver))
 }
 
 async fn row_count_demuxer(
-    mut sender: UnboundedSender<(Path, Receiver<RecordBatch>)>,
+    router: ParquetFileRouter,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
-    base_output_path: ListingTableUrl,
-    file_extension: String,
     single_file_output: bool,
-    file_prefix: String,
     max_records_per_file: Option<NonZeroUsize>,
     write_empty_file: bool,
 ) -> Result<()> {
@@ -114,14 +169,10 @@ async fn row_count_demuxer(
     let mut received_batch = false;
 
     if single_file_output {
-        open_file_streams.push(create_file_stream(
-            &base_output_path,
-            &file_prefix,
+        open_file_streams.push(router.open_unpartitioned_file(
             next_part_index,
-            &file_extension,
             true,
             max_buffered_batches,
-            &mut sender,
         )?);
         row_counts.push(0);
         next_part_index += 1;
@@ -140,27 +191,19 @@ async fn row_count_demuxer(
             let mut offset = 0;
             while offset < batch.num_rows() {
                 if open_file_streams.is_empty() {
-                    open_file_streams.push(create_file_stream(
-                        &base_output_path,
-                        &file_prefix,
+                    open_file_streams.push(router.open_unpartitioned_file(
                         next_part_index,
-                        &file_extension,
                         false,
                         max_buffered_batches,
-                        &mut sender,
                     )?);
                     row_counts.push(0);
                     next_part_index += 1;
                 } else if row_counts[0] == max_records_per_file {
                     row_counts[0] = 0;
-                    open_file_streams[0] = create_file_stream(
-                        &base_output_path,
-                        &file_prefix,
+                    open_file_streams[0] = router.open_unpartitioned_file(
                         next_part_index,
-                        &file_extension,
                         false,
                         max_buffered_batches,
-                        &mut sender,
                     )?;
                     next_part_index += 1;
                 }
@@ -176,28 +219,17 @@ async fn row_count_demuxer(
             continue;
         }
         if open_file_streams.len() < minimum_parallel_files {
-            open_file_streams.push(create_file_stream(
-                &base_output_path,
-                &file_prefix,
+            open_file_streams.push(router.open_unpartitioned_file(
                 next_part_index,
-                &file_extension,
                 false,
                 max_buffered_batches,
-                &mut sender,
             )?);
             row_counts.push(0);
             next_part_index += 1;
         } else if row_counts[next_stream] >= max_rows_per_file {
             row_counts[next_stream] = 0;
-            open_file_streams[next_stream] = create_file_stream(
-                &base_output_path,
-                &file_prefix,
-                next_part_index,
-                &file_extension,
-                false,
-                max_buffered_batches,
-                &mut sender,
-            )?;
+            open_file_streams[next_stream] =
+                router.open_unpartitioned_file(next_part_index, false, max_buffered_batches)?;
             next_part_index += 1;
         }
         row_counts[next_stream] = row_counts[next_stream].saturating_add(batch.num_rows());
@@ -210,14 +242,10 @@ async fn row_count_demuxer(
 
     if (single_file_output || write_empty_file) && !received_batch {
         if open_file_streams.is_empty() {
-            open_file_streams.push(create_file_stream(
-                &base_output_path,
-                &file_prefix,
+            open_file_streams.push(router.open_unpartitioned_file(
                 next_part_index,
-                &file_extension,
                 single_file_output,
                 max_buffered_batches,
-                &mut sender,
             )?);
         }
         open_file_streams[0]
@@ -228,39 +256,27 @@ async fn row_count_demuxer(
     Ok(())
 }
 
-fn create_file_stream(
-    base_output_path: &ListingTableUrl,
-    file_prefix: &str,
-    part_index: usize,
-    file_extension: &str,
-    single_file_output: bool,
-    max_buffered_batches: usize,
-    sender: &mut UnboundedSender<(Path, Receiver<RecordBatch>)>,
-) -> Result<Sender<RecordBatch>> {
-    let path = if single_file_output {
-        base_output_path.prefix().to_owned()
-    } else {
-        base_output_path
-            .prefix()
-            .clone()
-            .join(format!("{file_prefix}-c{part_index:03}.{file_extension}"))
-    };
-    let (file_sender, file_receiver) = mpsc::channel(max_buffered_batches.div_ceil(2).max(1));
-    sender
-        .send((path, file_receiver))
-        .map_err(|_| exec_datafusion_err!("failed to create Parquet file stream"))?;
-    Ok(file_sender)
+fn staging_file_path(
+    output_prefix: &Path,
+    staging_prefix: &Path,
+    final_path: &Path,
+) -> Result<Path> {
+    let relative = final_path.prefix_match(output_prefix).ok_or_else(|| {
+        internal_datafusion_err!(
+            "Parquet output path {final_path} is outside table path {output_prefix}"
+        )
+    })?;
+    let mut staging_path = staging_prefix.clone();
+    staging_path.extend(relative);
+    Ok(staging_path)
 }
 
 async fn hive_style_partitions_demuxer(
-    sender: UnboundedSender<(Path, Receiver<RecordBatch>)>,
+    router: ParquetFileRouter,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
     partition_by: Vec<(String, DataType)>,
-    base_output_path: ListingTableUrl,
-    file_extension: String,
     keep_partition_by_columns: bool,
-    file_prefix: String,
     max_records_per_file: Option<NonZeroUsize>,
 ) -> Result<()> {
     let max_buffered_batches = context
@@ -289,19 +305,15 @@ async fn hive_style_partitions_demuxer(
             let mut offset = 0;
             while offset < partition_batch.num_rows() {
                 if state.sender.is_none() {
-                    let (partition_sender, partition_receiver) =
-                        mpsc::channel(max_buffered_batches);
                     let file_path = hive_style_file_path(
                         &partition_key,
                         &partition_by,
-                        &file_prefix,
+                        &router.file_prefix,
                         state.next_file_index,
-                        &file_extension,
-                        &base_output_path,
+                        &router.file_extension,
+                        &router.output_path,
                     )?;
-                    sender
-                        .send((file_path, partition_receiver))
-                        .map_err(|_| exec_datafusion_err!("failed to create partition writer"))?;
+                    let partition_sender = router.open_file(file_path, max_buffered_batches)?;
                     state.sender = Some(partition_sender);
                     state.next_file_index += 1;
                 }

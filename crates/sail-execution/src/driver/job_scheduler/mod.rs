@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
+use object_store::path::Path;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
@@ -60,4 +62,14 @@ pub enum JobAction {
         stage: Option<usize>,
         context: Arc<TaskContext>,
     },
+    CleanUpListingWrites {
+        locations: Vec<ListingWriteStaging>,
+        context: Arc<TaskContext>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ListingWriteStaging {
+    pub object_store_url: ObjectStoreUrl,
+    pub prefix: Path,
 }

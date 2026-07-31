@@ -14,8 +14,8 @@ use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::config::{ExecutionOptions, TableParquetOptions};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::dml::InsertOp;
@@ -36,11 +36,20 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err, not_impl_err, plan_datafusion_err};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSink, FileSinkConfig};
 use datafusion_datasource_parquet::ParquetSink;
-use futures::stream;
+use futures::{StreamExt, stream};
+use log::warn;
+use object_store::ObjectStoreExt;
+use object_store::path::Path;
 use parquet::file::metadata::SortingColumn;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::listing_write::{
+    ListingWriteFile, ListingWriteTaskManifest, encode_listing_write_manifest,
+    listing_write_manifest_schema,
+};
+use sail_common_datafusion::task_attempt::TaskAttemptContext;
 use uuid::Uuid;
 
-use crate::demux::start_demuxer_task;
+use crate::demux::{ParquetFileManifest, start_demuxer_task};
 
 /// Settings captured in the physical plan that affect file layout and writer buffering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +138,7 @@ impl ParquetWriterExec {
         // interpretation prevents multiple input partitions from racing on a
         // path that happens to end in `.parquet`.
         sink_config.file_output_mode = FileOutputMode::Directory;
-        let schema = count_schema();
+        let schema = listing_write_manifest_schema();
         let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(
             PlanProperties::new(
@@ -176,6 +185,35 @@ impl ParquetWriterExec {
 
     pub fn write_id(&self) -> &str {
         &self.write_id
+    }
+
+    pub fn staging_prefix(&self) -> Path {
+        self.sink_config.table_paths[0]
+            .prefix()
+            .clone()
+            .join("_temporary")
+            .join("sail")
+            .join(self.write_id.as_str())
+    }
+
+    fn attempt_staging_prefix(
+        &self,
+        context: &TaskContext,
+        partition: usize,
+    ) -> Result<(Path, TaskAttemptContext)> {
+        let attempt = context
+            .extension::<TaskAttemptContext>()
+            .unwrap_or_else(|_| Arc::new(TaskAttemptContext::new(0, 0, partition, 0)));
+        if attempt.partition() != partition {
+            return Err(plan_datafusion_err!(
+                "Parquet writer partition {partition} does not match task partition {}",
+                attempt.partition()
+            ));
+        }
+        Ok((
+            self.staging_prefix().join(attempt.path_component()),
+            *attempt,
+        ))
     }
 
     fn writer_context(&self, context: &TaskContext) -> Arc<TaskContext> {
@@ -381,14 +419,19 @@ impl ExecutionPlan for ParquetWriterExec {
                 .with_sorting_columns(sorting_columns),
         );
         let writer_context = self.writer_context(&context);
+        let (staging_prefix, task_attempt) =
+            self.attempt_staging_prefix(&writer_context, partition)?;
         let object_store = writer_context
             .runtime_env()
             .object_store(&self.sink_config.object_store_url)?;
+        let output_prefix = self.sink_config.table_paths[0].prefix().clone();
+        let write_id = self.write_id.clone();
         let file_prefix = format!("part-{partition:05}-{}", self.write_id);
-        let (demux_task, file_streams) = start_demuxer_task(
+        let (demux_task, file_streams, mut file_manifests) = start_demuxer_task(
             &self.sink_config,
             input,
             &writer_context,
+            staging_prefix.clone(),
             file_prefix,
             self.execution_options.max_records_per_file,
             partition == 0,
@@ -399,38 +442,121 @@ impl ExecutionPlan for ParquetWriterExec {
         let schema = Arc::clone(&self.schema);
         let output = stream::once(async move {
             let _timer = elapsed_compute.timer();
-            let rows = sink
-                .spawn_writer_tasks_and_join(
-                    &writer_context,
-                    demux_task,
-                    file_streams,
-                    object_store,
+            let mut cleanup =
+                StagingCleanupGuard::new(Arc::clone(&object_store), staging_prefix.clone());
+            let result = async {
+                let rows = sink
+                    .spawn_writer_tasks_and_join(
+                        &writer_context,
+                        demux_task,
+                        file_streams,
+                        Arc::clone(&object_store),
+                    )
+                    .await?;
+                output_rows.add(usize::try_from(rows).map_err(|_| {
+                    DataFusionError::Execution("Parquet row count is too large".to_string())
+                })?);
+                let written = sink
+                    .written()
+                    .into_iter()
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mut paths = Vec::new();
+                while let Some(path) = file_manifests.recv().await {
+                    paths.push(path);
+                }
+                let (batch, bytes) = build_task_manifest(
+                    &object_store,
+                    &output_prefix,
+                    &staging_prefix,
+                    &write_id,
+                    task_attempt,
+                    rows,
+                    written,
+                    paths,
                 )
                 .await?;
-            output_rows.add(usize::try_from(rows).map_err(|_| {
-                DataFusionError::Execution("Parquet row count is too large".to_string())
-            })?);
-            let bytes = sink
-                .written()
-                .values()
-                .flat_map(|metadata| metadata.row_groups())
-                .try_fold(0_usize, |total, row_group| {
-                    let size = usize::try_from(row_group.compressed_size()).map_err(|_| {
-                        DataFusionError::Execution(
-                            "Parquet compressed byte count is too large".to_string(),
-                        )
-                    })?;
-                    total.checked_add(size).ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "Parquet compressed byte count overflow".to_string(),
-                        )
-                    })
-                })?;
-            output_bytes.add(bytes);
-            count_batch(rows)
+                output_bytes.add(bytes);
+                Ok(batch)
+            }
+            .await;
+            match result {
+                Ok(batch) => {
+                    cleanup.disarm();
+                    Ok(batch)
+                }
+                Err(error) => {
+                    if let Err(cleanup_error) = cleanup.clean_up().await {
+                        warn!(
+                            "failed to clean Parquet task staging path {staging_prefix}: {cleanup_error}"
+                        );
+                    }
+                    Err(error)
+                }
+            }
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
     }
+}
+
+struct StagingCleanupGuard {
+    object_store: Option<Arc<dyn object_store::ObjectStore>>,
+    staging_prefix: Path,
+}
+
+impl StagingCleanupGuard {
+    fn new(object_store: Arc<dyn object_store::ObjectStore>, staging_prefix: Path) -> Self {
+        Self {
+            object_store: Some(object_store),
+            staging_prefix,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.object_store = None;
+    }
+
+    async fn clean_up(&mut self) -> Result<()> {
+        if let Some(object_store) = self.object_store.take() {
+            delete_staging_files(object_store.as_ref(), &self.staging_prefix).await?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for StagingCleanupGuard {
+    fn drop(&mut self) {
+        let Some(object_store) = self.object_store.take() else {
+            return;
+        };
+        let staging_prefix = self.staging_prefix.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            warn!(
+                "cannot clean canceled Parquet task staging path {staging_prefix} without a runtime"
+            );
+            return;
+        };
+        std::mem::drop(runtime.spawn(async move {
+            if let Err(error) = delete_staging_files(object_store.as_ref(), &staging_prefix).await {
+                warn!(
+                    "failed to clean canceled Parquet task staging path {staging_prefix}: {error}"
+                );
+            }
+        }));
+    }
+}
+
+async fn delete_staging_files(
+    object_store: &dyn object_store::ObjectStore,
+    staging_prefix: &Path,
+) -> Result<()> {
+    let mut objects = object_store.list(Some(staging_prefix));
+    while let Some(object) = objects.next().await.transpose()? {
+        match object_store.delete(&object.location).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => return Err(DataFusionError::ObjectStore(Box::new(error))),
+        }
+    }
+    Ok(())
 }
 
 fn lex_ordering_to_sorting_columns(
@@ -494,19 +620,81 @@ fn sort_expr_to_sorting_column(
     })
 }
 
-fn count_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new(
-        "count",
-        DataType::UInt64,
-        false,
-    )]))
-}
-
-fn count_batch(count: u64) -> Result<RecordBatch> {
-    let values = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
-    Ok(RecordBatch::try_from_iter_with_nullable(vec![(
-        "count", values, false,
-    )])?)
+async fn build_task_manifest(
+    object_store: &Arc<dyn object_store::ObjectStore>,
+    output_prefix: &Path,
+    staging_prefix: &Path,
+    write_id: &str,
+    task_attempt: TaskAttemptContext,
+    rows: u64,
+    written: std::collections::HashMap<Path, parquet::file::metadata::ParquetMetaData>,
+    paths: Vec<ParquetFileManifest>,
+) -> Result<(RecordBatch, usize)> {
+    if written.len() != paths.len() {
+        return internal_err!(
+            "Parquet writer recorded {} files but wrote {} files",
+            paths.len(),
+            written.len()
+        );
+    }
+    let mut files = Vec::with_capacity(paths.len());
+    let mut total_size = 0_usize;
+    for path in paths {
+        let metadata = written.get(&path.staging_path).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "missing Parquet metadata for staged file {}",
+                path.staging_path
+            ))
+        })?;
+        if !path.staging_path.prefix_matches(staging_prefix) {
+            return internal_err!(
+                "staged Parquet file {} is outside attempt prefix {staging_prefix}",
+                path.staging_path
+            );
+        }
+        let relative = path.final_path.prefix_match(output_prefix).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "final Parquet file {} is outside output prefix {output_prefix}",
+                path.final_path
+            ))
+        })?;
+        let mut final_relative_path = Path::ROOT;
+        final_relative_path.extend(relative);
+        if final_relative_path.is_root() {
+            return internal_err!("Parquet final path must name a file");
+        }
+        let object = object_store.head(&path.staging_path).await?;
+        let size = usize::try_from(object.size).map_err(|_| {
+            DataFusionError::Internal("Parquet object size is too large".to_string())
+        })?;
+        total_size = total_size
+            .checked_add(size)
+            .ok_or_else(|| DataFusionError::Internal("Parquet object size overflow".to_string()))?;
+        files.push(ListingWriteFile {
+            staging_path: path.staging_path.to_string(),
+            final_relative_path: final_relative_path.to_string(),
+            size: object.size,
+            row_count: u64::try_from(metadata.file_metadata().num_rows()).map_err(|_| {
+                DataFusionError::Internal("Parquet file row count must not be negative".to_string())
+            })?,
+            e_tag: object.e_tag,
+            version: object.version,
+        });
+    }
+    files.sort_by(|left, right| left.final_relative_path.cmp(&right.final_relative_path));
+    let manifest = ListingWriteTaskManifest {
+        write_id: write_id.to_string(),
+        job_id: task_attempt.job_id(),
+        stage: u64::try_from(task_attempt.stage())
+            .map_err(|_| DataFusionError::Internal("task stage is too large".to_string()))?,
+        partition: u64::try_from(task_attempt.partition())
+            .map_err(|_| DataFusionError::Internal("task partition is too large".to_string()))?,
+        attempt: u64::try_from(task_attempt.attempt())
+            .map_err(|_| DataFusionError::Internal("task attempt is too large".to_string()))?,
+        row_count: rows,
+        files,
+    };
+    Ok((encode_listing_write_manifest(&manifest)?, total_size))
 }
 
 #[cfg(test)]
@@ -514,7 +702,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray, UInt64Array};
+    use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
     use datafusion::arrow::compute::SortOptions;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::arrow::record_batch::RecordBatch;
@@ -532,14 +720,15 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_datasource::ListingTableUrl;
-    use futures::TryStreamExt;
+    use futures::{StreamExt, TryStreamExt};
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::metadata::SortingColumn;
+    use sail_common_datafusion::listing_write::decode_listing_write_manifests;
 
-    use super::{ParquetWriteExecutionOptions, ParquetWriterExec};
+    use super::{ParquetWriteExecutionOptions, ParquetWriterExec, StagingCleanupGuard};
 
     fn sink_config(
         output_schema: SchemaRef,
@@ -559,20 +748,40 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn canceled_task_cleanup_guard_removes_attempt_files() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let staging_prefix =
+            Path::from("output/_temporary/sail/write-id/job-1-stage-2-part-0-attempt-3");
+        let file = staging_prefix.clone().join("part.parquet");
+        store.put(&file, b"staged".as_slice().into()).await?;
+
+        let cleanup = StagingCleanupGuard::new(store.clone(), staging_prefix.clone());
+        drop(cleanup);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if store.list(Some(&staging_prefix)).next().await.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            DataFusionError::Execution("canceled task staging cleanup timed out".to_string())
+        })?;
+        Ok(())
+    }
+
     fn output_row_count(partitions: &[Vec<RecordBatch>]) -> Result<u64> {
         partitions.iter().flatten().try_fold(0_u64, |total, batch| {
-            let counts = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Parquet writer returned an invalid count column".to_string(),
-                    )
-                })?;
-            total.checked_add(counts.value(0)).ok_or_else(|| {
-                DataFusionError::Execution("Parquet output row count overflow".to_string())
-            })
+            decode_listing_write_manifests(batch)?
+                .into_iter()
+                .try_fold(total, |total, manifest| {
+                    total.checked_add(manifest.row_count).ok_or_else(|| {
+                        DataFusionError::Execution("Parquet output row count overflow".to_string())
+                    })
+                })
         })
     }
 
@@ -585,6 +794,12 @@ mod tests {
             .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
         paths.sort();
         Ok(paths)
+    }
+
+    fn staged_path(write_id: &str, partition: usize, final_relative_path: &str) -> String {
+        format!(
+            "output/_temporary/sail/{write_id}/job-0-stage-0-part-{partition}-attempt-0/{final_relative_path}"
+        )
     }
 
     async fn parquet_row_count(store: &Arc<InMemory>, path: &str) -> Result<i64> {
@@ -735,10 +950,10 @@ mod tests {
         assert_eq!(first.len(), 2);
         assert_eq!(output_row_count(&first)?, 6);
         let expected_paths = vec![
-            "output/part-00000-retry-write-c000.parquet".to_string(),
-            "output/part-00000-retry-write-c001.parquet".to_string(),
-            "output/part-00001-retry-write-c000.parquet".to_string(),
-            "output/part-00001-retry-write-c001.parquet".to_string(),
+            staged_path("retry-write", 0, "part-00000-retry-write-c000.parquet"),
+            staged_path("retry-write", 0, "part-00000-retry-write-c001.parquet"),
+            staged_path("retry-write", 1, "part-00001-retry-write-c000.parquet"),
+            staged_path("retry-write", 1, "part-00001-retry-write-c001.parquet"),
         ];
         assert_eq!(object_paths(&store).await?, expected_paths);
 
@@ -788,7 +1003,11 @@ mod tests {
         let paths = object_paths(&store).await?;
         assert_eq!(
             paths,
-            vec!["output/part-00000-empty-write-c000.snappy.parquet"]
+            vec![staged_path(
+                "empty-write",
+                0,
+                "part-00000-empty-write-c000.snappy.parquet"
+            )]
         );
         assert_eq!(parquet_row_count(&store, &paths[0]).await?, 0);
         Ok(())
@@ -829,7 +1048,11 @@ mod tests {
         assert_eq!(output_row_count(&output)?, 0);
         assert_eq!(
             object_paths(&store).await?,
-            vec!["output/part-00000-zero-partitions-c000.parquet"]
+            vec![staged_path(
+                "zero-partitions",
+                0,
+                "part-00000-zero-partitions-c000.parquet"
+            )]
         );
         Ok(())
     }
@@ -917,9 +1140,9 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "output/part-00000-limited-write-c000.parquet",
-                "output/part-00000-limited-write-c001.parquet",
-                "output/part-00000-limited-write-c002.parquet",
+                staged_path("limited-write", 0, "part-00000-limited-write-c000.parquet"),
+                staged_path("limited-write", 0, "part-00000-limited-write-c001.parquet"),
+                staged_path("limited-write", 0, "part-00000-limited-write-c002.parquet"),
             ]
         );
         let mut row_counts = Vec::new();
@@ -973,11 +1196,31 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "output/bucket=a/part-00000-limited-partitioned-write.c000.parquet",
-                "output/bucket=a/part-00000-limited-partitioned-write.c001.parquet",
-                "output/bucket=a/part-00000-limited-partitioned-write.c002.parquet",
-                "output/bucket=b/part-00000-limited-partitioned-write.c000.parquet",
-                "output/bucket=b/part-00000-limited-partitioned-write.c001.parquet",
+                staged_path(
+                    "limited-partitioned-write",
+                    0,
+                    "bucket=a/part-00000-limited-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "limited-partitioned-write",
+                    0,
+                    "bucket=a/part-00000-limited-partitioned-write.c001.parquet",
+                ),
+                staged_path(
+                    "limited-partitioned-write",
+                    0,
+                    "bucket=a/part-00000-limited-partitioned-write.c002.parquet",
+                ),
+                staged_path(
+                    "limited-partitioned-write",
+                    0,
+                    "bucket=b/part-00000-limited-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "limited-partitioned-write",
+                    0,
+                    "bucket=b/part-00000-limited-partitioned-write.c001.parquet",
+                ),
             ]
         );
         let mut total_rows = 0;
@@ -1048,10 +1291,26 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "output/bucket=a/part-00000-partitioned-write.c000.parquet".to_string(),
-                "output/bucket=a/part-00001-partitioned-write.c000.parquet".to_string(),
-                "output/bucket=b/part-00000-partitioned-write.c000.parquet".to_string(),
-                "output/bucket=b/part-00001-partitioned-write.c000.parquet".to_string(),
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=a/part-00000-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=b/part-00000-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    1,
+                    "bucket=a/part-00001-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    1,
+                    "bucket=b/part-00001-partitioned-write.c000.parquet",
+                ),
             ]
         );
         for path in paths {
@@ -1130,10 +1389,26 @@ mod tests {
         assert_eq!(
             object_paths(&store).await?,
             vec![
-                "output/bucket=__HIVE_DEFAULT_PARTITION__/part-00000-partitioned-write.c000.parquet",
-                "output/bucket=a%2Fb/part-00000-partitioned-write.c000.parquet",
-                "output/bucket=a%3Db/part-00000-partitioned-write.c000.parquet",
-                "output/bucket=雪/part-00000-partitioned-write.c000.parquet",
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=__HIVE_DEFAULT_PARTITION__/part-00000-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=a%2Fb/part-00000-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=a%3Db/part-00000-partitioned-write.c000.parquet",
+                ),
+                staged_path(
+                    "partitioned-write",
+                    0,
+                    "bucket=雪/part-00000-partitioned-write.c000.parquet",
+                ),
             ]
         );
         Ok(())

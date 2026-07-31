@@ -17,7 +17,8 @@ def safe_sort_key(row):
 
 
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
-    path = str(tmp_path / "parquet_basic")
+    output_path = tmp_path / "parquet_basic"
+    path = str(output_path)
     sample_df.write.parquet(path, mode="overwrite")
     read_df = spark.read.parquet(path)
     assert sample_df.count() == read_df.count()
@@ -33,6 +34,8 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
         )
         for file in files
     )
+    assert (output_path / "_SUCCESS").read_bytes() == b""
+    assert not (output_path / "_temporary").exists()
 
 
 def test_parquet_hive_partition_paths_match_spark(spark, tmp_path):
@@ -66,6 +69,8 @@ def test_parquet_hive_partition_paths_match_spark(spark, tmp_path):
         )
         for file in files
     )
+    assert (path / "_SUCCESS").read_bytes() == b""
+    assert not (path / "_temporary").exists()
 
     read_df = spark.read.parquet(str(path))
     assert sorted(read_df.collect(), key=lambda row: row.id) == [
@@ -178,6 +183,8 @@ def test_parquet_empty_write_has_one_readable_file(spark, tmp_path):
     read_df = spark.read.parquet(str(path))
     assert read_df.schema == empty.schema
     assert read_df.count() == 0
+    assert (path / "_SUCCESS").read_bytes() == b""
+    assert not (path / "_temporary").exists()
 
 
 def test_parquet_path_glob_filter(spark, tmp_path):
@@ -197,7 +204,8 @@ def test_parquet_path_glob_filter(spark, tmp_path):
 
 
 def test_parquet_write_modes(spark, tmp_path):
-    path = str(tmp_path / "parquet_write_modes")
+    output_path = tmp_path / "parquet_write_modes"
+    path = str(output_path)
 
     spark.createDataFrame([(1, "old")], schema="id INT, value STRING").write.parquet(path)
 
@@ -215,6 +223,8 @@ def test_parquet_write_modes(spark, tmp_path):
 
     spark.createDataFrame([(5, "new")], schema="id INT, value STRING").write.mode("overwrite").parquet(path)
     assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
+    assert (output_path / "_SUCCESS").read_bytes() == b""
+    assert not (output_path / "_temporary").exists()
 
 
 def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):
@@ -680,13 +690,12 @@ def test_parquet_read_partitioned_directory_type_inference_string_only(spark, tm
     assert type_by_name["float_part"] == "string"
     assert type_by_name["string_part"] == "string"
     rows = df.collect()
-    # Note: Sail's writer drops trailing zeros when stringifying a DOUBLE
-    # partition value (`3.0` → `"3"`). Spark would write `"3.0"`. Pinned
-    # against Sail's current behavior.
+    # Partition values use Spark-compatible formatting even though Sail still
+    # discovers all partition column types as STRING.
     assert rows == [
         Row(id=1, val="a", int_part="2024", float_part="1.5", string_part="alpha"),
         Row(id=2, val="b", int_part="2024", float_part="2.5", string_part="beta"),
-        Row(id=3, val="c", int_part="2025", float_part="3", string_part="alpha"),
+        Row(id=3, val="c", int_part="2025", float_part="3.0", string_part="alpha"),
     ]
 
 

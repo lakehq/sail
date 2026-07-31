@@ -70,6 +70,7 @@ message ExtendedPhysicalPlanNode {
     RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
     RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
     ParquetWriterExecNode parquet_writer = 57;
+    ListingWriteCommitExecNode listing_write_commit = 58;
   }
 }
 
@@ -665,6 +666,16 @@ message ParquetWriterExecNode {
   uint64 max_buffered_batches_per_output_file = 9;
   uint64 objectstore_writer_buffer_size = 10;
   optional uint64 max_records_per_file = 11;
+}
+
+message ListingWriteCommitExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string target_prefix = 3;
+  string staging_prefix = 4;
+  string write_id = 5;
+  bool overwrite = 6;
+  uint64 expected_task_count = 7;
 }
 
 message ArrowExecNode {

@@ -102,6 +102,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::commit::ListingWriteCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
@@ -1245,6 +1246,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     write_id,
                 )?))
             }
+            NodeKind::ListingWriteCommit(r#gen::ListingWriteCommitExecNode {
+                input,
+                object_store_url,
+                target_prefix,
+                staging_prefix,
+                write_id,
+                overwrite,
+                expected_task_count,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let target_prefix =
+                    object_store::path::Path::parse(target_prefix).map_err(|error| {
+                        plan_datafusion_err!("invalid listing target path: {error}")
+                    })?;
+                let staging_prefix =
+                    object_store::path::Path::parse(staging_prefix).map_err(|error| {
+                        plan_datafusion_err!("invalid listing staging path: {error}")
+                    })?;
+                let expected_task_count = usize::try_from(expected_task_count)
+                    .map_err(|_| plan_datafusion_err!("listing writer task count is too large"))?;
+                Ok(Arc::new(ListingWriteCommitExec::try_new(
+                    input,
+                    object_store_url,
+                    target_prefix,
+                    staging_prefix,
+                    write_id,
+                    overwrite,
+                    expected_task_count,
+                )?))
+            }
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
@@ -2209,6 +2242,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         })
                     })
                     .transpose()?,
+            })
+        } else if let Some(commit) = node.downcast_ref::<ListingWriteCommitExec>() {
+            NodeKind::ListingWriteCommit(r#gen::ListingWriteCommitExecNode {
+                input: try_encode_physical_plan(self, commit.input().clone())?,
+                object_store_url: commit.object_store_url().to_string(),
+                target_prefix: commit.target_prefix().to_string(),
+                staging_prefix: commit.staging_prefix().to_string(),
+                write_id: commit.write_id().to_string(),
+                overwrite: commit.overwrite(),
+                expected_task_count: u64::try_from(commit.expected_task_count())
+                    .map_err(|_| plan_datafusion_err!("listing writer task count is too large"))?,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan(self, data_sink.input().clone())?;
@@ -5342,6 +5386,46 @@ mod tests {
         assert_eq!(column.name(), "value");
         assert_eq!(column.index(), 0);
         assert_eq!(requirement.options, Some(sort_options));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_listing_write_commit_plan() -> Result<()> {
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::listing_write::listing_write_manifest_schema;
+
+        let input = Arc::new(EmptyExec::new(listing_write_manifest_schema()));
+        let commit = ListingWriteCommitExec::try_new(
+            input,
+            ObjectStoreUrl::parse("memory://")?,
+            object_store::path::Path::from("codec/output"),
+            object_store::path::Path::from("codec/output/_temporary/sail/codec-write-id"),
+            "codec-write-id".to_string(),
+            true,
+            3,
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ListingWriteCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a listing write commit"))?;
+
+        assert_eq!(decoded.object_store_url().as_str(), "memory:///");
+        assert_eq!(
+            decoded.target_prefix(),
+            &object_store::path::Path::from("codec/output")
+        );
+        assert_eq!(
+            decoded.staging_prefix(),
+            &object_store::path::Path::from("codec/output/_temporary/sail/codec-write-id")
+        );
+        assert_eq!(decoded.write_id(), "codec-write-id");
+        assert!(decoded.overwrite());
+        assert_eq!(decoded.expected_task_count(), 3);
+        assert_eq!(decoded.input().schema(), listing_write_manifest_schema());
         Ok(())
     }
 

@@ -36,6 +36,11 @@ pub struct StageTopology {
 }
 
 impl JobTopology {
+    #[cfg(test)]
+    pub(crate) fn from_parts(regions: Vec<TaskRegionTopology>, stages: Vec<StageTopology>) -> Self {
+        Self { regions, stages }
+    }
+
     /// Groups pipelined stages into components and builds the topology of task regions and stages.
     pub fn try_new(graph: &JobGraph) -> ExecutionResult<Self> {
         let mut stages = (0..graph.stages().len())

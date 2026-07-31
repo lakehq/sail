@@ -10,6 +10,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_common_datafusion::system::predicate::Predicates;
+use sail_data_source::listing::commit::clean_up_listing_write_staging;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
@@ -224,8 +225,9 @@ impl DriverActor {
                 // for the message and cause.
                 self.job_scheduler
                     .update_task(&key, TaskState::Canceled, message, cause);
-                // Task cancellation must have been initiated by the driver itself,
-                // so it is a no-op to handle canceled tasks here.
+                // The task stream is quiescent before this status is reported, so a terminal
+                // job can safely retry cleanup of any staging data left by the attempt.
+                self.refresh_job(ctx, key.job_id);
             }
         }
         ActorAction::Continue
@@ -519,6 +521,24 @@ impl DriverActor {
                         }
                     }
                 }
+            }
+            JobAction::CleanUpListingWrites { locations, context } => {
+                ctx.spawn(async move {
+                    for location in locations {
+                        if let Err(error) = clean_up_listing_write_staging(
+                            context.as_ref(),
+                            &location.object_store_url,
+                            &location.prefix,
+                        )
+                        .await
+                        {
+                            warn!(
+                                "failed to clean listing write staging path {}: {error}",
+                                location.prefix
+                            );
+                        }
+                    }
+                });
             }
         }
     }

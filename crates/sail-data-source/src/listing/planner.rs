@@ -17,6 +17,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalN
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
@@ -29,8 +30,10 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_parquet::ParquetWriterExec;
 use sail_physical_plan::barrier::BarrierExec;
 
+use crate::listing::commit::ListingWriteCommitExec;
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::partition::pruned_partition_list;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
@@ -242,6 +245,21 @@ async fn plan_file_write(
             },
         )
         .await?;
+    if let Some(writer) = plan.downcast_ref::<ParquetWriterExec>() {
+        let staging_prefix = writer.staging_prefix();
+        let write_id = writer.write_id().to_string();
+        let expected_task_count = writer.properties().output_partitioning().partition_count();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(plan));
+        return Ok(Arc::new(ListingWriteCommitExec::try_new(
+            input,
+            object_store_url,
+            table_path.prefix().clone(),
+            staging_prefix,
+            write_id,
+            *overwrite,
+            expected_task_count,
+        )?));
+    }
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
@@ -600,7 +618,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_partition_statistics_cover_all_file_rows() {
+    fn null_partition_statistics_cover_all_file_rows() -> datafusion_common::Result<()> {
         let file = datafusion_datasource::PartitionedFile::new("part.parquet", 10)
             .with_partition_values(vec![ScalarValue::Utf8(None)]);
         let statistics = Arc::new(Statistics {
@@ -610,10 +628,14 @@ mod tests {
         });
 
         let file = with_partition_statistics(file, statistics);
-        let partition = &file.statistics.unwrap().column_statistics[0];
+        let statistics = file.statistics.ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("partition statistics are missing")
+        })?;
+        let partition = &statistics.column_statistics[0];
         assert_eq!(partition.null_count, Precision::Exact(3));
         assert_eq!(partition.distinct_count, Precision::Exact(0));
         assert_eq!(partition.min_value, Precision::Absent);
         assert_eq!(partition.max_value, Precision::Absent);
+        Ok(())
     }
 }

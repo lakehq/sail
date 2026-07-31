@@ -37,18 +37,22 @@ fn populate_partition_values<'a>(
 ) {
     if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = filter {
         match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(Column { name, .. }), Expr::Literal(value, _))
-                | (Expr::Literal(value, _), Expr::Column(Column { name, .. })) => {
-                    if partition_values
+            Operator::Eq => {
+                let equality = match (left.as_ref(), right.as_ref()) {
+                    (Expr::Column(Column { name, .. }), Expr::Literal(value, _))
+                    | (Expr::Literal(value, _), Expr::Column(Column { name, .. })) => {
+                        Some((name, value))
+                    }
+                    _ => None,
+                };
+                if let Some((name, value)) = equality
+                    && partition_values
                         .insert(name, PartitionValue::Single(value.clone()))
                         .is_some()
-                    {
-                        partition_values.insert(name, PartitionValue::Multi);
-                    }
+                {
+                    partition_values.insert(name, PartitionValue::Multi);
                 }
-                _ => {}
-            },
+            }
             Operator::And => {
                 populate_partition_values(partition_values, left);
                 populate_partition_values(partition_values, right);
@@ -225,7 +229,7 @@ mod tests {
     #[test]
     fn parses_escaped_partition_names_and_values() -> Result<()> {
         let table_path = ListingTableUrl::parse("memory:///table")?;
-        let file_path = Path::parse("table/a%3Ab=a%2Fb/part.parquet").unwrap();
+        let file_path = Path::parse("table/a%3Ab=a%2Fb/part.parquet")?;
         let values = parse_partitions_for_path(&table_path, &file_path, ["a:b"])?;
         assert_eq!(values, Some(vec!["a%2Fb"]));
         Ok(())
@@ -234,8 +238,8 @@ mod tests {
     #[test]
     fn builds_hive_escaped_partition_prefix() -> Result<()> {
         let filters = vec![datafusion_expr::col("part").eq(lit("a=b"))];
-        let prefix =
-            evaluate_partition_prefix(&[("part".to_string(), DataType::Utf8)], &filters)?.unwrap();
+        let prefix = evaluate_partition_prefix(&[("part".to_string(), DataType::Utf8)], &filters)?
+            .ok_or_else(|| exec_datafusion_err!("partition filter did not produce a prefix"))?;
         assert_eq!(prefix.as_ref(), "part=a%3Db");
         Ok(())
     }

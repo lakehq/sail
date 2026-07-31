@@ -5,15 +5,18 @@ data:
   |-
     == Physical Plan ==
     BarrierExec
-      CatalogCommandExec: CreateTable
-      ParquetWriterExec: output=file://<tmp>/explain_ctas/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=snappy.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_records_per_file=unlimited, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=snappy, max_row_group_size=1048576
-        ProjectionExec: expr=[column1@0 as id, column2@1 as name]
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      CooperativeExec
+        CatalogCommandExec: CreateTable
+      ListingWriteCommitExec: output=<tmp>/explain_ctas, mode=append, expected_tasks=1
+        ParquetWriterExec: output=file://<tmp>/explain_ctas/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=snappy.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_records_per_file=unlimited, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=snappy, max_row_group_size=1048576
+          ProjectionExec: expr=[column1@0 as id, column2@1 as name]
+            DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
     == Physical Plan ==
-    ParquetWriterExec: output=file://<tmp>/explain_insert/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=snappy.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_records_per_file=unlimited, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=snappy, max_row_group_size=1048576
-      ProjectionExec: expr=[column1@0 as id, column2@1 as name]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+    ListingWriteCommitExec: output=<tmp>/explain_insert, mode=append, expected_tasks=1
+      ParquetWriterExec: output=file://<tmp>/explain_insert/, input_partitions=1, partition_by=[], keep_partition_by_columns=false, sort_order=[], file_extension=snappy.parquet, minimum_parallel_output_files=4, soft_max_rows_per_output_file=50000000, max_records_per_file=unlimited, max_buffered_batches_per_output_file=2, object_store_writer_buffer_size=10485760, compression=snappy, max_row_group_size=1048576
+        ProjectionExec: expr=[column1@0 as id, column2@1 as name]
+          DataSourceExec: partitions=1, partition_sizes=[1]

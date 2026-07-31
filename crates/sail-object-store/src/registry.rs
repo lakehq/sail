@@ -55,7 +55,9 @@ impl DynamicObjectStoreRegistry {
                 authority: "".to_string(),
                 session_fingerprint: None,
             },
-            Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
+            Arc::new(LoggingObjectStore::new(Arc::new(
+                LocalFileSystem::new().with_automatic_cleanup(true),
+            ))),
         );
         Self { stores, runtime }
     }
@@ -154,7 +156,9 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
         _ => {
             let (scheme, _path) = ObjectStoreScheme::parse(url)?;
             let store: Arc<dyn ObjectStore> = match scheme {
-                ObjectStoreScheme::Local => Arc::new(LocalFileSystem::new()),
+                ObjectStoreScheme::Local => {
+                    Arc::new(LocalFileSystem::new().with_automatic_cleanup(true))
+                }
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();

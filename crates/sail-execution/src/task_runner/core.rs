@@ -12,6 +12,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::debug;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::task_attempt::TaskAttemptContext;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
@@ -82,6 +83,7 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
+        let context = task_attempt_context(context, key);
         let plan =
             decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
         let plan = self.rewrite_file_scans(plan)?;
@@ -192,5 +194,52 @@ impl TaskRunner {
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);
         Ok(Arc::new(shuffle))
+    }
+}
+
+fn task_attempt_context(context: Arc<TaskContext>, key: &TaskKey) -> Arc<TaskContext> {
+    let mut config = context.session_config().clone();
+    config = config.with_extension(Arc::new(TaskAttemptContext::new(
+        key.job_id.into(),
+        key.stage,
+        key.partition,
+        key.attempt,
+    )));
+    Arc::new(TaskContext::new(
+        context.task_id(),
+        context.session_id(),
+        config,
+        context.scalar_functions().clone(),
+        context.higher_order_functions().clone(),
+        context.aggregate_functions().clone(),
+        context.window_functions().clone(),
+        context.runtime_env(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common_datafusion::extension::SessionExtensionAccessor;
+
+    use super::*;
+
+    #[test]
+    fn task_attempt_context_preserves_distributed_identity() -> datafusion::common::Result<()> {
+        let key = TaskKey {
+            job_id: 17_u64.into(),
+            stage: 3,
+            partition: 5,
+            attempt: 2,
+        };
+
+        let context = task_attempt_context(Arc::new(TaskContext::default()), &key);
+        let attempt = context.extension::<TaskAttemptContext>()?;
+
+        assert_eq!(attempt.job_id(), 17);
+        assert_eq!(attempt.stage(), 3);
+        assert_eq!(attempt.partition(), 5);
+        assert_eq!(attempt.attempt(), 2);
+        assert_eq!(attempt.path_component(), "job-17-stage-3-part-5-attempt-2");
+        Ok(())
     }
 }

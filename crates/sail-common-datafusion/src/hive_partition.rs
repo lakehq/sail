@@ -132,6 +132,7 @@ pub fn parse_partition_value(encoded: &str, data_type: &DataType) -> Result<Scal
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{
         Decimal128Array, Float64Array, StringArray, TimestampMicrosecondArray,

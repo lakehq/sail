@@ -7933,6 +7933,7 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-datasource-parquet",
  "futures",
+ "log",
  "object_store",
  "parquet",
  "sail-common-datafusion",
