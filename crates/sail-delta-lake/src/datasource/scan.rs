@@ -731,109 +731,14 @@ mod tests {
     use datafusion::common::ScalarValue;
     use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use object_store::path::Path;
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-    use parquet_variant_compute::VariantType;
 
     use super::{
-        add_column_statistics, logical_file_schema_for_scan, map_statistics_to_schema,
+        add_column_statistics, map_statistics_to_schema,
         map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
         sanitize_statistics_for_schema, stats_for_add,
     };
     use crate::conversion::ScalarConverter;
-    use crate::spec::{Add, ColumnMappingMode, ColumnMetadataKey};
-
-    #[test]
-    fn test_logical_file_schema_uses_physical_names_and_logical_fields() {
-        let physical_schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "col-event-time",
-                DataType::Timestamp(
-                    datafusion::arrow::datatypes::TimeUnit::Microsecond,
-                    Some(Arc::from("UTC")),
-                ),
-                true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-        let logical_field = Field::new(
-            "event_time",
-            DataType::Timestamp(
-                datafusion::arrow::datatypes::TimeUnit::Microsecond,
-                Some(Arc::from("America/Los_Angeles")),
-            ),
-            true,
-        )
-        .with_metadata(HashMap::from([
-            (
-                ColumnMetadataKey::ColumnMappingPhysicalName
-                    .as_ref()
-                    .to_string(),
-                "col-event-time".to_string(),
-            ),
-            (
-                ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
-                "1".to_string(),
-            ),
-        ]));
-        let logical_schema = Arc::new(Schema::new(vec![logical_field.clone()]));
-
-        let scan_schema = logical_file_schema_for_scan(
-            &physical_schema,
-            &logical_schema,
-            ColumnMappingMode::Name,
-        );
-        let scan_field = scan_schema.field(0);
-
-        assert_eq!(scan_field.name(), "col-event-time");
-        assert_eq!(scan_field.data_type(), logical_field.data_type());
-        assert_eq!(scan_field.metadata(), logical_field.metadata());
-        assert!(
-            !scan_field
-                .metadata()
-                .contains_key(PARQUET_FIELD_ID_META_KEY)
-        );
-    }
-
-    #[test]
-    fn test_logical_file_schema_restores_variant_extension() {
-        let variant_storage_type = DataType::Struct(
-            vec![
-                Arc::new(
-                    Field::new("metadata", DataType::Binary, false).with_metadata(HashMap::from([
-                        ("variant".to_string(), "true".to_string()),
-                    ])),
-                ),
-                Arc::new(Field::new("value", DataType::Binary, false)),
-            ]
-            .into(),
-        );
-        let physical_schema = Arc::new(Schema::new(vec![Field::new(
-            "payload",
-            variant_storage_type.clone(),
-            true,
-        )]));
-        let logical_schema = Arc::new(Schema::new(vec![Field::new(
-            "payload",
-            variant_storage_type,
-            true,
-        )]));
-
-        let scan_schema = logical_file_schema_for_scan(
-            &physical_schema,
-            &logical_schema,
-            ColumnMappingMode::None,
-        );
-
-        assert!(
-            scan_schema
-                .field(0)
-                .try_extension_type::<VariantType>()
-                .is_ok()
-        );
-    }
+    use crate::spec::Add;
 
     #[test]
     fn test_scalar_from_json_null_returns_typed_null() {

@@ -58,6 +58,16 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Then query plan matches snapshot
 
+    Scenario: SELECT with timestamp preserves the session-local value
+      When query
+        """
+        SELECT id, CAST(event_time AS STRING) AS event_time
+        FROM delta_read_driver_timestamp_path
+        """
+      Then query result ordered
+        | id | event_time          |
+        | 1  | 2024-05-01 12:00:00 |
+
   Rule: EXPLAIN shows metadata-as-data path when table has metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_metadata

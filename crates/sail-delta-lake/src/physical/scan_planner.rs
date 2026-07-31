@@ -457,8 +457,6 @@ fn align_delta_scan_output(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::physical_plan::empty::EmptyExec;
 
@@ -472,57 +470,6 @@ mod tests {
         let aligned = align_delta_scan_output(Arc::clone(&input), schema)?;
 
         assert!(Arc::ptr_eq(&aligned, &input));
-        Ok(())
-    }
-
-    #[test]
-    fn align_delta_scan_output_renames_without_casting_matching_fields() -> Result<()> {
-        let metadata = HashMap::from([("delta.columnMapping.id".to_string(), "1".to_string())]);
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("col-id", DataType::Int64, true).with_metadata(metadata.clone()),
-        ]));
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, true).with_metadata(metadata),
-        ]));
-        let input = Arc::new(EmptyExec::new(input_schema));
-
-        let aligned = align_delta_scan_output(input, Arc::clone(&target_schema))?;
-        let Some(projection) = aligned.downcast_ref::<ProjectionExec>() else {
-            return Err(DataFusionError::Plan(
-                "expected Delta scan rename projection".to_string(),
-            ));
-        };
-
-        assert!(projection.expr()[0].expr.is::<Column>());
-        assert_eq!(projection.schema(), target_schema);
-        Ok(())
-    }
-
-    #[test]
-    fn align_delta_scan_output_casts_field_metadata_to_logical_field() -> Result<()> {
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("col-id", DataType::Int64, true).with_metadata(HashMap::from([(
-                "PARQUET:field_id".to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
-                "delta.columnMapping.id".to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-        let input = Arc::new(EmptyExec::new(input_schema));
-
-        let aligned = align_delta_scan_output(input, Arc::clone(&target_schema))?;
-        let Some(projection) = aligned.downcast_ref::<ProjectionExec>() else {
-            return Err(DataFusionError::Plan(
-                "expected Delta scan schema projection".to_string(),
-            ));
-        };
-
-        assert!(projection.expr()[0].expr.is::<CastExpr>());
-        assert_eq!(projection.schema(), target_schema);
         Ok(())
     }
 

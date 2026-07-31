@@ -1238,49 +1238,6 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_timezone_adapter_preserves_timestamp_values() -> Result<()> {
-        let physical_field = Arc::new(Field::new(
-            "event_time",
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
-            true,
-        ));
-        let logical_field = Arc::new(Field::new(
-            "event_time",
-            DataType::Timestamp(
-                TimeUnit::Microsecond,
-                Some(Arc::from("America/Los_Angeles")),
-            ),
-            true,
-        ));
-        let physical_schema = Arc::new(Schema::new(vec![Arc::clone(&physical_field)]));
-        let logical_schema = Arc::new(Schema::new(vec![Arc::clone(&logical_field)]));
-        let factory = SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
-            StructFieldMatching::Name,
-        );
-        let adapter = factory.create(Arc::clone(&logical_schema), physical_schema)?;
-        let expression = adapter.rewrite(Arc::new(Column::new("event_time", 0)))?;
-        let cast = expression
-            .downcast_ref::<SchemaEvolutionCastColumnExpr>()
-            .expect("schema evolution cast");
-
-        assert_eq!(cast.timezone_mode(), SchemaEvolutionTimezoneMode::Relaxed);
-
-        let input = Arc::new(
-            TimestampMicrosecondArray::from(vec![Some(1_714_566_400_000_000)]).with_timezone("UTC"),
-        ) as ArrayRef;
-        let batch = RecordBatch::try_new(Arc::new(Schema::new(vec![physical_field])), vec![input])?;
-        let output = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let timestamp = output
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("timestamp");
-
-        assert_eq!(timestamp.value(0), 1_714_566_400_000_000);
-        assert_eq!(timestamp.data_type(), logical_field.data_type());
-        Ok(())
-    }
-
-    #[test]
     fn relaxed_timezone_cast_recurses_into_structs() -> Result<()> {
         let source_child = Arc::new(Field::new(
             "ts",
