@@ -22,7 +22,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
+};
 use datafusion::catalog::Session;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
@@ -38,12 +40,13 @@ use object_store::path::Path;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
+use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
 use crate::conversion::ScalarConverter;
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
-use crate::spec::{Add, MaxStat, MinStat};
+use crate::spec::{Add, ColumnMappingMode, MaxStat, MinStat};
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
@@ -110,6 +113,43 @@ pub(crate) fn file_scan_logical_names(
     names
 }
 
+fn logical_file_schema_for_scan(
+    physical_file_schema: &SchemaRef,
+    logical_table_schema: &SchemaRef,
+    column_mapping_mode: ColumnMappingMode,
+) -> SchemaRef {
+    let logical_fields_by_physical_name = logical_table_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            (
+                arrow_field_physical_name(field, column_mapping_mode).to_string(),
+                Arc::clone(field),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let fields = physical_file_schema
+        .fields()
+        .iter()
+        .map(|physical_field| {
+            logical_fields_by_physical_name
+                .get(physical_field.name())
+                .map(|logical_field| {
+                    Arc::new(
+                        with_variant_extension_if_marked_storage(logical_field.as_ref().clone())
+                            .with_name(physical_field.name()),
+                    )
+                })
+                .unwrap_or_else(|| Arc::clone(physical_field))
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        physical_file_schema.metadata().clone(),
+    ))
+}
+
 pub(crate) fn file_scan_projection_for_schema(
     snapshot: &DeltaSnapshot,
     scan_config: &DeltaScanConfig,
@@ -153,6 +193,11 @@ pub fn build_file_scan_config(
     let table_partition_cols = snapshot.metadata().partition_columns();
     let partition_columns_mapped = snapshot.physical_partition_columns();
     let physical_to_logical = physical_to_logical_name_map(snapshot);
+    let logical_file_schema = logical_file_schema_for_scan(
+        &file_schema,
+        &complete_schema,
+        snapshot.effective_column_mapping_mode(),
+    );
 
     // Build file groups by partition values
     let mut file_groups: HashMap<
@@ -237,7 +282,8 @@ pub fn build_file_scan_config(
         } else {
             field.data_type().clone()
         };
-        table_partition_cols_schema.push(Arc::new(Field::new(col.clone(), corrected, true)));
+        table_partition_cols_schema
+            .push(Arc::new(field.as_ref().clone().with_data_type(corrected)));
     }
 
     // Add file column to partition schema if configured
@@ -274,7 +320,7 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::new(Arc::clone(&file_schema), table_partition_cols_schema);
+    let table_schema = TableSchema::new(logical_file_schema, table_partition_cols_schema);
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema
@@ -367,7 +413,7 @@ pub fn build_file_scan_config(
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
         .with_expr_adapter(Some(Arc::new(
-            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
                 match snapshot.effective_column_mapping_mode() {
                     crate::spec::ColumnMappingMode::None => StructFieldMatching::Name,
                     crate::spec::ColumnMappingMode::Name => StructFieldMatching::PhysicalName,
@@ -685,14 +731,109 @@ mod tests {
     use datafusion::common::ScalarValue;
     use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use object_store::path::Path;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet_variant_compute::VariantType;
 
     use super::{
-        add_column_statistics, map_statistics_to_schema,
+        add_column_statistics, logical_file_schema_for_scan, map_statistics_to_schema,
         map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
         sanitize_statistics_for_schema, stats_for_add,
     };
     use crate::conversion::ScalarConverter;
-    use crate::spec::Add;
+    use crate::spec::{Add, ColumnMappingMode, ColumnMetadataKey};
+
+    #[test]
+    fn test_logical_file_schema_uses_physical_names_and_logical_fields() {
+        let physical_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "col-event-time",
+                DataType::Timestamp(
+                    datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                    Some(Arc::from("UTC")),
+                ),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+        let logical_field = Field::new(
+            "event_time",
+            DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles")),
+            ),
+            true,
+        )
+        .with_metadata(HashMap::from([
+            (
+                ColumnMetadataKey::ColumnMappingPhysicalName
+                    .as_ref()
+                    .to_string(),
+                "col-event-time".to_string(),
+            ),
+            (
+                ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+                "1".to_string(),
+            ),
+        ]));
+        let logical_schema = Arc::new(Schema::new(vec![logical_field.clone()]));
+
+        let scan_schema = logical_file_schema_for_scan(
+            &physical_schema,
+            &logical_schema,
+            ColumnMappingMode::Name,
+        );
+        let scan_field = scan_schema.field(0);
+
+        assert_eq!(scan_field.name(), "col-event-time");
+        assert_eq!(scan_field.data_type(), logical_field.data_type());
+        assert_eq!(scan_field.metadata(), logical_field.metadata());
+        assert!(
+            !scan_field
+                .metadata()
+                .contains_key(PARQUET_FIELD_ID_META_KEY)
+        );
+    }
+
+    #[test]
+    fn test_logical_file_schema_restores_variant_extension() {
+        let variant_storage_type = DataType::Struct(
+            vec![
+                Arc::new(
+                    Field::new("metadata", DataType::Binary, false).with_metadata(HashMap::from([
+                        ("variant".to_string(), "true".to_string()),
+                    ])),
+                ),
+                Arc::new(Field::new("value", DataType::Binary, false)),
+            ]
+            .into(),
+        );
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            variant_storage_type.clone(),
+            true,
+        )]));
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            variant_storage_type,
+            true,
+        )]));
+
+        let scan_schema = logical_file_schema_for_scan(
+            &physical_schema,
+            &logical_schema,
+            ColumnMappingMode::None,
+        );
+
+        assert!(
+            scan_schema
+                .field(0)
+                .try_extension_type::<VariantType>()
+                .is_ok()
+        );
+    }
 
     #[test]
     fn test_scalar_from_json_null_returns_typed_null() {

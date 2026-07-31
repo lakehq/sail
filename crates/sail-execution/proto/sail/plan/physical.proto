@@ -58,17 +58,16 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 43;
     CatalogCommandExecNode catalog_command = 44;
     BarrierExecNode barrier = 45;
-    RelaxedTzCastExecNode relaxed_tz_cast = 46;
-    SparkPartitionIdExecNode spark_partition_id = 47;
-    DeletionVectorWriterExecNode deletion_vector_writer = 48;
-    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
-    CoalesceExecNode coalesce = 50;
-    FileDeleteExecNode file_delete = 51;
-    NoopSinkExecNode noop_sink = 52;
-    CsvExecNode csv = 53;
-    ParquetExecNode parquet = 54;
-    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
-    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
+    SparkPartitionIdExecNode spark_partition_id = 46;
+    DeletionVectorWriterExecNode deletion_vector_writer = 47;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 48;
+    CoalesceExecNode coalesce = 49;
+    FileDeleteExecNode file_delete = 50;
+    NoopSinkExecNode noop_sink = 51;
+    CsvExecNode csv = 52;
+    ParquetExecNode parquet = 53;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 54;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
   }
 }
 
@@ -105,10 +104,16 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_FIELD_ID = 2;
 }
 
+enum SchemaEvolutionTimezoneMode {
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+}
+
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
+  SchemaEvolutionTimezoneMode timezone_mode = 4;
 }
 
 message LambdaExprNode {
@@ -650,6 +655,7 @@ message ParquetExecNode {
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
+  SchemaEvolutionTimezoneMode timezone_mode = 6;
 }
 
 message ArrowExecNode {
@@ -890,12 +896,6 @@ message SparkPartitionIdExecNode {
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
-}
-
-message RelaxedTzCastExecNode {
-  bytes input = 1;
-  bytes schema = 2;
-  DeltaColumnMappingMode column_mapping_mode = 3;
 }
 
 message JoinOn {
