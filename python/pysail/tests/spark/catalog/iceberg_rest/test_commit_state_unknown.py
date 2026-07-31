@@ -29,13 +29,13 @@ class CommitFaultState:
 
 def _proxy_handler(upstream: str, state: CommitFaultState):
     class CommitFaultProxy(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._forward()
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._forward()
 
-        def do_DELETE(self) -> None:  # noqa: N802
+        def do_DELETE(self) -> None:
             self._forward()
 
         def _forward(self) -> None:

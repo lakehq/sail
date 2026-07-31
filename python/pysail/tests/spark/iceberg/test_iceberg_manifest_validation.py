@@ -14,11 +14,7 @@ from pyiceberg.types import LongType, NestedField
 
 
 def _set_record_field(record, struct_type, field_name: str, value) -> None:
-    field_index = next(
-        index
-        for index, field in enumerate(struct_type.fields)
-        if field.name == field_name
-    )
+    field_index = next(index for index, field in enumerate(struct_type.fields) if field.name == field_name)
     record._data[field_index] = value  # noqa: SLF001
 
 

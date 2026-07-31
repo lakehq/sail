@@ -177,8 +177,7 @@ def _current_manifest_files(metadata: dict) -> list:
         read_types={-1: ManifestFile, 508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
     ) as reader:
-        manifests = list(reader)
-    return manifests
+        return list(reader)
 
 
 def _current_manifest_list(metadata: dict) -> dict:
@@ -674,13 +673,12 @@ def _snapshot_value(value):
 def _sanitize_data_file_path(path: str) -> str:
     sanitized = _normalize_pytest_tmp_path(path)
     sanitized = re.sub(r"file://.*/data/", "file://<root>/data/", sanitized)
-    sanitized = re.sub(
+    return re.sub(
         r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+)?"
         r"\.(parquet|avro|orc)",
         r"data-<uuid>.\1",
         sanitized,
     )
-    return sanitized
 
 
 def _schema_types_by_id(metadata: dict) -> dict[int, PrimitiveType]:
@@ -749,10 +747,7 @@ def _bound_map(
     values: dict[int, bytes] | None,
     types_by_id: dict[int, PrimitiveType],
 ) -> dict[int, object]:
-    return {
-        field_id: _decode_bound(field_id, value, types_by_id)
-        for field_id, value in sorted((values or {}).items())
-    }
+    return {field_id: _decode_bound(field_id, value, types_by_id) for field_id, value in sorted((values or {}).items())}
 
 
 def _partition_values(data_file, partition_spec: dict) -> dict[str, object]:
@@ -761,10 +756,7 @@ def _partition_values(data_file, partition_spec: dict) -> dict[str, object]:
     assert len(values) == len(fields), (
         f"partition value count {len(values)} does not match spec field count {len(fields)}"
     )
-    return {
-        field["name"]: _snapshot_value(value)
-        for field, value in zip(fields, values, strict=True)
-    }
+    return {field["name"]: _snapshot_value(value) for field, value in zip(fields, values, strict=True)}
 
 
 def _sanitize_manifest_entry(
@@ -784,7 +776,7 @@ def _sanitize_manifest_entry(
         file_sequence_number = (
             file_sequence_number if file_sequence_number is not None else manifest_file.sequence_number
         )
-    column_sizes = {field_id: "<bytes>" for field_id in sorted((data_file.column_sizes or {}).keys())}
+    column_sizes = dict.fromkeys(sorted((data_file.column_sizes or {}).keys()), "<bytes>")
     split_offsets = ["<offset>" for _ in (data_file.split_offsets or [])]
     sanitized = {
         "status": _snapshot_value(entry.status),
@@ -814,7 +806,7 @@ def _sanitize_manifest_entry(
             "sort-order-id": data_file.sort_order_id,
         },
     }
-    if format_version == 3:
+    if format_version == 3:  # noqa: PLR2004
         data_file_values = dict(
             zip(
                 (field.name for field in DATA_FILE_TYPE[3].fields),
@@ -825,9 +817,7 @@ def _sanitize_manifest_entry(
         sanitized["data-file"].update(
             {
                 "first-row-id": data_file_values["first_row_id"],
-                "referenced-data-file": _sanitize_data_file_path(
-                    data_file_values["referenced_data_file"]
-                )
+                "referenced-data-file": _sanitize_data_file_path(data_file_values["referenced_data_file"])
                 if data_file_values["referenced_data_file"]
                 else None,
                 "content-offset": data_file_values["content_offset"],
@@ -842,9 +832,7 @@ def _current_snapshot_graph(table_location: Path) -> dict:
     format_version = metadata.get("format-version", _MANIFEST_READ_VERSION)
     snapshot_labels = _snapshot_id_labels(metadata)
     types_by_id = _schema_types_by_id(metadata)
-    specs_by_id = {
-        spec["spec-id"]: spec for spec in metadata.get("partition-specs", [])
-    }
+    specs_by_id = {spec["spec-id"]: spec for spec in metadata.get("partition-specs", [])}
     io = PyArrowFileIO()
     manifests = []
     manifest_files = sorted(

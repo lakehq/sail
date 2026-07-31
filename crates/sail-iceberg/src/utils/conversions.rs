@@ -452,6 +452,8 @@ pub fn array_value_to_literal(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::TimeUnit;
+
     use super::*;
 
     #[test]
@@ -561,8 +563,13 @@ mod tests {
         use datafusion::arrow::array::TimestampNanosecondArray;
 
         let array = TimestampNanosecondArray::from(vec![Some(9_999_999)]);
-        let literal =
-            array_value_to_literal(&(Arc::new(array) as ArrayRef), 0).expect("literal value");
+        let literal = array_value_to_literal(
+            &(Arc::new(array) as ArrayRef),
+            0,
+            &Type::Primitive(PrimitiveType::TimestampNs),
+        )
+        .expect("literal conversion")
+        .expect("literal value");
         assert_eq!(
             literal,
             Literal::Primitive(PrimitiveLiteral::Long(9_999_999))

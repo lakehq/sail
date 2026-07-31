@@ -37,10 +37,12 @@ def _copy_data_file(data_file: DataFile, **changes) -> DataFile:
 
 
 def _append_data_files(table, data_files: list[DataFile]) -> None:
-    with table.transaction() as transaction:
-        with transaction._append_snapshot_producer({}) as append_files:  # noqa: SLF001
-            for data_file in data_files:
-                append_files.append_data_file(data_file)
+    with (
+        table.transaction() as transaction,
+        transaction._append_snapshot_producer({}) as append_files,  # noqa: SLF001
+    ):
+        for data_file in data_files:
+            append_files.append_data_file(data_file)
 
 
 def _promote_metadata_to_v3(table, field_defaults: dict[int, dict[str, object]]) -> None:
@@ -48,9 +50,7 @@ def _promote_metadata_to_v3(table, field_defaults: dict[int, dict[str, object]])
     metadata = json.loads(metadata_path.read_text())
     metadata["format-version"] = 3
     current_schema = next(
-        schema
-        for schema in metadata["schemas"]
-        if schema["schema-id"] == metadata["current-schema-id"]
+        schema for schema in metadata["schemas"] if schema["schema-id"] == metadata["current-schema-id"]
     )
 
     def update_type(field_type) -> None:
@@ -95,9 +95,7 @@ def test_field_id_reads_defaults_statistics_and_filter_projection(spark, sql_cat
     )
     table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=spec)
     try:
-        payload_type = pa.struct(
-            [pa.field("old_nested", pa.int32(), nullable=False)]
-        )
+        payload_type = pa.struct([pa.field("old_nested", pa.int32(), nullable=False)])
         table.append(
             pa.Table.from_arrays(
                 [
@@ -128,9 +126,7 @@ def test_field_id_reads_defaults_statistics_and_filter_projection(spark, sql_cat
             table,
             {
                 table.schema().find_field("added").field_id: {"initial-default": 42},
-                table.schema().find_field("payload.added_nested").field_id: {
-                    "initial-default": 7
-                },
+                table.schema().find_field("payload.added_nested").field_id: {"initial-default": 7},
             },
         )
 
@@ -242,9 +238,7 @@ def test_write_defaults_apply_recursively_to_struct_list_and_map(spark, sql_cata
         _promote_metadata_to_v3(
             table,
             {
-                table_schema.find_field("initial_only").field_id: {
-                    "initial-default": "legacy"
-                },
+                table_schema.find_field("initial_only").field_id: {"initial-default": "legacy"},
                 table_schema.find_field("status").field_id: {
                     "initial-default": "legacy",
                     "write-default": "new",
@@ -279,9 +273,7 @@ def test_write_defaults_apply_recursively_to_struct_list_and_map(spark, sql_cata
         assert row.status == "new"
         assert tuple(row.payload) == (5, 60)
         assert [tuple(item) for item in row.items] == [(9, 100)]
-        assert {key: tuple(value) for key, value in row.attributes.items()} == {
-            "a": (14, 150)
-        }
+        assert {key: tuple(value) for key, value in row.attributes.items()} == {"a": (14, 150)}
     finally:
         sql_catalog.drop_table(identifier)
 
@@ -309,28 +301,28 @@ def test_overwrite_schema_preserves_compatible_identity_and_replaces_incompatibl
             table,
             {2: {"initial-default": 23, "write-default": 34}},
         )
-        spark.createDataFrame([(1, 100)], "id LONG, value INT").write.format(
-            "iceberg"
-        ).mode("overwrite").save(table.location())
+        spark.createDataFrame([(1, 100)], "id LONG, value INT").write.format("iceberg").mode("overwrite").save(
+            table.location()
+        )
 
-        spark.createDataFrame([(2, 200)], "id LONG, value LONG").write.format(
-            "iceberg"
-        ).mode("overwrite").option("overwriteSchema", "true").save(table.location())
+        spark.createDataFrame([(2, 200)], "id LONG, value LONG").write.format("iceberg").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).save(table.location())
 
         promoted = _static_table(table.location()).schema().find_field("value")
-        assert promoted.field_id == 2
+        assert promoted.field_id == 2  # noqa: PLR2004
         assert isinstance(promoted.field_type, LongType)
         assert promoted.required is False
         assert promoted.doc == "stable meaning"
-        assert promoted.initial_default == 23
-        assert promoted.write_default == 34
+        assert promoted.initial_default == 23  # noqa: PLR2004
+        assert promoted.write_default == 34  # noqa: PLR2004
 
-        spark.createDataFrame([(3, "three")], "id LONG, value STRING").write.format(
-            "iceberg"
-        ).mode("overwrite").option("overwriteSchema", "true").save(table.location())
+        spark.createDataFrame([(3, "three")], "id LONG, value STRING").write.format("iceberg").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).save(table.location())
 
         replaced = _static_table(table.location()).schema().find_field("value")
-        assert replaced.field_id != 2
+        assert replaced.field_id != 2  # noqa: PLR2004
         assert isinstance(replaced.field_type, StringType)
     finally:
         sql_catalog.drop_table(identifier)
@@ -350,12 +342,7 @@ def test_missing_null_count_keeps_a_file_eligible_for_is_null(spark, sql_catalog
             [_copy_data_file(source_file, null_value_counts=None)],
         )
 
-        rows = (
-            spark.read.format("iceberg")
-            .load(target.location())
-            .where("value IS NULL")
-            .collect()
-        )
+        rows = spark.read.format("iceberg").load(target.location()).where("value IS NULL").collect()
         assert len(rows) == 1
         assert rows[0].value is None
     finally:
@@ -449,22 +436,17 @@ def test_void_partition_writes_null_values(spark, sql_catalog):
         partition_spec=spec,
     )
     try:
-        spark.createDataFrame([(1,), (2,)], "id LONG").write.format("iceberg").mode(
-            "append"
-        ).save(table.location())
+        spark.createDataFrame([(1,), (2,)], "id LONG").write.format("iceberg").mode("append").save(table.location())
 
         static_table = _static_table(table.location())
         tasks = static_table.scan().plan_files()
         assert len(tasks) == 1
         assert tasks[0].file.partition[0] is None
         assert "/id_void=null/" in tasks[0].file.file_path
-        assert [
-            tuple(row)
-            for row in spark.read.format("iceberg")
-            .load(table.location())
-            .orderBy("id")
-            .collect()
-        ] == [(1,), (2,)]
+        assert [tuple(row) for row in spark.read.format("iceberg").load(table.location()).orderBy("id").collect()] == [
+            (1,),
+            (2,),
+        ]
     finally:
         sql_catalog.drop_table(identifier)
 
@@ -498,10 +480,7 @@ def test_binary_truncate_writes_prefix_partitions(spark, sql_catalog):
             "id LONG, payload BINARY",
         ).write.format("iceberg").mode("append").save(table.location())
 
-        partitions = {
-            task.file.partition[0]
-            for task in _static_table(table.location()).scan().plan_files()
-        }
+        partitions = {task.file.partition[0] for task in _static_table(table.location()).scan().plan_files()}
         assert partitions == {b"\x01\x02", b"\x03\x04"}
     finally:
         sql_catalog.drop_table(identifier)
@@ -530,9 +509,7 @@ def test_unknown_partition_transform_fails_before_data_write(spark, sql_catalog)
         metadata_path.write_text(json.dumps(metadata, separators=(",", ":")))
 
         with pytest.raises(Exception, match=r"(?i)(unknown|unsupported).*transform"):
-            spark.createDataFrame([(1,)], "id LONG").write.format("iceberg").mode(
-                "append"
-            ).save(table.location())
+            spark.createDataFrame([(1,)], "id LONG").write.format("iceberg").mode("append").save(table.location())
 
         table_path = Path(unquote(urlparse(table.location()).path))
         assert not list(table_path.glob("data/**/*.parquet"))
@@ -565,14 +542,12 @@ def test_v1_partition_replacement_keeps_removed_fields_as_void(spark, sql_catalo
         spark.createDataFrame(
             [(1, "A", "east"), (2, "B", "west")],
             "id LONG, category STRING, region STRING",
-        ).write.format("iceberg").mode("overwrite").option(
-            "overwriteSchema", "true"
-        ).partitionBy("region").save(table.location())
+        ).write.format("iceberg").mode("overwrite").option("overwriteSchema", "true").partitionBy("region").save(
+            table.location()
+        )
 
         table_path = Path(unquote(urlparse(table.location()).path))
-        metadata_path = sorted(table_path.joinpath("metadata").glob("*.metadata.json"))[
-            -1
-        ]
+        metadata_path = sorted(table_path.joinpath("metadata").glob("*.metadata.json"))[-1]
         metadata = json.loads(metadata_path.read_text())
         assert metadata["format-version"] == 1
         assert metadata["partition-specs"][0]["fields"] == [
@@ -584,9 +559,7 @@ def test_v1_partition_replacement_keeps_removed_fields_as_void(spark, sql_catalo
             }
         ]
         default_spec = next(
-            spec
-            for spec in metadata["partition-specs"]
-            if spec["spec-id"] == metadata["default-spec-id"]
+            spec for spec in metadata["partition-specs"] if spec["spec-id"] == metadata["default-spec-id"]
         )
         fields = default_spec["fields"]
         assert fields[0] == {
