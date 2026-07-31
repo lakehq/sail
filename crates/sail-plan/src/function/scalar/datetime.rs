@@ -26,7 +26,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -39,9 +38,6 @@ use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn to_chrono_fmt(format: Expr) -> Expr {
-    ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
-}
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
         expr_fn::date_part(lit(part.to_uppercase()), expr),
@@ -400,39 +396,105 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(session_tz)
 }
 
+fn coerce_datetime_format(
+    function_name: &str,
+    format: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Expr> {
+    let data_type = format.get_type(schema)?;
+    if data_type.is_nested() {
+        Err(PlanError::invalid(format!(
+            "{function_name} format argument must be a string, got {data_type}"
+        )))
+    } else if data_type.is_string() {
+        Ok(format)
+    } else {
+        Ok(cast(format, DataType::Utf8))
+    }
+}
+
+fn declare_nullable_result(expr: Expr, nullable: bool, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    if nullable && !expr.nullable(schema)? {
+        let null = lit(ScalarValue::try_from(&expr.get_type(schema)?)?);
+        Ok(when(lit(true), expr).otherwise(null)?)
+    } else {
+        Ok(expr)
+    }
+}
+
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
         crate::function::scalar::conversion::cast_to_date(input)
     } else if input.arguments.len() == 2 {
         let expr = input.arguments[0].clone();
+        let format = coerce_datetime_format(
+            "to_date",
+            input.arguments[1].clone(),
+            input.function_context.schema,
+        )?;
         let expr_type = expr.get_type(input.function_context.schema);
-        if let Ok(DataType::Timestamp(_, _)) = expr_type {
-            let expr = expr_fn::to_local_time(vec![expr]);
-            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+        let date = match &expr_type {
+            Ok(DataType::Timestamp(_, _)) => Some(expr_fn::to_local_time(vec![expr.clone()])),
+            Ok(DataType::Date32 | DataType::Date64) => Some(expr.clone()),
+            _ => None,
+        };
+        if let Some(date) = date {
+            let nullable = !input.function_context.plan_config.ansi_mode
+                || expr.nullable(input.function_context.schema)?
+                || format.nullable(input.function_context.schema)?;
+            return declare_nullable_result(
+                cast(date, DataType::Date32),
+                nullable,
+                input.function_context.schema,
+            );
         }
         let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
-        let mut arguments = input.arguments;
-        arguments[0] = expr;
-        Ok(ScalarUDF::from(SparkDate::new(false)).call(arguments))
+        Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
     }
 }
 
+fn validate_unix_timestamp_format(format: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+    match format.get_type(schema)? {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => Ok(()),
+        data_type => Err(PlanError::invalid(format!(
+            "unix_timestamp format argument must be a string, got {data_type}"
+        ))),
+    }
+}
+
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
     if input.arguments.is_empty() {
         let expr = ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Second)).call(vec![]);
         Ok(cast(expr, DataType::Int64))
     } else if input.arguments.len() == 1 {
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(input.arguments))
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
+        if matches!(
+            expr.get_type(input.function_context.schema)?,
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) | DataType::Null
+        ) {
+            validate_unix_timestamp_format(&format, input.function_context.schema)?;
+            let nullable = !ansi_mode
+                || expr.nullable(input.function_context.schema)?
+                || format.nullable(input.function_context.schema)?;
+            let result =
+                ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(vec![expr]);
+            declare_nullable_result(result, nullable, input.function_context.schema)
+        } else {
+            Ok(
+                ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode))
+                    .call(vec![expr, format]),
+            )
+        }
     } else {
         Err(PlanError::invalid(
             "unix_timestamp requires 0, 1, or 2 arguments",
@@ -504,7 +566,8 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 /// Shared `to_time` / `try_to_time` planner. Routes through `SparkTime`, which
-/// parses strings (with an optional chrono format) or casts time/timestamp args.
+/// parses strings (with an optional Spark Java datetime pattern) or casts
+/// time/timestamp args.
 /// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
@@ -518,7 +581,6 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         // cast to Utf8 here would route non-string inputs through string parsing,
         // bypassing the coercion checks and diverging from the 1-arg behavior.
         let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
         let name = if is_try { "try_to_time" } else { "to_time" };

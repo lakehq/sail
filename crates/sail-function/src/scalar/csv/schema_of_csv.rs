@@ -166,9 +166,9 @@ impl Default for SparkSchemaOfCsvOptions {
     fn default() -> Self {
         Self {
             sep: ",".to_string(),
-            timestamp_format: DateTimeFormat::parse("yyyy-MM-dd HH:mm:ss")
+            timestamp_format: DateTimeFormat::for_parsing("yyyy-MM-dd HH:mm:ss")
                 .expect("default timestamp format should be valid"),
-            date_format: DateTimeFormat::parse("yyyy-MM-dd")
+            date_format: DateTimeFormat::for_parsing("yyyy-MM-dd")
                 .expect("default date format should be valid"),
             timezone: None,
         }
@@ -189,10 +189,10 @@ impl SparkSchemaOfCsvOptions {
             options.sep = sep.to_string();
         }
         if let Some(format) = find_option(map_array, "timestampFormat") {
-            options.timestamp_format = DateTimeFormat::parse(format)?;
+            options.timestamp_format = DateTimeFormat::for_parsing(format)?;
         }
         if let Some(format) = find_option(map_array, "dateFormat") {
-            options.date_format = DateTimeFormat::parse(format)?;
+            options.date_format = DateTimeFormat::for_parsing(format)?;
         }
         if let Some(timezone) = find_option(map_array, "timeZone") {
             options.timezone = Some(timezone.to_string());

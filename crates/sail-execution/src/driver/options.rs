@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
 use sail_server::RetryStrategy;
 
 use crate::id::DriverId;
@@ -30,7 +30,11 @@ pub struct DriverOptions {
     pub shuffle_backend: ShuffleBackendKind,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
-    pub worker_manager: Arc<dyn WorkerManager>,
+}
+
+pub struct DriverComponents {
+    pub worker_manager: Box<dyn WorkerManager>,
+    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
 }
 
 impl DriverOptions {
@@ -39,7 +43,6 @@ impl DriverOptions {
         runtime: RuntimeHandle,
         driver_id: DriverId,
         driver_server_port: u16,
-        worker_manager: Arc<dyn WorkerManager>,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
@@ -67,7 +70,6 @@ impl DriverOptions {
             task_max_attempts: config.cluster.task_max_attempts,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
-            worker_manager,
         }
     }
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use sail_server::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
+use tokio::sync::oneshot;
 use tonic::async_trait;
 
 use crate::driver::{DriverActor, DriverEvent};
@@ -35,9 +36,25 @@ impl DriverHandle {
     }
 
     pub async fn shutdown(&self) -> ExecutionResult<()> {
-        self.send(DriverEvent::Shutdown { history: None })
+        // A closed channel means that the driver actor has already stopped.
+        // Shutdown is intentionally idempotent, so this is still a success.
+        let _ = self.send(DriverEvent::Shutdown { result: None }).await;
+        Ok(())
+    }
+
+    /// Stop the driver and wait for its shutdown hook to complete.
+    pub async fn shutdown_and_wait(&self) -> ExecutionResult<()> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .send(DriverEvent::Shutdown { result: Some(tx) })
             .await
-            .map_err(ExecutionError::from)
+            .is_ok()
+        {
+            // A closed result channel means another shutdown request won the race.
+            // In either case, the driver actor is no longer running.
+            let _ = rx.await;
+        }
+        Ok(())
     }
 }
 
@@ -66,6 +83,10 @@ impl DriverRegistry {
             .get(&driver_id)
             .cloned()
             .ok_or_else(|| ExecutionError::InvalidArgument(format!("driver {driver_id} not found")))
+    }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = (DriverId, DriverHandle)> + '_ {
+        self.drivers.drain()
     }
 }
 

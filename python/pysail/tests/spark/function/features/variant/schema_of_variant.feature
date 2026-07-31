@@ -80,6 +80,22 @@ Feature: schema_of_variant
         | result                      |
         | ARRAY<ARRAY<ARRAY<BIGINT>>> |
 
+    Scenario: schema_of_variant merges object fields with decimal types
+      When query
+        """
+        SELECT schema_of_variant(
+          to_variant_object(
+            array(
+              map('a', CAST(1.23 AS DECIMAL(3,2))),
+              map('b', CAST(4.56 AS DECIMAL(3,2)))
+            )
+          )
+        ) AS result
+        """
+      Then query result
+        | result                                          |
+        | ARRAY<OBJECT<a: DECIMAL(3,2), b: DECIMAL(3,2)>> |
+
     Scenario Outline: Nested: <case>
       When query
         """

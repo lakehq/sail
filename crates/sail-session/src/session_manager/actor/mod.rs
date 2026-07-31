@@ -14,6 +14,7 @@ pub struct SessionManagerActor {
     job_runner_factory: Box<dyn SessionJobRunnerFactory>,
     sessions: IndexMap<String, ServerSession>,
     drivers: DriverRegistry,
-    gateway: Option<DriverGateway>,
+    driver_gateway: Option<DriverGateway>,
     driver_id_generator: IdGenerator<DriverId>,
+    shutdown_notifier: Option<tokio::sync::oneshot::Sender<()>>,
 }

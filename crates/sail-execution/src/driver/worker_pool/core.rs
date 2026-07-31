@@ -40,7 +40,7 @@ impl WorkerPool {
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.generate() else {
             error!("failed to generate worker ID");
-            ctx.send(DriverEvent::Shutdown { history: None });
+            ctx.send(DriverEvent::Shutdown { result: None });
             return;
         };
         let descriptor = WorkerDescriptor {

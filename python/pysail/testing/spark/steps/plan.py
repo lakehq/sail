@@ -36,7 +36,7 @@ def normalize_plan_text(plan_text: str) -> str:
 
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
-        r"(^|[\s\[\(=,:{\"])"
+        r"(^|[\s\[\(=,:{\"]|[A-Za-z][A-Za-z0-9+.\-]+://)"
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
