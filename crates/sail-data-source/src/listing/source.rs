@@ -231,7 +231,7 @@ impl<T: FormatFactory> DataSourceFormat for ListingDataSourceFormat<T> {
                 //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
                 let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, true)))
                     .collect();
                 (schema, partition_fields)
             }

@@ -24,6 +24,80 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_parquet_hive_partition_paths_match_spark(spark, tmp_path):
+    path = tmp_path / "parquet_hive_partition_paths"
+    df = spark.createDataFrame(
+        [
+            (1, "a/b"),
+            (2, "x=y"),
+            (3, ""),
+            (4, None),
+            (5, "雪"),
+        ],
+        "id INT, `part=name` STRING",
+    )
+
+    df.write.partitionBy("part=name").parquet(str(path))
+
+    partition_directories = {str(file.parent.relative_to(path)) for file in path.rglob("*.parquet")}
+    assert partition_directories == {
+        "part%3Dname=a%2Fb",
+        "part%3Dname=x%3Dy",
+        "part%3Dname=__HIVE_DEFAULT_PARTITION__",
+        "part%3Dname=雪",
+    }
+
+    read_df = spark.read.parquet(str(path))
+    assert sorted(read_df.collect(), key=lambda row: row.id) == [
+        Row(id=1, **{"part=name": "a/b"}),
+        Row(id=2, **{"part=name": "x=y"}),
+        Row(id=3, **{"part=name": None}),
+        Row(id=4, **{"part=name": None}),
+        Row(id=5, **{"part=name": "雪"}),
+    ]
+    assert read_df.where("`part=name` = 'a/b'").collect() == [Row(id=1, **{"part=name": "a/b"})]
+    assert read_df.selectExpr("count(`part=name`) AS count").collect() == [Row(count=3)]
+
+
+def test_parquet_hive_partition_value_formatting(spark, tmp_path):
+    path = tmp_path / "parquet_hive_partition_value_formatting"
+    df = spark.sql(
+        """
+        SELECT
+          1 AS id,
+          DATE '2024-01-02' AS date_part,
+          CAST(123.40 AS DECIMAL(10, 2)) AS decimal_part,
+          TIMESTAMP '2024-01-02 03:04:05.123456' AS timestamp_part
+        """
+    )
+
+    df.write.partitionBy("date_part", "decimal_part", "timestamp_part").parquet(str(path))
+
+    files = list(path.rglob("*.parquet"))
+    assert len(files) == 1
+    assert str(files[0].parent.relative_to(path)) == (
+        "date_part=2024-01-02/decimal_part=123.40/"
+        "timestamp_part=2024-01-02 03%3A04%3A05.123456"
+    )
+
+    read_df = spark.read.schema(
+        "id INT, date_part DATE, decimal_part DECIMAL(10, 2), timestamp_part TIMESTAMP"
+    ).parquet(str(path))
+    assert read_df.selectExpr(
+        "id",
+        "CAST(date_part AS STRING) AS date_part",
+        "CAST(decimal_part AS STRING) AS decimal_part",
+        "CAST(timestamp_part AS STRING) AS timestamp_part",
+    ).collect() == [
+        Row(
+            id=1,
+            date_part="2024-01-02",
+            decimal_part="123.40",
+            timestamp_part="2024-01-02 03:04:05.123456",
+        )
+    ]
+
+
 def test_parquet_path_glob_filter(spark, tmp_path):
     keep_source = tmp_path / "parquet_keep_source"
     drop_source = tmp_path / "parquet_drop_source"

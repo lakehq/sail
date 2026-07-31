@@ -7,7 +7,8 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-chrono = { workspace = true }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }

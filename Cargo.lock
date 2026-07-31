@@ -7928,7 +7928,6 @@ dependencies = [
 name = "sail-parquet"
 version = "0.6.6"
 dependencies = [
- "chrono",
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",
@@ -7936,6 +7935,7 @@ dependencies = [
  "futures",
  "object_store",
  "parquet",
+ "sail-common-datafusion",
  "tokio",
  "uuid",
 ]

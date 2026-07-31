@@ -794,4 +794,58 @@ mod tests {
         }
         Ok(())
     }
+
+    #[tokio::test]
+    async fn writes_spark_compatible_hive_partition_paths() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("bucket", DataType::Utf8, true),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some(""),
+                    None,
+                    Some("a/b"),
+                    Some("a=b"),
+                    Some("雪"),
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            ],
+        )?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config(schema, vec![("bucket".to_string(), DataType::Utf8)])?,
+            TableParquetOptions::default(),
+            ParquetWriteExecutionOptions {
+                minimum_parallel_output_files: 1,
+                soft_max_rows_per_output_file: usize::MAX,
+                max_buffered_batches_per_output_file: 2,
+                objectstore_writer_buffer_size: 64,
+            },
+            None,
+            "partitioned-write".to_string(),
+        )?);
+        let context = SessionContext::new();
+        let store = Arc::new(InMemory::new());
+        let object_store_url = ObjectStoreUrl::parse("memory://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), store.clone());
+
+        let output = collect_partitioned(writer, context.task_ctx()).await?;
+        assert_eq!(output_row_count(&output)?, 5);
+        assert_eq!(
+            object_paths(&store).await?,
+            vec![
+                "output/bucket=__HIVE_DEFAULT_PARTITION__/partitioned-write-00000.parquet",
+                "output/bucket=a%2Fb/partitioned-write-00000.parquet",
+                "output/bucket=a%3Db/partitioned-write-00000.parquet",
+                "output/bucket=雪/partitioned-write-00000.parquet",
+            ]
+        );
+        Ok(())
+    }
 }

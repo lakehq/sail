@@ -7,6 +7,7 @@ pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
+pub mod hive_partition;
 pub mod literal;
 pub mod logical_expr;
 pub mod logical_rewriter;

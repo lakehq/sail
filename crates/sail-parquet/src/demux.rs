@@ -10,21 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::NaiveDate;
 use datafusion::arrow::array::builder::UInt64Builder;
 use datafusion::arrow::array::cast::AsArray;
-use datafusion::arrow::array::{ArrayAccessor, RecordBatch, StructArray};
+use datafusion::arrow::array::{RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::common::cast::{
-    as_boolean_array, as_date32_array, as_date64_array, as_float16_array, as_float32_array,
-    as_float64_array, as_int8_array, as_int16_array, as_int32_array, as_int64_array,
-    as_large_string_array, as_string_array, as_string_view_array, as_uint8_array, as_uint16_array,
-    as_uint32_array, as_uint64_array,
-};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::SendableRecordBatchStream;
@@ -34,7 +26,8 @@ use datafusion_common::{
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use futures::StreamExt;
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
+use sail_common_datafusion::hive_partition::{format_partition_values, partition_path_segment};
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type FileStreamReceiver = UnboundedReceiver<(Path, Receiver<RecordBatch>)>;
@@ -228,7 +221,7 @@ async fn hive_style_partitions_demuxer(
                         &write_id,
                         &file_extension,
                         &base_output_path,
-                    );
+                    )?;
                     sender
                         .send((file_path, partition_receiver))
                         .map_err(|_| exec_datafusion_err!("failed to create partition writer"))?;
@@ -252,123 +245,73 @@ async fn hive_style_partitions_demuxer(
     Ok(())
 }
 
-fn compute_partition_keys_by_row<'a>(
-    batch: &'a RecordBatch,
-    partition_by: &'a [(String, DataType)],
-) -> Result<Vec<Vec<Cow<'a, str>>>> {
-    const EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
+fn compute_partition_keys_by_row(
+    batch: &RecordBatch,
+    partition_by: &[(String, DataType)],
+) -> Result<Vec<Vec<String>>> {
     let schema = batch.schema();
     let mut all_partition_values = Vec::with_capacity(partition_by.len());
     for (column, _) in partition_by {
         let data_type = schema.field_with_name(column)?.data_type();
+        if !supports_hive_partition_type(data_type) {
+            return not_impl_err!(
+                "writing Hive partitions with data type {data_type} is not supported"
+            );
+        }
         let array = batch.column_by_name(column).ok_or_else(|| {
             exec_datafusion_err!("partition column {column} does not exist in schema {schema}")
         })?;
-        let mut values = Vec::with_capacity(batch.num_rows());
-        match data_type {
-            DataType::Utf8 => {
-                let array = as_string_array(array)?;
-                for index in 0..batch.num_rows() {
-                    values.push(Cow::from(array.value(index)));
-                }
-            }
-            DataType::LargeUtf8 => {
-                let array = as_large_string_array(array)?;
-                for index in 0..batch.num_rows() {
-                    values.push(Cow::from(array.value(index)));
-                }
-            }
-            DataType::Utf8View => {
-                let array = as_string_view_array(array)?;
-                for index in 0..batch.num_rows() {
-                    values.push(Cow::from(array.value(index)));
-                }
-            }
-            DataType::Boolean => {
-                let array = as_boolean_array(array)?;
-                for index in 0..batch.num_rows() {
-                    values.push(Cow::from(array.value(index).to_string()));
-                }
-            }
-            DataType::Date32 => {
-                let array = as_date32_array(array)?;
-                for index in 0..batch.num_rows() {
-                    let days = EPOCH_DAYS_FROM_CE
-                        .checked_add(array.value(index))
-                        .ok_or_else(|| {
-                            internal_datafusion_err!("Date32 partition value is out of range")
-                        })?;
-                    let date = NaiveDate::from_num_days_from_ce_opt(days).ok_or_else(|| {
-                        internal_datafusion_err!("Date32 partition value is out of range")
-                    })?;
-                    values.push(Cow::from(date.format("%Y-%m-%d").to_string()));
-                }
-            }
-            DataType::Date64 => {
-                let array = as_date64_array(array)?;
-                for index in 0..batch.num_rows() {
-                    let epoch_days =
-                        i32::try_from(array.value(index) / 86_400_000).map_err(|_| {
-                            internal_datafusion_err!("Date64 partition value is out of range")
-                        })?;
-                    let days = EPOCH_DAYS_FROM_CE.checked_add(epoch_days).ok_or_else(|| {
-                        internal_datafusion_err!("Date64 partition value is out of range")
-                    })?;
-                    let date = NaiveDate::from_num_days_from_ce_opt(days).ok_or_else(|| {
-                        internal_datafusion_err!("Date64 partition value is out of range")
-                    })?;
-                    values.push(Cow::from(date.format("%Y-%m-%d").to_string()));
-                }
-            }
-            DataType::Int8 => push_display_values(as_int8_array(array)?, &mut values, batch),
-            DataType::Int16 => push_display_values(as_int16_array(array)?, &mut values, batch),
-            DataType::Int32 => push_display_values(as_int32_array(array)?, &mut values, batch),
-            DataType::Int64 => push_display_values(as_int64_array(array)?, &mut values, batch),
-            DataType::UInt8 => push_display_values(as_uint8_array(array)?, &mut values, batch),
-            DataType::UInt16 => push_display_values(as_uint16_array(array)?, &mut values, batch),
-            DataType::UInt32 => push_display_values(as_uint32_array(array)?, &mut values, batch),
-            DataType::UInt64 => push_display_values(as_uint64_array(array)?, &mut values, batch),
-            DataType::Float16 => push_display_values(as_float16_array(array)?, &mut values, batch),
-            DataType::Float32 => push_display_values(as_float32_array(array)?, &mut values, batch),
-            DataType::Float64 => push_display_values(as_float64_array(array)?, &mut values, batch),
-            DataType::Dictionary(_, _) => {
-                let strings = datafusion::arrow::compute::cast(array, &DataType::Utf8)?;
-                let strings = as_string_array(&strings)?;
-                for index in 0..batch.num_rows() {
-                    values.push(Cow::from(strings.value(index).to_string()));
-                }
-            }
-            _ => {
-                return not_impl_err!(
-                    "writing Hive partitions with data type {data_type} is not supported"
-                );
-            }
-        }
-        all_partition_values.push(values);
+        all_partition_values.push(format_partition_values(array.as_ref())?);
     }
     Ok(all_partition_values)
 }
 
-fn push_display_values<'a, T>(array: T, values: &mut Vec<Cow<'a, str>>, batch: &RecordBatch)
-where
-    T: ArrayAccessor,
-    T::Item: ToString,
-{
-    for index in 0..batch.num_rows() {
-        values.push(Cow::from(array.value(index).to_string()));
+fn supports_hive_partition_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _)
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _)
+        | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_hive_partition_type(value_type),
+        _ => false,
     }
 }
 
 fn compute_take_arrays(
     batch: &RecordBatch,
-    all_partition_values: &[Vec<Cow<'_, str>>],
+    all_partition_values: &[Vec<String>],
 ) -> HashMap<Vec<String>, UInt64Builder> {
     let mut take_arrays = HashMap::new();
     for row in 0..batch.num_rows() {
         let partition_key = all_partition_values
             .iter()
-            .map(|values| values[row].clone().into_owned())
+            .map(|values| values[row].clone())
             .collect::<Vec<_>>();
         take_arrays
             .entry(partition_key)
@@ -405,10 +348,13 @@ fn hive_style_file_path(
     write_id: &str,
     file_extension: &str,
     base_output_path: &ListingTableUrl,
-) -> Path {
+) -> Result<Path> {
     let mut path = base_output_path.prefix().clone();
     for (index, value) in partition_key.iter().enumerate() {
-        path = path.join(format!("{}={value}", partition_by[index].0));
+        let segment = partition_path_segment(&partition_by[index].0, value);
+        path = path.join(PathPart::parse(&segment).map_err(|error| {
+            exec_datafusion_err!("invalid Hive partition path segment {segment:?}: {error}")
+        })?);
     }
-    path.join(format!("{write_id}.{file_extension}"))
+    Ok(path.join(format!("{write_id}.{file_extension}")))
 }

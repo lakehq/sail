@@ -7,7 +7,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::SessionState;
 use datafusion::execution::cache::TableScopedPath;
@@ -21,7 +20,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{ColumnStatistics, Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -33,6 +32,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::pruned_partition_list;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -389,9 +389,7 @@ async fn list_files_for_scan<'a>(
                     None,
                 )
             };
-            Ok(part_file
-                .with_statistics(statistics)
-                .with_ordering(ordering))
+            Ok(with_partition_statistics(part_file, statistics).with_ordering(ordering))
         })
         .boxed()
         .buffer_unordered(meta_fetch_concurrency);
@@ -431,6 +429,46 @@ async fn list_files_for_scan<'a>(
         statistics: stats,
         grouped_by_partition,
     })
+}
+
+fn with_partition_statistics(
+    mut file: datafusion_datasource::PartitionedFile,
+    file_statistics: Arc<Statistics>,
+) -> datafusion_datasource::PartitionedFile {
+    if file.partition_values.is_empty() {
+        file.statistics = Some(file_statistics);
+        return file;
+    }
+
+    let mut statistics = Arc::unwrap_or_clone(file_statistics);
+    for partition_value in &file.partition_values {
+        let column_statistics = if partition_value.is_null() {
+            ColumnStatistics {
+                null_count: statistics.num_rows,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                distinct_count: Precision::Exact(0),
+                sum_value: Precision::Absent,
+                byte_size: Precision::Exact(0),
+            }
+        } else {
+            ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(partition_value.clone()),
+                min_value: Precision::Exact(partition_value.clone()),
+                distinct_count: Precision::Exact(1),
+                sum_value: Precision::Absent,
+                byte_size: partition_value
+                    .data_type()
+                    .primitive_width()
+                    .map(|width| statistics.num_rows.multiply(&Precision::Exact(width)))
+                    .unwrap_or(Precision::Absent),
+            }
+        };
+        statistics.column_statistics.push(column_statistics);
+    }
+    file.statistics = Some(Arc::new(statistics));
+    file
 }
 
 async fn do_collect_statistics_and_ordering(
@@ -553,4 +591,29 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::ScalarValue;
+
+    use super::*;
+
+    #[test]
+    fn null_partition_statistics_cover_all_file_rows() {
+        let file = datafusion_datasource::PartitionedFile::new("part.parquet", 10)
+            .with_partition_values(vec![ScalarValue::Utf8(None)]);
+        let statistics = Arc::new(Statistics {
+            num_rows: Precision::Exact(3),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![],
+        });
+
+        let file = with_partition_statistics(file, statistics);
+        let partition = &file.statistics.unwrap().column_statistics[0];
+        assert_eq!(partition.null_count, Precision::Exact(3));
+        assert_eq!(partition.distinct_count, Precision::Exact(0));
+        assert_eq!(partition.min_value, Precision::Absent);
+        assert_eq!(partition.max_value, Precision::Absent);
+    }
 }

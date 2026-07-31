@@ -299,7 +299,7 @@ pub fn get_partition_columns_and_file_schema(
                 .iter()
                 .filter(|f| f.name().eq_ignore_ascii_case(&col));
             match (candidates.next(), candidates.next()) {
-                (Some(field), None) => Ok(field.clone()),
+                (Some(field), None) => Ok(Arc::new(field.as_ref().clone().with_nullable(true))),
                 _ => {
                     plan_err!("missing or ambiguous partition column: {col}")
                 }
