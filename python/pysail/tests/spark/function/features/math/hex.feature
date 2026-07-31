@@ -38,3 +38,38 @@ Feature: hex output schema
         root
          |-- result: string (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: hex without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT hex(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 17    |
+
+    Scenario Outline: hex through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT hex(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case             | input              |
+        | DOUBLE -> BIGINT | CAST(17 AS DOUBLE) |

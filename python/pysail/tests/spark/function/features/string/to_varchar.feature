@@ -130,3 +130,38 @@ Feature: to_varchar with an argument coming from a column
         SELECT to_varchar(454, 'PR999') AS r
         """
       Then query error (?i).*
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: to_varchar without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT to_varchar(<input>, '99D99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 78.12 |
+
+    Scenario Outline: to_varchar through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT to_varchar(<input>, '99D99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case                     | input   |
+        | STRING -> DECIMAL(38,18) | '78.12' |

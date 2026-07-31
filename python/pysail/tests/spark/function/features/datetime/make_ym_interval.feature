@@ -123,3 +123,39 @@ Feature: make_ym_interval builds a year-month interval from years and months
         root
          |-- result: interval year to month (nullable = true)
         """
+
+  @spark_null @spark-4
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+  # Spark 4+: PySpark 3.5 renders the type as a bare `interval` in `treeString`.
+
+    @sail-bug
+    Scenario Outline: make_ym_interval without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT make_ym_interval(<input>, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 1     |
+
+    Scenario Outline: make_ym_interval through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT make_ym_interval(<input>, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = true)
+        """
+
+      Examples:
+        | case          | input |
+        | STRING -> INT | '1'   |

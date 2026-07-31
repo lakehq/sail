@@ -4,7 +4,6 @@ Feature: cast output schema
   @spark_null
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to cast yields the schema Spark declares
       When query
         """
