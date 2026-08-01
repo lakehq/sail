@@ -1,4 +1,4 @@
-@to_csv
+@csv @to_csv
 Feature: to_csv converts a struct value to a CSV string
 
   Rule: Basic serialization
@@ -32,14 +32,18 @@ Feature: to_csv converts a struct value to a CSV string
 
   Rule: NULL handling
 
+    @sail-bug
     Scenario: NULL struct returns NULL
+      # The value matches Spark, but Sail's column name diverges: Spark folds the NULL cast to
+      # `to_csv(NULL)` in the display name (verified against JVM 4.2), while Sail keeps the full
+      # `CAST(NULL AS STRUCT<...>)`.
       When query
         """
         SELECT to_csv(CAST(NULL AS STRUCT<a:INT, b:INT>))
         """
       Then query result
-        | to_csv(CAST(NULL AS STRUCT<A:INT,B:INT>)) |
-        | NULL                                      |
+        | to_csv(NULL) |
+        | NULL         |
 
     Scenario: Struct with NULL field serializes null field as empty string
       When query
@@ -110,6 +114,7 @@ Feature: to_csv converts a struct value to a CSV string
         | quoteAll quotes custom emptyValue fields                                  | 'a', '', 'b', 'x'                   | 'emptyValue', '_', 'quoteAll', 'true' | "_","x"      |
         | emptyValue containing separator is quoted                                 | 'a', '', 'b', 'x'                   | 'emptyValue', ','                     | ",",x        |
         | Literal escape characters are escaped in quoted fields                    | 'a', 'a#b,c'                        | 'escape', '#'                         | "a##b,c"     |
+        | Custom quote character is used                                            | 'a', 'x'                            | 'quote', '#', 'quoteAll', 'true'      | #x#          |
 
   Rule: Timestamp formatting
 
@@ -147,21 +152,26 @@ Feature: to_csv converts a struct value to a CSV string
 
   Rule: Decimal formatting
 
-    # The negative case needs a separate `name` slot: Spark derives the column
-    # name as `CAST((- 0.99) AS DECIMAL(5,2))`, not `CAST(-0.99 AS DECIMAL(5,2))`.
-    Scenario Outline: Decimal: <case>
+    Scenario: Decimal field is formatted as fixed-point string
       When query
         """
-        SELECT to_csv(named_struct(<args>))
+        SELECT to_csv(named_struct('price', CAST(9.99 AS DECIMAL(5,2))))
         """
       Then query result
-        | to_csv(named_struct(<name>)) |
-        | <result>                     |
+        | to_csv(named_struct(price, CAST(9.99 AS DECIMAL(5,2)))) |
+        | 9.99                                                    |
 
-      Examples:
-        | case                                                             | args                                 | name                                  | result |
-        | Decimal field is formatted as fixed-point string                 | 'price', CAST(9.99 AS DECIMAL(5,2))  | price, CAST(9.99 AS DECIMAL(5,2))     | 9.99   |
-        | Negative decimal preserves sign including fractional-only values | 'price', CAST(-0.99 AS DECIMAL(5,2)) | price, CAST((- 0.99) AS DECIMAL(5,2)) | -0.99  |
+    @sail-bug
+    Scenario: Negative decimal preserves sign including fractional-only values
+      # The value matches Spark; the column name diverges: Spark writes `-0.99` (verified against
+      # JVM 4.2) while Sail renders the negative literal as `(- 0.99)`.
+      When query
+        """
+        SELECT to_csv(named_struct('price', CAST(-0.99 AS DECIMAL(5,2))))
+        """
+      Then query result
+        | to_csv(named_struct(price, CAST(-0.99 AS DECIMAL(5,2)))) |
+        | -0.99                                                   |
 
   Rule: Complex and special values
 
