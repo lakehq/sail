@@ -41,6 +41,9 @@ pub enum SessionManagerEvent {
         driver_id: DriverId,
         result: oneshot::Sender<ExecutionResult<DriverHandle>>,
     },
+    Shutdown {
+        result: oneshot::Sender<()>,
+    },
 }
 
 pub struct SessionHistory {
@@ -57,6 +60,7 @@ impl SpanAssociation for SessionManagerEvent {
             SessionManagerEvent::SetSessionFailure { .. } => "SetSessionFailure",
             SessionManagerEvent::ObserveState { .. } => "ObserveState",
             SessionManagerEvent::GetDriver { .. } => "GetDriver",
+            SessionManagerEvent::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -90,7 +94,8 @@ impl SpanAssociation for SessionManagerEvent {
             } => {
                 p.push((SpanAttribute::CLUSTER_DRIVER_ID, driver_id.to_string()));
             }
-            SessionManagerEvent::ObserveState { observer: _ } => {}
+            SessionManagerEvent::ObserveState { observer: _ }
+            | SessionManagerEvent::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

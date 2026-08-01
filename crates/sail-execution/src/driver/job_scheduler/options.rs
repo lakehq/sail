@@ -8,6 +8,7 @@ use crate::driver::DriverOptions;
 pub struct JobSchedulerOptions {
     pub task_launch_timeout: Duration,
     pub task_max_attempts: usize,
+    pub use_blocking_shuffle: bool,
 }
 
 impl From<&DriverOptions> for JobSchedulerOptions {
@@ -15,6 +16,10 @@ impl From<&DriverOptions> for JobSchedulerOptions {
         Self {
             task_launch_timeout: options.task_launch_timeout,
             task_max_attempts: options.task_max_attempts,
+            use_blocking_shuffle: matches!(
+                &options.shuffle_backend,
+                crate::shuffle::ShuffleBackendKind::Storage { .. }
+            ),
         }
     }
 }

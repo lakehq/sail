@@ -1,4 +1,4 @@
-@schema_of_csv
+@csv @schema_of_csv
 Feature: schema_of_csv infers a CSV schema from a literal row
 
     Scenario Outline: schema_of_csv infers <case>

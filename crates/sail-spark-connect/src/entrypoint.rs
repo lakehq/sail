@@ -23,18 +23,23 @@ where
     F: Future<Output = ()>,
 {
     let session_manager = create_spark_session_manager(config, runtime).await?;
-    let server = SparkConnectServer::new(session_manager);
-    let service = SparkConnectServiceServer::new(server)
-        // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.
-        // .max_encoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
-        .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
-        .accept_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Zstd)
-        .send_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Zstd);
-    ServerBuilder::new("sail_spark_connect", Default::default())
-        .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
-        .await
-        .serve(listener, signal)
-        .await
+    let result = {
+        let server = SparkConnectServer::new(session_manager.clone());
+        let service = SparkConnectServiceServer::new(server)
+            // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.
+            // .max_encoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Zstd)
+            .send_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Zstd);
+        ServerBuilder::new("sail_spark_connect", Default::default())
+            .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
+            .await
+            .serve(listener, signal)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    };
+    session_manager.shutdown().await?;
+    result.map_err(Into::into)
 }

@@ -1,5 +1,5 @@
 use chrono::format::Parsed;
-use chrono::{Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Weekday};
+use chrono::{Datelike, FixedOffset, NaiveDate, NaiveDateTime, Weekday};
 use datafusion_common::{Result, exec_datafusion_err};
 
 use super::locale::LocaleData;
@@ -28,17 +28,48 @@ struct ParseState {
     milli_of_day: Option<u32>,
     nano_of_day: Option<u64>,
     timezone: Option<String>,
-    /// Flag indicating hour was 24 (midnight of next day)
-    hour_24: Option<bool>,
-    leap_second: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AdjacentNumericRun {
+    #[default]
+    None,
+    FixedWidth,
+    HasVariableWidth,
+    HasVariableWidthAcrossOptional,
+}
+
+impl AdjacentNumericRun {
+    fn include(self, variable_width: bool) -> Self {
+        match self {
+            Self::HasVariableWidthAcrossOptional => Self::HasVariableWidthAcrossOptional,
+            Self::HasVariableWidth if !variable_width => Self::HasVariableWidth,
+            _ if variable_width => Self::HasVariableWidth,
+            _ => Self::FixedWidth,
+        }
+    }
+
+    fn cross_optional(self) -> Self {
+        match self {
+            Self::HasVariableWidth | Self::HasVariableWidthAcrossOptional => {
+                Self::HasVariableWidthAcrossOptional
+            }
+            other => other,
+        }
+    }
 }
 
 impl DateTimeFormat {
     pub fn parse_datetime_value(&self, value: &str) -> Result<ParsedDateTime> {
         let mut state = ParseState::default();
-        let value = value.trim();
-        let mut position = parse_items(&self.items, value, 0, self.locale.data(), &mut state)?;
-        position = parse_optional_zone_region(value, position);
+        let (position, _) = parse_items(
+            &self.items,
+            value,
+            0,
+            self.locale.data(),
+            &mut state,
+            AdjacentNumericRun::None,
+        )?;
         if position != value.len() {
             return Err(exec_datafusion_err!(
                 "datetime value does not match format at byte offset {position}: {value}"
@@ -58,93 +89,71 @@ fn parse_items(
     mut position: usize,
     locale: &LocaleData,
     state: &mut ParseState,
-) -> Result<usize> {
-    let mut pad_next = false;
+    mut adjacent_numeric_run: AdjacentNumericRun,
+) -> Result<(usize, AdjacentNumericRun)> {
     for item in items {
         match item {
             DateTimeItem::Literal(literal) => {
                 position = consume_literal(value, position, literal)?;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Field(field_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
-                }
                 position = parse_field_spec(field_spec, value, position, locale, state)?;
+                if matches!(
+                    field_spec.style,
+                    FieldStyle::Numeric | FieldStyle::LocalizedNumeric
+                ) {
+                    adjacent_numeric_run = adjacent_numeric_run
+                        .include(field_has_variable_width_in_numeric_run(field_spec));
+                } else {
+                    adjacent_numeric_run = AdjacentNumericRun::None;
+                }
             }
             DateTimeItem::Fraction(fraction_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
+                if adjacent_numeric_run == AdjacentNumericRun::HasVariableWidthAcrossOptional
+                    || (adjacent_numeric_run == AdjacentNumericRun::HasVariableWidth
+                        && fraction_spec.min_width < fraction_spec.max_width)
+                {
+                    return Err(exec_datafusion_err!(
+                        "seconds fraction is ambiguous after a variable-width numeric datetime field"
+                    ));
                 }
                 position = parse_fraction_spec(fraction_spec, value, position, state)?;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Zone(zone_spec) => {
-                if pad_next {
-                    position = skip_padding(value, position);
-                    pad_next = false;
-                }
                 position = parse_zone_spec(zone_spec, value, position, state)?;
+                adjacent_numeric_run = AdjacentNumericRun::None;
             }
             DateTimeItem::Optional(items) => {
                 let snapshot = state.clone();
-                match parse_items(items, value, position, locale, state) {
-                    Ok(next) => position = next,
+                match parse_items(items, value, position, locale, state, adjacent_numeric_run) {
+                    Ok((next, next_numeric_run)) => {
+                        position = next;
+                        adjacent_numeric_run = next_numeric_run.cross_optional();
+                    }
                     Err(_) => {
-                        *state = snapshot.clone();
-                        // Try partial literal matching for the first item
-                        if let Some(DateTimeItem::Literal(literal)) = items.first() {
-                            // Try to find a suffix of the literal that matches
-                            let mut matched = false;
-                            for i in 0..literal.len() {
-                                let suffix = &literal[i..];
-                                if value[position..].starts_with(suffix) {
-                                    // Found matching suffix, parse rest of optional items
-                                    let new_position = position + suffix.len();
-                                    match parse_items(
-                                        &items[1..],
-                                        value,
-                                        new_position,
-                                        locale,
-                                        state,
-                                    ) {
-                                        Ok(next) => {
-                                            position = next;
-                                            matched = true;
-                                            break;
-                                        }
-                                        Err(_) => {
-                                            *state = snapshot.clone();
-                                        }
-                                    }
-                                }
-                            }
-                            // Also try the original special case for single space
-                            if !matched && literal == " " {
-                                match parse_items(&items[1..], value, position, locale, state) {
-                                    Ok(next) => position = next,
-                                    Err(_) => *state = snapshot,
-                                }
-                            }
-                        }
+                        *state = snapshot;
+                        adjacent_numeric_run = adjacent_numeric_run.cross_optional();
                     }
                 }
             }
-            DateTimeItem::PadNext { .. } => {
-                pad_next = true;
-            }
         }
     }
-    Ok(position)
+    Ok((position, adjacent_numeric_run))
+}
+
+fn field_has_variable_width_in_numeric_run(spec: &DateTimeFieldSpec) -> bool {
+    match spec.kind {
+        DateTimeField::YearOfEra | DateTimeField::ProlepticYear | DateTimeField::WeekBasedYear => {
+            spec.width != 2
+        }
+        DateTimeField::DayOfYear => spec.width < 3,
+        _ => spec.width == 1,
+    }
 }
 
 fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize> {
-    if literal == " " {
-        let next = skip_padding(value, position);
-        if next > position {
-            return Ok(next);
-        }
-    }
     if value[position..].starts_with(literal) {
         Ok(position + literal.len())
     } else {
@@ -152,13 +161,6 @@ fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize>
             "expected datetime literal '{literal}' at byte offset {position}"
         ))
     }
-}
-
-fn skip_padding(value: &str, mut position: usize) -> usize {
-    while value[position..].starts_with(' ') {
-        position += 1;
-    }
-    position
 }
 
 fn parse_quarter(
@@ -258,21 +260,23 @@ fn parse_fraction(
 fn parse_era(
     value: &str,
     position: usize,
+    style: FieldStyle,
     locale: &LocaleData,
     state: &mut ParseState,
 ) -> Result<usize> {
-    if starts_with_ignore_case(&value[position..], "CE") {
-        state.era_bc = Some(false);
-        return Ok(position + 2);
-    }
-    let choices = [
-        (locale.eras_full[0], true),
-        (locale.eras_full[1], false),
-        (locale.eras_short[0], true),
-        (locale.eras_short[1], false),
-        (locale.eras_narrow[0], true),
-        (locale.eras_narrow[1], false),
-    ];
+    let choices = match style {
+        FieldStyle::TextShort => [(locale.eras_short[0], true), (locale.eras_short[1], false)],
+        FieldStyle::TextFull => [(locale.eras_full[0], true), (locale.eras_full[1], false)],
+        FieldStyle::TextNarrow => [
+            (locale.eras_narrow[0], true),
+            (locale.eras_narrow[1], false),
+        ],
+        _ => {
+            return Err(exec_datafusion_err!(
+                "unsupported datetime era field style: {style:?}"
+            ));
+        }
+    };
     choices
         .iter()
         .filter(|(text, _)| starts_with_ignore_case(&value[position..], text))
@@ -369,10 +373,47 @@ fn parse_offset(
             .ok_or_else(|| exec_datafusion_err!("invalid UTC offset seconds: 0"))?;
         return Ok((position + 1, offset));
     }
-    let colon = count >= 3;
-    let include_seconds = count >= 4;
-    let require_minutes = count != 1;
-    parse_numeric_offset(value, position, colon, include_seconds, require_minutes)
+    parse_iso_offset(value, position, count)
+}
+
+fn parse_iso_offset(value: &str, position: usize, count: usize) -> Result<(usize, FixedOffset)> {
+    let sign = parse_offset_sign(value, position)?;
+    let (mut next, hours) = parse_number(value, position + 1, (2, 2))?;
+    let mut minutes = 0;
+    let mut seconds = 0;
+
+    match count {
+        1 => {
+            if matches!(value.as_bytes().get(next), Some(b'0'..=b'9')) {
+                (next, minutes) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        2 => (next, minutes) = parse_number(value, next, (2, 2))?,
+        3 => {
+            next = consume_literal(value, next, ":")?;
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+        }
+        4 => {
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+            if matches!(value.as_bytes().get(next), Some(b'0'..=b'9')) {
+                (next, seconds) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        5 => {
+            next = consume_literal(value, next, ":")?;
+            (next, minutes) = parse_number(value, next, (2, 2))?;
+            if value[next..].starts_with(':') {
+                next += 1;
+                (next, seconds) = parse_number(value, next, (2, 2))?;
+            }
+        }
+        _ => unreachable!("offset pattern width is validated when the pattern is parsed"),
+    }
+
+    Ok((
+        next,
+        fixed_offset_from_components(sign, hours, minutes, seconds)?,
+    ))
 }
 
 fn parse_localized_offset(value: &str, position: usize) -> Result<(usize, FixedOffset)> {
@@ -397,21 +438,10 @@ fn parse_numeric_offset(
     include_seconds: bool,
     require_minutes: bool,
 ) -> Result<(usize, FixedOffset)> {
-    let sign = match value.as_bytes().get(position) {
-        Some(b'+') => 1,
-        Some(b'-') => -1,
-        _ => {
-            return Err(exec_datafusion_err!(
-                "expected offset sign at byte offset {position}"
-            ));
-        }
-    };
+    let sign = parse_offset_sign(value, position)?;
     let (mut next, hours) = parse_number(value, position + 1, (2, 2))?;
     if !require_minutes && !matches!(value.as_bytes().get(next), Some(b'0'..=b'9') | Some(b':')) {
-        let total = sign * hours * 3600;
-        let offset = FixedOffset::east_opt(total)
-            .ok_or_else(|| exec_datafusion_err!("invalid datetime offset seconds: {total}"))?;
-        return Ok((next, offset));
+        return Ok((next, fixed_offset_from_components(sign, hours, 0, 0)?));
     }
     if colon {
         next = consume_literal(value, next, ":")?;
@@ -427,10 +457,47 @@ fn parse_numeric_offset(
         next = parsed.0;
         seconds = parsed.1;
     }
+    Ok((
+        next,
+        fixed_offset_from_components(sign, hours, minutes, seconds)?,
+    ))
+}
+
+fn parse_offset_sign(value: &str, position: usize) -> Result<i32> {
+    match value.as_bytes().get(position) {
+        Some(b'+') => Ok(1),
+        Some(b'-') => Ok(-1),
+        _ => Err(exec_datafusion_err!(
+            "expected offset sign at byte offset {position}"
+        )),
+    }
+}
+
+fn fixed_offset_from_components(
+    sign: i32,
+    hours: i32,
+    minutes: i32,
+    seconds: i32,
+) -> Result<FixedOffset> {
+    if !(0..60).contains(&minutes) {
+        return Err(exec_datafusion_err!(
+            "invalid datetime offset minute component: {minutes}"
+        ));
+    }
+    if !(0..60).contains(&seconds) {
+        return Err(exec_datafusion_err!(
+            "invalid datetime offset second component: {seconds}"
+        ));
+    }
+    if hours > 18 || (hours == 18 && (minutes != 0 || seconds != 0)) {
+        return Err(exec_datafusion_err!(
+            "datetime offset exceeds the valid range of -18:00 to +18:00"
+        ));
+    }
     let total = sign * (hours * 3600 + minutes * 60 + seconds);
     let offset = FixedOffset::east_opt(total)
         .ok_or_else(|| exec_datafusion_err!("invalid datetime offset seconds: {total}"))?;
-    Ok((next, offset))
+    Ok(offset)
 }
 
 fn parse_zone_name(value: &str, position: usize) -> Result<(usize, String)> {
@@ -449,16 +516,6 @@ fn parse_zone_name(value: &str, position: usize) -> Result<(usize, String)> {
     } else {
         Ok((next, value[position..next].to_string()))
     }
-}
-
-fn parse_optional_zone_region(value: &str, position: usize) -> usize {
-    if !value[position..].starts_with('[') {
-        return position;
-    }
-    value[position + 1..]
-        .find(']')
-        .map(|offset| position + offset + 2)
-        .unwrap_or(position)
 }
 
 fn parse_week_of_month_field(
@@ -515,28 +572,16 @@ impl ParseState {
     fn resolve(mut self) -> Result<ParsedDateTime> {
         self.resolve_sail_fields()?;
         self.apply_defaults()?;
-        let add_day = self.hour_24.unwrap_or(false);
-        let mut date = self
+        let date = self
             .parsed
             .to_naive_date()
             .map_err(|e| exec_datafusion_err!("invalid parsed date: {e}"))?;
-        if add_day {
-            date = date.succ_opt().unwrap_or(date);
-        }
         validate_week_of_month(&self, date)?;
-        let mut datetime = date.and_time(
+        let datetime = date.and_time(
             self.parsed
                 .to_naive_time()
                 .map_err(|e| exec_datafusion_err!("invalid parsed time: {e}"))?,
         );
-        if self.leap_second {
-            if datetime.hour() != 23 || datetime.minute() != 59 {
-                return Err(exec_datafusion_err!(
-                    "Invalid value for SecondOfMinute (valid leap second must be 23:59:60)"
-                ));
-            }
-            datetime += Duration::seconds(1);
-        }
         let date = datetime.date();
         let time = datetime.time();
         let offset = self
@@ -587,9 +632,6 @@ impl ParseState {
                 return Err(exec_datafusion_err!(
                     "Invalid value for ClockHourOfDay (valid values 1 - 24): {hour}"
                 ));
-            }
-            if hour == 24 {
-                self.hour_24 = Some(true);
             }
             self.set_hour(if hour == 24 { 0 } else { hour as i32 })?;
         }
@@ -770,7 +812,7 @@ fn parse_field_spec(
     state: &mut ParseState,
 ) -> Result<usize> {
     match spec.kind {
-        DateTimeField::Era => parse_era(value, position, locale, state),
+        DateTimeField::Era => parse_era(value, position, spec.style, locale, state),
         DateTimeField::YearOfEra => {
             parse_signed_number(value, position, number_bounds(spec.width, 10)).map(
                 |(next, year)| {
@@ -826,13 +868,12 @@ fn parse_field_spec(
         DateTimeField::AmPmOfDay => parse_am_pm(value, position, locale, state),
         DateTimeField::HourOfDay => parse_number(value, position, number_bounds(spec.width, 2))
             .and_then(|(next, hour)| {
-                if hour == 24 {
-                    // Hour 24 means midnight of the next day
-                    state.hour_24 = Some(true);
-                    state.set_hour(0)?;
-                } else {
-                    state.set_hour(hour)?;
+                if !(0..24).contains(&hour) {
+                    return Err(exec_datafusion_err!(
+                        "Invalid value for HourOfDay (valid values 0 - 23): {hour}"
+                    ));
                 }
+                state.set_hour(hour)?;
                 Ok(next)
             }),
         DateTimeField::ClockHourOfDay => {
@@ -865,17 +906,12 @@ fn parse_field_spec(
         DateTimeField::SecondOfMinute => {
             parse_number(value, position, number_bounds(spec.width, 2)).and_then(
                 |(next, second)| {
-                    if !(0..=60).contains(&second) {
+                    if !(0..60).contains(&second) {
                         return Err(exec_datafusion_err!(
-                            "Invalid value for SecondOfMinute (valid values 0 - 60): {second}"
+                            "Invalid value for SecondOfMinute (valid values 0 - 59): {second}"
                         ));
                     }
-                    if second == 60 {
-                        state.leap_second = true;
-                        state.set_second(59)?;
-                    } else {
-                        state.set_second(second)?;
-                    }
+                    state.set_second(second)?;
                     Ok(next)
                 },
             )
@@ -929,12 +965,17 @@ fn parse_zone_spec(
     state: &mut ParseState,
 ) -> Result<usize> {
     match spec.kind {
-        ZoneField::Offset => {
+        ZoneField::IsoOffset => {
             parse_offset(value, position, spec.width, spec.zero_as_z).and_then(|(next, offset)| {
                 state.set_offset(offset)?;
                 Ok(next)
             })
         }
+        ZoneField::Rfc822Offset => parse_numeric_offset(value, position, false, false, true)
+            .and_then(|(next, offset)| {
+                state.set_offset(offset)?;
+                Ok(next)
+            }),
         ZoneField::LocalizedOffset => {
             parse_localized_offset(value, position).and_then(|(next, offset)| {
                 state.set_offset(offset)?;
