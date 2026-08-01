@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -29,6 +30,9 @@ pub enum StructFieldMatching {
     FieldId,
 }
 
+pub type SchemaEvolutionFieldDefaults = BTreeMap<String, ScalarValue>;
+type SchemaEvolutionColumnMapping = (Vec<Option<usize>>, Vec<Option<ScalarValue>>);
+
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
@@ -42,6 +46,7 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
             StructFieldMatching::Name,
+            Arc::default(),
         )
     }
 }
@@ -49,11 +54,20 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     matching: StructFieldMatching,
+    field_defaults: Arc<SchemaEvolutionFieldDefaults>,
 }
 
 impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     pub fn new(matching: StructFieldMatching) -> Self {
-        Self { matching }
+        Self {
+            matching,
+            field_defaults: Arc::default(),
+        }
+    }
+
+    pub fn with_field_defaults(mut self, field_defaults: SchemaEvolutionFieldDefaults) -> Self {
+        self.field_defaults = Arc::new(field_defaults);
+        self
     }
 }
 
@@ -63,7 +77,12 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactoryWit
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-        create_schema_evolution_adapter(logical_file_schema, physical_file_schema, self.matching)
+        create_schema_evolution_adapter(
+            logical_file_schema,
+            physical_file_schema,
+            self.matching,
+            Arc::clone(&self.field_defaults),
+        )
     }
 }
 
@@ -71,9 +90,14 @@ fn create_schema_evolution_adapter(
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     matching: StructFieldMatching,
+    field_defaults: Arc<SchemaEvolutionFieldDefaults>,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-    let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema);
+    let (column_mapping, default_values) = create_column_mapping(
+        &logical_file_schema,
+        &physical_file_schema,
+        matching,
+        &field_defaults,
+    )?;
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
@@ -81,41 +105,42 @@ fn create_schema_evolution_adapter(
         column_mapping,
         default_values,
         matching,
+        field_defaults,
     }))
 }
 
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
-) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
+    matching: StructFieldMatching,
+    field_defaults: &SchemaEvolutionFieldDefaults,
+) -> Result<SchemaEvolutionColumnMapping> {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
-        match physical_schema.index_of(logical_field.name()) {
-            Ok(physical_index) => {
+        match find_matching_struct_field(physical_schema.fields(), logical_field, matching) {
+            Some((physical_index, _)) => {
                 column_mapping.push(Some(physical_index));
                 default_values.push(None);
             }
-            Err(_) => {
+            None => {
                 column_mapping.push(None);
-                let default_value = if logical_field.is_nullable() {
-                    Some(
-                        ScalarValue::try_from(logical_field.data_type())
-                            .unwrap_or(ScalarValue::Null),
-                    )
+                let default_value = if let Some(default_value) =
+                    field_default_value(logical_field, field_defaults)
+                {
+                    Some(default_value.clone())
+                } else if logical_field.is_nullable() {
+                    Some(ScalarValue::try_from(logical_field.data_type())?)
                 } else {
-                    Some(
-                        ScalarValue::new_zero(logical_field.data_type())
-                            .unwrap_or(ScalarValue::Null),
-                    )
+                    None
                 };
                 default_values.push(default_value);
             }
         }
     }
 
-    (column_mapping, default_values)
+    Ok((column_mapping, default_values))
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +150,7 @@ struct SchemaEvolutionPhysicalExprAdapter {
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
     matching: StructFieldMatching,
+    field_defaults: Arc<SchemaEvolutionFieldDefaults>,
 }
 
 impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
@@ -135,6 +161,7 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             column_mapping: &self.column_mapping,
             default_values: &self.default_values,
             matching: self.matching,
+            field_defaults: &self.field_defaults,
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
@@ -147,6 +174,7 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
     matching: StructFieldMatching,
+    field_defaults: &'a Arc<SchemaEvolutionFieldDefaults>,
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
@@ -225,8 +253,18 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             return Ok(None);
         }
 
-        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(Arc::new(Literal::new(null_value))))
+        if let Some(default_value) = field_default_value(logical_struct_field, self.field_defaults)
+        {
+            return Ok(Some(Arc::new(Literal::new(default_value.clone()))));
+        }
+        if logical_struct_field.is_nullable() {
+            let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+            return Ok(Some(Arc::new(Literal::new(null_value))));
+        }
+        exec_err!(
+            "Non-nullable nested column '{}' is missing from physical schema and no default value provided",
+            logical_struct_field.name()
+        )
     }
 
     fn rewrite_column(
@@ -302,13 +340,13 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
             (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
             }
         }
@@ -320,7 +358,12 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if !can_cast_field_with_schema_evolution(physical_field, logical_field, self.matching)? {
+        if !can_cast_field_with_schema_evolution_and_defaults(
+            physical_field,
+            logical_field,
+            self.matching,
+            self.field_defaults,
+        )? {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
                 logical_field.name(),
@@ -330,21 +373,37 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         }
 
         Ok(Transformed::yes(Arc::new(
-            SchemaEvolutionCastColumnExpr::new_with_matching(
+            SchemaEvolutionCastColumnExpr::new_with_matching_and_defaults(
                 column_expr,
                 Arc::new(physical_field.clone()),
                 Arc::new(logical_field.clone()),
                 None,
                 self.matching,
+                Arc::clone(self.field_defaults),
             ),
         )))
     }
 }
 
+#[cfg(test)]
 fn can_cast_field_with_schema_evolution(
     source: &Field,
     target: &Field,
     matching: StructFieldMatching,
+) -> Result<bool> {
+    can_cast_field_with_schema_evolution_and_defaults(
+        source,
+        target,
+        matching,
+        &SchemaEvolutionFieldDefaults::new(),
+    )
+}
+
+fn can_cast_field_with_schema_evolution_and_defaults(
+    source: &Field,
+    target: &Field,
+    matching: StructFieldMatching,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<bool> {
     if source.data_type() == &DataType::Null {
         return Ok(target.is_nullable());
@@ -364,14 +423,22 @@ fn can_cast_field_with_schema_evolution(
 
     match (source.data_type(), target.data_type()) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-            validate_struct_compatibility_with_variant(from_fields, to_fields, matching)?;
+            validate_struct_compatibility_with_variant(
+                from_fields,
+                to_fields,
+                matching,
+                field_defaults,
+            )?;
             Ok(true)
         }
-        (DataType::List(from_elem), DataType::List(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
-        }
-        (DataType::LargeList(from_elem), DataType::LargeList(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
+        (DataType::List(from_elem), DataType::List(to_elem))
+        | (DataType::LargeList(from_elem), DataType::LargeList(to_elem)) => {
+            can_cast_field_with_schema_evolution_and_defaults(
+                from_elem,
+                to_elem,
+                matching,
+                field_defaults,
+            )
         }
         (
             DataType::FixedSizeList(from_elem, from_len),
@@ -380,10 +447,15 @@ fn can_cast_field_with_schema_evolution(
             if from_len != to_len {
                 return Ok(false);
             }
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
+            can_cast_field_with_schema_evolution_and_defaults(
+                from_elem,
+                to_elem,
+                matching,
+                field_defaults,
+            )
         }
         (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => {
-            validate_map_entries_compatibility(from_entries, to_entries, matching)?;
+            validate_map_entries_compatibility(from_entries, to_entries, matching, field_defaults)?;
             Ok(true)
         }
         _ => Ok(can_cast_types(source.data_type(), target.data_type())),
@@ -403,6 +475,13 @@ fn struct_field_id(field: &Field) -> Option<&str> {
     STRUCT_FIELD_ID_METADATA_KEYS
         .iter()
         .find_map(|key| field.metadata().get(*key).map(String::as_str))
+}
+
+fn field_default_value<'a>(
+    field: &Field,
+    field_defaults: &'a SchemaEvolutionFieldDefaults,
+) -> Option<&'a ScalarValue> {
+    struct_field_id(field).and_then(|field_id| field_defaults.get(field_id))
 }
 
 fn find_matching_struct_field<'a>(
@@ -440,6 +519,7 @@ fn validate_struct_compatibility_with_variant(
     source_fields: &[Arc<Field>],
     target_fields: &[Arc<Field>],
     matching: StructFieldMatching,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<()> {
     if matching == StructFieldMatching::Name
         && !target_fields
@@ -456,7 +536,12 @@ fn validate_struct_compatibility_with_variant(
     for target_field in target_fields {
         match find_matching_struct_field(source_fields, target_field, matching) {
             Some((_, source_field)) => {
-                if !can_cast_field_with_schema_evolution(source_field, target_field, matching)? {
+                if !can_cast_field_with_schema_evolution_and_defaults(
+                    source_field,
+                    target_field,
+                    matching,
+                    field_defaults,
+                )? {
                     return exec_err!(
                         "Cannot cast struct field '{}' from type {} to type {}",
                         target_field.name(),
@@ -465,7 +550,8 @@ fn validate_struct_compatibility_with_variant(
                     );
                 }
             }
-            None if target_field.is_nullable() => {}
+            None if target_field.is_nullable()
+                || field_default_value(target_field, field_defaults).is_some() => {}
             None => {
                 return exec_err!(
                     "Cannot cast struct: target field '{}' is non-nullable but missing from source. \
@@ -483,6 +569,7 @@ fn validate_map_entries_compatibility(
     source_entries: &Field,
     target_entries: &Field,
     matching: StructFieldMatching,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<()> {
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_entries.data_type(), target_entries.data_type())
@@ -497,7 +584,12 @@ fn validate_map_entries_compatibility(
             .find(|source| source.name() == target_field.name())
         {
             Some(source_field)
-                if can_cast_field_with_schema_evolution(source_field, target_field, matching)? => {}
+                if can_cast_field_with_schema_evolution_and_defaults(
+                    source_field,
+                    target_field,
+                    matching,
+                    field_defaults,
+                )? => {}
             Some(source_field) => {
                 return exec_err!(
                     "Cannot cast map entry '{}' from type {} to type {}",
@@ -506,7 +598,8 @@ fn validate_map_entries_compatibility(
                     target_field.data_type()
                 );
             }
-            None if target_field.is_nullable() => {}
+            None if target_field.is_nullable()
+                || field_default_value(target_field, field_defaults).is_some() => {}
             None => {
                 return exec_err!(
                     "Cannot cast map: target entry '{}' is non-nullable but missing from source. \
@@ -527,6 +620,7 @@ pub struct SchemaEvolutionCastColumnExpr {
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
     matching: StructFieldMatching,
+    field_defaults: Arc<SchemaEvolutionFieldDefaults>,
 }
 
 impl PartialEq for SchemaEvolutionCastColumnExpr {
@@ -536,6 +630,7 @@ impl PartialEq for SchemaEvolutionCastColumnExpr {
             && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
             && self.matching.eq(&other.matching)
+            && self.field_defaults.eq(&other.field_defaults)
     }
 }
 
@@ -546,6 +641,7 @@ impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
         self.target_field.hash(state);
         self.cast_options.hash(state);
         self.matching.hash(state);
+        self.field_defaults.hash(state);
     }
 }
 
@@ -583,12 +679,31 @@ impl SchemaEvolutionCastColumnExpr {
         cast_options: Option<CastOptions<'static>>,
         matching: StructFieldMatching,
     ) -> Self {
+        Self::new_with_matching_and_defaults(
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+            matching,
+            Arc::default(),
+        )
+    }
+
+    pub fn new_with_matching_and_defaults(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: Arc<Field>,
+        target_field: Arc<Field>,
+        cast_options: Option<CastOptions<'static>>,
+        matching: StructFieldMatching,
+        field_defaults: Arc<SchemaEvolutionFieldDefaults>,
+    ) -> Self {
         Self {
             expr,
             input_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
             matching,
+            field_defaults,
         }
     }
 
@@ -617,21 +732,23 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         match value {
-            ColumnarValue::Array(array) => {
-                Ok(ColumnarValue::Array(cast_array_with_schema_evolution(
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+                cast_array_with_schema_evolution_and_defaults(
                     &array,
                     self.target_field.as_ref(),
                     &self.cast_options,
                     self.matching,
-                )?))
-            }
+                    &self.field_defaults,
+                )?,
+            )),
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
-                let casted = cast_array_with_schema_evolution(
+                let casted = cast_array_with_schema_evolution_and_defaults(
                     &as_array,
                     self.target_field.as_ref(),
                     &self.cast_options,
                     self.matching,
+                    &self.field_defaults,
                 )?;
                 Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
                     casted.as_ref(),
@@ -657,12 +774,13 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
         let child = children.pop().ok_or_else(|| {
             DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
-        Ok(Arc::new(Self::new_with_matching(
+        Ok(Arc::new(Self::new_with_matching_and_defaults(
             child,
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
             self.matching,
+            Arc::clone(&self.field_defaults),
         )))
     }
 
@@ -677,7 +795,30 @@ pub fn cast_array_with_schema_evolution(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, false)
+    cast_array_with_schema_evolution_and_defaults(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        &SchemaEvolutionFieldDefaults::new(),
+    )
+}
+
+fn cast_array_with_schema_evolution_and_defaults(
+    source: &ArrayRef,
+    target_field: &Field,
+    cast_options: &CastOptions,
+    matching: StructFieldMatching,
+    field_defaults: &SchemaEvolutionFieldDefaults,
+) -> Result<ArrayRef> {
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        false,
+        field_defaults,
+    )
 }
 
 pub fn cast_array_with_schema_evolution_relaxed_tz(
@@ -686,7 +827,14 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, true)
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        true,
+        &SchemaEvolutionFieldDefaults::new(),
+    )
 }
 
 fn cast_array_with_schema_evolution_inner(
@@ -695,6 +843,7 @@ fn cast_array_with_schema_evolution_inner(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<ArrayRef> {
     if relaxed_timezone
         && let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
@@ -718,6 +867,7 @@ fn cast_array_with_schema_evolution_inner(
             cast_options,
             matching,
             relaxed_timezone,
+            field_defaults,
         ),
         DataType::List(target_elem) => {
             let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
@@ -732,6 +882,7 @@ fn cast_array_with_schema_evolution_inner(
                 cast_options,
                 matching,
                 relaxed_timezone,
+                field_defaults,
             )?;
             Ok(Arc::new(ListArray::new(
                 Arc::clone(target_elem),
@@ -753,6 +904,7 @@ fn cast_array_with_schema_evolution_inner(
                 cast_options,
                 matching,
                 relaxed_timezone,
+                field_defaults,
             )?;
             Ok(Arc::new(LargeListArray::new(
                 Arc::clone(target_elem),
@@ -782,6 +934,7 @@ fn cast_array_with_schema_evolution_inner(
                 cast_options,
                 matching,
                 relaxed_timezone,
+                field_defaults,
             )?;
             Ok(Arc::new(FixedSizeListArray::new(
                 Arc::clone(target_elem),
@@ -819,8 +972,13 @@ fn cast_array_with_schema_evolution_inner(
                         cast_options,
                         matching,
                         relaxed_timezone,
+                        field_defaults,
                     )?),
-                    None => kv_arrays.push(new_null_array(target_child.data_type(), num_entries)),
+                    None => kv_arrays.push(missing_field_array(
+                        target_child,
+                        num_entries,
+                        field_defaults,
+                    )?),
                 }
             }
 
@@ -861,6 +1019,32 @@ fn cast_variant_array_with_schema_evolution(
         cast_options,
         StructFieldMatching::Name,
         false,
+        &SchemaEvolutionFieldDefaults::new(),
+    )
+}
+
+fn missing_field_array(
+    target_field: &Field,
+    length: usize,
+    field_defaults: &SchemaEvolutionFieldDefaults,
+) -> Result<ArrayRef> {
+    if let Some(default_value) = field_default_value(target_field, field_defaults) {
+        let array = default_value.to_array_of_size(length)?;
+        if array.data_type() == target_field.data_type() {
+            return Ok(array);
+        }
+        return Ok(cast_with_options(
+            &array,
+            target_field.data_type(),
+            &DEFAULT_CAST_OPTIONS,
+        )?);
+    }
+    if target_field.is_nullable() {
+        return Ok(new_null_array(target_field.data_type(), length));
+    }
+    exec_err!(
+        "Non-nullable column '{}' is missing from physical schema and no default value provided",
+        target_field.name()
     )
 }
 
@@ -870,6 +1054,7 @@ fn cast_struct_array_with_schema_evolution(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<ArrayRef> {
     if source.data_type() == &DataType::Null
         || (!source.is_empty() && source.null_count() == source.len())
@@ -886,13 +1071,19 @@ fn cast_struct_array_with_schema_evolution(
             source.data_type()
         );
     };
-    validate_struct_compatibility_with_variant(source_struct.fields(), target_fields, matching)?;
+    validate_struct_compatibility_with_variant(
+        source_struct.fields(),
+        target_fields,
+        matching,
+        field_defaults,
+    )?;
     cast_struct_array_to_fields(
         source,
         target_fields,
         cast_options,
         matching,
         relaxed_timezone,
+        field_defaults,
     )
 }
 
@@ -902,6 +1093,7 @@ fn cast_struct_array_to_fields(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    field_defaults: &SchemaEvolutionFieldDefaults,
 ) -> Result<ArrayRef> {
     let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
         return exec_err!(
@@ -923,9 +1115,10 @@ fn cast_struct_array_to_fields(
                     cast_options,
                     matching,
                     relaxed_timezone,
+                    field_defaults,
                 )?);
             }
-            None => arrays.push(new_null_array(target_child.data_type(), num_rows)),
+            None => arrays.push(missing_field_array(target_child, num_rows, field_defaults)?),
         }
     }
 

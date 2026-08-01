@@ -192,9 +192,14 @@ impl ManifestEntryV2 {
         schema: Option<&Schema>,
     ) -> Result<super::ManifestEntry, String> {
         let status = match self.status {
+            0 => super::ManifestStatus::Existing,
             1 => super::ManifestStatus::Added,
             2 => super::ManifestStatus::Deleted,
-            _ => super::ManifestStatus::Existing,
+            value => {
+                return Err(format!(
+                    "Invalid Iceberg manifest entry `status` value {value}"
+                ));
+            }
         };
         Ok(super::ManifestEntry::new(
             status,
@@ -243,6 +248,16 @@ fn int_long_map_into(
         .collect()
 }
 
+fn data_file_long_into_u64(name: &str, value: i64) -> Result<u64, String> {
+    u64::try_from(value)
+        .map_err(|_| format!("Invalid negative Iceberg data file `{name}` value {value}"))
+}
+
+fn data_file_u64_into_long(name: &str, value: u64) -> Result<i64, String> {
+    i64::try_from(value)
+        .map_err(|_| format!("Iceberg data file `{name}` value {value} exceeds Avro long range"))
+}
+
 fn i128_to_min_big_endian(value: i128) -> Vec<u8> {
     let bytes = value.to_be_bytes();
     let mut start = 0;
@@ -282,14 +297,24 @@ fn datum_to_bytes(datum: &Datum) -> Result<Vec<u8>, String> {
     }
 }
 
-fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
-    if values.is_empty() {
+fn bytes_map_from(
+    values: HashMap<i32, Datum>,
+    raw_values: HashMap<i32, Vec<u8>>,
+) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
+    if values.is_empty() && raw_values.is_empty() {
         Ok(None)
     } else {
-        let mut out = values
+        let mut encoded = HashMap::with_capacity(values.len() + raw_values.len());
+        for (key, datum) in values {
+            encoded.insert(key, datum_to_bytes(&datum)?);
+        }
+        // The original manifest bytes are authoritative. In particular, a promoted int bound
+        // decoded through a long schema must remain four bytes when the manifest is rewritten.
+        encoded.extend(raw_values);
+        let mut out = encoded
             .into_iter()
-            .map(|(key, value)| datum_to_bytes(&value).map(|value| IntBytesMapEntry { key, value }))
-            .collect::<Result<Vec<_>, String>>()?;
+            .map(|(key, value)| IntBytesMapEntry { key, value })
+            .collect::<Vec<_>>();
         out.sort_by_key(|entry| entry.key);
         Ok(Some(out))
     }
@@ -298,26 +323,37 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
 fn bytes_map_into(
     values: Option<Vec<IntBytesMapEntry>>,
     schema: Option<&Schema>,
-) -> HashMap<i32, Datum> {
-    // TODO: Preserve raw bound bytes like `Map<Integer, ByteBuffer>` metrics.
-    // For now, keep only bounds we can decode into `Datum`; unknown fields and unsupported
-    // primitive encodings are ignored so manifest reads remain non-fatal after schema evolution.
-    values
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|entry| {
-            let primitive = schema
-                .and_then(|schema| schema.field_by_id(entry.key))
-                .and_then(|field| match field.field_type.as_ref() {
-                    Type::Primitive(primitive) => Some(primitive.clone()),
-                    Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
-                })?;
+) -> (HashMap<i32, Datum>, HashMap<i32, Vec<u8>>) {
+    let mut decoded = HashMap::new();
+    let mut raw = HashMap::new();
+    for entry in values.unwrap_or_default() {
+        let primitive = schema
+            .and_then(|schema| schema.field_by_id(entry.key))
+            .and_then(|field| match field.field_type.as_ref() {
+                Type::Primitive(primitive) => Some(primitive.clone()),
+                Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
+            });
+        match primitive.and_then(|primitive| {
             primitive
                 .literal_from_bytes(&entry.value)
                 .ok()
-                .map(|literal| (entry.key, Datum::new(primitive, literal)))
-        })
-        .collect()
+                .map(|literal| Datum::new(primitive, literal))
+        }) {
+            Some(datum) => {
+                if datum_to_bytes(&datum)
+                    .map(|encoded| encoded != entry.value)
+                    .unwrap_or(true)
+                {
+                    raw.insert(entry.key, entry.value.clone());
+                }
+                decoded.insert(entry.key, datum);
+            }
+            None => {
+                raw.insert(entry.key, entry.value);
+            }
+        }
+    }
+    (decoded, raw)
 }
 
 #[expect(dead_code)]
@@ -343,6 +379,9 @@ impl DataFileSerde {
         df: super::DataFile,
         partition_type: &StructType,
     ) -> Result<Self, String> {
+        let record_count = data_file_u64_into_long("record_count", df.record_count)?;
+        let file_size_in_bytes =
+            data_file_u64_into_long("file_size_in_bytes", df.file_size_in_bytes)?;
         Ok(Self {
             content: match df.content {
                 DataContentType::Data => 0,
@@ -360,14 +399,14 @@ impl DataFileSerde {
                 &df.partition,
                 partition_type,
             )?),
-            record_count: df.record_count as i64,
-            file_size_in_bytes: df.file_size_in_bytes as i64,
+            record_count,
+            file_size_in_bytes,
             column_sizes: int_long_map_from(df.column_sizes),
             value_counts: int_long_map_from(df.value_counts),
             null_value_counts: int_long_map_from(df.null_value_counts),
             nan_value_counts: int_long_map_from(df.nan_value_counts),
-            lower_bounds: bytes_map_from(df.lower_bounds)?,
-            upper_bounds: bytes_map_from(df.upper_bounds)?,
+            lower_bounds: bytes_map_from(df.lower_bounds, df.raw_lower_bounds)?,
+            upper_bounds: bytes_map_from(df.upper_bounds, df.raw_upper_bounds)?,
             key_metadata: df.key_metadata,
             split_offsets: if df.split_offsets.is_empty() {
                 None
@@ -393,19 +432,30 @@ impl DataFileSerde {
         partition_type: &StructType,
         schema: Option<&Schema>,
     ) -> Result<super::DataFile, String> {
+        let record_count = data_file_long_into_u64("record_count", self.record_count)?;
+        let file_size_in_bytes =
+            data_file_long_into_u64("file_size_in_bytes", self.file_size_in_bytes)?;
         let content = match self.content {
             0 => DataContentType::Data,
             1 => DataContentType::PositionDeletes,
             2 => DataContentType::EqualityDeletes,
-            _ => DataContentType::Data,
+            value => {
+                return Err(format!("Invalid Iceberg data file `content` value {value}"));
+            }
         };
         let file_format = match self.file_format.as_str() {
             "PARQUET" => DataFileFormat::Parquet,
             "AVRO" => DataFileFormat::Avro,
             "ORC" => DataFileFormat::Orc,
             "PUFFIN" => DataFileFormat::Puffin,
-            _ => DataFileFormat::Parquet,
+            value => {
+                return Err(format!(
+                    "Invalid Iceberg data file `file_format` value {value}"
+                ));
+            }
         };
+        let (lower_bounds, raw_lower_bounds) = bytes_map_into(self.lower_bounds, schema);
+        let (upper_bounds, raw_upper_bounds) = bytes_map_into(self.upper_bounds, schema);
         Ok(super::DataFile {
             content,
             file_path: self.file_path,
@@ -413,15 +463,18 @@ impl DataFileSerde {
             partition: self
                 .partition
                 .map(|p| p.into_struct_values(partition_type))
+                .transpose()?
                 .unwrap_or_default(),
-            record_count: self.record_count as u64,
-            file_size_in_bytes: self.file_size_in_bytes as u64,
+            record_count,
+            file_size_in_bytes,
             column_sizes: int_long_map_into("column_sizes", self.column_sizes)?,
             value_counts: int_long_map_into("value_counts", self.value_counts)?,
             null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
             nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
-            lower_bounds: bytes_map_into(self.lower_bounds, schema),
-            upper_bounds: bytes_map_into(self.upper_bounds, schema),
+            lower_bounds,
+            upper_bounds,
+            raw_lower_bounds,
+            raw_upper_bounds,
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),

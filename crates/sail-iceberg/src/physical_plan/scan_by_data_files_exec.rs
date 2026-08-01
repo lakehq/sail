@@ -22,11 +22,14 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
+use crate::datasource::provider::iceberg_schema_evolution_expr_adapter;
+use crate::datasource::type_converter::arrow_schema_to_iceberg;
 use crate::io::StoreContext;
-use crate::physical_plan::manifest_scan_exec::{COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES};
+use crate::physical_plan::manifest_scan_exec::{
+    COL_FILE_FORMAT, COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES,
+};
 
 /// How many files to accumulate before building a DataSourceExec scan batch.
 const SCAN_CHUNK_FILES: usize = 1024;
@@ -41,6 +44,8 @@ struct ScanByDataFilesState {
     table_url: Url,
     /// The Arrow schema of the actual user data.
     output_schema: SchemaRef,
+    /// Iceberg field-ID matching and initial-default handling for Parquet files.
+    expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
     pending_files: Vec<(String, u64)>,
     /// Currently active scan stream (draining Parquet data).
@@ -57,48 +62,19 @@ impl ScanByDataFilesState {
         context: Arc<TaskContext>,
         table_url: Url,
         output_schema: SchemaRef,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     ) -> Self {
         Self {
             input,
             context,
             table_url,
             output_schema,
+            expr_adapter_factory,
             pending_files: Vec::new(),
             current_scan: None,
             input_done: false,
             emitted_empty: false,
         }
-    }
-
-    /// Extract file paths and sizes from a metadata RecordBatch.
-    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64)>> {
-        let path_col = batch
-            .column_by_name(COL_FILE_PATH)
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "IcebergScanByDataFilesExec: missing or invalid '{}' column",
-                    COL_FILE_PATH
-                ))
-            })?;
-
-        let size_col = batch
-            .column_by_name(COL_FILE_SIZE_IN_BYTES)
-            .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "IcebergScanByDataFilesExec: missing or invalid '{}' column",
-                    COL_FILE_SIZE_IN_BYTES
-                ))
-            })?;
-
-        let mut files = Vec::with_capacity(path_col.len());
-        for i in 0..path_col.len() {
-            if !path_col.is_null(i) {
-                files.push((path_col.value(i).to_string(), size_col.value(i)));
-            }
-        }
-        Ok(files)
     }
 
     /// Build and start a Parquet scan for the accumulated file entries.
@@ -168,8 +144,7 @@ impl ScanByDataFilesState {
 
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                as Arc<dyn PhysicalExprAdapterFactory>))
+            .with_expr_adapter(Some(Arc::clone(&self.expr_adapter_factory)))
             .build();
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
@@ -195,6 +170,54 @@ impl ScanByDataFilesState {
         )));
         Ok(())
     }
+}
+
+/// Extract file paths and sizes while rejecting formats this Parquet-only node cannot read.
+fn extract_file_info(batch: &RecordBatch) -> Result<Vec<(String, u64)>> {
+    let path_col = batch
+        .column_by_name(COL_FILE_PATH)
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "IcebergScanByDataFilesExec: missing or invalid '{COL_FILE_PATH}' column"
+            ))
+        })?;
+    let format_col = batch
+        .column_by_name(COL_FILE_FORMAT)
+        .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "IcebergScanByDataFilesExec: missing or invalid '{COL_FILE_FORMAT}' column"
+            ))
+        })?;
+    let size_col = batch
+        .column_by_name(COL_FILE_SIZE_IN_BYTES)
+        .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "IcebergScanByDataFilesExec: missing or invalid '{COL_FILE_SIZE_IN_BYTES}' column"
+            ))
+        })?;
+
+    let mut files = Vec::with_capacity(path_col.len());
+    for index in 0..path_col.len() {
+        if path_col.is_null(index) {
+            continue;
+        }
+        if format_col.is_null(index) || format_col.value(index) != "Parquet" {
+            let format = if format_col.is_null(index) {
+                "<null>"
+            } else {
+                format_col.value(index)
+            };
+            return Err(DataFusionError::NotImplemented(format!(
+                "reading Iceberg data file '{}' in {format} format; only Parquet is currently supported",
+                path_col.value(index)
+            )));
+        }
+        files.push((path_col.value(index).to_string(), size_col.value(index)));
+    }
+    Ok(files)
 }
 
 /// Physical execution node that scans Iceberg data files based on file metadata
@@ -308,9 +331,16 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         let table_url =
             Url::parse(&self.table_url).map_err(|e| DataFusionError::External(Box::new(e)))?;
         let output_schema = self.output_schema.clone();
+        let iceberg_schema = arrow_schema_to_iceberg(&output_schema)?;
+        let expr_adapter_factory = iceberg_schema_evolution_expr_adapter(&iceberg_schema)?;
 
-        let state =
-            ScanByDataFilesState::new(input_stream, context, table_url, Arc::clone(&output_schema));
+        let state = ScanByDataFilesState::new(
+            input_stream,
+            context,
+            table_url,
+            Arc::clone(&output_schema),
+            expr_adapter_factory,
+        );
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {
@@ -339,7 +369,7 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
                         if batch.num_rows() == 0 {
                             continue;
                         }
-                        let files = st.extract_file_info(&batch)?;
+                        let files = extract_file_info(&batch)?;
                         st.pending_files.extend(files);
                         continue;
                     }

@@ -85,6 +85,12 @@ pub struct DataFile {
     pub lower_bounds: HashMap<i32, Datum>,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub upper_bounds: HashMap<i32, Datum>,
+    /// Original lower-bound encodings that must be preserved across manifest rewrites.
+    #[serde(skip)]
+    pub raw_lower_bounds: HashMap<i32, Vec<u8>>,
+    /// Original upper-bound encodings that must be preserved across manifest rewrites.
+    #[serde(skip)]
+    pub raw_upper_bounds: HashMap<i32, Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size_in_bytes: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,5 +148,11 @@ impl DataFile {
     }
     pub fn upper_bounds(&self) -> &HashMap<i32, Datum> {
         &self.upper_bounds
+    }
+    pub fn raw_lower_bounds(&self) -> &HashMap<i32, Vec<u8>> {
+        &self.raw_lower_bounds
+    }
+    pub fn raw_upper_bounds(&self) -> &HashMap<i32, Vec<u8>> {
+        &self.raw_upper_bounds
     }
 }

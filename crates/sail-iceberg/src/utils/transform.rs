@@ -28,9 +28,28 @@ pub fn apply_transform(
     transform: Transform,
     field_type: &Type,
     value: Option<Literal>,
-) -> Option<Literal> {
+) -> Result<Option<Literal>, String> {
     match transform {
-        Transform::Identity | Transform::Unknown | Transform::Void => value,
+        Transform::Bucket(count) if count == 0 || count > i32::MAX as u32 => {
+            return Err(format!(
+                "invalid Iceberg bucket count {count}: expected 1..={}",
+                i32::MAX
+            ));
+        }
+        Transform::Truncate(width) if width == 0 || width > i32::MAX as u32 => {
+            return Err(format!(
+                "invalid Iceberg truncate width {width}: expected 1..={}",
+                i32::MAX
+            ));
+        }
+        _ => {}
+    }
+    let transformed = match transform {
+        Transform::Identity => value,
+        Transform::Void => None,
+        Transform::Unknown => {
+            return Err("cannot write an unknown Iceberg partition transform".to_string());
+        }
         Transform::Truncate(w) => match value {
             Some(Literal::Primitive(PrimitiveLiteral::String(s))) => {
                 let taken = s.chars().take(w as usize).collect::<String>();
@@ -46,6 +65,15 @@ pub fn apply_transform(
                 let rem = v.rem_euclid(w);
                 Some(Literal::Primitive(PrimitiveLiteral::Long(v - rem)))
             }
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => {
+                let width = i128::from(w);
+                let remainder = v.rem_euclid(width);
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(v - remainder)))
+            }
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(mut value))) => {
+                value.truncate(w as usize);
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(value)))
+            }
             other => other,
         },
         Transform::Bucket(n) => match value {
@@ -54,7 +82,17 @@ pub fn apply_transform(
                 Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_int(v, n))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Long(v))) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(v, n))))
+                let value = if matches!(
+                    field_type,
+                    Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+                ) {
+                    v.div_euclid(1_000)
+                } else {
+                    v
+                };
+                Some(Literal::Primitive(PrimitiveLiteral::Int(bucket_long(
+                    value, n,
+                ))))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => Some(Literal::Primitive(
                 PrimitiveLiteral::Int(bucket_decimal(v, n)),
@@ -186,17 +224,31 @@ pub fn apply_transform(
             }
             _ => value,
         },
-    }
+    };
+    Ok(transformed)
 }
 
 // ==== Helpers for temporal transforms ====
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
+fn civil_year_month(days_since_epoch: i32) -> (i32, i32) {
+    // Convert an epoch-day to a proleptic Gregorian year/month without an unsigned date offset.
+    let shifted_days = i64::from(days_since_epoch) + 719_468;
+    let era = shifted_days.div_euclid(146_097);
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let provisional_year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_phase = (5 * day_of_year + 2) / 153;
+    let month = month_phase + if month_phase < 10 { 3 } else { -9 };
+    let year = provisional_year + i64::from(month <= 2);
+    (year as i32, month as i32)
+}
+
 pub fn days_to_year(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    date.year() - UNIX_EPOCH_YEAR
+    let (year, _) = civil_year_month(days);
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn micros_to_year(micros: i64) -> i32 {
@@ -206,10 +258,8 @@ pub fn micros_to_year(micros: i64) -> i32 {
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
+    let (year, month) = civil_year_month(days);
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 pub fn micros_to_months(micros: i64) -> i32 {
@@ -248,11 +298,19 @@ fn hash_long(v: i64) -> i32 {
 #[inline]
 fn hash_decimal(v: i128) -> i32 {
     let bytes = v.to_be_bytes();
-    if let Some(start) = bytes.iter().position(|&x| x != 0) {
-        hash_bytes(&bytes[start..])
-    } else {
-        hash_bytes(&[0])
+    let mut start = 0;
+    while start < bytes.len() - 1 {
+        let current = bytes[start];
+        let next = bytes[start + 1];
+        let redundant_positive = current == 0x00 && (next & 0x80) == 0;
+        let redundant_negative = current == 0xff && (next & 0x80) != 0;
+        if redundant_positive || redundant_negative {
+            start += 1;
+        } else {
+            break;
+        }
     }
+    hash_bytes(&bytes[start..])
 }
 
 #[inline]

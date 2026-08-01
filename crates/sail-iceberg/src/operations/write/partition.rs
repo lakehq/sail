@@ -10,6 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use datafusion::arrow::array::{ArrayRef, UInt32Array};
 use datafusion::arrow::compute;
@@ -30,15 +32,146 @@ pub struct PartitionBatchResult {
     pub spec_id: i32,
 }
 
-pub fn scalar_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
+pub fn scalar_to_literal(
+    array: &ArrayRef,
+    row: usize,
+    iceberg_type: &Type,
+) -> Result<Option<Literal>, String> {
     // Delegate to the unified conversion function
-    array_value_to_literal(array, row)
+    array_value_to_literal(array, row, iceberg_type)
 }
 
 pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<String> {
     schema
         .name_by_field_id(field_id)
         .map(|s| s.split('.').next_back().unwrap_or(s).to_string())
+}
+
+fn encode_partition_path_component(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+fn format_decimal(unscaled: i128, scale: u32) -> String {
+    let sign = if unscaled.is_negative() { "-" } else { "" };
+    let digits = unscaled.unsigned_abs().to_string();
+    if scale == 0 {
+        return format!("{sign}{digits}");
+    }
+
+    let precision = digits.len() as i64;
+    let adjusted_exponent = precision - i64::from(scale) - 1;
+    if adjusted_exponent >= -6 {
+        let scale = scale as usize;
+        if scale < digits.len() {
+            let split = digits.len() - scale;
+            format!("{sign}{}.{}", &digits[..split], &digits[split..])
+        } else {
+            format!("{sign}0.{}{digits}", "0".repeat(scale - digits.len()))
+        }
+    } else {
+        let coefficient = if digits.len() == 1 {
+            digits
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        format!("{sign}{coefficient}E{adjusted_exponent}")
+    }
+}
+
+fn format_time(micros: i64) -> Result<String, String> {
+    let nanos = micros
+        .checked_mul(1_000)
+        .ok_or_else(|| "Iceberg time value overflows nanoseconds".to_string())?;
+    if nanos < 0 {
+        return Err("Iceberg time value must not be negative".to_string());
+    }
+    let seconds = nanos / 1_000_000_000;
+    let subsecond_nanos = (nanos % 1_000_000_000) as u32;
+    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
+        seconds
+            .try_into()
+            .map_err(|_| "Iceberg time value is outside a day".to_string())?,
+        subsecond_nanos,
+    )
+    .ok_or_else(|| "Iceberg time value is outside a day".to_string())?;
+    Ok(time.to_string())
+}
+
+fn format_timestamp(
+    value: i64,
+    nanosecond_precision: bool,
+    with_zone: bool,
+) -> Result<String, String> {
+    let units_per_second = if nanosecond_precision {
+        1_000_000_000
+    } else {
+        1_000_000
+    };
+    let seconds = value.div_euclid(units_per_second);
+    let remainder = value.rem_euclid(units_per_second);
+    let nanoseconds = if nanosecond_precision {
+        remainder as u32
+    } else {
+        (remainder * 1_000) as u32
+    };
+    let timestamp = chrono::DateTime::from_timestamp(seconds, nanoseconds)
+        .ok_or_else(|| "Iceberg timestamp value is out of range".to_string())?
+        .naive_utc()
+        .to_string()
+        .replace(' ', "T");
+    if with_zone {
+        Ok(format!("{timestamp}+00:00"))
+    } else {
+        Ok(timestamp)
+    }
+}
+
+fn format_identity_value(field_type: &Type, value: &PrimitiveLiteral) -> Result<String, String> {
+    match (field_type, value) {
+        (Type::Primitive(PrimitiveType::Date), PrimitiveLiteral::Int(days)) => {
+            #[expect(clippy::unwrap_used)]
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            epoch
+                .checked_add_signed(chrono::Duration::days(i64::from(*days)))
+                .map(|date| date.format("%Y-%m-%d").to_string())
+                .ok_or_else(|| "Iceberg date value is out of range".to_string())
+        }
+        (Type::Primitive(PrimitiveType::Time), PrimitiveLiteral::Long(micros)) => {
+            format_time(*micros)
+        }
+        (Type::Primitive(PrimitiveType::Timestamp), PrimitiveLiteral::Long(micros)) => {
+            format_timestamp(*micros, false, false)
+        }
+        (Type::Primitive(PrimitiveType::Timestamptz), PrimitiveLiteral::Long(micros)) => {
+            format_timestamp(*micros, false, true)
+        }
+        (Type::Primitive(PrimitiveType::TimestampNs), PrimitiveLiteral::Long(nanos)) => {
+            format_timestamp(*nanos, true, false)
+        }
+        (Type::Primitive(PrimitiveType::TimestamptzNs), PrimitiveLiteral::Long(nanos)) => {
+            format_timestamp(*nanos, true, true)
+        }
+        (
+            Type::Primitive(PrimitiveType::Decimal { scale, .. }),
+            PrimitiveLiteral::Int128(unscaled),
+        ) => Ok(format_decimal(*unscaled, *scale)),
+        (Type::Primitive(PrimitiveType::Uuid), PrimitiveLiteral::UInt128(value)) => {
+            Ok(uuid::Uuid::from_u128(*value).to_string())
+        }
+        (
+            Type::Primitive(PrimitiveType::Fixed(_) | PrimitiveType::Binary),
+            PrimitiveLiteral::Binary(value),
+        ) => Ok(BASE64_STANDARD.encode(value)),
+        (_, PrimitiveLiteral::Boolean(value)) => Ok(value.to_string()),
+        (_, PrimitiveLiteral::Int(value)) => Ok(value.to_string()),
+        (_, PrimitiveLiteral::Long(value)) => Ok(value.to_string()),
+        (_, PrimitiveLiteral::Float(value)) => Ok(value.0.to_string()),
+        (_, PrimitiveLiteral::Double(value)) => Ok(value.0.to_string()),
+        (_, PrimitiveLiteral::Int128(value)) => Ok(value.to_string()),
+        (_, PrimitiveLiteral::String(value)) => Ok(value.clone()),
+        (_, PrimitiveLiteral::UInt128(value)) => Ok(value.to_string()),
+        (_, PrimitiveLiteral::Binary(value)) => Ok(BASE64_STANDARD.encode(value)),
+    }
 }
 
 pub fn build_partition_dir(
@@ -57,35 +190,12 @@ pub fn build_partition_dir(
             .field_by_id(f.source_id)
             .map(|nf| nf.field_type.as_ref())
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
-        // Use already-transformed values to build partition directories.
-        // This ensures bucket paths are simple integers like `number_bucket=4`
-        // instead of verbose strings like `bucket[8](4)`.
         let val = values.get(i).cloned().flatten();
         let base_human = match val.as_ref() {
             None => "null".to_string(),
-            Some(Literal::Primitive(p)) => match p {
-                PrimitiveLiteral::Boolean(v) => v.to_string(),
-                PrimitiveLiteral::Int(v) => v.to_string(),
-                PrimitiveLiteral::Long(v) => v.to_string(),
-                PrimitiveLiteral::Float(v) => v.0.to_string(),
-                PrimitiveLiteral::Double(v) => v.0.to_string(),
-                PrimitiveLiteral::Int128(v) => v.to_string(),
-                PrimitiveLiteral::String(s) => s.clone(),
-                PrimitiveLiteral::UInt128(v) => v.to_string(),
-                PrimitiveLiteral::Binary(b) => {
-                    // hex-encode binary values for stability
-                    let mut s = String::with_capacity(b.len() * 2 + 2);
-                    s.push_str("0x");
-                    for byte in b.iter() {
-                        use std::fmt::Write as _;
-                        let _ = write!(&mut s, "{:02x}", byte);
-                    }
-                    s
-                }
-            },
-            Some(l @ (Literal::Struct(_) | Literal::List(_) | Literal::Map(_))) => {
-                // Fallback debug formatting for complex types
-                format!("{l:?}")
+            Some(Literal::Primitive(value)) => format_identity_value(field_type, value)?,
+            Some(Literal::Struct(_) | Literal::List(_) | Literal::Map(_)) => {
+                return Err("Iceberg partition values must be primitive".to_string());
             }
         };
 
@@ -146,7 +256,11 @@ pub fn build_partition_dir(
             _ => base_human,
         };
 
-        segs.push(format!("{}={}", f.name, human));
+        segs.push(format!(
+            "{}={}",
+            encode_partition_path_component(&f.name),
+            encode_partition_path_component(&human)
+        ));
     }
     Ok(segs.join("/"))
 }
@@ -160,18 +274,22 @@ pub fn compute_partition_values(
     let _ = partition_columns; // not used in single-group fallback
     let mut values = Vec::with_capacity(spec.fields.len());
     for f in &spec.fields {
+        if f.transform == crate::spec::transform::Transform::Void {
+            values.push(None);
+            continue;
+        }
         let col_name = field_name_from_id(iceberg_schema, f.source_id)
             .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
         let col_index = batch
             .schema()
             .index_of(&col_name)
             .map_err(|e| e.to_string())?;
-        let lit = scalar_to_literal(batch.column(col_index), 0);
         let field_type = iceberg_schema
             .field_by_id(f.source_id)
             .map(|nf| nf.field_type.as_ref())
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
-        values.push(apply_transform(f.transform, field_type, lit));
+        let lit = scalar_to_literal(batch.column(col_index), 0, field_type)?;
+        values.push(apply_transform(f.transform, field_type, lit)?);
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values)?;
     Ok((values, dir))
@@ -205,18 +323,22 @@ pub fn split_record_batch_by_partition(
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
         for f in &spec.fields {
+            if f.transform == crate::spec::transform::Transform::Void {
+                vals.push(None);
+                continue;
+            }
             let col_name = field_name_from_id(iceberg_schema, f.source_id)
                 .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
             let col_index = batch
                 .schema()
                 .index_of(&col_name)
                 .map_err(|e| e.to_string())?;
-            let lit = scalar_to_literal(batch.column(col_index), row);
             let field_type = iceberg_schema
                 .field_by_id(f.source_id)
                 .map(|nf| nf.field_type.as_ref())
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
-            vals.push(apply_transform(f.transform, field_type, lit));
+            let lit = scalar_to_literal(batch.column(col_index), row, field_type)?;
+            vals.push(apply_transform(f.transform, field_type, lit)?);
         }
         let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
         let entry = groups.entry(dir).or_insert_with(|| Group {

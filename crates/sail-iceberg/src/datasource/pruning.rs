@@ -148,10 +148,10 @@ impl PruningStatistics for IcebergPruningStats {
         if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
             return Some(arr.clone());
         }
-        let counts: Vec<u64> = self
+        let counts: Vec<Option<u64>> = self
             .files
             .iter()
-            .map(|f| f.null_value_counts().get(&field_id).copied().unwrap_or(0))
+            .map(|f| f.null_value_counts().get(&field_id).copied())
             .collect();
         let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
         self.nulls_cache.borrow_mut().insert(field_id, arr.clone());
@@ -171,30 +171,11 @@ impl PruningStatistics for IcebergPruningStats {
     fn contained(
         &self,
         _column: &Column,
-        _value: &std::collections::HashSet<datafusion::common::scalar::ScalarValue>,
+        _values: &std::collections::HashSet<datafusion::common::scalar::ScalarValue>,
     ) -> Option<BooleanArray> {
-        let field_id = self.field_id_for(_column)?;
-        let mut result = Vec::with_capacity(self.files.len());
-        for f in &self.files {
-            let lower = f.lower_bounds().get(&field_id);
-            let upper = f.upper_bounds().get(&field_id);
-            if let (Some(lb), Some(ub)) = (lower, upper) {
-                let lb_sv = self.datum_to_scalar_for_field(field_id, lb);
-                let ub_sv = self.datum_to_scalar_for_field(field_id, ub);
-                let mut any_match = false;
-                for v in _value.iter() {
-                    if &lb_sv == v && &ub_sv == v {
-                        any_match = true;
-                        break;
-                    }
-                }
-                result.push(any_match);
-            } else {
-                // If stats are missing, we cannot safely prune the file.
-                result.push(true);
-            }
-        }
-        Some(BooleanArray::from(result))
+        // Iceberg min/max bounds cannot prove set containment or disjointness in general.
+        // Returning unknown lets DataFusion use the independent min/max statistics safely.
+        None
     }
 }
 
@@ -542,7 +523,7 @@ fn transform_primitive_literal(
     source_type: &Type,
     literal: PrimitiveLiteral,
 ) -> Option<PrimitiveLiteral> {
-    match apply_transform(transform, source_type, Some(Literal::Primitive(literal))) {
+    match apply_transform(transform, source_type, Some(Literal::Primitive(literal))).ok()? {
         Some(Literal::Primitive(value)) => Some(value),
         _ => None,
     }

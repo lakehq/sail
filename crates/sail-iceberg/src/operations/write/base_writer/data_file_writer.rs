@@ -59,6 +59,8 @@ impl DataFileWriter {
             nan_value_counts: Default::default(),
             lower_bounds,
             upper_bounds,
+            raw_lower_bounds: Default::default(),
+            raw_upper_bounds: Default::default(),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets,
@@ -87,7 +89,6 @@ fn aggregate_from_parquet_metadata(
     parquet_meta: &parquet::file::metadata::ParquetMetaData,
 ) -> Result<AggregatedMetadata, String> {
     let row_groups = parquet_meta.row_groups();
-    let schema_descr = parquet_meta.file_metadata().schema_descr();
 
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();
     let mut val_counts: HashMap<i32, u64> = HashMap::new();
@@ -100,30 +101,20 @@ fn aggregate_from_parquet_metadata(
         if let Some(off) = rg.file_offset() {
             split_offsets.push(off);
         }
-        for (column_index, c) in rg.columns().iter().enumerate() {
-            let _path = c.column_descr().path().string();
+        for c in rg.columns() {
             let leaf_info = c.column_descr().self_type().get_basic_info();
-            let Some(field_id) = (if leaf_info.has_id() {
-                Some(leaf_info.id())
-            } else {
-                let root_info = schema_descr.get_column_root(column_index).get_basic_info();
-                if root_info.has_id() {
-                    Some(root_info.id())
-                } else {
-                    None
-                }
-            }) else {
+            if !leaf_info.has_id() {
                 continue;
-            };
+            }
+            let field_id = leaf_info.id();
             *col_sizes.entry(field_id).or_insert(0) += c.compressed_size() as u64;
             *val_counts.entry(field_id).or_insert(0) += c.num_values() as u64;
-            if let Some(stats) = c.statistics() {
-                if let Some(n) = stats.null_count_opt() {
-                    *null_counts.entry(field_id).or_insert(0) += n;
-                }
-                // Do not attempt to parse typed bounds here; leave empty per-field for now
-                let _ = _path; // silence unused
+            if let Some(stats) = c.statistics()
+                && let Some(n) = stats.null_count_opt()
+            {
+                *null_counts.entry(field_id).or_insert(0) += n;
             }
+            // Do not attempt to parse typed bounds here; leave empty per-field for now.
         }
     }
 

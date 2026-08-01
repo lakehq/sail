@@ -387,28 +387,71 @@ impl IcebergRestCatalogProvider {
             ));
         }
 
-        let mut configured_storage_fallbacks = Vec::new();
+        let mut unsupported_access_requirements = Vec::new();
         if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
-            configured_storage_fallbacks.push("remote signing");
+            unsupported_access_requirements.push("remote signing");
         }
         if result
             .storage_credentials
             .as_ref()
             .is_some_and(|credentials| !credentials.is_empty())
         {
-            configured_storage_fallbacks.push("vended credentials");
+            unsupported_access_requirements.push("vended credentials");
         }
-        if !configured_storage_fallbacks.is_empty() {
-            log::warn!(
-                "Iceberg REST catalog {} create_table for {}.{} returned {}; using configured object-store credentials for create+write",
+        if !unsupported_access_requirements.is_empty() {
+            return Err(CatalogError::UnsupportedCapability(format!(
+                "Iceberg REST catalog {} create_table for {}.{} requires {}, which Sail cannot materialize for create+write yet",
                 catalog,
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table),
-                configured_storage_fallbacks.join(", "),
-            );
+                unsupported_access_requirements.join(" and "),
+            )));
         }
 
         Ok(())
+    }
+
+    fn is_commit_state_unknown_status(status: Option<reqwest::StatusCode>) -> bool {
+        matches!(
+            status,
+            Some(
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                    | reqwest::StatusCode::BAD_GATEWAY
+                    | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    | reqwest::StatusCode::GATEWAY_TIMEOUT
+            )
+        )
+    }
+
+    fn snapshot_id_for_simple_commit_reconciliation(
+        updates: &[crate::r#gen::TableUpdate],
+    ) -> Option<i64> {
+        let mut added_snapshot_id = None;
+        let mut main_ref_snapshot_id = None;
+
+        for update in updates {
+            match update {
+                crate::r#gen::TableUpdate::AddSnapshot { snapshot }
+                    if added_snapshot_id.is_none() =>
+                {
+                    added_snapshot_id = Some(snapshot.snapshot_id);
+                }
+                crate::r#gen::TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    snapshot_id,
+                    ..
+                } if ref_name == "main" && main_ref_snapshot_id.is_none() => {
+                    main_ref_snapshot_id = Some(*snapshot_id);
+                }
+                _ => return None,
+            }
+        }
+
+        let added_snapshot_id = added_snapshot_id?;
+        if main_ref_snapshot_id.is_some_and(|snapshot_id| snapshot_id != added_snapshot_id) {
+            return None;
+        }
+        Some(added_snapshot_id)
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -1210,6 +1253,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| {
                 CatalogError::External(format!("Failed to parse Iceberg REST commit updates: {e}"))
             })?;
+        let expected_snapshot_id =
+            Self::snapshot_id_for_simple_commit_reconciliation(updates.as_slice());
         let request = crate::r#gen::CommitTableRequest {
             identifier: Some(Box::new(crate::r#gen::TableIdentifier {
                 namespace: Box::new(database.clone().into()),
@@ -1218,7 +1263,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             requirements,
             updates,
         };
-        let response = client
+        let response = match client
             .update_table(
                 catalog_config.prefix().map(ToOwned::to_owned),
                 namespace,
@@ -1226,51 +1271,90 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 request,
             )
             .await
-            .map(|response| response.inner)
-            .map_err(|e| match e {
-                e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                    CatalogObject::Table,
-                    format!(
-                        "{}.{}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ),
-                ),
-                e if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
-                    CatalogError::Conflict(format!(
-                        "Iceberg REST catalog commit conflict for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
-                    CatalogError::Unauthorized(format!(
-                        "Iceberg REST catalog commit unauthorized for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
-                    CatalogError::Forbidden(format!(
-                        "Iceberg REST catalog commit forbidden for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
-                    CatalogError::RateLimited(format!(
-                        "Iceberg REST catalog commit rate limited for {}.{}: {e}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ))
-                }
-                e if e.status().is_some() => CatalogError::External(format!(
-                    "Failed to commit Iceberg table {}.{}: {e}",
+        {
+            Ok(response) => response.inner,
+            Err(error) if Self::is_commit_state_unknown_status(error.status()) => {
+                let message = format!(
+                    "Iceberg REST catalog commit state is unknown for {}.{}: {error}",
                     quote_namespace_if_needed(database),
                     quote_name_if_needed(table)
-                )),
-                e => CatalogError::External(format!("Failed to commit table: {e}")),
-            })?;
+                );
+                if let Some(expected_snapshot_id) = expected_snapshot_id {
+                    match self.load_table_result(database, table, None).await {
+                        Ok(result)
+                            if result.metadata.snapshots.as_ref().is_some_and(|snapshots| {
+                                snapshots
+                                    .iter()
+                                    .any(|snapshot| snapshot.snapshot_id == expected_snapshot_id)
+                            }) =>
+                        {
+                            let reconciled_payload = payload
+                                .clone()
+                                .or_else(|| serde_json::to_value(result).ok());
+                            return Ok(LakehouseCommitOutcome::Committed {
+                                context,
+                                payload: reconciled_payload,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(reconcile_error) => {
+                            log::warn!(
+                                "Failed to reconcile {message} by reloading the table: {reconcile_error}"
+                            );
+                        }
+                    }
+                }
+                return Ok(LakehouseCommitOutcome::StateUnknown { message });
+            }
+            Err(e) => {
+                return Err(match e {
+                    e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+                        CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!(
+                                "{}.{}",
+                                quote_namespace_if_needed(database),
+                                quote_name_if_needed(table)
+                            ),
+                        )
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
+                        CatalogError::Conflict(format!(
+                            "Iceberg REST catalog commit conflict for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
+                        CatalogError::Unauthorized(format!(
+                            "Iceberg REST catalog commit unauthorized for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
+                        CatalogError::Forbidden(format!(
+                            "Iceberg REST catalog commit forbidden for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+                        CatalogError::RateLimited(format!(
+                            "Iceberg REST catalog commit rate limited for {}.{}: {e}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ))
+                    }
+                    e if e.status().is_some() => CatalogError::External(format!(
+                        "Failed to commit Iceberg table {}.{}: {e}",
+                        quote_namespace_if_needed(database),
+                        quote_name_if_needed(table)
+                    )),
+                    e => CatalogError::External(format!("Failed to commit table: {e}")),
+                });
+            }
+        };
         let payload = match payload {
             Some(payload) => Some(payload),
             None => Some(serde_json::to_value(response).map_err(|e| {

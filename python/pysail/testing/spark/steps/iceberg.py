@@ -8,14 +8,31 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from pyiceberg.avro.file import AvroFile
+from pyiceberg.conversions import from_bytes
 from pyiceberg.io.pyarrow import PyArrowFile, PyArrowFileIO
-from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
+from pyiceberg.manifest import (
+    DATA_FILE_TYPE,
+    MANIFEST_ENTRY_SCHEMAS,
+    MANIFEST_LIST_FILE_SCHEMAS,
+    DataFile,
+    DataFileContent,
+    FileFormat,
+    ManifestContent,
+    ManifestEntry,
+    ManifestEntryStatus,
+    ManifestFile,
+    PartitionFieldSummary,
+)
+from pyiceberg.typedef import Record
+from pyiceberg.types import IcebergType, PrimitiveType
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
 
@@ -34,6 +51,7 @@ _PYTEST_TMP_PREFIX = re.compile(
 )
 
 _MANIFEST_LIST_FIRST_ROW_ID_POSITION = 15
+_MANIFEST_READ_VERSION = 2
 
 
 def _normalize_pytest_tmp_path(value: str) -> str:
@@ -145,7 +163,7 @@ def _pyarrow_input_file(io: PyArrowFileIO, location: str) -> PyArrowFile:
     return PyArrowFile(location=location, path=path, fs=io.fs_by_scheme("file", ""))
 
 
-def _current_manifest_list(metadata: dict) -> dict:
+def _current_manifest_files(metadata: dict) -> list:
     snapshot = _current_snapshot(metadata)
     manifest_list = snapshot.get("manifest-list")
     assert isinstance(manifest_list, str), f"current snapshot has no manifest-list: {snapshot!r}"
@@ -156,11 +174,33 @@ def _current_manifest_list(metadata: dict) -> dict:
     with AvroFile(
         _pyarrow_input_file(io, manifest_list),
         MANIFEST_LIST_FILE_SCHEMAS[format_version],
-        read_types={508: PartitionFieldSummary},
+        read_types={-1: ManifestFile, 508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
     ) as reader:
-        manifests = [_manifest_record_to_dict(record) for record in reader]
+        return list(reader)
+
+
+def _current_manifest_list(metadata: dict) -> dict:
+    manifests = [_manifest_record_to_dict(record) for record in _current_manifest_files(metadata)]
     return {"manifests": manifests}
+
+
+def _manifest_entries(
+    io: PyArrowFileIO,
+    manifest: ManifestFile,
+    format_version: int,
+) -> list[ManifestEntry]:
+    with AvroFile(
+        _pyarrow_input_file(io, manifest.manifest_path),
+        MANIFEST_ENTRY_SCHEMAS[format_version],
+        read_types={-1: ManifestEntry, 2: DataFile},
+        read_enums={
+            0: ManifestEntryStatus,
+            101: FileFormat,
+            134: DataFileContent,
+        },
+    ) as reader:
+        return list(reader)
 
 
 def _manifest_record_to_dict(record) -> dict:
@@ -398,13 +438,39 @@ def append_query_to_iceberg_table_with_merge_schema(
     ).save(location.path.absolute().as_uri())
 
 
-def _sanitize_iceberg_metadata(metadata: dict) -> dict:
+def _snapshot_id_labels(metadata: dict) -> dict[int, str]:
+    return {
+        snapshot["snapshot-id"]: f"<snapshot-{index}>"
+        for index, snapshot in enumerate(_ordered_snapshots(metadata), start=1)
+    }
+
+
+def _snapshot_id_label(
+    snapshot_id: int | None,
+    labels: dict[int, str] | None,
+    fallback: str,
+) -> int | str | None:
+    if snapshot_id is None:
+        return None
+    if labels is None:
+        return fallback
+    return labels.get(snapshot_id, "<unknown-snapshot>")
+
+
+def _sanitize_iceberg_metadata(
+    metadata: dict,
+    snapshot_labels: dict[int, str] | None = None,
+) -> dict:
     """Sanitize volatile fields in Iceberg metadata for snapshot comparison."""
     sanitized = dict(metadata)
 
     # Replace volatile IDs with placeholders
     if "current-snapshot-id" in sanitized:
-        sanitized["current-snapshot-id"] = "<snapshot-id>"
+        sanitized["current-snapshot-id"] = _snapshot_id_label(
+            sanitized["current-snapshot-id"],
+            snapshot_labels,
+            "<snapshot-id>",
+        )
 
     # Replace UUIDs with placeholders
     if "table-uuid" in sanitized:
@@ -429,7 +495,9 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
 
     # Sanitize snapshots
     if "snapshots" in sanitized:
-        sanitized["snapshots"] = [_sanitize_iceberg_snapshot(s) for s in sanitized["snapshots"]]
+        sanitized["snapshots"] = [
+            _sanitize_iceberg_snapshot(snapshot, snapshot_labels) for snapshot in sanitized["snapshots"]
+        ]
 
     # Sanitize snapshot log
     if "snapshot-log" in sanitized:
@@ -437,7 +505,11 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
             {
                 **entry,
                 "timestamp-ms": "<timestamp>",
-                "snapshot-id": "<snapshot-id>",
+                "snapshot-id": _snapshot_id_label(
+                    entry.get("snapshot-id"),
+                    snapshot_labels,
+                    "<snapshot-id>",
+                ),
             }
             for entry in sanitized["snapshot-log"]
         ]
@@ -447,7 +519,14 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
         refs = {}
         for name, ref in sanitized["refs"].items():
             if isinstance(ref, dict) and "snapshot-id" in ref:
-                refs[name] = {**ref, "snapshot-id": "<snapshot-id>"}
+                refs[name] = {
+                    **ref,
+                    "snapshot-id": _snapshot_id_label(
+                        ref.get("snapshot-id"),
+                        snapshot_labels,
+                        "<snapshot-id>",
+                    ),
+                }
             else:
                 refs[name] = ref
         sanitized["refs"] = refs
@@ -500,15 +579,26 @@ def _sanitize_partition_spec(spec: dict) -> dict:
     return dict(spec)
 
 
-def _sanitize_iceberg_snapshot(snapshot: dict) -> dict:
+def _sanitize_iceberg_snapshot(
+    snapshot: dict,
+    snapshot_labels: dict[int, str] | None = None,
+) -> dict:
     """Sanitize a single Iceberg snapshot."""
     sanitized = dict(snapshot)
 
     # Replace IDs with placeholders
     if "snapshot-id" in sanitized:
-        sanitized["snapshot-id"] = "<snapshot-id>"
+        sanitized["snapshot-id"] = _snapshot_id_label(
+            sanitized["snapshot-id"],
+            snapshot_labels,
+            "<snapshot-id>",
+        )
     if "parent-snapshot-id" in sanitized:
-        sanitized["parent-snapshot-id"] = "<parent-snapshot-id>"
+        sanitized["parent-snapshot-id"] = _snapshot_id_label(
+            sanitized["parent-snapshot-id"],
+            snapshot_labels,
+            "<parent-snapshot-id>",
+        )
 
     # Replace timestamps
     if "timestamp-ms" in sanitized:
@@ -558,6 +648,236 @@ def _sanitize_iceberg_snapshot(snapshot: dict) -> dict:
         pass  # Keep schema-id for validation
 
     return sanitized
+
+
+def _snapshot_value(value):
+    if isinstance(value, Enum):
+        return value.name.lower()
+    if isinstance(value, bytes):
+        return f"0x{value.hex()}"
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Record):
+        return [_snapshot_value(item) for item in value._data]  # noqa: SLF001
+    if isinstance(value, dict):
+        return {key: _snapshot_value(item) for key, item in sorted(value.items())}
+    if isinstance(value, list | tuple):
+        return [_snapshot_value(item) for item in value]
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _sanitize_data_file_path(path: str) -> str:
+    sanitized = _normalize_pytest_tmp_path(path)
+    sanitized = re.sub(r"file://.*/data/", "file://<root>/data/", sanitized)
+    return re.sub(
+        r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+)?"
+        r"\.(parquet|avro|orc)",
+        r"data-<uuid>.\1",
+        sanitized,
+    )
+
+
+def _schema_types_by_id(metadata: dict) -> dict[int, PrimitiveType]:
+    types_by_id: dict[int, PrimitiveType] = {}
+
+    def visit_field(field: dict) -> None:
+        field_type_json = field.get("type")
+        try:
+            field_type = IcebergType.model_validate(field_type_json)
+        except Exception:  # noqa: BLE001 - PyIceberg may not yet know newer Iceberg primitive types.
+            field_type = None
+        if isinstance(field_type, PrimitiveType):
+            types_by_id.setdefault(field["id"], field_type)
+            return
+        if not isinstance(field_type_json, dict):
+            return
+        if field_type_json.get("type") == "struct":
+            for child in field_type_json.get("fields", []):
+                visit_field(child)
+        elif field_type_json.get("type") == "list":
+            visit_field(
+                {
+                    "id": field_type_json["element-id"],
+                    "type": field_type_json["element"],
+                }
+            )
+        elif field_type_json.get("type") == "map":
+            visit_field(
+                {
+                    "id": field_type_json["key-id"],
+                    "type": field_type_json["key"],
+                }
+            )
+            visit_field(
+                {
+                    "id": field_type_json["value-id"],
+                    "type": field_type_json["value"],
+                }
+            )
+
+    for schema_json in metadata.get("schemas", []):
+        for field in schema_json.get("fields", []):
+            visit_field(field)
+    return types_by_id
+
+
+def _decode_bound(
+    field_id: int,
+    value: bytes,
+    types_by_id: dict[int, PrimitiveType],
+):
+    field_type = types_by_id.get(field_id)
+    if field_type is None:
+        return f"0x{value.hex()}"
+    try:
+        return _snapshot_value(from_bytes(field_type, value))
+    except Exception:  # noqa: BLE001 - keep malformed historical bytes visible in the snapshot.
+        return f"0x{value.hex()}"
+
+
+def _metric_map(values: dict[int, int] | None) -> dict[int, int]:
+    return dict(sorted((values or {}).items()))
+
+
+def _bound_map(
+    values: dict[int, bytes] | None,
+    types_by_id: dict[int, PrimitiveType],
+) -> dict[int, object]:
+    return {field_id: _decode_bound(field_id, value, types_by_id) for field_id, value in sorted((values or {}).items())}
+
+
+def _partition_values(data_file, partition_spec: dict) -> dict[str, object]:
+    values = data_file.partition._data  # noqa: SLF001 - PyIceberg Record has no public positional iterator.
+    fields = partition_spec.get("fields", [])
+    assert len(values) == len(fields), (
+        f"partition value count {len(values)} does not match spec field count {len(fields)}"
+    )
+    return {field["name"]: _snapshot_value(value) for field, value in zip(fields, values, strict=True)}
+
+
+def _sanitize_manifest_entry(
+    entry,
+    manifest_file: ManifestFile,
+    partition_spec: dict,
+    snapshot_labels: dict[int, str],
+    types_by_id: dict[int, PrimitiveType],
+    format_version: int,
+) -> dict:
+    data_file = entry.data_file
+    snapshot_id = entry.snapshot_id or manifest_file.added_snapshot_id
+    sequence_number = entry.sequence_number
+    file_sequence_number = entry.file_sequence_number
+    if manifest_file.sequence_number == 0 or entry.status == ManifestEntryStatus.ADDED:
+        sequence_number = sequence_number if sequence_number is not None else manifest_file.sequence_number
+        file_sequence_number = (
+            file_sequence_number if file_sequence_number is not None else manifest_file.sequence_number
+        )
+    column_sizes = dict.fromkeys(sorted((data_file.column_sizes or {}).keys()), "<bytes>")
+    split_offsets = ["<offset>" for _ in (data_file.split_offsets or [])]
+    sanitized = {
+        "status": _snapshot_value(entry.status),
+        "snapshot-id": _snapshot_id_label(
+            snapshot_id,
+            snapshot_labels,
+            "<snapshot-id>",
+        ),
+        "sequence-number": sequence_number,
+        "file-sequence-number": file_sequence_number,
+        "data-file": {
+            "content": _snapshot_value(data_file.content),
+            "file-path": _sanitize_data_file_path(data_file.file_path),
+            "file-format": _snapshot_value(data_file.file_format),
+            "partition": _partition_values(data_file, partition_spec),
+            "record-count": data_file.record_count,
+            "file-size-in-bytes": "<bytes>",
+            "column-sizes": column_sizes,
+            "value-counts": _metric_map(data_file.value_counts),
+            "null-value-counts": _metric_map(data_file.null_value_counts),
+            "nan-value-counts": _metric_map(data_file.nan_value_counts),
+            "lower-bounds": _bound_map(data_file.lower_bounds, types_by_id),
+            "upper-bounds": _bound_map(data_file.upper_bounds, types_by_id),
+            "key-metadata": _snapshot_value(data_file.key_metadata),
+            "split-offsets": split_offsets,
+            "equality-ids": data_file.equality_ids,
+            "sort-order-id": data_file.sort_order_id,
+        },
+    }
+    if format_version == 3:  # noqa: PLR2004
+        data_file_values = dict(
+            zip(
+                (field.name for field in DATA_FILE_TYPE[3].fields),
+                data_file._data,  # noqa: SLF001 - V3 fields have no PyIceberg accessors.
+                strict=True,
+            )
+        )
+        sanitized["data-file"].update(
+            {
+                "first-row-id": data_file_values["first_row_id"],
+                "referenced-data-file": _sanitize_data_file_path(data_file_values["referenced_data_file"])
+                if data_file_values["referenced_data_file"]
+                else None,
+                "content-offset": data_file_values["content_offset"],
+                "content-size-in-bytes": data_file_values["content_size_in_bytes"],
+            }
+        )
+    return sanitized
+
+
+def _current_snapshot_graph(table_location: Path) -> dict:
+    metadata = _find_latest_metadata(table_location)
+    format_version = metadata.get("format-version", _MANIFEST_READ_VERSION)
+    snapshot_labels = _snapshot_id_labels(metadata)
+    types_by_id = _schema_types_by_id(metadata)
+    specs_by_id = {spec["spec-id"]: spec for spec in metadata.get("partition-specs", [])}
+    io = PyArrowFileIO()
+    manifests = []
+    manifest_files = sorted(
+        _current_manifest_files(metadata),
+        key=lambda manifest: (
+            _snapshot_value(manifest.content),
+            manifest.sequence_number,
+            manifest.manifest_path,
+        ),
+    )
+    for index, manifest_file in enumerate(manifest_files, start=1):
+        manifest = _manifest_record_to_dict(manifest_file)
+        manifest["manifest-path"] = f"file://<root>/metadata/manifest-{index}.avro"
+        manifest["manifest-length"] = "<bytes>"
+        manifest["added-snapshot-id"] = _snapshot_id_label(
+            manifest.get("added-snapshot-id"),
+            snapshot_labels,
+            "<snapshot-id>",
+        )
+        manifest["key-metadata"] = _snapshot_value(manifest.get("key-metadata"))
+        manifest["partitions"] = _snapshot_value(manifest.get("partitions"))
+
+        partition_spec = specs_by_id[manifest_file.partition_spec_id]
+        entries = [
+            _sanitize_manifest_entry(
+                entry,
+                manifest_file,
+                partition_spec,
+                snapshot_labels,
+                types_by_id,
+                format_version,
+            )
+            for entry in _manifest_entries(io, manifest_file, format_version)
+        ]
+        entries.sort(key=lambda entry: entry["data-file"]["file-path"])
+        manifests.append({"manifest": manifest, "entries": entries})
+
+    return {
+        "table-metadata": _sanitize_iceberg_metadata(metadata, snapshot_labels),
+        "current-snapshot": _sanitize_iceberg_snapshot(
+            _current_snapshot(metadata),
+            snapshot_labels,
+        ),
+        "manifests": manifests,
+    }
 
 
 def _sanitize_iceberg_snapshot_summary(snapshot: dict) -> dict:
@@ -648,6 +968,16 @@ def check_iceberg_current_manifest_list_matches_snapshot(variables, snapshot: Sn
     sanitized = _sanitize_manifest_list(manifest_list)
 
     assert snapshot == sanitized
+
+
+@then("iceberg current snapshot graph matches snapshot")
+def check_iceberg_current_snapshot_graph_matches(variables, snapshot: SnapshotAssertion):
+    """Check table metadata, the current manifest list, and every manifest entry."""
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg snapshot inspection"
+
+    graph = _current_snapshot_graph(Path(location.path))
+    assert snapshot == graph
 
 
 @then("iceberg current snapshot matches snapshot")

@@ -15,13 +15,9 @@
 /// This module consolidates all literal/scalar conversions
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    MapArray, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
-};
+use datafusion::arrow::array::{Array, ArrayRef, MapArray, StructArray, new_empty_array};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{DataFusionError, Result};
 use ordered_float::OrderedFloat;
@@ -72,21 +68,15 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
         (PrimitiveType::Decimal { precision, scale }, PL::Int128(v)) => {
             SV::Decimal128(Some(*v), *precision as u8, *scale as i8)
         }
-        // UUID: UInt128 -> could be represented as string or binary, use string for now
+        // UUID is stored as a 16-byte fixed binary value in the Arrow schema.
         (PrimitiveType::Uuid, PL::UInt128(u)) => {
-            let mut bytes = [0u8; 16];
-            let mut tmp = *u;
-            for i in (0..16).rev() {
-                bytes[i] = (tmp & 0xFF) as u8;
-                tmp >>= 8;
-            }
-            let uuid = uuid::Uuid::from_bytes(bytes);
-            SV::Utf8(Some(uuid.to_string()))
+            SV::FixedSizeBinary(16, Some(u.to_be_bytes().to_vec()))
         }
-        // Fixed/Binary: Binary -> Binary
-        (PrimitiveType::Fixed(_), PL::Binary(b)) | (PrimitiveType::Binary, PL::Binary(b)) => {
-            SV::Binary(Some(b.clone()))
-        }
+        (PrimitiveType::Fixed(size), PL::Binary(bytes)) => match i32::try_from(*size) {
+            Ok(size) => SV::FixedSizeBinary(size, Some(bytes.clone())),
+            Err(_) => SV::LargeBinary(Some(bytes.clone())),
+        },
+        (PrimitiveType::Binary, PL::Binary(bytes)) => SV::LargeBinary(Some(bytes.clone())),
         // Iceberg encodes String lower/upper bounds as raw bytes (UTF-8) in file metrics.
         // Decode them so pruning predicates comparing against Utf8 literals work.
         (PrimitiveType::String, PL::Binary(b)) => {
@@ -314,76 +304,156 @@ pub fn scalar_to_primitive_literal(scalar: &ScalarValue) -> Result<PrimitiveLite
 
 /// Extract a literal value from an ArrayRef at a specific row index.
 ///
-/// Returns None if the value is null or the type is not supported.
+/// Returns `Ok(None)` only if the value is null. Unsupported or incompatible values are errors.
 /// This is primarily used for extracting partition values from record batches.
-pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
+pub fn array_value_to_literal(
+    array: &ArrayRef,
+    row: usize,
+    iceberg_type: &Type,
+) -> Result<Option<Literal>, String> {
+    if row >= array.len() {
+        return Err(format!(
+            "partition row {row} is out of bounds for array of length {}",
+            array.len()
+        ));
+    }
     if array.is_null(row) {
-        return None;
+        return Ok(None);
     }
 
-    match array.data_type() {
-        ArrowDataType::Boolean => {
-            let a = array.as_any().downcast_ref::<BooleanArray>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Boolean(a.value(row))))
+    let Type::Primitive(primitive_type) = iceberg_type else {
+        return Err(format!(
+            "partition values must use primitive Iceberg types, got {iceberg_type}"
+        ));
+    };
+    let scalar = ScalarValue::try_from_array(array, row)
+        .map_err(|error| format!("failed to extract partition value: {error}"))?;
+
+    use PrimitiveLiteral as PL;
+    use ScalarValue as SV;
+
+    let checked_mul = |value: i64, factor: i64, unit: &str| {
+        value
+            .checked_mul(factor)
+            .ok_or_else(|| format!("{unit} partition value overflows i64"))
+    };
+    let exact_div = |value: i64, divisor: i64, unit: &str| {
+        if value.rem_euclid(divisor) == 0 {
+            Ok(value.div_euclid(divisor))
+        } else {
+            Err(format!(
+                "{unit} partition value loses precision when converted to Iceberg"
+            ))
         }
-        ArrowDataType::Int32 => {
-            let a = array.as_any().downcast_ref::<Int32Array>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Int(a.value(row))))
+    };
+
+    let primitive = match (&scalar, primitive_type) {
+        (SV::Boolean(Some(value)), PrimitiveType::Boolean) => PL::Boolean(*value),
+        (SV::Int8(Some(value)), PrimitiveType::Int) => PL::Int(i32::from(*value)),
+        (SV::Int16(Some(value)), PrimitiveType::Int) => PL::Int(i32::from(*value)),
+        (SV::Int32(Some(value)), PrimitiveType::Int) => PL::Int(*value),
+        (SV::Int64(Some(value)), PrimitiveType::Long) => PL::Long(*value),
+        (SV::Float32(Some(value)), PrimitiveType::Float) => PL::Float(OrderedFloat(*value)),
+        (SV::Float64(Some(value)), PrimitiveType::Double) => PL::Double(OrderedFloat(*value)),
+        (
+            SV::Decimal128(Some(value), precision, scale),
+            PrimitiveType::Decimal {
+                precision: expected_precision,
+                scale: expected_scale,
+            },
+        ) if u32::from(*precision) <= *expected_precision
+            && u32::try_from(*scale).ok() == Some(*expected_scale) =>
+        {
+            PL::Int128(*value)
         }
-        ArrowDataType::Int64 => {
-            let a = array.as_any().downcast_ref::<Int64Array>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Long(a.value(row))))
+        (SV::Utf8(Some(value)), PrimitiveType::String)
+        | (SV::Utf8View(Some(value)), PrimitiveType::String)
+        | (SV::LargeUtf8(Some(value)), PrimitiveType::String) => PL::String(value.clone()),
+        (SV::Date32(Some(value)), PrimitiveType::Date) => PL::Int(*value),
+        (SV::Date64(Some(value)), PrimitiveType::Date) => {
+            const MILLIS_PER_DAY: i64 = 86_400_000;
+            PL::Int(
+                exact_div(*value, MILLIS_PER_DAY, "date")?
+                    .try_into()
+                    .map_err(|_| "date partition value overflows i32".to_string())?,
+            )
         }
-        ArrowDataType::Float32 => {
-            let a = array.as_any().downcast_ref::<Float32Array>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(
-                a.value(row),
-            ))))
+        (SV::Time32Second(Some(value)), PrimitiveType::Time) => {
+            PL::Long(checked_mul(i64::from(*value), 1_000_000, "time")?)
         }
-        ArrowDataType::Float64 => {
-            let a = array.as_any().downcast_ref::<Float64Array>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(
-                a.value(row),
-            ))))
+        (SV::Time32Millisecond(Some(value)), PrimitiveType::Time) => {
+            PL::Long(checked_mul(i64::from(*value), 1_000, "time")?)
         }
-        ArrowDataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::String(
-                a.value(row).to_string(),
-            )))
+        (SV::Time64Microsecond(Some(value)), PrimitiveType::Time) => PL::Long(*value),
+        (SV::Time64Nanosecond(Some(value)), PrimitiveType::Time) => {
+            PL::Long(exact_div(*value, 1_000, "time")?)
         }
-        ArrowDataType::Date32 => {
-            let a = array.as_any().downcast_ref::<Date32Array>()?;
-            Some(Literal::Primitive(PrimitiveLiteral::Int(a.value(row))))
+        (
+            SV::TimestampSecond(Some(value), _),
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+        ) => PL::Long(checked_mul(*value, 1_000_000, "timestamp")?),
+        (
+            SV::TimestampMillisecond(Some(value), _),
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+        ) => PL::Long(checked_mul(*value, 1_000, "timestamp")?),
+        (
+            SV::TimestampMicrosecond(Some(value), _),
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+        ) => PL::Long(*value),
+        (
+            SV::TimestampNanosecond(Some(value), _),
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+        ) => PL::Long(exact_div(*value, 1_000, "timestamp")?),
+        (
+            SV::TimestampSecond(Some(value), _),
+            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+        ) => PL::Long(checked_mul(*value, 1_000_000_000, "timestamp_ns")?),
+        (
+            SV::TimestampMillisecond(Some(value), _),
+            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+        ) => PL::Long(checked_mul(*value, 1_000_000, "timestamp_ns")?),
+        (
+            SV::TimestampMicrosecond(Some(value), _),
+            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+        ) => PL::Long(checked_mul(*value, 1_000, "timestamp_ns")?),
+        (
+            SV::TimestampNanosecond(Some(value), _),
+            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+        ) => PL::Long(*value),
+        (SV::Binary(Some(value)), PrimitiveType::Binary)
+        | (SV::BinaryView(Some(value)), PrimitiveType::Binary)
+        | (SV::LargeBinary(Some(value)), PrimitiveType::Binary) => PL::Binary(value.clone()),
+        (SV::FixedSizeBinary(size, Some(value)), PrimitiveType::Fixed(expected_size))
+            if u64::try_from(*size).ok() == Some(*expected_size) =>
+        {
+            PL::Binary(value.clone())
         }
-        ArrowDataType::Timestamp(unit, _tz) => {
-            // Convert all timestamp units to microseconds (Iceberg's standard)
-            let value_in_micros = match unit {
-                TimeUnit::Second => {
-                    let a = array.as_any().downcast_ref::<TimestampSecondArray>()?;
-                    a.value(row).checked_mul(1_000_000)
-                }
-                TimeUnit::Millisecond => {
-                    let a = array.as_any().downcast_ref::<TimestampMillisecondArray>()?;
-                    a.value(row).checked_mul(1_000)
-                }
-                TimeUnit::Microsecond => {
-                    let a = array.as_any().downcast_ref::<TimestampMicrosecondArray>()?;
-                    Some(a.value(row))
-                }
-                TimeUnit::Nanosecond => {
-                    let a = array.as_any().downcast_ref::<TimestampNanosecondArray>()?;
-                    Some(a.value(row))
-                }
-            };
-            value_in_micros.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
+        (SV::FixedSizeBinary(16, Some(value)), PrimitiveType::Uuid) => {
+            let bytes: [u8; 16] = value
+                .as_slice()
+                .try_into()
+                .map_err(|_| "UUID partition value must contain 16 bytes".to_string())?;
+            PL::UInt128(u128::from_be_bytes(bytes))
         }
-        _ => None,
+        _ => {
+            return Err(format!(
+                "unsupported partition value {scalar:?} for Iceberg type {iceberg_type}"
+            ));
+        }
+    };
+
+    if !primitive_type.compatible(&primitive) {
+        return Err(format!(
+            "partition value {primitive:?} is incompatible with Iceberg type {iceberg_type}"
+        ));
     }
+    Ok(Some(Literal::Primitive(primitive)))
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::TimeUnit;
+
     use super::*;
 
     #[test]
@@ -493,8 +563,13 @@ mod tests {
         use datafusion::arrow::array::TimestampNanosecondArray;
 
         let array = TimestampNanosecondArray::from(vec![Some(9_999_999)]);
-        let literal =
-            array_value_to_literal(&(Arc::new(array) as ArrayRef), 0).expect("literal value");
+        let literal = array_value_to_literal(
+            &(Arc::new(array) as ArrayRef),
+            0,
+            &Type::Primitive(PrimitiveType::TimestampNs),
+        )
+        .expect("literal conversion")
+        .expect("literal value");
         assert_eq!(
             literal,
             Literal::Primitive(PrimitiveLiteral::Long(9_999_999))

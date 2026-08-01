@@ -42,6 +42,7 @@ use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
+    assign_replacement_partition_spec,
 };
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
@@ -75,6 +76,9 @@ impl IcebergWriterExec {
         if let Some(spec) = spec {
             let mut cols = Vec::with_capacity(spec.fields().len());
             for f in spec.fields() {
+                if f.transform == crate::spec::transform::Transform::Void {
+                    continue;
+                }
                 let field = iceberg_schema.field_by_id(f.source_id).ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Partition column mismatch: field id {} missing in schema",
@@ -90,6 +94,34 @@ impl IcebergWriterExec {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    fn existing_table_commit_requirements(
+        table_meta: &TableMetadata,
+        write_spec: Option<&BoundPartitionSpec>,
+    ) -> Vec<TableRequirement> {
+        let mut requirements = vec![
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: table_meta.last_column_id,
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: table_meta.current_schema_id,
+            },
+            TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: table_meta.default_spec_id,
+            },
+        ];
+        if write_spec.is_some_and(|write_spec| {
+            !table_meta
+                .partition_specs
+                .iter()
+                .any(|spec| spec.spec_id() == write_spec.spec_id())
+        }) {
+            requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: table_meta.last_partition_id,
+            });
+        }
+        requirements
     }
 
     pub fn new(
@@ -421,9 +453,6 @@ impl ExecutionPlan for IcebergWriterExec {
                     if !partition_columns.is_empty() {
                         let current_schema = schema_outcome.iceberg_schema.clone();
                         let mut builder = crate::spec::partition::PartitionSpec::builder();
-                        if let Some(existing) = &default_spec {
-                            builder = builder.with_spec_id(existing.spec_id());
-                        }
                         for field in &partition_columns {
                             let fid = current_schema.field_id_by_name(&field.column).ok_or_else(
                                 || {
@@ -439,7 +468,16 @@ impl ExecutionPlan for IcebergWriterExec {
                                 iceberg_transform_from_partition_field(field),
                             );
                         }
-                        default_spec = Some(builder.build());
+                        default_spec = Some(
+                            assign_replacement_partition_spec(
+                                table_meta.format_version,
+                                &table_meta.partition_specs,
+                                table_meta.default_spec_id,
+                                table_meta.last_partition_id,
+                                &builder.build(),
+                            )
+                            .map_err(DataFusionError::Plan)?,
+                        );
                     }
                 } else {
                     let table_partition_columns = {
@@ -468,14 +506,8 @@ impl ExecutionPlan for IcebergWriterExec {
                 let commit_schema = schema_outcome
                     .changed
                     .then(|| schema_outcome.iceberg_schema.clone());
-                let requirements = vec![
-                    TableRequirement::LastAssignedFieldIdMatch {
-                        last_assigned_field_id: table_meta.last_column_id,
-                    },
-                    TableRequirement::CurrentSchemaIdMatch {
-                        current_schema_id: table_meta.current_schema_id,
-                    },
-                ];
+                let requirements =
+                    Self::existing_table_commit_requirements(&table_meta, default_spec.as_ref());
                 (
                     schema_outcome.iceberg_schema,
                     schema_outcome.arrow_schema,

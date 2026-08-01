@@ -61,18 +61,21 @@ def _load_lakekeeper_table(
     return response.json()
 
 
-def test_create_write_uses_configured_credentials_with_lakekeeper_session_hints(
+def test_create_write_rejects_unmaterialized_lakekeeper_storage_access(
     spark: SparkSession,
     lakekeeper_endpoint: str,
     lakekeeper_warehouse_id: str,
 ) -> None:
     spark.sql(f"DROP TABLE IF EXISTS {TABLE}")
     source = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "name"])
-    source.writeTo(TABLE).using("iceberg").create()
-
-    rows = spark.table(TABLE).orderBy("id").collect()
-    assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b")]
+    with pytest.raises(
+        Exception,
+        match=r"(?i)(remote signing|vended credentials|storage access)",
+    ):
+        source.writeTo(TABLE).using("iceberg").create()
 
     table = _load_lakekeeper_table(lakekeeper_endpoint, lakekeeper_warehouse_id)
     assert table["config"]["s3.remote-signing-enabled"] == "true"
     assert table["storage-credentials"]
+    assert table["metadata"].get("current-snapshot-id") in (None, -1)
+    assert table["metadata"].get("snapshots", []) == []

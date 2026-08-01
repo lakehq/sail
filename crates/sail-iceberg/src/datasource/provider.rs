@@ -20,7 +20,7 @@ use datafusion::catalog::Session;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{Result, ToDFSchema, plan_err};
+use datafusion::common::{Result, ToDFSchema, not_impl_err, plan_err};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -40,7 +40,11 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use object_store::ObjectMeta;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionFieldDefaults, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
+};
 use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
@@ -56,11 +60,13 @@ use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
-use crate::spec::types::values::Literal;
+use crate::spec::types::values::{Datum, Literal};
+use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
-    DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
+    DataFile, DataFileFormat, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec,
+    Schema, Snapshot,
 };
-use crate::utils::conversions::primitive_to_scalar_default;
+use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 /// Iceberg table provider for DataFusion
@@ -83,7 +89,115 @@ pub struct IcebergTableProvider {
     metadata_as_data_read: bool,
 }
 
+pub(crate) fn iceberg_schema_evolution_expr_adapter(
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExprAdapterFactory>> {
+    fn collect_initial_defaults(
+        field: &crate::spec::types::NestedField,
+        defaults: &mut SchemaEvolutionFieldDefaults,
+    ) -> Result<()> {
+        if let Some(initial_default) = &field.initial_default {
+            defaults.insert(
+                field.id.to_string(),
+                to_scalar(initial_default, field.field_type.as_ref())?,
+            );
+        }
+        match field.field_type.as_ref() {
+            Type::Struct(struct_type) => {
+                for child in struct_type.fields() {
+                    collect_initial_defaults(child, defaults)?;
+                }
+            }
+            Type::List(list_type) => {
+                collect_initial_defaults(&list_type.element_field, defaults)?;
+            }
+            Type::Map(map_type) => {
+                collect_initial_defaults(&map_type.key_field, defaults)?;
+                collect_initial_defaults(&map_type.value_field, defaults)?;
+            }
+            Type::Primitive(_) => {}
+        }
+        Ok(())
+    }
+
+    let mut field_defaults = SchemaEvolutionFieldDefaults::new();
+    for field in schema.fields() {
+        collect_initial_defaults(field, &mut field_defaults)?;
+    }
+    Ok(Arc::new(
+        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(StructFieldMatching::FieldId)
+            .with_field_defaults(field_defaults),
+    ))
+}
+
+fn pre_delete_file_pruning_limit(
+    requested_limit: Option<usize>,
+    delete_index: &DeleteFileIndex,
+) -> Option<usize> {
+    if delete_index.is_empty() {
+        requested_limit
+    } else {
+        None
+    }
+}
+
 impl IcebergTableProvider {
+    fn require_parquet_file(data_file: &DataFile, role: &str) -> Result<()> {
+        if data_file.file_format() != DataFileFormat::Parquet {
+            return not_impl_err!(
+                "reading Iceberg {role} file '{}' in {} format; only Parquet is currently supported",
+                data_file.file_path(),
+                data_file.file_format().as_action_str()
+            );
+        }
+        Ok(())
+    }
+
+    fn iceberg_field_id_for_arrow_field(
+        field: &datafusion::arrow::datatypes::Field,
+    ) -> Option<i32> {
+        field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .and_then(|value| value.parse().ok())
+    }
+
+    fn bound_scalar_for_field(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+        let field = self.schema.field_by_id(field_id)?;
+        to_scalar(
+            &Literal::Primitive(datum.literal.clone()),
+            field.field_type.as_ref(),
+        )
+        .ok()
+    }
+
+    /// String and binary bounds may be truncated, while floating bounds exclude NaN values.
+    fn bounds_are_exact(&self, field_id: i32, data_file: &DataFile) -> bool {
+        let Some(field) = self.schema.field_by_id(field_id) else {
+            return false;
+        };
+        match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::String | PrimitiveType::Binary) => false,
+            Type::Primitive(PrimitiveType::Float | PrimitiveType::Double) => {
+                data_file.nan_value_counts().get(&field_id) == Some(&0)
+            }
+            _ => true,
+        }
+    }
+
+    fn bound_precision(
+        &self,
+        field_id: i32,
+        data_file: &DataFile,
+        scalar: ScalarValue,
+    ) -> Precision<ScalarValue> {
+        if self.bounds_are_exact(field_id, data_file) {
+            Precision::Exact(scalar)
+        } else {
+            Precision::Inexact(scalar)
+        }
+    }
+
     /// Create a new Iceberg table provider
     pub fn new(
         table_uri: impl ToString,
@@ -244,6 +358,38 @@ impl IcebergTableProvider {
         }
     }
 
+    fn apply_requested_projection(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(projection) = projection else {
+            return Ok(input);
+        };
+        let requested_schema = self.projected_arrow_schema(Some(projection))?;
+        if input.schema() == requested_schema {
+            return Ok(input);
+        }
+
+        let input_schema = input.schema();
+        let expressions = projection
+            .iter()
+            .map(|index| {
+                let field = self.arrow_schema.field(*index);
+                let input_index = input_schema.index_of(field.name()).map_err(|_| {
+                    datafusion::common::DataFusionError::Internal(format!(
+                        "Iceberg scan is missing requested column '{}'",
+                        field.name()
+                    ))
+                })?;
+                let column: Arc<dyn PhysicalExpr> =
+                    Arc::new(Column::new(field.name(), input_index));
+                Ok((column, field.name().to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+    }
+
     /// Load manifest list from snapshot
     async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
         let snapshot = self.snapshot.as_ref().ok_or_else(|| {
@@ -400,6 +546,7 @@ impl IcebergTableProvider {
                         file_ref.data_file.file_path
                     );
                 }
+                Self::require_parquet_file(&file_ref.data_file, "delete")?;
                 index.insert(file_ref).map_err(|e| {
                     datafusion::common::DataFusionError::Plan(format!(
                         "failed to index Iceberg delete file: {e}"
@@ -418,6 +565,7 @@ impl IcebergTableProvider {
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
+            Self::require_parquet_file(&data_file, "data")?;
             let raw_path = data_file.file_path();
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             log::trace!("Processing data file: {}", file_path);
@@ -547,29 +695,49 @@ impl IcebergTableProvider {
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
 
-        // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
+        let field_ids: Vec<Option<i32>> = self
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| Self::iceberg_field_id_for_arrow_field(field))
+            .collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
             vec![None; self.arrow_schema.fields().len()];
         let mut max_scalars: Vec<Option<ScalarValue>> =
             vec![None; self.arrow_schema.fields().len()];
-        let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
+        let mut min_complete = vec![true; self.arrow_schema.fields().len()];
+        let mut max_complete = vec![true; self.arrow_schema.fields().len()];
+        let mut bounds_exact = vec![true; self.arrow_schema.fields().len()];
+        let mut null_counts: Vec<Option<usize>> = vec![Some(0); self.arrow_schema.fields().len()];
 
         for df in data_files {
             total_rows = total_rows.saturating_add(df.record_count() as usize);
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                let Some(field_id) = field_id else {
+                    continue;
+                };
+                bounds_exact[col_idx] &= self.bounds_are_exact(*field_id, df);
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
-                    null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
+                    null_counts[col_idx] = null_counts[col_idx].and_then(|count| {
+                        usize::try_from(*c)
+                            .ok()
+                            .and_then(|value| count.checked_add(value))
+                    });
+                } else {
+                    null_counts[col_idx] = None;
                 }
 
                 // min
-                if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(sv) = df
+                    .lower_bounds()
+                    .get(field_id)
+                    .and_then(|datum| self.bound_scalar_for_field(*field_id, datum))
+                {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -578,11 +746,16 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    min_complete[col_idx] = false;
                 }
 
                 // max
-                if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(sv) = df
+                    .upper_bounds()
+                    .get(field_id)
+                    .and_then(|datum| self.bound_scalar_for_field(*field_id, datum))
+                {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -591,21 +764,39 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    max_complete[col_idx] = false;
                 }
             }
         }
 
         let column_statistics = (0..self.arrow_schema.fields().len())
             .map(|i| ColumnStatistics {
-                null_count: Precision::Exact(null_counts[i]),
-                max_value: max_scalars[i]
-                    .clone()
+                null_count: null_counts[i]
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent),
-                min_value: min_scalars[i]
-                    .clone()
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent),
+                max_value: if max_complete[i] {
+                    max_scalars[i].clone().map_or(Precision::Absent, |scalar| {
+                        if bounds_exact[i] {
+                            Precision::Exact(scalar)
+                        } else {
+                            Precision::Inexact(scalar)
+                        }
+                    })
+                } else {
+                    Precision::Absent
+                },
+                min_value: if min_complete[i] {
+                    min_scalars[i].clone().map_or(Precision::Absent, |scalar| {
+                        if bounds_exact[i] {
+                            Precision::Exact(scalar)
+                        } else {
+                            Precision::Inexact(scalar)
+                        }
+                    })
+                } else {
+                    Precision::Absent
+                },
                 distinct_count: Precision::Absent,
                 sum_value: Precision::Absent,
                 byte_size: Precision::Absent,
@@ -629,14 +820,10 @@ impl IcebergTableProvider {
             .arrow_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                let field_id = self
-                    .schema
-                    .fields()
-                    .get(i)
-                    .map(|f| f.id)
-                    .unwrap_or(i as i32 + 1);
+            .map(|field| {
+                let Some(field_id) = Self::iceberg_field_id_for_arrow_field(field) else {
+                    return ColumnStatistics::new_unknown();
+                };
 
                 let null_count = data_file
                     .null_value_counts()
@@ -649,15 +836,15 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
-                    .map(Precision::Exact)
+                    .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
+                    .map(|scalar| self.bound_precision(field_id, data_file, scalar))
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
-                    .map(Precision::Exact)
+                    .and_then(|datum| self.bound_scalar_for_field(field_id, datum))
+                    .map(|scalar| self.bound_precision(field_id, data_file, scalar))
                     .unwrap_or(Precision::Absent);
 
                 ColumnStatistics {
@@ -737,10 +924,18 @@ impl TableProvider for IcebergTableProvider {
             .await?;
         log::trace!("Loaded {} data files", data_files_with_seq.len());
 
+        // A file's manifest record count is an upper bound before row-level deletes. Build the
+        // delete index first so LIMIT can only shorten the file list when no deletes exist.
+        log::trace!("Building delete file index...");
+        let delete_index = self
+            .build_delete_file_index(&store_ctx, &manifest_list)
+            .await?;
+        let file_pruning_limit = pre_delete_file_pruning_limit(limit, &delete_index);
+
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
         // Preserve per-file sequence numbers through the prune.
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        if filter_expr.is_some() || file_pruning_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -751,7 +946,7 @@ impl TableProvider for IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_pruning_limit,
                 self.rebuild_logical_schema_for_filters(projection, filters),
                 files_only,
                 &self.schema,
@@ -768,12 +963,6 @@ impl TableProvider for IcebergTableProvider {
                 data_files_with_seq.len()
             );
         }
-
-        // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
-        log::trace!("Building delete file index...");
-        let delete_index = self
-            .build_delete_file_index(&store_ctx, &manifest_list)
-            .await?;
 
         // Partition each data file into "clean" (no matching deletes) vs "dirty"
         // (one or more matching deletes) buckets. We only pay the cost of
@@ -803,6 +992,7 @@ impl TableProvider for IcebergTableProvider {
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
+        let expr_adapter_factory = iceberg_schema_evolution_expr_adapter(&self.schema)?;
 
         if dirty_units.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
@@ -826,10 +1016,10 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                    as Arc<dyn PhysicalExprAdapterFactory>))
+                .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                 .build();
-            return Ok(DataSourceExec::from_data_source(file_scan_config));
+            let scan = DataSourceExec::from_data_source(file_scan_config);
+            return self.apply_requested_projection(scan, projection);
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
@@ -855,8 +1045,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
         }
@@ -869,8 +1058,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(Arc::clone(&expr_adapter_factory)))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);
@@ -914,20 +1102,7 @@ impl TableProvider for IcebergTableProvider {
         };
 
         // Apply projection above.
-        let after_projection: Arc<dyn ExecutionPlan> = if let Some(proj) = projection {
-            let projected_schema = self.arrow_schema.clone();
-            let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = proj
-                .iter()
-                .map(|&idx| {
-                    let field = projected_schema.field(idx);
-                    let col: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), idx));
-                    (col, field.name().to_string())
-                })
-                .collect();
-            Arc::new(ProjectionExec::try_new(proj_exprs, after_filter)?)
-        } else {
-            after_filter
-        };
+        let after_projection = self.apply_requested_projection(after_filter, projection)?;
 
         // Apply limit above (may over-scan; correctness is preserved because
         // GlobalLimitExec stops streaming once the row count is reached).
@@ -1210,6 +1385,6 @@ impl IcebergTableProvider {
             ),
         );
 
-        Ok(scan_exec)
+        self.apply_requested_projection(scan_exec, projection)
     }
 }

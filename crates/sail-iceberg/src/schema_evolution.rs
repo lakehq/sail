@@ -11,7 +11,6 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::mem::discriminant;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
@@ -20,6 +19,7 @@ use sail_common_datafusion::variant::variant_storage_types_equivalent;
 
 use crate::spec::TableMetadata;
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
+use crate::spec::types::values::Literal;
 use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,16 +82,13 @@ impl SchemaEvolver {
                     field.name()
                 ))
             })?;
-            if !Self::field_types_equivalent(table_field.data_type(), field.data_type())
-                && !Self::is_safe_write_cast(table_field.data_type(), field.data_type())
-            {
-                return Err(DataFusionError::Plan(format!(
-                    "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
-                    field.name(),
-                    table_field.data_type(),
-                    field.data_type(),
-                )));
-            }
+            let iceberg_field = iceberg_schema.field_by_name(field.name()).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' is missing from the Iceberg schema",
+                    field.name()
+                ))
+            })?;
+            Self::validate_write_field(table_field, iceberg_field.as_ref(), field, field.name())?;
         }
 
         for field in table_schema.fields() {
@@ -101,12 +98,7 @@ impl SchemaEvolver {
 
             let has_default = iceberg_schema
                 .field_by_name(field.name())
-                .and_then(|nested| {
-                    nested
-                        .write_default
-                        .as_ref()
-                        .or(nested.initial_default.as_ref())
-                })
+                .and_then(|nested| nested.write_default.as_ref())
                 .is_some();
 
             if !field.is_nullable() && !has_default {
@@ -118,6 +110,134 @@ impl SchemaEvolver {
         }
 
         Ok(())
+    }
+
+    fn validate_write_field(
+        table_field: &Field,
+        iceberg_field: &NestedField,
+        input_field: &Field,
+        path: &str,
+    ) -> Result<()> {
+        match (
+            table_field.data_type(),
+            iceberg_field.field_type.as_ref(),
+            input_field.data_type(),
+        ) {
+            (
+                DataType::Struct(table_fields),
+                Type::Struct(iceberg_struct),
+                DataType::Struct(input_fields),
+            ) => {
+                for input_child in input_fields {
+                    let table_child = table_fields
+                        .iter()
+                        .find(|field| field.name() == input_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is not present in the Iceberg table schema. Set mergeSchema=true to add nested columns.",
+                                input_child.name()
+                            ))
+                        })?;
+                    let iceberg_child = iceberg_struct
+                        .field_by_name(input_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is missing from the Iceberg schema",
+                                input_child.name()
+                            ))
+                        })?;
+                    Self::validate_write_field(
+                        table_child,
+                        iceberg_child.as_ref(),
+                        input_child,
+                        &format!("{path}.{}", input_child.name()),
+                    )?;
+                }
+
+                for table_child in table_fields {
+                    if input_fields
+                        .iter()
+                        .any(|field| field.name() == table_child.name())
+                    {
+                        continue;
+                    }
+                    let iceberg_child = iceberg_struct
+                        .field_by_name(table_child.name())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Column '{path}.{}' is missing from the Iceberg schema",
+                                table_child.name()
+                            ))
+                        })?;
+                    if !table_child.is_nullable() && iceberg_child.write_default.is_none() {
+                        return Err(DataFusionError::Plan(format!(
+                            "Column '{path}.{}' is required in the Iceberg table schema and must be present in the input data.",
+                            table_child.name()
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            (
+                DataType::List(table_child)
+                | DataType::ListView(table_child)
+                | DataType::LargeList(table_child)
+                | DataType::LargeListView(table_child),
+                Type::List(iceberg_list),
+                DataType::List(input_child)
+                | DataType::ListView(input_child)
+                | DataType::LargeList(input_child)
+                | DataType::LargeListView(input_child),
+            ) => Self::validate_write_field(
+                table_child,
+                iceberg_list.element_field.as_ref(),
+                input_child,
+                &format!("{path}.element"),
+            ),
+            (
+                DataType::Map(table_entries, _),
+                Type::Map(iceberg_map),
+                DataType::Map(input_entries, _),
+            ) => {
+                let (DataType::Struct(table_entry_fields), DataType::Struct(input_entry_fields)) =
+                    (table_entries.data_type(), input_entries.data_type())
+                else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{path}' has invalid map entry types"
+                    )));
+                };
+                if table_entry_fields.len() != 2 || input_entry_fields.len() != 2 {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{path}' map entries must contain key and value fields"
+                    )));
+                }
+                Self::validate_write_field(
+                    &table_entry_fields[0],
+                    iceberg_map.key_field.as_ref(),
+                    &input_entry_fields[0],
+                    &format!("{path}.key"),
+                )?;
+                Self::validate_write_field(
+                    &table_entry_fields[1],
+                    iceberg_map.value_field.as_ref(),
+                    &input_entry_fields[1],
+                    &format!("{path}.value"),
+                )
+            }
+            _ => {
+                if Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
+                    || Self::is_safe_write_cast(table_field.data_type(), input_field.data_type())
+                {
+                    Ok(())
+                } else {
+                    Err(DataFusionError::Plan(format!(
+                        "Column '{path}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
+                        table_field.data_type(),
+                        input_field.data_type(),
+                    )))
+                }
+            }
+        }
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
@@ -134,6 +254,9 @@ impl SchemaEvolver {
         if variant_storage_types_equivalent(table_type, input_type) {
             return true;
         }
+        if Self::is_binary_storage_type(table_type) && Self::is_binary_storage_type(input_type) {
+            return true;
+        }
 
         matches!(
             (table_type, input_type),
@@ -145,12 +268,94 @@ impl SchemaEvolver {
         ) || Self::nested_types_equivalent(table_type, input_type)
     }
 
-    fn field_has_default(field: &NestedField) -> bool {
-        field.write_default.is_some() || field.initial_default.is_some()
+    fn field_has_write_default(field: &NestedField) -> bool {
+        field.write_default.is_some()
     }
 
-    fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
-        discriminant(existing) == discriminant(candidate)
+    fn types_can_reuse_field_id(existing: &Type, candidate: &Type) -> bool {
+        match (existing, candidate) {
+            (Type::Primitive(existing), Type::Primitive(candidate)) => {
+                existing == candidate
+                    || matches!(
+                        (existing, candidate),
+                        (PrimitiveType::Int, PrimitiveType::Long)
+                            | (PrimitiveType::Float, PrimitiveType::Double)
+                    )
+                    || matches!(
+                        (existing, candidate),
+                        (
+                            PrimitiveType::Decimal {
+                                precision: existing_precision,
+                                scale: existing_scale,
+                            },
+                            PrimitiveType::Decimal {
+                                precision: candidate_precision,
+                                scale: candidate_scale,
+                            },
+                        ) if existing_scale == candidate_scale
+                            && existing_precision <= candidate_precision
+                    )
+            }
+            (Type::Struct(_), Type::Struct(_)) => true,
+            (Type::List(existing), Type::List(candidate)) => Self::types_can_reuse_field_id(
+                existing.element_field.field_type.as_ref(),
+                candidate.element_field.field_type.as_ref(),
+            ),
+            (Type::Map(existing), Type::Map(candidate)) => {
+                existing.key_field.field_type == candidate.key_field.field_type
+                    && Self::types_can_reuse_field_id(
+                        existing.value_field.field_type.as_ref(),
+                        candidate.value_field.field_type.as_ref(),
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    fn convert_preserved_default(
+        default: Option<&Literal>,
+        existing_type: &Type,
+        candidate_type: &Type,
+    ) -> Result<Option<Literal>> {
+        let Some(default) = default else {
+            return Ok(None);
+        };
+        if existing_type == candidate_type {
+            return Ok(Some(default.clone()));
+        }
+
+        let json = default.try_into_json(existing_type).map_err(|error| {
+            DataFusionError::Plan(format!(
+                "Failed to preserve Iceberg field default during schema overwrite: {error}"
+            ))
+        })?;
+        Literal::try_from_json(json, candidate_type)
+            .map_err(|error| {
+                DataFusionError::Plan(format!(
+                    "Failed to promote Iceberg field default during schema overwrite: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Iceberg field default became null during schema overwrite".to_string(),
+                )
+            })
+            .map(Some)
+    }
+
+    fn preserve_field_metadata(existing: &NestedField, candidate: &mut NestedField) -> Result<()> {
+        candidate.doc.clone_from(&existing.doc);
+        candidate.initial_default = Self::convert_preserved_default(
+            existing.initial_default.as_ref(),
+            existing.field_type.as_ref(),
+            candidate.field_type.as_ref(),
+        )?;
+        candidate.write_default = Self::convert_preserved_default(
+            existing.write_default.as_ref(),
+            existing.field_type.as_ref(),
+            candidate.field_type.as_ref(),
+        )?;
+        Ok(())
     }
 
     fn is_allowed_type_promotion(table_type: &DataType, input_type: &DataType) -> bool {
@@ -219,6 +424,9 @@ impl SchemaEvolver {
         if table_type == input_type {
             return true;
         }
+        if Self::is_binary_storage_type(table_type) && Self::is_binary_storage_type(input_type) {
+            return true;
+        }
         if let (
             DataType::Timestamp(table_unit, table_tz),
             DataType::Timestamp(input_unit, input_tz),
@@ -273,6 +481,13 @@ impl SchemaEvolver {
         }
     }
 
+    fn is_binary_storage_type(data_type: &DataType) -> bool {
+        matches!(
+            data_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
+    }
+
     fn timestamp_timezone_compatible(
         table_tz: &Option<std::sync::Arc<str>>,
         input_tz: &Option<std::sync::Arc<str>>,
@@ -317,7 +532,7 @@ impl SchemaEvolver {
                     merged_fields.push(Arc::new(merged_field));
                 }
                 Err(_) => {
-                    if existing.required && !Self::field_has_default(existing) {
+                    if existing.required && !Self::field_has_write_default(existing) {
                         return Err(DataFusionError::Plan(format!(
                             "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
                             existing.name
@@ -500,7 +715,7 @@ impl SchemaEvolver {
         // 2. Handle fields that exist in Iceberg but not in Input (i.e., omitted old fields)
         // These fields should be preserved and placed at the end
         for remaining_field in existing_pool.values() {
-            if remaining_field.required && !Self::field_has_default(remaining_field) {
+            if remaining_field.required && !Self::field_has_write_default(remaining_field) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' is required in the Iceberg schema and must be present in the input data.",
                     remaining_field.name
@@ -627,7 +842,15 @@ impl SchemaEvolver {
                 let mut updated_fields = Vec::with_capacity(candidate_struct.fields().len());
                 for child in candidate_struct.fields() {
                     let mut new_child = child.as_ref().clone();
-                    if let Some(existing_child) = existing_struct.field_by_name(&new_child.name) {
+                    if let Some(existing_child) = existing_struct
+                        .field_by_name(&new_child.name)
+                        .filter(|existing_child| {
+                            Self::types_can_reuse_field_id(
+                                existing_child.field_type.as_ref(),
+                                new_child.field_type.as_ref(),
+                            )
+                        })
+                    {
                         new_child.id = existing_child.id;
                         Self::reuse_nested_ids_from_existing(
                             existing_child.as_ref(),
@@ -655,7 +878,7 @@ impl SchemaEvolver {
             }
             (Type::Map(existing_map), Type::Map(candidate_map)) => {
                 let mut new_key = candidate_map.key_field.as_ref().clone();
-                if Self::types_share_shape(
+                if Self::types_can_reuse_field_id(
                     existing_map.key_field.field_type.as_ref(),
                     new_key.field_type.as_ref(),
                 ) {
@@ -672,7 +895,7 @@ impl SchemaEvolver {
                 }
 
                 let mut new_value = candidate_map.value_field.as_ref().clone();
-                if Self::types_share_shape(
+                if Self::types_can_reuse_field_id(
                     existing_map.value_field.field_type.as_ref(),
                     new_value.field_type.as_ref(),
                 ) {
@@ -693,6 +916,7 @@ impl SchemaEvolver {
             }
             _ => {}
         }
+        Self::preserve_field_metadata(existing, candidate)?;
         Ok(())
     }
 
@@ -718,7 +942,7 @@ impl SchemaEvolver {
         current_schema: &IcebergSchema,
         input_schema: &ArrowSchema,
     ) -> Result<SchemaEvolutionOutcome> {
-        use crate::datasource::type_converter::{arrow_type_to_iceberg, iceberg_schema_to_arrow};
+        use crate::datasource::type_converter::{arrow_field_to_iceberg, iceberg_schema_to_arrow};
 
         let mut identifier_names = HashSet::new();
         for id in current_schema.identifier_field_ids() {
@@ -731,33 +955,30 @@ impl SchemaEvolver {
         let mut new_fields = Vec::new();
 
         for field in input_schema.fields() {
-            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+            let mut nested = arrow_field_to_iceberg(field).map_err(|e| {
                 DataFusionError::Plan(format!(
                     "Failed to convert column '{}' to an Iceberg type: {e}",
                     field.name()
                 ))
             })?;
-            let existing_field = current_schema.field_by_name(field.name());
-            let field_id = if let Some(existing) = existing_field {
-                existing.id
-            } else {
-                let id = next_field_id;
-                next_field_id += 1;
-                id
-            };
-            let mut nested = NestedField::new(
-                field_id,
-                field.name().clone(),
-                iceberg_type,
-                !field.is_nullable(),
-            );
-            if let Some(existing) = existing_field {
+            let reusable_field = current_schema
+                .field_by_name(field.name())
+                .filter(|existing| {
+                    Self::types_can_reuse_field_id(
+                        existing.field_type.as_ref(),
+                        nested.field_type.as_ref(),
+                    )
+                });
+            if let Some(existing) = reusable_field {
+                nested.id = existing.id;
                 Self::reuse_nested_ids_from_existing(
                     existing.as_ref(),
                     &mut nested,
                     &mut next_field_id,
                 )?;
             } else {
+                nested.id = next_field_id;
+                next_field_id += 1;
                 Self::assign_nested_ids(&mut nested, &mut next_field_id);
             }
             new_fields.push(Arc::new(nested));

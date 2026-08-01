@@ -127,23 +127,31 @@ impl IcebergCommitExec {
             .max(format_version_for_schema(&new_schema));
     }
 
-    fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
+    fn apply_partition_spec_update(
+        table_meta: &mut TableMetadata,
+        new_spec: PartitionSpec,
+    ) -> Result<PartitionSpec> {
         let spec_id = new_spec.spec_id();
-        let mut replaced = false;
-        for spec in table_meta.partition_specs.iter_mut() {
-            if spec.spec_id() == spec_id {
-                *spec = new_spec.clone();
-                replaced = true;
-                break;
+        if let Some(existing) = table_meta
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == spec_id)
+            .cloned()
+        {
+            if !existing.is_compatible_with(&new_spec) {
+                return Err(DataFusionError::Plan(format!(
+                    "Iceberg partition spec ID {spec_id} is already assigned to an incompatible spec"
+                )));
             }
+            table_meta.default_spec_id = spec_id;
+            return Ok(existing);
         }
-        if !replaced {
-            table_meta.partition_specs.push(new_spec.clone());
-        }
+        table_meta.partition_specs.push(new_spec.clone());
         table_meta.default_spec_id = spec_id;
         if let Some(highest) = new_spec.highest_field_id() {
             table_meta.last_partition_id = table_meta.last_partition_id.max(highest);
         }
+        Ok(new_spec)
     }
 
     fn validate_requirements(
@@ -631,19 +639,15 @@ impl ExecutionPlan for IcebergCommitExec {
                     .cloned()
                     .unwrap_or_else(PartitionSpec::unpartitioned_spec);
                 if let Some(new_spec) = commit_info.partition_spec.clone() {
-                    let spec = if new_spec.spec_id() == 0 && table_meta.default_spec_id != 0 {
-                        new_spec.with_spec_id(table_meta.default_spec_id)
-                    } else {
-                        new_spec
-                    };
+                    let spec = new_spec;
                     let spec_id = spec.spec_id();
                     let should_add_spec = !table_meta
                         .partition_specs
                         .iter()
                         .any(|partition_spec| partition_spec.spec_id() == spec_id);
                     let should_set_default_spec = table_meta.default_spec_id != spec_id;
-                    Self::apply_partition_spec_update(&mut table_meta, spec.clone());
-                    partition_spec_for_commit = spec;
+                    partition_spec_for_commit =
+                        Self::apply_partition_spec_update(&mut table_meta, spec)?;
                     if should_add_spec {
                         metadata_updates.push(TableUpdate::AddSpec {
                             spec: Self::unbound_partition_spec(&partition_spec_for_commit),
@@ -740,6 +744,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                     return Err(commit_conflict_error());
                                 }
                                 continue;
+                            }
+                            CatalogCommitOutcome::StateUnknown { message } => {
+                                return Err(commit_state_unknown_error(message));
                             }
                         }
                     }
@@ -922,6 +929,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                 return Err(commit_conflict_error());
                             }
                             continue;
+                        }
+                        CatalogCommitOutcome::StateUnknown { message } => {
+                            return Err(commit_state_unknown_error(message));
                         }
                     }
                 }
@@ -1114,5 +1124,11 @@ impl DisplayAs for IcebergCommitExec {
 fn commit_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
+    ))
+}
+
+fn commit_state_unknown_error(message: String) -> DataFusionError {
+    DataFusionError::Execution(format!(
+        "Iceberg catalog commit state is unknown; the commit was not retried and its files were preserved: {message}"
     ))
 }

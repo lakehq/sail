@@ -163,7 +163,8 @@ impl Transform {
                         PrimitiveType::Int
                         | PrimitiveType::Long
                         | PrimitiveType::Decimal { .. }
-                        | PrimitiveType::String => Ok(input_type.clone()),
+                        | PrimitiveType::String
+                        | PrimitiveType::Binary => Ok(input_type.clone()),
                         _ => Err(format!(
                             "{input_type} is not a valid input type of truncate transform"
                         )),

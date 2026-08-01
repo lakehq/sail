@@ -174,6 +174,12 @@ def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(spark,
     ]
     df_initial = spark.createDataFrame(initial_data)
     df_initial.write.format("iceberg").mode("overwrite").partitionBy("category").save(iceberg_path)
+    initial_metadata_path = sorted(table_path.joinpath("metadata").glob("*.metadata.json"))[-1]
+    initial_meta = json.loads(initial_metadata_path.read_text())
+    initial_spec = next(
+        spec for spec in initial_meta["partition-specs"] if spec["spec-id"] == initial_meta["default-spec-id"]
+    )
+    initial_partition_field = initial_spec["fields"][0]
 
     # Overwrite with different partition column with overwriteSchema=true
     # Keep compatible columns to avoid schema incompatibility issues
@@ -204,6 +210,21 @@ def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(spark,
     default_spec = next(spec for spec in meta["partition-specs"] if spec["spec-id"] == default_spec_id)
     partition_names = [field["name"] for field in default_spec.get("fields", [])]
     assert partition_names == ["region"], f"Expected default partition spec to be ['region'], got {partition_names}"
+    historical_spec = next(spec for spec in meta["partition-specs"] if spec["spec-id"] == initial_spec["spec-id"])
+    assert historical_spec == initial_spec
+    assert default_spec["fields"][0]["field-id"] != initial_partition_field["field-id"]
+
+    df_overwrite.write.format("iceberg").mode("overwrite").option("overwriteSchema", "true").partitionBy(
+        "category"
+    ).save(iceberg_path)
+    restored_metadata_path = sorted(table_path.joinpath("metadata").glob("*.metadata.json"))[-1]
+    restored_meta = json.loads(restored_metadata_path.read_text())
+    restored_spec = next(
+        spec for spec in restored_meta["partition-specs"] if spec["spec-id"] == restored_meta["default-spec-id"]
+    )
+    assert [field["name"] for field in restored_spec["fields"]] == ["category"]
+    assert restored_spec["fields"][0]["field-id"] == initial_partition_field["field-id"]
+    assert initial_spec in restored_meta["partition-specs"]
 
 
 def test_append_to_unpartitioned_table_with_partitioning_raises_error(spark, tmp_path):

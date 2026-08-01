@@ -21,10 +21,9 @@ Feature: Iceberg Variant support
       INSERT INTO iceberg_variant_table
       SELECT 1, parse_json('{"a":2,"b":"iceberg"}')
       """
-    Then iceberg metadata matches snapshot
+    Then iceberg current snapshot graph matches snapshot
     Then iceberg latest metadata file is v2.metadata.json
     Then iceberg version hint is 2
-    Then iceberg current manifest list matches snapshot
     When query
       """
       SELECT
@@ -144,12 +143,10 @@ Feature: Iceberg Variant support
       INSERT INTO iceberg_variant_schema_evolution_table
       SELECT CAST(1 AS INT)
       """
-    Then iceberg metadata matches snapshot
     Given append query to iceberg table in location with mergeSchema
       """
       SELECT CAST(2 AS INT) AS id, parse_json('{"a":3,"b":"merge"}') AS payload
       """
-    Then iceberg metadata matches snapshot
     Then iceberg latest metadata file is v3.metadata.json
     Then iceberg version hint is 3
-    Then iceberg current manifest list matches snapshot
+    Then iceberg current snapshot graph matches snapshot

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
@@ -129,22 +130,37 @@ def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
     assert rows == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
 
 
-def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):
-    table_path, table_location = _table_path_and_uri(tmp_path, "tt_precedence")
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        ("snapshotId", "timestampAsOf"),
+        ("snapshotId", "ref"),
+        ("timestampAsOf", "ref"),
+    ],
+)
+def test_iceberg_time_travel_rejects_conflicting_selectors(
+    spark,
+    tmp_path,
+    selectors,
+):
+    table_path, table_location = _table_path_and_uri(tmp_path, "tt_conflicts")
 
     spark.createDataFrame([Row(id=1, value="old")]).write.format("iceberg").mode("overwrite").save(table_location)
     old_snapshot_id = _current_snapshot_id(table_path)
     spark.createDataFrame([Row(id=2, value="new")]).write.format("iceberg").mode("overwrite").save(table_location)
     snapshot_times = _rewrite_snapshot_timestamps(table_path)
 
-    rows = (
-        spark.read.format("iceberg")
-        .option("snapshotId", str(old_snapshot_id))
-        .option("timestampAsOf", snapshot_times[-1])
-        .load(table_location)
-        .collect()
-    )
-    assert rows == [Row(id=1, value="old")]
+    values = {
+        "snapshotId": str(old_snapshot_id),
+        "timestampAsOf": snapshot_times[-1],
+        "ref": "main",
+    }
+    reader = spark.read.format("iceberg")
+    for selector in selectors:
+        reader = reader.option(selector, values[selector])
+
+    with pytest.raises(Exception, match=r"(?i)(ambiguous|only one|conflict)"):
+        reader.load(table_location).collect()
 
 
 def test_iceberg_time_travel_by_ref_main(spark, tmp_path):

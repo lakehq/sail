@@ -100,6 +100,7 @@ impl Table {
 
     /// Build an Iceberg table provider that reflects the requested snapshot options.
     pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
+        validate_snapshot_selection(options)?;
         if self.metadata.current_snapshot().is_none()
             && options.snapshot_id.is_none()
             && options.use_ref.is_none()
@@ -136,6 +137,7 @@ impl Table {
     }
 
     fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {
+        validate_snapshot_selection(options)?;
         let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = options.snapshot_id {
             (
                 self.metadata
@@ -227,6 +229,26 @@ impl Table {
 
         Ok((schema, chosen_snapshot))
     }
+}
+
+fn validate_snapshot_selection(options: &IcebergReadOptions) -> Result<()> {
+    let mut selectors = Vec::with_capacity(3);
+    if options.snapshot_id.is_some() {
+        selectors.push("snapshot-id");
+    }
+    if options.use_ref.is_some() {
+        selectors.push("ref");
+    }
+    if options.timestamp_as_of.is_some() {
+        selectors.push("timestamp-as-of");
+    }
+    if selectors.len() > 1 {
+        return Err(DataFusionError::Plan(format!(
+            "Iceberg snapshot selection is ambiguous: specify only one of snapshot-id, ref, or timestamp-as-of; received {}",
+            selectors.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
