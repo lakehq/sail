@@ -17,6 +17,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::config::{ExecutionOptions, TableParquetOptions};
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::expressions::Column;
@@ -36,10 +37,12 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err, not_impl_err, plan_datafusion_err};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSink, FileSinkConfig};
 use datafusion_datasource_parquet::ParquetSink;
-use futures::{StreamExt, stream};
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, StreamExt, stream};
 use log::warn;
-use object_store::ObjectStoreExt;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::file::metadata::SortingColumn;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::listing_write::{
@@ -49,7 +52,84 @@ use sail_common_datafusion::listing_write::{
 use sail_common_datafusion::task_attempt::TaskAttemptContext;
 use uuid::Uuid;
 
-use crate::demux::{ParquetFileManifest, start_demuxer_task};
+use crate::demux::{FileStreamReceiver, ParquetFileManifest, start_demuxer_task};
+
+async fn write_parquet_file_streams(
+    sink: Arc<ParquetSink>,
+    context: Arc<TaskContext>,
+    demux_task: SpawnedTask<Result<()>>,
+    mut file_streams: FileStreamReceiver,
+    object_store: Arc<dyn ObjectStore>,
+    max_concurrent_writers: usize,
+) -> Result<u64> {
+    let max_concurrent_writers = max_concurrent_writers.max(1);
+    let mut writer_futures: FuturesUnordered<BoxFuture<'static, Result<()>>> =
+        FuturesUnordered::new();
+    let mut stream_open = true;
+
+    while stream_open || !writer_futures.is_empty() {
+        if !stream_open || writer_futures.len() >= max_concurrent_writers {
+            if let Some(result) = writer_futures.next().await {
+                result?;
+            }
+            continue;
+        }
+
+        tokio::select! {
+            file_stream = file_streams.recv() => {
+                match file_stream {
+                    Some(file_stream) => {
+                        writer_futures.push(write_parquet_file(
+                            Arc::clone(&sink),
+                            Arc::clone(&context),
+                            Arc::clone(&object_store),
+                            file_stream,
+                        ));
+                    }
+                    None => stream_open = false,
+                }
+            }
+            result = writer_futures.next(), if !writer_futures.is_empty() => {
+                if let Some(result) = result {
+                    result?;
+                }
+            }
+        }
+    }
+
+    demux_task
+        .join_unwind()
+        .await
+        .map_err(|error| DataFusionError::ExecutionJoin(Box::new(error)))??;
+
+    sink.written().values().try_fold(0_u64, |rows, metadata| {
+        let file_rows = u64::try_from(metadata.file_metadata().num_rows()).map_err(|_| {
+            DataFusionError::Execution("Parquet metadata row count is negative".to_string())
+        })?;
+        rows.checked_add(file_rows)
+            .ok_or_else(|| DataFusionError::Execution("Parquet row count overflow".to_string()))
+    })
+}
+
+fn write_parquet_file(
+    sink: Arc<ParquetSink>,
+    context: Arc<TaskContext>,
+    object_store: Arc<dyn ObjectStore>,
+    file_stream: (Path, tokio::sync::mpsc::Receiver<RecordBatch>),
+) -> BoxFuture<'static, Result<()>> {
+    async move {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        sender.send(file_stream).map_err(|_| {
+            DataFusionError::Execution("failed to dispatch Parquet file stream".to_string())
+        })?;
+        drop(sender);
+        let file_demux_task = SpawnedTask::spawn(async { Ok(()) });
+        sink.spawn_writer_tasks_and_join(&context, file_demux_task, receiver, object_store)
+            .await?;
+        Ok(())
+    }
+    .boxed()
+}
 
 /// Settings captured in the physical plan that affect file layout and writer buffering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,14 +525,19 @@ impl ExecutionPlan for ParquetWriterExec {
             let mut cleanup =
                 StagingCleanupGuard::new(Arc::clone(&object_store), staging_prefix.clone());
             let result = async {
-                let rows = sink
-                    .spawn_writer_tasks_and_join(
-                        &writer_context,
-                        demux_task,
-                        file_streams,
-                        Arc::clone(&object_store),
-                    )
-                    .await?;
+                let rows = write_parquet_file_streams(
+                    Arc::clone(&sink),
+                    Arc::clone(&writer_context),
+                    demux_task,
+                    file_streams,
+                    Arc::clone(&object_store),
+                    writer_context
+                        .session_config()
+                        .options()
+                        .execution
+                        .minimum_parallel_output_files,
+                )
+                .await?;
                 output_rows.add(usize::try_from(rows).map_err(|_| {
                     DataFusionError::Execution("Parquet row count is too large".to_string())
                 })?);

@@ -45,3 +45,6 @@ educe = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,5 +1,5 @@
-from collections.abc import Mapping
 import re
+from collections.abc import Mapping
 
 import pandas as pd
 import pytest
@@ -84,6 +84,40 @@ def test_parquet_hive_partition_paths_match_spark(spark, tmp_path):
     assert read_df.selectExpr("count(`part=name`) AS count").collect() == [Row(count=3)]
 
 
+def test_parquet_binary_hive_partition_paths_and_round_trip(spark, tmp_path):
+    path = tmp_path / "parquet_binary_hive_partition_paths"
+    df = spark.createDataFrame(
+        [
+            (1, bytearray(b"ab")),
+            (2, bytearray()),
+            (3, None),
+            (4, bytearray(b"\xff")),
+            (5, bytearray(b"\xc3(")),
+        ],
+        "id INT, binary_part BINARY",
+    )
+
+    df.write.partitionBy("binary_part").parquet(str(path))
+
+    files = list(path.rglob("*.parquet"))
+    partition_directories = {str(file.parent.relative_to(path)) for file in files}
+    assert partition_directories == {
+        "binary_part=ab",
+        "binary_part=�",
+        "binary_part=�(",
+        "binary_part=__HIVE_DEFAULT_PARTITION__",
+    }
+
+    rows = spark.read.schema("id INT, binary_part BINARY").parquet(str(path)).orderBy("id").collect()
+    assert [(row.id, None if row.binary_part is None else bytes(row.binary_part)) for row in rows] == [
+        (1, b"ab"),
+        (2, None),
+        (3, None),
+        (4, "�".encode()),
+        (5, "�(".encode()),
+    ]
+
+
 def test_parquet_hive_partition_value_formatting(spark, tmp_path):
     path = tmp_path / "parquet_hive_partition_value_formatting"
     df = spark.sql(
@@ -124,7 +158,8 @@ def test_parquet_hive_partition_value_formatting(spark, tmp_path):
 
 def test_parquet_max_records_per_file(spark, tmp_path):
     path = tmp_path / "parquet_max_records_per_file"
-    spark.range(5).coalesce(1).write.option("maxRecordsPerFile", 2).parquet(str(path))
+    row_count = 5
+    spark.range(row_count).coalesce(1).write.option("maxRecordsPerFile", 2).parquet(str(path))
 
     files = sorted(path.glob("*.parquet"))
     assert [re.search(r"-c(\d{3})\.", file.name).group(1) for file in files] == [
@@ -138,7 +173,7 @@ def test_parquet_max_records_per_file(spark, tmp_path):
     spark.range(5).coalesce(1).write.option("maxRecordsPerFile", -1).parquet(str(unlimited_path))
     unlimited_files = list(unlimited_path.glob("*.parquet"))
     assert len(unlimited_files) == 1
-    assert spark.read.parquet(str(unlimited_files[0])).count() == 5
+    assert spark.read.parquet(str(unlimited_files[0])).count() == row_count
 
 
 def test_parquet_max_records_per_file_with_hive_partitions(spark, tmp_path):
@@ -163,11 +198,13 @@ def test_parquet_max_records_per_file_session_fallback_and_override(spark, tmp_p
         spark.conf.set(key, "2")
         session_path = tmp_path / "parquet_max_records_session"
         spark.range(5).coalesce(1).write.parquet(str(session_path))
-        assert len(list(session_path.glob("*.parquet"))) == 3
+        session_files = sorted(session_path.glob("*.parquet"))
+        assert [spark.read.parquet(str(file)).count() for file in session_files] == [2, 2, 1]
 
         override_path = tmp_path / "parquet_max_records_override"
         spark.range(5).coalesce(1).write.option("maxRecordsPerFile", 3).parquet(str(override_path))
-        assert len(list(override_path.glob("*.parquet"))) == 2
+        override_files = sorted(override_path.glob("*.parquet"))
+        assert [spark.read.parquet(str(file)).count() for file in override_files] == [3, 2]
     finally:
         spark.conf.set(key, previous)
 
@@ -242,7 +279,7 @@ def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):
 def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path):
     # Test reading a compressed Parquet file written by Sail
     path = str(tmp_path / "parquet_compressed_zstd")
-    sample_df.write.option("compression", "zstd(4)").parquet(path, mode="overwrite")
+    sample_df.write.parquet(path, mode="overwrite", compression="zstd(4)")
     read_df = spark.read.parquet(path)
     assert sample_df.count() == read_df.count()
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
@@ -289,7 +326,7 @@ def test_parquet_write_options(spark, sample_df, tmp_path):
     assert len(list((tmp_path / "parquet_write_options_1").glob("*.snappy.parquet"))) > 0
 
     path = str(tmp_path / "parquet_write_options_uncompressed")
-    sample_df.write.option("compression", "none").parquet(path, mode="overwrite")
+    sample_df.write.parquet(path, mode="overwrite", compression="none")
     read_df = spark.read.parquet(path)
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
     files = list((tmp_path / "parquet_write_options_uncompressed").glob("*.parquet"))

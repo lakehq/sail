@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
+bytes = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
@@ -19,3 +20,6 @@ object_store = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

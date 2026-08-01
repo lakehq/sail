@@ -7638,6 +7638,7 @@ dependencies = [
  "sail-pyarrow",
  "sail-sql-analyzer",
  "serde",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -7917,6 +7918,7 @@ dependencies = [
  "reqwest 0.12.28",
  "sail-common",
  "sail-telemetry",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -7928,6 +7930,8 @@ dependencies = [
 name = "sail-parquet"
 version = "0.6.6"
 dependencies = [
+ "async-trait",
+ "bytes",
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",

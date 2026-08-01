@@ -16,6 +16,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, exec_err, internal_err, plan_err};
 use futures::{StreamExt, TryStreamExt};
 use log::warn;
+use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
 use sail_common_datafusion::listing_write::{
@@ -233,13 +234,18 @@ impl ExecutionPlan for ListingWriteCommitExec {
             let row_count = commit_listing_write(
                 store,
                 target_prefix,
-                staging_prefix,
+                staging_prefix.clone(),
                 write_id,
                 overwrite,
                 expected_task_count,
                 manifests,
             )
             .await?;
+            if let Err(error) =
+                clean_up_listing_write_staging(&context, &object_store_url, &staging_prefix).await
+            {
+                warn!("failed to clean listing write staging path {staging_prefix}: {error}");
+            }
             count_batch(row_count)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -549,7 +555,70 @@ pub async fn clean_up_listing_write_staging(
     staging_prefix: &Path,
 ) -> Result<()> {
     let store = context.runtime_env().object_store(object_store_url)?;
-    delete_prefix(store.as_ref(), staging_prefix).await
+    delete_prefix(store.as_ref(), staging_prefix).await?;
+    clean_up_local_listing_write_directories(object_store_url, staging_prefix).await
+}
+
+async fn clean_up_local_listing_write_directories(
+    object_store_url: &ObjectStoreUrl,
+    staging_prefix: &Path,
+) -> Result<()> {
+    if !object_store_url.as_str().starts_with("file:") {
+        return Ok(());
+    }
+    let parts = staging_prefix
+        .parts()
+        .map(|part| part.as_ref().to_string())
+        .collect::<Vec<_>>();
+    let Some(temporary_index) = parts
+        .windows(2)
+        .rposition(|parts| parts == ["_temporary", "sail"])
+    else {
+        return exec_err!(
+            "local listing write staging path {staging_prefix} is outside _temporary/sail"
+        );
+    };
+    if parts.len() <= temporary_index + 2 {
+        return exec_err!("local listing write staging path {staging_prefix} has no write ID");
+    }
+
+    let local = LocalFileSystem::new();
+    let staging_directory = local.path_to_filesystem(staging_prefix)?;
+    remove_directory_tree(staging_directory).await?;
+
+    let sail_prefix = parts[..temporary_index + 2]
+        .iter()
+        .map(String::as_str)
+        .collect::<Path>();
+    remove_empty_directory(local.path_to_filesystem(&sail_prefix)?).await?;
+    let temporary_prefix = parts[..temporary_index + 1]
+        .iter()
+        .map(String::as_str)
+        .collect::<Path>();
+    remove_empty_directory(local.path_to_filesystem(&temporary_prefix)?).await
+}
+
+async fn remove_directory_tree(path: std::path::PathBuf) -> Result<()> {
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DataFusionError::External(Box::new(error))),
+    }
+}
+
+async fn remove_empty_directory(path: std::path::PathBuf) -> Result<()> {
+    match tokio::fs::remove_dir(path).await {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(DataFusionError::External(Box::new(error))),
+    }
 }
 
 async fn delete_paths(store: &dyn ObjectStore, paths: Vec<Path>) -> Result<()> {
@@ -588,6 +657,7 @@ fn count_batch(count: u64) -> Result<RecordBatch> {
 #[cfg(test)]
 mod tests {
     use std::fmt::{Display, Formatter};
+    use std::fs;
 
     use async_trait::async_trait;
     use datafusion::arrow::datatypes::Field;
@@ -604,6 +674,7 @@ mod tests {
         PutOptions, PutResult,
     };
     use sail_parquet::{ParquetWriteExecutionOptions, ParquetWriterExec};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -960,6 +1031,34 @@ mod tests {
                 .await
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_terminal_cleanup_removes_only_sail_owned_directories() -> Result<()> {
+        let sandbox = tempdir().map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let table = sandbox.path().join("table");
+        let guard = table.join("caller-owned");
+        let staging = table.join("_temporary/sail/write-id");
+        fs::create_dir_all(&staging).map_err(|error| DataFusionError::External(Box::new(error)))?;
+        fs::write(&guard, b"preserve")
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        fs::write(staging.join("part.parquet"), b"staged")
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+
+        let staging_prefix = Path::from_absolute_path(&staging)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let context = TaskContext::default();
+        let object_store_url = ObjectStoreUrl::parse("file://")?;
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), Arc::new(LocalFileSystem::new()));
+
+        clean_up_listing_write_staging(&context, &object_store_url, &staging_prefix).await?;
+
+        assert!(guard.is_file());
+        assert!(table.is_dir());
+        assert!(!table.join("_temporary").exists());
         Ok(())
     }
 

@@ -582,8 +582,10 @@ impl JobScheduler {
         Ok((definition, job.context.clone()))
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> Vec<JobAction> {
+        let mut actions = Vec::new();
         for (_, job) in self.jobs.iter_mut() {
+            actions.extend(Self::clean_up_listing_write_staging_actions(job));
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 // For running jobs, the job output is dropped here.
                 // Internally, the job output manages the receiving end of the output stream.
@@ -611,6 +613,7 @@ impl JobScheduler {
                 }
             }
         }
+        actions
     }
 
     fn get_task_input(
@@ -949,6 +952,50 @@ mod tests {
             JobScheduler::clean_up_listing_write_staging_actions(&job).as_slice(),
             [JobAction::CleanUpListingWrites { .. }]
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn stop_emits_listing_staging_cleanup_actions() -> ExecutionResult<()> {
+        let commit = ListingWriteCommitExec::try_new(
+            Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            Path::from("table/_temporary/sail/write-id"),
+            "write-id".to_string(),
+            false,
+            1,
+        )?;
+        let graph = JobGraph::try_new(
+            Arc::new(commit),
+            crate::job_graph::JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )?;
+        let context = Arc::new(TaskContext::default());
+        let job = JobDescriptor::try_new(graph, JobState::Draining, Arc::clone(&context))?;
+        let job_id = 1_u64.into();
+        let mut scheduler = JobScheduler::new(JobSchedulerOptions::default());
+        scheduler.jobs.insert(job_id, job);
+
+        let actions: Vec<JobAction> = scheduler.stop();
+
+        let cleanup = actions.iter().find_map(|action| match action {
+            JobAction::CleanUpListingWrites { locations, context } => Some((locations, context)),
+            _ => None,
+        });
+        let (locations, cleanup_context) = cleanup.ok_or_else(|| {
+            ExecutionError::InternalError(
+                "driver stop did not emit listing staging cleanup".to_string(),
+            )
+        })?;
+        assert!(Arc::ptr_eq(cleanup_context, &context));
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].object_store_url.as_str(), "memory:///");
+        assert_eq!(
+            locations[0].prefix,
+            Path::from("table/_temporary/sail/write-id")
+        );
         Ok(())
     }
 }

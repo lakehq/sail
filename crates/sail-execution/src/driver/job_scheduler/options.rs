@@ -23,3 +23,14 @@ impl From<&DriverOptions> for JobSchedulerOptions {
         }
     }
 }
+
+#[cfg(test)]
+impl Default for JobSchedulerOptions {
+    fn default() -> Self {
+        Self {
+            task_launch_timeout: Duration::ZERO,
+            task_max_attempts: 1,
+            use_blocking_shuffle: false,
+        }
+    }
+}

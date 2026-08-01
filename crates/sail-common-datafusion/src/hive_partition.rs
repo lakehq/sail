@@ -1,4 +1,5 @@
-use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{Array, BinaryArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 
@@ -90,6 +91,9 @@ pub fn unescape_path_name(value: &str) -> Result<String> {
 
 /// Formats an Arrow array using Spark SQL string semantics for Hive partition paths.
 pub fn format_partition_values(array: &dyn Array) -> Result<Vec<String>> {
+    if is_binary_type(array.data_type()) {
+        return format_binary_partition_values(array);
+    }
     let options = FormatOptions::new().with_null(DEFAULT_PARTITION_NAME);
     let formatter = ArrayFormatter::try_new(array, &options)?;
     (0..array.len())
@@ -102,6 +106,38 @@ pub fn format_partition_values(array: &dyn Array) -> Result<Vec<String>> {
             }
         })
         .collect()
+}
+
+fn format_binary_partition_values(array: &dyn Array) -> Result<Vec<String>> {
+    let values = cast(array, &DataType::Binary)?;
+    let values = values
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| exec_datafusion_err!("failed to cast binary partition values"))?;
+    Ok((0..values.len())
+        .map(|index| {
+            if values.is_null(index) {
+                return DEFAULT_PARTITION_NAME.to_string();
+            }
+            let value = String::from_utf8_lossy(values.value(index));
+            if value.is_empty() {
+                DEFAULT_PARTITION_NAME.to_string()
+            } else {
+                value.into_owned()
+            }
+        })
+        .collect())
+}
+
+fn is_binary_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => true,
+        DataType::Dictionary(_, value_type) => is_binary_type(value_type),
+        _ => false,
+    }
 }
 
 /// Formats a scalar for partition-prefix pruning using the same rules as file writes.
@@ -135,7 +171,7 @@ pub fn parse_partition_value(encoded: &str, data_type: &DataType) -> Result<Scal
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{
-        Decimal128Array, Float64Array, StringArray, TimestampMicrosecondArray,
+        BinaryArray, Decimal128Array, Float64Array, StringArray, TimestampMicrosecondArray,
     };
 
     use super::*;
@@ -183,6 +219,27 @@ mod tests {
         assert_eq!(
             format_partition_values(&timestamps).unwrap(),
             vec!["2024-01-02 03:04:05.123456"]
+        );
+    }
+
+    #[test]
+    fn formats_binary_values_with_spark_cast_semantics() {
+        let binaries = BinaryArray::from(vec![
+            Some(&b"ab"[..]),
+            Some(&b""[..]),
+            Some(&b"\xff"[..]),
+            Some(&b"\xc3("[..]),
+            None,
+        ]);
+        assert_eq!(
+            format_partition_values(&binaries).unwrap(),
+            vec![
+                "ab",
+                DEFAULT_PARTITION_NAME,
+                "�",
+                "�(",
+                DEFAULT_PARTITION_NAME,
+            ]
         );
     }
 

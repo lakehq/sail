@@ -666,6 +666,12 @@ message ParquetWriterExecNode {
   uint64 max_buffered_batches_per_output_file = 9;
   uint64 objectstore_writer_buffer_size = 10;
   optional uint64 max_records_per_file = 11;
+  repeated ParquetKeyValueMetadata key_value_metadata = 12;
+}
+
+message ParquetKeyValueMetadata {
+  string key = 1;
+  optional string value = 2;
 }
 
 message ListingWriteCommitExecNode {

@@ -72,6 +72,12 @@ impl TaskRunner {
         }
     }
 
+    pub fn stop_all_tasks(&mut self) {
+        for (_, signal) in self.signals.drain() {
+            let _ = signal.send(());
+        }
+    }
+
     /// Deserializes and prepares a physical plan for execution on this node.
     fn execute_plan<T: Actor>(
         &mut self,

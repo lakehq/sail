@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use log::{error, info};
+use log::{error, info, warn};
+use sail_data_source::listing::commit::clean_up_listing_write_staging;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
-use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
+use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverOptions};
@@ -117,10 +118,30 @@ impl Actor for DriverActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
-        self.job_scheduler.stop();
+        let stop_actions = self.job_scheduler.stop();
+        self.task_runner.stop_all_tasks();
         self.stream_manager.stop().await;
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
+        }
+        for action in stop_actions {
+            let JobAction::CleanUpListingWrites { locations, context } = action else {
+                continue;
+            };
+            for location in locations {
+                if let Err(error) = clean_up_listing_write_staging(
+                    context.as_ref(),
+                    &location.object_store_url,
+                    &location.prefix,
+                )
+                .await
+                {
+                    warn!(
+                        "failed to clean listing write staging path {} while stopping driver: {error}",
+                        location.prefix
+                    );
+                }
+            }
         }
         let history = self.build_history();
         self.history_reporter.report(history).await;

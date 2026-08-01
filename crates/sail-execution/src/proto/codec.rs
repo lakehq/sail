@@ -1223,6 +1223,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 max_buffered_batches_per_output_file,
                 objectstore_writer_buffer_size,
                 max_records_per_file,
+                key_value_metadata,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let input_schema = input.schema();
@@ -1232,7 +1233,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 file_sink_config.original_url = original_url;
                 let options =
                     try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
-                let options: TableParquetOptions = (&options).try_into()?;
+                let mut options: TableParquetOptions = (&options).try_into()?;
+                options.key_value_metadata = key_value_metadata
+                    .into_iter()
+                    .map(|entry| (entry.key, entry.value))
+                    .collect();
                 let physical_sort_expr_nodes = if let Some(sort_order) = sort_order {
                     let nodes: Vec<PhysicalSortExprNode> = sort_order
                         .physical_sort_expr_nodes
@@ -2255,6 +2260,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         )
                 })
                 .transpose()?;
+            let mut key_value_metadata = writer
+                .parquet_options()
+                .key_value_metadata
+                .iter()
+                .map(|(key, value)| r#gen::ParquetKeyValueMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect::<Vec<_>>();
+            key_value_metadata.sort_unstable_by(|left, right| left.key.cmp(&right.key));
             NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
                 input,
                 base_config,
@@ -2295,6 +2310,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         })
                     })
                     .transpose()?,
+                key_value_metadata,
             })
         } else if let Some(commit) = node.downcast_ref::<ListingWriteCommitExec>() {
             NodeKind::ListingWriteCommit(r#gen::ListingWriteCommitExecNode {
@@ -5444,6 +5460,18 @@ mod tests {
         let mut parquet_options = TableParquetOptions::default();
         parquet_options.global.skip_arrow_metadata = true;
         parquet_options.global.max_row_group_size = 456;
+        parquet_options.key_value_metadata = [
+            (
+                "sail.codec.owner".to_string(),
+                Some("distributed-writer".to_string()),
+            ),
+            (
+                "sail.codec.write-id".to_string(),
+                Some("codec-write-id".to_string()),
+            ),
+        ]
+        .into();
+        let expected_key_value_metadata = parquet_options.key_value_metadata.clone();
         let execution_options = ParquetWriteExecutionOptions {
             minimum_parallel_output_files: 7,
             soft_max_rows_per_output_file: 89,
@@ -5488,6 +5516,10 @@ mod tests {
         assert_eq!(decoded.execution_options(), &execution_options);
         assert!(decoded.parquet_options().global.skip_arrow_metadata);
         assert_eq!(decoded.parquet_options().global.max_row_group_size, 456);
+        assert_eq!(
+            decoded.parquet_options().key_value_metadata,
+            expected_key_value_metadata
+        );
         let requirement = decoded
             .sort_order()
             .as_ref()
