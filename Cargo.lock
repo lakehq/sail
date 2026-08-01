@@ -7980,6 +7980,7 @@ dependencies = [
  "parquet-variant-compute",
  "rand 0.10.2",
  "regex",
+ "regex-syntax 0.8.11",
  "ryu",
  "sail-cache",
  "sail-catalog",
