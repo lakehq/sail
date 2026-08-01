@@ -18,6 +18,28 @@ pub const DEFAULT_COMPRESS_THRESHOLD: usize = 10_000;
 /// Size of the head buffer of not-yet-inserted observations.
 const DEFAULT_HEAD_SIZE: usize = 50_000;
 
+/// Orders two observations the way Spark's sort does.
+///
+/// Spark sorts the head buffer with `headSampled.toArray.sorted`
+/// (`QuantileSummaries.scala:92`), whose implicit `Ordering[Double]` delegates
+/// to `java.lang.Double.compare`. That routes every NaN through
+/// `doubleToLongBits`, canonicalizing it — so a sign-set NaN compares equal to a
+/// positive one and sorts last.
+///
+/// IEEE's `totalOrder`, which `f64::total_cmp` implements, honors the sign bit
+/// instead and sorts `-NaN` first, below `-Infinity`. The two orders agree
+/// everywhere else, `-0.0 < 0.0` included, so canonicalizing the sign of a NaN
+/// is the entire difference — and it is not cosmetic: `compress_immut` drops the
+/// first sample when `curr_head.value <= head.value` is false, which any
+/// comparison against NaN is, so the end the NaN lands on decides whether the
+/// sketch keeps its minimum.
+fn spark_compare(a: f64, b: f64) -> std::cmp::Ordering {
+    fn canonical(x: f64) -> f64 {
+        if x.is_nan() { f64::NAN } else { x }
+    }
+    canonical(a).total_cmp(&canonical(b))
+}
+
 /// A sampled observation.
 ///
 /// `g` is the minimum rank jump from the previous sample's minimum rank, and
@@ -115,7 +137,7 @@ impl QuantileSummaries {
             return;
         }
         let mut sorted = std::mem::take(&mut self.head_sampled);
-        sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+        sorted.sort_unstable_by(|a, b| spark_compare(*a, *b));
 
         let mut current_count = self.count;
         let mut new_samples: Vec<Stats> = Vec::with_capacity(self.sampled.len() + sorted.len());

@@ -1128,3 +1128,157 @@ Feature: approx_percentile / percentile_approx aggregate function
         | double past its own precision   | DOUBLE | 9007199254740993         | 9007199254740992.0      |
         | double at the maximum           | DOUBLE | 1.7976931348623157E308   | 1.7976931348623157e+308 |
         | double subnormal                | DOUBLE | 4.9E-324                 | 5e-324                  |
+
+  Rule: NaN observations carrying a sign bit
+
+    # Spark sorts the head buffer with `headSampled.toArray.sorted`
+    # (QuantileSummaries.scala:92). The comparator is invisible in that line: it
+    # comes from the implicit `Ordering[Double]`, which is `TotalOrdering` and
+    # delegates to `java.lang.Double.compare` -- and that canonicalises EVERY
+    # NaN through `doubleToLongBits`, so a sign-set NaN sorts LAST, together
+    # with a positive one. IEEE's `totalOrder` disagrees: it honours the sign
+    # bit and puts `-NaN` FIRST, below `-Infinity`. Both are total orders over
+    # f64; they differ on exactly this input.
+    #
+    # It changes the RESULT, not just the order, because `compressImmut` drops
+    # the first sample when `currHead.value <= head.value` is false
+    # (QuantileSummaries.scala:386) and any comparison against NaN is false. So
+    # whichever end the NaN lands on decides whether the minimum survives.
+    #
+    # The last two rows are the controls, and they are what make the rest
+    # discriminating: they show a sign-set NaN does NOT simply poison every
+    # percentile, so a fix that just let every NaN win would satisfy the first
+    # five rows and break these two instead.
+
+    Scenario Outline: a negative NaN sorts with the positive one: <case>
+      When query
+        """
+        SELECT percentile_approx(v, <percentage>) AS result
+        FROM VALUES <rows> AS t(v)
+        """
+      Then query result
+        | result     |
+        | <expected> |
+
+      Examples:
+        | case                                    | rows                                                                   | percentage | expected |
+        | it wins the maximum                     | (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                        | 1.0        | NaN      |
+        | it drops the minimum from the sketch    | (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                        | 0.0        | NaN      |
+        | it also takes the median of the two     | (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE))                        | 0.5        | NaN      |
+        | a third observation still loses the max | (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) | 1.0        | NaN      |
+        | a float carries the sign bit too        | (-CAST('NaN' AS FLOAT)), (CAST(1 AS FLOAT))                            | 1.0        | NaN      |
+        | a third observation keeps the minimum   | (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) | 0.0        | 1.0      |
+        | a lone negative NaN                     | (-CAST('NaN' AS DOUBLE))                                               | 0.5        | NaN      |
+
+    Scenario: an array of percentiles over a negative-NaN sketch
+      When query
+        """
+        SELECT percentile_approx(v, array(0.0, 1.0)) AS result
+        FROM VALUES (-CAST('NaN' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) AS t(v)
+        """
+      Then query result
+        | result     |
+        | [NaN, NaN] |
+
+  Rule: Result schema per input-type family
+
+    # `Rule: Result schema` above pins only the integer and decimal families.
+    # The element's `containsNull = false` is the interesting part -- Spark
+    # declares it unconditionally (ApproximatePercentile.scala:243) -- and the
+    # array element field also has to carry the input type EXACTLY, timezone
+    # included, or the list cannot be built at all.
+
+    Scenario Outline: the <case> array result declares a non-nullable element
+      When query
+        """
+        SELECT percentile_approx(v, array(0.25, 0.75)) AS q
+        FROM VALUES (<value>) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- q: array (nullable = true)
+         |    |-- element: <element> (containsNull = false)
+        """
+
+      Examples:
+        | case         | value                              | element       |
+        | double       | CAST(1 AS DOUBLE)                  | double        |
+        | bigint       | CAST(1 AS BIGINT)                  | long          |
+        | date         | DATE '2024-01-15'                  | date          |
+        | timestamp    | TIMESTAMP '2024-01-15 12:00:00'    | timestamp     |
+        | timestamp_ntz | TIMESTAMP_NTZ '2024-01-15 12:00:00' | timestamp_ntz |
+
+    Scenario Outline: the <case> scalar result is nullable
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) AS m
+        FROM VALUES (<value>) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- m: <type> (nullable = true)
+        """
+
+      Examples:
+        | case      | value                           | type          |
+        | double    | CAST(1 AS DOUBLE)               | double        |
+        | timestamp | TIMESTAMP '2024-01-15 12:00:00' | timestamp     |
+        | decimal   | CAST(1 AS DECIMAL(10,2))        | decimal(10,2) |
+
+    # Both of these return the result through a different construction path
+    # from the populated one -- there are no values to build the list from, so
+    # the element field is taken from the declared return type rather than from
+    # the narrowed values. Only their VALUE was asserted so far, never their
+    # schema, so a path that lost the element type here would go unnoticed.
+
+    Scenario: an empty percentage array still declares the element type
+      When query
+        """
+        SELECT percentile_approx(v, array()) AS q
+        FROM VALUES (1) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- q: array (nullable = true)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    Scenario: an all-NULL input still declares the element type
+      When query
+        """
+        SELECT percentile_approx(v, array(0.5)) AS q
+        FROM VALUES (CAST(NULL AS INT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- q: array (nullable = true)
+         |    |-- element: integer (containsNull = false)
+        """
+
+    # The interval subrange is widened by Sail's formatter for every expression
+    # that returns an interval, so these fail for the same Sail-wide reason as
+    # the `typeof` scenarios in the rule above -- pinned here at the schema
+    # layer, where the element's `containsNull` is visible too.
+
+    @sail-bug
+    Scenario Outline: the <case> array result keeps its subrange
+      When query
+        """
+        SELECT percentile_approx(v, array(0.25, 0.75)) AS q
+        FROM VALUES (<value>) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- q: array (nullable = true)
+         |    |-- element: <element> (containsNull = false)
+        """
+
+      Examples:
+        | case                | value             | element          |
+        | year-month interval | INTERVAL '1' MONTH  | interval month   |
+        | day-time interval   | INTERVAL '1' SECOND | interval second  |
