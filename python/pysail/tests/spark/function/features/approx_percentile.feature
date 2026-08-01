@@ -262,6 +262,19 @@ Feature: approx_percentile / percentile_approx aggregate function
         """
       Then query error The accuracy must be between \(0, 2147483647\]
 
+    # The bound is `accuracy > Int.MaxValue` on a value read as a Long, so the
+    # int maximum itself is still accepted. Pairs with the scenario above: an
+    # off-by-one in that comparison changes exactly this row and nothing else.
+    Scenario: the int maximum is still an accepted accuracy
+      When query
+        """
+        SELECT percentile_approx(v, 0.5, 2147483647) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | r |
+        | 5 |
+
     Scenario: percentile_approx with percentage out of range errors
       When query
         """
@@ -720,6 +733,28 @@ Feature: approx_percentile / percentile_approx aggregate function
         """
       Then query error The third parameter requires the "INTEGRAL" type
 
+    # `accuracy` is declared as IntegralType, and none of these three has an
+    # implicit cast to it, so all fail analysis whatever their value — a rule
+    # about the TYPE, which is why an integral-valued `DECIMAL(10,0)` is
+    # rejected too. BOOLEAN is the one that changes the answer rather than
+    # merely being accepted: read as accuracy 1, its relative error of 1.0
+    # short-circuits every percentile to the minimum, so the median of 0..10
+    # comes back as 0 instead of 5.
+    @sail-bug
+    Scenario Outline: a <case> accuracy is rejected for its type
+      When query
+        """
+        SELECT percentile_approx(v, 0.5, <accuracy>) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query error The third parameter requires the "INTEGRAL" type
+
+      Examples:
+        | case    | accuracy                   |
+        | string  | '100'                      |
+        | decimal | CAST(100 AS DECIMAL(10,0)) |
+        | boolean | true                       |
+
   Rule: Sliding window frames (Sail-wide, tracked)
 
     # Spark re-initializes the aggregation buffer per frame, so it needs no
@@ -846,3 +881,250 @@ Feature: approx_percentile / percentile_approx aggregate function
         | case                 | accuracy              |
         | arithmetic           | 50 + 50               |
         | a cast from a string | CAST('100' AS INT)    |
+
+  Rule: Every accepted numeric width round-trips
+
+    # The result type is the input type, so each numeric width needs its own
+    # scenario: the widen-to-f64 and narrow-back steps are per-type, and Scala
+    # narrows Byte/Short via Int (keeping the low bits) while Int/Long saturate.
+
+    Scenario Outline: percentile_approx over <type> returns <type>
+      When query
+        """
+        SELECT
+          percentile_approx(v, 0.5) AS median,
+          typeof(percentile_approx(v, 0.5)) AS type
+        FROM VALUES <rows> AS t(v)
+        """
+      Then query result
+        | median   | type   |
+        | <median> | <type> |
+
+      Examples:
+        | type     | rows                                                                  | median |
+        | tinyint  | (CAST(1 AS TINYINT)), (CAST(3 AS TINYINT)), (CAST(5 AS TINYINT))      | 3      |
+        | smallint | (CAST(1 AS SMALLINT)), (CAST(3 AS SMALLINT)), (CAST(5 AS SMALLINT))   | 3      |
+        | bigint   | (CAST(1 AS BIGINT)), (CAST(3 AS BIGINT)), (CAST(5 AS BIGINT))         | 3      |
+        | float    | (CAST(1.5 AS FLOAT)), (CAST(3.5 AS FLOAT)), (CAST(5.5 AS FLOAT))      | 3.5    |
+
+  Rule: percentage and accuracy must not be NULL
+
+    # `checkInputDataTypes` rejects both at ANALYSIS time (UNEXPECTED_NULL),
+    # before a single row is read, so this is not NULL propagation — there is
+    # no answer to propagate to. The typed NULL array is the discriminating
+    # case: it resolves to "no percentiles requested", which collides with the
+    # empty-array rule above that legitimately returns NULL, so an engine that
+    # guards only the scalar form still answers NULL here.
+
+    @sail-bug
+    Scenario Outline: a NULL <argument> is rejected: <case>
+      When query
+        """
+        SELECT percentile_approx(v, <args>) AS r
+        FROM VALUES (0), (1), (2) AS t(v)
+        """
+      Then query error The <argument> must not be null
+
+      Examples:
+        | case                  | argument   | args                        |
+        | an untyped NULL       | percentage | NULL                        |
+        | a typed NULL array    | percentage | CAST(NULL AS ARRAY<DOUBLE>) |
+        | an untyped NULL       | accuracy   | 0.5, NULL                   |
+
+  Rule: percentage and accuracy must be foldable
+
+    # Spark's rule is FOLDABLE, not "is a literal"
+    # (ApproximatePercentile.scala:125-142), and it rejects everything else
+    # during analysis. A volatile expression is the discriminating input: it
+    # carries no column reference and evaluates perfectly well right now, so an
+    # engine that asks "can I evaluate this?" instead of "is this foldable?"
+    # accepts it — and then returns a different quantile on every run rather
+    # than failing. The column rows and the rand() rows therefore fail for
+    # opposite reasons and neither subsumes the other.
+
+    @sail-bug
+    Scenario Outline: a non-foldable <argument> is rejected: <case>
+      When query
+        """
+        SELECT percentile_approx(v, <args>) AS r
+        FROM VALUES (0, 0.5, 100), (1, 0.5, 100), (2, 0.5, 100) AS t(v, p, a)
+        """
+      Then query error the input `<argument>` should be a foldable
+
+      Examples:
+        | case                     | argument   | args                               |
+        | from a column            | percentage | p                                  |
+        | from rand                | percentage | rand()                             |
+        | from rand inside an array | percentage | array(0.5, rand())                |
+        | from a column            | accuracy   | 0.5, a                             |
+        | from rand                | accuracy   | 0.5, CAST(rand() * 100 + 1 AS INT) |
+
+  Rule: The double round trip loses precision exactly as Spark's does
+
+    # Every observation is widened to f64 on the way in
+    # (ApproximatePercentile.scala:184-193) and narrowed back on the way out
+    # (206-218), so a value needing more than 53 significant bits does not
+    # survive its own aggregation even though it is the only row. These pin the
+    # LOSS, not an exact answer: an implementation that kept the input in its
+    # own type would return each value unchanged and fail every row here.
+    # Asserted as an equality against a literal rather than on the rendered
+    # text, so a float/double rendering difference cannot mask the value.
+
+    Scenario Outline: <case>
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) = <expected> AS same
+        FROM VALUES (<value>) AS t(v)
+        """
+      Then query result
+        | same |
+        | true |
+
+      Examples:
+        | case                                            | value                                  | expected                               |
+        | a bigint one below the maximum saturates back up | CAST(9223372036854775806 AS BIGINT)   | CAST(9223372036854775807 AS BIGINT)    |
+        | a bigint loses its last two digits              | CAST(123456789012345678 AS BIGINT)     | CAST(123456789012345680 AS BIGINT)     |
+        | a timestamp rounds up by one microsecond        | TIMESTAMP '2262-04-11 23:47:16.854775' | TIMESTAMP '2262-04-11 23:47:16.854776' |
+
+    # The largest timestamp Spark accepts rounds PAST the end of the supported
+    # range: 253402300799999999 has no double, and the nearest one is
+    # 253402300800000000 — midnight of the year 10000. Read back as micros
+    # because the value can no longer be written as a timestamp literal.
+    Scenario: the maximum timestamp rounds out of the supported range
+      When query
+        """
+        SELECT unix_micros(percentile_approx(v, 0.5)) AS r
+        FROM VALUES (TIMESTAMP '9999-12-31 23:59:59.999999') AS t(v)
+        """
+      Then query result
+        | r                  |
+        | 253402300800000000 |
+
+  Rule: Infinite observations
+
+    # Unlike NaN, an infinity orders normally against every other value, so it
+    # behaves as an ordinary extreme: it takes the maximum without displacing
+    # anything below it, and `compressImmut` keeps the minimum. Paired with the
+    # NaN rule above, this separates "not a number" from "outside the range".
+
+    Scenario Outline: infinite observations: <case>
+      When query
+        """
+        SELECT percentile_approx(v, <percentage>) AS result
+        FROM VALUES <rows> AS t(v)
+        """
+      Then query result
+        | result     |
+        | <expected> |
+
+      Examples:
+        | case                               | rows                                                 | percentage | expected  |
+        | +Infinity does not move the median | (CAST('Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE))  | 0.5        | 1.0       |
+        | +Infinity wins the maximum         | (CAST('Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE))  | 1.0        | Infinity  |
+        | -Infinity wins the minimum         | (CAST('-Infinity' AS DOUBLE)), (CAST(1.0 AS DOUBLE)) | 0.0        | -Infinity |
+
+    Scenario: both infinities survive an array of percentiles
+      When query
+        """
+        SELECT percentile_approx(v, array(0.0, 1.0)) AS result
+        FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)) AS t(v)
+        """
+      Then query result
+        | result                |
+        | [-Infinity, Infinity] |
+
+  Rule: FILTER clause
+
+    # FILTER routes the aggregate through a different physical path than a
+    # WHERE does, and a filter that keeps nothing has to reach the same
+    # `count == 0` branch an empty input does rather than reading an
+    # unfiltered sketch.
+
+    Scenario: FILTER restricts the observations
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) FILTER (WHERE v > 5) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | r |
+        | 8 |
+
+    Scenario: a FILTER that keeps no row returns NULL
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) FILTER (WHERE v > 100) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+  Rule: The percentage is coerced to DOUBLE
+
+    # `inputTypes` declares DOUBLE / ARRAY<DOUBLE> under ImplicitCastInputTypes,
+    # so a percentage of another type is cast rather than rejected. This is a
+    # separate mechanism from the foldable rule above, and it is what decides
+    # whether the bare integer in `percentile_approx(v, 1)` means the maximum
+    # or is a type error.
+
+    Scenario Outline: a <case> percentage is cast to double
+      When query
+        """
+        SELECT percentile_approx(v, <percentage>) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | r        |
+        | <result> |
+
+      Examples:
+        | case         | percentage                | result |
+        | bare int one | 1                         | 10     |
+        | decimal      | CAST(0.5 AS DECIMAL(2,1)) | 5      |
+        | string       | '0.5'                     | 5      |
+
+    Scenario: an array of integer percentages is cast to double
+      When query
+        """
+        SELECT percentile_approx(v, array(0, 1)) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query result
+        | r       |
+        | [0, 10] |
+
+  Rule: Float and double results are bit-exact
+
+    # `query result collected` compares the value PySpark decodes, formatted
+    # with Python's shortest round-trip repr, so it pins the IEEE bits and never
+    # touches the server-side rendering. That matters here: Sail's display path
+    # prints a float of 1e7 as `10000000.0` where Java's `Float.toString` gives
+    # `1.0E7`, and asserting the rendered text would attribute that Sail-wide
+    # rendering gap to this function. Verified bit-identical to Spark for every
+    # row below, including the subnormals and both extremes.
+    #
+    # These also probe the narrowing itself: the sketch stores every observation
+    # as an f64, so a float has to survive f32 -> f64 -> f32 and a double has to
+    # come back untouched at the very edges of the format.
+
+    Scenario Outline: a <case> keeps its exact bits
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) AS r
+        FROM VALUES (CAST(<value> AS <type>)) AS t(v)
+        """
+      Then query result collected
+        | r        |
+        | <result> |
+
+      Examples:
+        | case                            | type   | value                    | result                  |
+        | float at the mantissa boundary  | FLOAT  | 16777217                 | 16777216.0              |
+        | float whose display diverges    | FLOAT  | 1.0E7                    | 10000000.0              |
+        | float that is not exact in base two | FLOAT | 0.1                    | 0.10000000149011612     |
+        | float at the maximum            | FLOAT  | 3.4028235E38             | 3.4028234663852886e+38  |
+        | float subnormal                 | FLOAT  | 1.4E-45                  | 1.401298464324817e-45   |
+        | double past its own precision   | DOUBLE | 9007199254740993         | 9007199254740992.0      |
+        | double at the maximum           | DOUBLE | 1.7976931348623157E308   | 1.7976931348623157e+308 |
+        | double subnormal                | DOUBLE | 4.9E-324                 | 5e-324                  |

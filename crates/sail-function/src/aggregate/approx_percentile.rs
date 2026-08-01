@@ -448,6 +448,10 @@ impl Accumulator for ApproxPercentileAccumulator {
 /// rounds twice and drifts: `CAST(123456789012345678.90 AS DECIMAL(38,2))`
 /// widens to `1.2345678901234566e17` rather than `…68e17`, and the error then
 /// propagates all the way to the returned quantile.
+///
+/// Fixed upstream in <https://github.com/apache/arrow-rs/pull/10509>; this can
+/// go once Sail picks up an arrow release that carries it, at which point
+/// `spark_internal_as_f64`'s cast handles decimals correctly on its own.
 fn unscaled_to_f64<T: std::fmt::Display>(unscaled: T, scale: i8) -> Result<f64> {
     // Rust's float parser is correctly rounded, so routing the exact decimal
     // through scientific notation gives the same single rounding as BigDecimal.
