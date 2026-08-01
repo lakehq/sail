@@ -1,8 +1,9 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -21,7 +22,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
@@ -308,6 +309,58 @@ use crate::proto::encode::{
 };
 
 pub struct RemoteExecutionCodec;
+
+static DATAFUSION_SCALAR_UDFS: LazyLock<HashMap<String, Arc<ScalarUDF>>> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for udf in SessionStateDefaults::default_scalar_functions() {
+        registry.insert(udf.name().to_ascii_lowercase(), Arc::clone(&udf));
+        for alias in udf.aliases() {
+            registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udf));
+        }
+    }
+    registry
+});
+
+static DATAFUSION_AGGREGATE_UDAFS: LazyLock<HashMap<String, Arc<AggregateUDF>>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::new();
+        for udaf in SessionStateDefaults::default_aggregate_functions() {
+            registry.insert(udaf.name().to_ascii_lowercase(), Arc::clone(&udaf));
+            for alias in udaf.aliases() {
+                registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udaf));
+            }
+        }
+        registry
+    });
+
+static DATAFUSION_WINDOW_UDWFS: LazyLock<HashMap<String, Arc<WindowUDF>>> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for udwf in SessionStateDefaults::default_window_functions() {
+        registry.insert(udwf.name().to_ascii_lowercase(), Arc::clone(&udwf));
+        for alias in udwf.aliases() {
+            registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udwf));
+        }
+    }
+    registry
+});
+
+fn find_datafusion_scalar_udf(name: &str) -> Option<Arc<ScalarUDF>> {
+    DATAFUSION_SCALAR_UDFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
+
+fn find_datafusion_aggregate_udaf(name: &str) -> Option<Arc<AggregateUDF>> {
+    DATAFUSION_AGGREGATE_UDAFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
+
+fn find_datafusion_window_udwf(name: &str) -> Option<Arc<WindowUDF>> {
+    DATAFUSION_WINDOW_UDWFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -2559,33 +2612,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry to avoid codec for built-in functions.
-        // The `match name` below has no session-registry fallback, so every
-        // scalar UDF needs an explicit arm or distributed decode fails with
-        // "could not find scalar function". DataFusion built-ins without an arm
-        // (e.g. `array_length`, `cardinality` — what Spark `size` lowers to) thus
-        // break ANY cluster query that uses them, including
-        // `filter(arr, x -> size(filter(x, ...)) > 0)`. A registry fallback for
-        // DF built-ins would fix this class at once (Spark* custom UDFs + HOFs
-        // would still need their oneof/arm). This is the prerequisite for
-        // distributing HOFs in aggregate/window nodes (see the TODO in
-        // `WrapHigherOrderFunctions`).
-        //
-        // The fix needs NO proto change. datafusion-proto's from_proto.rs already
-        // resolves a scalar UDF from the session registry FIRST when the encoded
-        // extension buffer is empty: `ctx.udf(name).or_else(|_| codec.try_decode_udf(name, &[]))`.
-        // Today `try_encode_udf` writes an `ExtendedScalarUdf` (UdfKind::Standard {})
-        // for built-ins too, so the non-empty buffer forces this codec path instead.
-        // Fix: in `try_encode_udf`, DON'T write a buffer for plain DataFusion
-        // built-ins (leave it empty), so decode falls through to `ctx.udf(name)`
-        // from the session registry (which already has array_length/cardinality/...).
-        // Keep the explicit oneof/buffer only for Sail's Spark* custom UDFs and HOFs.
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
         let udf_kind = match udf_kind {
             Some(x) => x,
-            None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+            None => {
+                return find_datafusion_scalar_udf(name).ok_or_else(|| {
+                    plan_datafusion_err!("ExtendedScalarUdf: no UDF found for {name}")
+                });
+            }
         };
         match udf_kind {
             UdfKind::Standard(r#gen::StandardUdf {}) => {}
@@ -3449,7 +3485,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             Some(UdafKind::PercentileDisc(r#gen::PercentileDiscUdaf { ansi_mode })) => {
                 Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
             }
-            None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
+            None => find_datafusion_aggregate_udaf(name).ok_or_else(|| {
+                plan_datafusion_err!("ExtendedAggregateUdf: no UDF found for {name}")
+            }),
         }
     }
 
@@ -3571,7 +3609,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 Ok(Arc::new(WindowUDF::from(fun)))
             }
-            None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
+            None => find_datafusion_window_udwf(name)
+                .ok_or_else(|| plan_datafusion_err!("ExtendedWindowUdf: no UDWF found for {name}")),
         }
     }
 
@@ -4735,10 +4774,14 @@ mod tests {
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
+        round_trip_udf_arc(Arc::new(udf))
+    }
+
+    fn round_trip_udf_arc(udf: Arc<ScalarUDF>) -> Result<Arc<ScalarUDF>> {
         let codec = RemoteExecutionCodec;
         let name = udf.name().to_string();
         let mut buf = vec![];
-        codec.try_encode_udf(&udf, &mut buf)?;
+        codec.try_encode_udf(udf.as_ref(), &mut buf)?;
         codec.try_decode_udf(&name, &buf)
     }
 
@@ -4758,6 +4801,14 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    fn round_trip_udaf_arc(udaf: Arc<AggregateUDF>) -> Result<Arc<AggregateUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udaf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udaf(udaf.as_ref(), &mut buf)?;
+        codec.try_decode_udaf(&name, &buf)
     }
 
     #[test]
@@ -4896,6 +4947,68 @@ mod tests {
         let decoded = round_trip_udwf(WindowUDF::from(SparkNtile::new()))?;
         assert!(decoded.inner().downcast_ref::<SparkNtile>().is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_datafusion_scalar_udfs_from_registry() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        for udf in datafusion::execution::SessionStateDefaults::default_scalar_functions() {
+            let expected_name = udf.name().to_string();
+            let decoded = round_trip_udf_arc(Arc::clone(&udf))?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let decoded = codec.try_decode_udf(&expected_name, &[])?;
+            assert_eq!(decoded.name(), expected_name);
+
+            for alias in udf.aliases() {
+                let decoded = codec.try_decode_udf(alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_datafusion_window_udwfs_from_registry() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        for udwf in datafusion::execution::SessionStateDefaults::default_window_functions() {
+            let expected_name = udwf.name().to_string();
+            let decoded = round_trip_udwf_arc(Arc::clone(&udwf))?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let decoded = codec.try_decode_udwf(&expected_name, &[])?;
+            assert_eq!(decoded.name(), expected_name);
+
+            for alias in udwf.aliases() {
+                let decoded = codec.try_decode_udwf(alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_datafusion_aggregate_udafs() -> Result<()> {
+        for udaf in datafusion::execution::SessionStateDefaults::default_aggregate_functions() {
+            let expected_name = udaf.name().to_string();
+            let aliases = udaf.aliases().to_vec();
+            let decoded = round_trip_udaf_arc(udaf)?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let codec = RemoteExecutionCodec;
+            for alias in aliases {
+                let decoded = codec.try_decode_udaf(&alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_sail_aggregate_udaf_takes_precedence_over_datafusion_default() -> Result<()> {
+        let decoded = round_trip_udaf_arc(Arc::new(AggregateUDF::from(MaxByFunction::new())))?;
+        assert!(decoded.inner().downcast_ref::<MaxByFunction>().is_some());
         Ok(())
     }
 
@@ -5824,14 +5937,6 @@ mod tests {
     /// expression encode/decode with the base schema. The extended-schema
     /// lambda-body branch is covered by
     /// `test_round_trip_distributed_filter_nested_in_lambda_body`.
-    ///
-    /// Note: the original "nested inside a lambda body via `cardinality(...)`"
-    /// formulation could not be used because `cardinality` (a
-    /// `datafusion-functions-nested` scalar UDF) is not registered in the Sail
-    /// codec's scalar-function deserialization table, so it fails to round-trip
-    /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
-    /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
-    /// roundtrip under test, so we nest two `filter's directly instead.
     #[test]
     fn test_round_trip_distributed_filter_nested() -> Result<()> {
         use std::collections::HashMap;
@@ -5888,16 +5993,11 @@ mod tests {
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
-    /// A `filter` HOF nested INSIDE the outer lambda's BODY:
-    /// `filter(arr2d, a -> filter(a, y -> y > 1) IS NOT NULL)` over a single
-    /// `List<List<Int32>>` column. Because the inner filter appears in the
-    /// outer lambda's body (not in an array-argument position), this exercises
-    /// lambda-body decode with the base schema extended by the outer lambda
-    /// parameter field.
-    ///
-    /// The outer lambda body uses only natively-serialized exprs (`IS NOT NULL`
-    /// over the inner filter's list result) so no unregistered scalar UDF is
-    /// needed.
+    /// A `filter` HOF nested inside the outer lambda's body:
+    /// `filter(arr2d, a -> cardinality(filter(a, y -> y > 2)) > 0)` over a
+    /// `List<List<Int32>>` column. This exercises a DataFusion scalar UDF inside
+    /// a Sail higher-order UDF while decoding against a task context without a
+    /// function registry.
     #[test]
     fn test_round_trip_distributed_filter_nested_in_lambda_body() -> Result<()> {
         use std::collections::HashMap;
@@ -5906,6 +6006,7 @@ mod tests {
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
         use datafusion::common::DFSchema;
+        use datafusion::functions_nested::expr_fn::cardinality;
         use datafusion::logical_expr::execution_props::ExecutionProps;
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
@@ -5949,11 +6050,14 @@ mod tests {
         // Inner HOF lives inside the outer lambda body.
         let inner = Expr::HigherOrderFunction(HigherOrderFunction::new(
             filter_udf(),
-            vec![a_var, lambda(["y"], y_var.gt(lit(1i32)))],
+            vec![a_var, lambda(["y"], y_var.gt(lit(2i32)))],
         ));
         let outer = Expr::HigherOrderFunction(HigherOrderFunction::new(
             filter_udf(),
-            vec![col("arr2d"), lambda(["a"], inner.is_not_null())],
+            vec![
+                col("arr2d"),
+                lambda(["a"], cardinality(inner).gt(lit(0u64))),
+            ],
         ));
         let physical = create_physical_expr(&outer, &dfschema, &ExecutionProps::new())?;
 

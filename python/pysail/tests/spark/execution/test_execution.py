@@ -234,6 +234,63 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
     assert rows == [Row(id=1), Row(id=2)]
 
 
+def test_parquet_write_decodes_builtin_window_aggregate_in_cluster_mode(spark, tmp_path):
+    df = spark.createDataFrame(
+        [(30, "c", "x"), (10, "a", "x"), (20, "b", "x")],
+        ("v", "k", "g"),
+    )
+    window = Window.partitionBy("g").orderBy(F.desc("k"))
+    result = df.select("*", F.sum("v").over(window).alias("s"))
+
+    path = tmp_path / "window_aggregate"
+    result.write.mode("overwrite").parquet(str(path))
+
+    rows = spark.read.parquet(str(path)).orderBy("k").collect()
+    assert rows == [
+        Row(v=10, k="a", g="x", s=60),
+        Row(v=20, k="b", g="x", s=50),
+        Row(v=30, k="c", g="x", s=30),
+    ]
+
+
+def test_parquet_write_decodes_builtin_scalar_udf_in_cluster_mode(spark, tmp_path):
+    df = spark.createDataFrame([([1, 2],)], "arr array<int>")
+    result = df.select(F.size("arr").alias("n"))
+
+    path = tmp_path / "scalar_udf"
+    result.write.mode("overwrite").parquet(str(path))
+
+    assert spark.read.parquet(str(path)).collect() == [Row(n=2)]
+
+
+def test_parquet_write_round_trips_all_sail_higher_order_udfs_in_cluster_mode(spark, tmp_path):
+    result = spark.sql(
+        """
+        SELECT
+          filter(array(1, 2, 3), x -> x > 1) AS filtered,
+          transform(array(1, 2, 3), x -> x * 2) AS transformed,
+          exists(array(1, 2, 3), x -> x = 2) AS has_two,
+          forall(array(1, 2, 3), x -> x > 0) AS all_positive,
+          aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x) AS total,
+          array_sort(array(3, 1, 2), (left, right) -> left - right) AS sorted
+        """
+    )
+
+    path = tmp_path / "higher_order_udfs"
+    result.write.mode("overwrite").parquet(str(path))
+
+    assert spark.read.parquet(str(path)).collect() == [
+        Row(
+            filtered=[2, 3],
+            transformed=[2, 4, 6],
+            has_two=True,
+            all_positive=True,
+            total=6,
+            sorted=[1, 2, 3],
+        )
+    ]
+
+
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):
     plan = spark.range(0, 12, 1, 4).coalesce(2)._explain_string()  # noqa: SLF001
     assert "CoalesceExec" in plan
