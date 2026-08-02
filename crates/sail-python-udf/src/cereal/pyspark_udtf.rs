@@ -5,14 +5,14 @@ use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
 use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python, intern};
 use sail_common::spec;
-use sail_pyarrow::{FromPyArrow, ToPyArrow};
+use sail_pyarrow::FromPyArrow;
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
     should_write_config, supports_kwargs, write_conf, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
-use crate::conversion::{TryToPy, normalize_data_type};
+use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub struct PySparkUdtfPayload;
@@ -94,8 +94,8 @@ impl PySparkUdtfPayload {
             // Build the list of arguments: (arrow_type, is_constant, value_array, kwarg_name, is_table)
             let mut arguments: Vec<Bound<'_, PyAny>> = Vec::with_capacity(argument_types.len());
             for (i, dt) in argument_types.iter().enumerate() {
-                let arrow_type = normalize_data_type(dt, large_var_types)
-                    .to_pyarrow(py)
+                let arrow_type = dt
+                    .try_to_py(py, large_var_types)
                     .map_err(PyUdfError::PythonError)?;
                 let (is_constant, value_array) = match argument_literals.get(i) {
                     Some(Some(sv)) => {
@@ -240,8 +240,7 @@ impl PySparkUdtfPayload {
         data.extend_from_slice(command);
 
         let type_string = Python::attach(|py| -> PyResult<String> {
-            let return_type = normalize_data_type(return_type, config.arrow_use_large_var_types)
-                .to_pyarrow(py)?;
+            let return_type = return_type.try_to_py(py, config.arrow_use_large_var_types)?;
             PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?
                 .call1((return_type,))?

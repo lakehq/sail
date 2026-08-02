@@ -19,7 +19,7 @@ fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> Fiel
     )
 }
 
-pub(crate) fn normalize_data_type(data_type: &DataType, large_var_types: bool) -> DataType {
+fn normalize_data_type(data_type: &DataType, large_var_types: bool) -> DataType {
     match data_type {
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView if large_var_types => {
             DataType::LargeBinary

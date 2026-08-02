@@ -4,9 +4,8 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
-use sail_pyarrow::ToPyArrow;
 
-use crate::conversion::normalize_data_type;
+use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub mod pyspark_udf;
@@ -163,16 +162,7 @@ fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> Py
             .iter()
             .enumerate()
             .map(|(i, dt)| -> PyResult<_> {
-                // Arrow view types are internal representations, not Spark SQL types.
-                let arrow_type = match dt {
-                    DataType::BinaryView if large_var_types => {
-                        DataType::LargeBinary.to_pyarrow(py)?
-                    }
-                    DataType::BinaryView => DataType::Binary.to_pyarrow(py)?,
-                    DataType::Utf8View if large_var_types => DataType::LargeUtf8.to_pyarrow(py)?,
-                    DataType::Utf8View => DataType::Utf8.to_pyarrow(py)?,
-                    _ => normalize_data_type(dt, large_var_types).to_pyarrow(py)?,
-                };
+                let arrow_type = dt.try_to_py(py, large_var_types)?;
                 let spark_type = from_arrow_type.call1((arrow_type,))?;
                 struct_field_cls.call1((format!("_{i}"), spark_type, true))
             })
