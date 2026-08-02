@@ -7387,6 +7387,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -7448,6 +7449,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "tempfile",
  "testcontainers",
  "thiserror 2.0.19",
  "tokio",
@@ -8105,6 +8107,7 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-telemetry",
  "secrecy",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tonic",
