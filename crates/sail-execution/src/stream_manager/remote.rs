@@ -25,19 +25,22 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
 /// directory, allowing retries to be selected by the task scheduler without overwriting an
 /// earlier attempt.
 pub(super) struct RemoteStreamManager {
-    storage_path: String,
+    path: Option<String>,
+    session_id: String,
     max_file_size: usize,
     compression: ShuffleCompression,
 }
 
 impl RemoteStreamManager {
     pub(super) fn new(
-        storage_path: String,
+        path: Option<String>,
+        session_id: String,
         max_file_size: usize,
         compression: ShuffleCompression,
     ) -> Self {
         Self {
-            storage_path,
+            path,
+            session_id,
             max_file_size,
             compression,
         }
@@ -150,14 +153,10 @@ impl RemoteStreamManager {
         };
         let locations = store
             .list(Some(&prefix))
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .into_iter()
-            .map(|meta| Ok(meta.location));
+            .map_ok(|meta| meta.location)
+            .boxed();
         store
-            .delete_stream(Box::pin(futures::stream::iter(locations)))
+            .delete_stream(locations)
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -169,13 +168,15 @@ impl RemoteStreamManager {
         key: &TaskStreamKey,
         context: &TaskContext,
     ) -> ExecutionResult<(Arc<dyn ObjectStore>, Path)> {
-        let url = Url::parse(&self.storage_path)
-            .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
+        let path = self.path.as_deref().ok_or_else(|| {
+            ExecutionError::InvalidArgument("missing shuffle storage path".to_string())
+        })?;
+        let url = Url::parse(path).map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
         let store = context
             .runtime_env()
             .object_store_registry
             .get_store(&url)?;
-        Ok((store, stream_prefix(&url, key)?))
+        Ok((store, stream_prefix(&url, key, &self.session_id)?))
     }
 
     fn store_and_cleanup_prefix(
@@ -184,16 +185,18 @@ impl RemoteStreamManager {
         stage: Option<usize>,
         context: &TaskContext,
     ) -> ExecutionResult<Option<(Arc<dyn ObjectStore>, Path)>> {
-        if self.storage_path.is_empty() {
+        let Some(path) = self.path.as_deref() else {
             return Ok(None);
-        }
-        let url = Url::parse(&self.storage_path)
-            .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
+        };
+        let url = Url::parse(path).map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
         let store = context
             .runtime_env()
             .object_store_registry
             .get_store(&url)?;
-        Ok(Some((store, shuffle_prefix(&url, job_id, stage)?)))
+        Ok(Some((
+            store,
+            shuffle_prefix(&url, &self.session_id, job_id, stage)?,
+        )))
     }
 }
 
@@ -307,16 +310,24 @@ impl TaskStreamSink for RemoteStreamSink {
     }
 }
 
-fn stream_prefix(url: &Url, key: &TaskStreamKey) -> ExecutionResult<Path> {
-    Ok(shuffle_prefix(url, key.job_id, Some(key.stage))?
-        .join(format!("partition-{}", key.partition))
-        .join(format!("attempt-{}", key.attempt))
-        .join(format!("channel-{}", key.channel)))
+fn stream_prefix(url: &Url, key: &TaskStreamKey, session_id: &str) -> ExecutionResult<Path> {
+    Ok(
+        shuffle_prefix(url, session_id, key.job_id, Some(key.stage))?
+            .join(format!("partition-{}", key.partition))
+            .join(format!("attempt-{}", key.attempt))
+            .join(format!("channel-{}", key.channel)),
+    )
 }
 
-fn shuffle_prefix(url: &Url, job_id: JobId, stage: Option<usize>) -> ExecutionResult<Path> {
+fn shuffle_prefix(
+    url: &Url,
+    session_id: &str,
+    job_id: JobId,
+    stage: Option<usize>,
+) -> ExecutionResult<Path> {
     let mut prefix = Path::from_url_path(url.path())
         .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?
+        .join(session_id)
         .join(format!("job-{job_id}"));
     if let Some(stage) = stage {
         prefix = prefix.join(format!("stage-{stage}"));
@@ -333,8 +344,8 @@ mod tests {
     fn shuffle_prefix_decodes_url_path() {
         let url = Url::parse("file:///tmp/sail%20shuffle").unwrap();
         assert_eq!(
-            shuffle_prefix(&url, JobId::from(1), Some(2)).unwrap(),
-            Path::from("tmp/sail shuffle/job-1/stage-2")
+            shuffle_prefix(&url, "session-1", JobId::from(1), Some(2)).unwrap(),
+            Path::from("tmp/sail shuffle/session-1/job-1/stage-2")
         );
     }
 
@@ -348,10 +359,30 @@ mod tests {
             attempt: 4,
             channel: 5,
         };
-        let prefix = stream_prefix(&url, &key).unwrap();
+        let prefix = stream_prefix(&url, &key, "session-1").unwrap();
         assert_eq!(
             prefix,
-            Path::from("shuffle/job-1/stage-2/partition-3/attempt-4/channel-5")
+            Path::from("shuffle/session-1/job-1/stage-2/partition-3/attempt-4/channel-5")
+        );
+    }
+
+    #[test]
+    fn missing_storage_path_is_invalid() {
+        let manager =
+            RemoteStreamManager::new(None, "session-1".to_string(), 1, ShuffleCompression::None);
+        let key = TaskStreamKey {
+            job_id: JobId::from(1),
+            stage: 2,
+            partition: 3,
+            attempt: 4,
+            channel: 5,
+        };
+        let error = manager
+            .store_and_prefix(&key, &TaskContext::default())
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid argument: missing shuffle storage path"
         );
     }
 }

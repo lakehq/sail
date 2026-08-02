@@ -7367,7 +7367,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-object-store",
  "thiserror 2.0.19",
- "uuid",
 ]
 
 [[package]]
