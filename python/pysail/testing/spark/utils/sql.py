@@ -89,10 +89,7 @@ def escape_sql_string_literal(s: str) -> str:
     while ASCII characters are converted to their octal representation
     unless they are alphanumeric.
     """
-    return "".join(
-        f"\\{ord(c):03o}" if ord(c) < 128 and not c.isalnum() else c  # noqa: PLR2004
-        for c in s
-    )
+    return "".join(f"\\{ord(c):03o}" if ord(c) < 128 and not c.isalnum() else c for c in s)
 
 
 def _display_width(c):
@@ -196,3 +193,16 @@ def normalize_floating_point_string(s: str, d: int = 6, n: int = 6) -> str:
     num = round(Decimal(match.group("num")), min(len(match.group("frac")), d))
     exp = match.group("exp") or ""
     return f"{num}{exp}"
+
+
+def streaming_explain_string(query, extended: bool = False) -> str:
+    """Returns the explain output of a streaming query as a string.
+
+    `StreamingQuery.explain` prints to stdout and returns `None`, so this
+    replicates its implementation up to the `print`, for use in snapshot tests.
+    """
+    from pyspark.sql.connect.proto import StreamingQueryCommand  # noqa: PLC0415
+
+    cmd = StreamingQueryCommand()
+    cmd.explain.extended = extended
+    return query._execute_streaming_query_cmd(cmd).explain.result  # noqa: SLF001

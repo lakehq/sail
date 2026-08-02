@@ -41,30 +41,13 @@ pub async fn resolve_and_execute_plan(
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
-    let (mut session_state, plan) = df.into_parts();
+    let (session_state, plan) = df.into_parts();
     let plan = session_state.optimize(&plan)?;
-    let streaming = is_streaming_plan(&plan)?;
-    let plan = if streaming {
+    let plan = if is_streaming_plan(&plan)? {
         rewrite_streaming_plan(plan)?
     } else {
         plan
     };
-    if streaming {
-        // Round-robin repartitioning exists to buy parallelism, and for an
-        // unbounded input it costs unbounded latency instead: `RepartitionExec`
-        // coalesces on the producer side, holding rows until `batch_size` of
-        // them accumulate, and only flushes the remainder when the input ends.
-        // A stream does not end, so at the default batch size a slow source
-        // delivers nothing for a very long time. Streaming plans are not meant
-        // to be repartitioned anyway — the streaming rewriter rejects a logical
-        // `Repartition` outright — so keep the physical planner from
-        // reintroducing one.
-        session_state
-            .config_mut()
-            .options_mut()
-            .optimizer
-            .enable_round_robin_repartition = false;
-    }
     info.push(plan.to_stringified(PlanType::FinalLogicalPlan));
     let plan = session_state
         .query_planner()

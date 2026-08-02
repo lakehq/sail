@@ -1,0 +1,54 @@
+# serializer version: 1
+---
+name: "test_batch_plan_keeps_round_robin_repartition"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: #1 AS #2, count(Int32(1)) AS count AS #3
+      Aggregate: groupBy=[[#1]], aggr=[[count(Int32(1))]]
+        Projection: #0 % CASE WHEN Int32(7) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(7) END AS k AS #1
+          Range: start=0, end=1000, step=1, num_partitions=1
+  
+    == Analyzed Logical Plan ==
+    #2: Int64, #3: Int64
+    Projection: #1 AS #2, count(Int32(1)) AS count AS #3
+      Aggregate: groupBy=[[#1]], aggr=[[count(Int32(1))]]
+        Projection: #0 % CAST(CASE WHEN Int32(7) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(7) END AS Int64) AS k AS #1
+          Range: start=0, end=1000, step=1, num_partitions=1
+  
+    == Optimized Logical Plan ==
+    Projection: #1 AS #2, count(Int32(1)) AS count AS #3
+      Aggregate: groupBy=[[#1]], aggr=[[count(Int32(1))]]
+        Projection: #0 % Int64(7) AS k AS #1
+          Range: start=0, end=1000, step=1, num_partitions=1
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as k, #3@1 as count]
+      ProjectionExec: expr=[#1@0 as #2, count(Int32(1))@1 as #3]
+        AggregateExec: mode=FinalPartitioned, gby=[#1@0 as #1], aggr=[count(Int32(1))]
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[count(Int32(1))]
+              ProjectionExec: expr=[#0@0 % 7 as #1]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  RangeExec
+---
+name: "test_streaming_plan_is_not_repartitioned"
+data:
+  |-
+    == Initial Logical Plan ==
+    Barrier
+      ConsoleWrite
+        Projection: ?table?.#0 AS timestamp, ?table?.#1 AS value
+          Projection: ?table?.timestamp AS #0, ?table?.value AS #1
+            TableScan: ?table?
+  
+    == Final Logical Plan ==
+    Barrier
+      ConsoleWrite
+        Projection: _marker, _retracted, ?table?.timestamp AS timestamp, ?table?.value AS value
+          StreamSourceWrapper
+  
+    == Final Physical Plan ==
+    ConsoleSinkExec
+      CooperativeExec
+        RateSourceExec: rows_per_second=5, num_partitions=1
