@@ -718,15 +718,31 @@ pub struct TelemetryConfig {
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
-    pub otlp_endpoint: String,
-    pub otlp_protocol: OtlpProtocol,
-    pub otlp_timeout_secs: u64,
+    pub exporter: TelemetryExporterConfig,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
     pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryExporterConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OtlpConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub endpoint: Option<String>,
+    pub protocol: OtlpProtocol,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

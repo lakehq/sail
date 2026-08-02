@@ -147,10 +147,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let DropDatabaseOptions {
-            if_exists,
-            cascade,
-        } = options;
+        let DropDatabaseOptions { if_exists, cascade } = options;
         match self.databases.entry(database.clone()) {
             Entry::Occupied(entry) => {
                 if !cascade && (!entry.get().tables.is_empty() || !entry.get().views.is_empty()) {

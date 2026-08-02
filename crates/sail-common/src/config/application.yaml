@@ -850,13 +850,15 @@
   description: Whether to export logs to an OpenTelemetry collector.
   experimental: true
 
-- key: telemetry.otlp_endpoint
+- key: telemetry.exporter.otlp.endpoint
   type: string
-  default: "http://localhost:4317"
-  description: The OTLP endpoint for telemetry data export.
+  default: ""
+  description: |
+    The OTLP endpoint for telemetry data export.
+    The OTLP exporter is disabled unless this option is set.
   experimental: true
 
-- key: telemetry.otlp_protocol
+- key: telemetry.exporter.otlp.protocol
   type: string
   default: "grpc"
   description: |
@@ -864,7 +866,7 @@
     Valid values are `grpc`, `http-binary`, and `http-json`.
   experimental: true
 
-- key: telemetry.otlp_timeout_secs
+- key: telemetry.exporter.otlp.timeout_secs
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.
