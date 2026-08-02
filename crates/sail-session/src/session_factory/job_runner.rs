@@ -42,6 +42,7 @@ impl SessionJobRunner {
 }
 
 pub struct SessionJobRunnerInfo {
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: Option<u16>,
     pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
@@ -78,7 +79,13 @@ impl ServerSessionJobRunnerFactory {
         let Some(port) = info.driver_server_port else {
             return internal_err!("driver gateway is not available");
         };
-        let options = DriverOptions::new(&self.config, self.runtime.clone(), info.driver_id, port);
+        let options = DriverOptions::new(
+            &self.config,
+            self.runtime.clone(),
+            info.session_id,
+            info.driver_id,
+            port,
+        );
         let components = DriverComponents {
             worker_manager,
             history_reporter: info.history_reporter,

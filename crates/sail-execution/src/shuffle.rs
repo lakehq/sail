@@ -2,7 +2,7 @@
 pub enum ShuffleBackendKind {
     Streaming,
     Storage {
-        path: String,
+        path: Option<String>,
         max_file_size: usize,
         compression: ShuffleCompression,
     },

@@ -186,6 +186,8 @@ pub struct TemporaryFilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
+    #[serde(skip_serializing)]
+    pub session_id: String,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
@@ -308,7 +310,11 @@ pub enum ShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageShuffleBackend {
-    pub path: String,
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
     pub max_file_size: usize,
     pub compression: ShuffleCompression,
 }
@@ -353,7 +359,7 @@ mod shuffle_backend {
                 super::ShuffleBackend::Streaming => ShuffleBackend {
                     r#type: Type::Streaming,
                     storage: super::StorageShuffleBackend {
-                        path: String::new(),
+                        path: None,
                         max_file_size: 0,
                         compression: super::ShuffleCompression::None,
                     },
@@ -635,6 +641,14 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        /// Path to a file holding the bearer token. When set, the token is
+        /// re-read from this file for every request, so a rotated token (for
+        /// example a kubelet-projected service account token) is picked up
+        /// without restarting the server. Takes precedence over
+        /// `bearer_access_token`. The path is not a secret, so it is kept as a
+        /// plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_access_token_file: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -718,15 +732,31 @@ pub struct TelemetryConfig {
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
-    pub otlp_endpoint: String,
-    pub otlp_protocol: OtlpProtocol,
-    pub otlp_timeout_secs: u64,
+    pub exporter: TelemetryExporterConfig,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
     pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryExporterConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OtlpConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub endpoint: Option<String>,
+    pub protocol: OtlpProtocol,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -751,6 +781,7 @@ macro_rules! define_cluster_config_env {
 impl ClusterConfigEnv {
     define_cluster_config_env! {
         ENABLE_TLS,
+        SESSION_ID,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
         DRIVER_ID,

@@ -149,6 +149,13 @@ def normalize_plan_text(plan_text: str) -> str:
         end = block.rfind("]")
         if start == -1 or end == -1 or end <= start:
             return block
+
+        # Checkpoint scans retain the input's physical partition layout. For iterative queries,
+        # repartitioning can leave different partitions empty across runs, so individual checkpoint
+        # files are execution details rather than stable plan properties.
+        if "__checkpoint_testing__/" in block:
+            return block[:start] + "<checkpoint files>" + block[end + 1 :]
+
         groups_list = block[start : end + 1]
 
         # Parse top-level groups inside the outer list.

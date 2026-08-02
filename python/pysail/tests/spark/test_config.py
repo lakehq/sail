@@ -6,7 +6,7 @@ from pysail.spark import SparkConnectServer
 
 
 def test_warning_on_static_config_addition(monkeypatch):
-    key = "SAIL_TELEMETRY__OTLP_ENDPOINT"
+    key = "SAIL_TELEMETRY__EXPORTER__OTLP__ENDPOINT"
     assert key not in os.environ
     monkeypatch.setenv(key, "http://localhost:4317")
     with pytest.warns(RuntimeWarning, match=f"ignored.*{key}"):

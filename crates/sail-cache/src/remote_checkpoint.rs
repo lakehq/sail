@@ -13,7 +13,6 @@ use sail_common_datafusion::extension::SessionExtension;
 use sail_object_store::{
     ResolvedObjectStorePath, delete_object_store_prefix_objects, resolve_object_store_path,
 };
-use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteCheckpointFile {
@@ -45,16 +44,16 @@ pub struct RemoteCheckpointDescriptor {
 #[derive(Debug)]
 pub struct RemoteCheckpointRegistry {
     path: Option<String>,
-    session_namespace: String,
+    session_id: String,
     closed: AtomicBool,
     relations: RwLock<HashMap<String, Arc<RemoteCheckpointDescriptor>>>,
 }
 
 impl RemoteCheckpointRegistry {
-    pub fn new(path: Option<String>) -> Self {
+    pub fn new(path: Option<String>, session_id: String) -> Self {
         Self {
             path,
-            session_namespace: Uuid::new_v4().to_string(),
+            session_id,
             closed: AtomicBool::new(false),
             relations: RwLock::new(HashMap::new()),
         }
@@ -152,7 +151,7 @@ impl RemoteCheckpointRegistry {
     }
 
     fn session_prefix(&self, root: &Path) -> Path {
-        root.clone().join(self.session_namespace.as_str())
+        root.clone().join(self.session_id.as_str())
     }
 
     fn clear(&self) -> Result<()> {
@@ -161,12 +160,6 @@ impl RemoteCheckpointRegistry {
         })?;
         relations.clear();
         Ok(())
-    }
-}
-
-impl Default for RemoteCheckpointRegistry {
-    fn default() -> Self {
-        Self::new(None)
     }
 }
 
@@ -199,7 +192,7 @@ mod tests {
 
     #[test]
     fn registry_owns_only_ready_descriptors() -> Result<()> {
-        let registry = RemoteCheckpointRegistry::default();
+        let registry = RemoteCheckpointRegistry::new(None, "session".to_string());
         registry.insert(descriptor("relation"))?;
         assert_eq!(
             registry
@@ -219,5 +212,14 @@ mod tests {
         registry.clear()?;
         assert!(registry.get("relation")?.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn registry_uses_the_provided_session_id_for_storage_paths() {
+        let registry = RemoteCheckpointRegistry::new(None, "session-1".to_string());
+        assert_eq!(
+            registry.session_prefix(&Path::from("checkpoint")),
+            Path::from("checkpoint/session-1")
+        );
     }
 }

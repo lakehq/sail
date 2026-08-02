@@ -68,6 +68,7 @@ impl WorkerPool {
         let _guard = span.set_local_parent();
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            session_id: self.options.session_id.clone(),
             driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
             driver_external_port: if self.options.driver_external_port > 0 {

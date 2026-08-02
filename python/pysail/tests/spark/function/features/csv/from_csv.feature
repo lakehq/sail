@@ -1,4 +1,4 @@
-@from_csv
+@csv @from_csv
 Feature: from_csv column display name matches Spark
 
   Spark renders `from_csv` as a UnaryExpression: only the input column
