@@ -209,6 +209,7 @@ impl StreamUDF for PySparkUDTF {
             input,
             function,
             self.output_schema.clone(),
+            self.config.arrow_use_large_var_types,
         )))
     }
 }
