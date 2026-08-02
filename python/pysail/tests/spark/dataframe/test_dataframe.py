@@ -113,6 +113,51 @@ def test_dataframe_with_column_alias(spark):
     )
 
 
+def test_with_column_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10), (2, 20)], ["a", "b"])
+
+    # The existing column is replaced in place, and it takes the new name.
+    replaced = df.withColumn("A", col("a") + 1)
+    assert replaced.columns == ["A", "b"]
+    assert [r.asDict() for r in replaced.orderBy("A").collect()] == [{"A": 2, "b": 10}, {"A": 3, "b": 20}]
+
+    assert df.withColumn("a", col("a") + 1).columns == ["a", "b"]
+    assert df.withColumn("zz", lit(1)).columns == ["a", "b", "zz"]
+    assert df.withColumns({"A": lit(1), "B": lit(2)}).columns == ["A", "B"]
+
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        _ = df.withColumns({"a": lit(1), "A": lit(2)}).columns
+
+    # The first duplicate in alphabetical order is the one reported.
+    with pytest.raises(Exception, match="The column `a` already exists"):
+        _ = df.withColumns({"z": lit(1), "a": lit(2), "Z": lit(3), "A": lit(4)}).columns
+
+
+def test_with_columns_renamed_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10)], ["a", "b"])
+
+    assert df.withColumnRenamed("A", "z").columns == ["z", "b"]
+    assert df.withColumnRenamed("a", "z").columns == ["z", "b"]
+    # A name that matches no column is ignored.
+    assert df.withColumnRenamed("nope", "z").columns == ["a", "b"]
+    assert df.withColumnsRenamed({"A": "z", "B": "y"}).columns == ["z", "y"]
+
+    # The renames are applied in order to the output of the previous one, so the second
+    # entry no longer matches the column that the first one renamed.
+    assert df.withColumnsRenamed({"A": "z", "a": "y"}).columns == ["z", "b"]
+    # Spark 3.5 rejected the resulting duplicate name with COLUMN_ALREADY_EXISTS;
+    # Spark 4 allows it, and we follow the latest behavior.
+    assert df.withColumnsRenamed({"a": "b", "b": "c"}).columns == ["c", "c"]
+
+
+def test_with_metadata_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10)], ["a", "b"])
+
+    annotated = df.withMetadata("A", {"m": "x"})
+    assert annotated.columns == ["A", "b"]
+    assert annotated.schema["A"].metadata == {"m": "x"}
+
+
 def test_with_metadata(spark):
     df = spark.sql("SELECT 1 AS a")
     assert df.schema["a"].metadata == {}

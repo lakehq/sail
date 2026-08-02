@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Column;
@@ -87,34 +87,26 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-
-        let mut inverse_map: HashMap<String, HashSet<String>> = HashMap::new();
-        for (from, to) in rename_columns_map
+        let columns = input.schema().columns();
+        let mut names = columns
             .iter()
-            .map(|(a, b)| (a.as_ref().to_string(), b.as_ref().to_string()))
-        {
-            let from_froms = inverse_map.remove(&from).unwrap_or_default(); //.unwrap_or_else(|| HashSet::new());
-            let to_froms = inverse_map.entry(to.clone()).or_default();
-            to_froms.extend(from_froms);
-            to_froms.insert(from);
-        }
-
-        let rename_columns_map: HashMap<String, String> = inverse_map
-            .into_iter()
-            .flat_map(|(to, froms)| froms.into_iter().map(move |from| (from, to.clone())))
-            .collect();
-        let schema = input.schema();
-        let expr = schema
-            .columns()
-            .into_iter()
-            .map(|column| {
-                let name = state.get_field_info(column.name())?.name();
-                match rename_columns_map.get(name) {
-                    Some(n) => Ok(NamedExpr::new(vec![n.clone()], Expr::Column(column))),
-                    None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
-                }
-            })
+            .map(|column| Ok(state.get_field_info(column.name())?.name().to_string()))
             .collect::<PlanResult<Vec<_>>>()?;
+        // Each rename is applied to the output of the previous one, and the column name is
+        // matched case-insensitively. A name that matches no column is ignored.
+        for (from, to) in rename_columns_map {
+            let (from, to) = (from.as_ref(), to.as_ref());
+            for name in names.iter_mut() {
+                if name.eq_ignore_ascii_case(from) {
+                    *name = to.to_string();
+                }
+            }
+        }
+        let expr = columns
+            .into_iter()
+            .zip(names)
+            .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column)))
+            .collect::<Vec<_>>();
         let expr = self.rewrite_named_expressions(expr, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
@@ -197,7 +189,7 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
         let mut aliases: IndexMap<String, AliasEntry> = async {
-            let mut results = IndexMap::new();
+            let mut results: IndexMap<String, AliasEntry> = IndexMap::new();
             for alias in aliases {
                 let (name, expr, metadata) = match alias {
                     spec::Expr::Alias {
@@ -215,6 +207,23 @@ impl PlanResolver<'_> {
                 let expr = self.resolve_expression(expr, schema, state).await?;
                 results.insert(name.into(), (expr, false, metadata));
             }
+            // Names that differ only in case are duplicates, and the first one in alphabetical
+            // order is reported.
+            let mut names = results
+                .keys()
+                .map(|name| name.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            names.sort();
+            let duplicate = names.windows(2).find_map(|names| match names {
+                [a, b] if a == b => Some(a),
+                _ => None,
+            });
+            if let Some(name) = duplicate {
+                return Err(PlanError::AnalysisError(format!(
+                    "[COLUMN_ALREADY_EXISTS] The column `{name}` already exists. \
+                     Choose another name or rename the existing column."
+                )));
+            }
             Ok(results) as PlanResult<_>
         }
         .await?;
@@ -223,15 +232,20 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|column| {
                 let name = state.get_field_info(column.name())?.name();
-                match aliases.get_mut(name) {
-                    Some((e, exists, metadata)) => {
+                // The column name is matched case-insensitively, and the alias name replaces
+                // the existing column name.
+                match aliases
+                    .iter_mut()
+                    .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
+                {
+                    Some((alias, (e, exists, metadata))) => {
                         *exists = true;
+                        let name = alias.clone();
                         match metadata {
                             Some(m) if !m.is_empty() => {
-                                Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                    .with_metadata(m.clone()))
+                                Ok(NamedExpr::new(vec![name], e.clone()).with_metadata(m.clone()))
                             }
-                            _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
+                            _ => Ok(NamedExpr::new(vec![name], e.clone())),
                         }
                     }
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
