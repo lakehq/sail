@@ -145,3 +145,38 @@ Feature: percentile() aggregate function computes percentiles
       Then query result
         | percentiles                |
         | [0.0, 2.5, 5.0, 7.5, 10.0] |
+
+  Rule: DISTINCT deduplicates the observations (Sail-wide gap)
+
+    # Spark's own aggregates all honour DISTINCT. In Sail it works for the
+    # aggregates DataFusion implements (count, sum, avg, min/max, stddev,
+    # collect_set, first/last, try_sum...) but is SILENTLY IGNORED by the ones
+    # Sail implements itself -- percentile, median, percentile_approx, mode and
+    # histogram_numeric. `distinct` is passed through in
+    # `sail-plan/src/function/aggregate.rs`, so the flag arrives; nothing acts
+    # on it, and the query answers with the duplicates still in.
+    #
+    # Over (1, 1, 1, 2, 3) the duplicates drag the median down to 1, so the
+    # divergence is a wrong VALUE rather than an error.
+
+    @sail-bug
+    Scenario: percentile with DISTINCT ignores the duplicates
+      When query
+        """
+        SELECT percentile(DISTINCT v, 0.5) AS r
+        FROM VALUES (1), (1), (1), (2), (3) AS t(v)
+        """
+      Then query result
+        | r   |
+        | 2.0 |
+
+    @sail-bug
+    Scenario: median with DISTINCT ignores the duplicates
+      When query
+        """
+        SELECT median(DISTINCT v) AS r
+        FROM VALUES (1), (1), (1), (2), (3) AS t(v)
+        """
+      Then query result
+        | r   |
+        | 2.0 |

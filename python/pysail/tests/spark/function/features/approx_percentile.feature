@@ -90,6 +90,24 @@ Feature: approx_percentile / percentile_approx aggregate function
         | quantiles   |
         | [0, 5, 10]  |
 
+    # Spark declares the percentage array as `containsNull = false`
+    # (ApproximatePercentile.scala:109) but never enforces it: `implicitCast`
+    # refuses to convert a nullable array to a non-nullable one
+    # (TypeCoercion.scala:258), and the type check that runs instead ignores
+    # `containsNull` altogether (DataType.scala:117 -> :90 -> :569). So the NULL
+    # survives to `eval`, where `toDoubleArray` reads every slot with `getDouble`
+    # and no null check (ArrayData.scala:154-162) -- a NULL percentage is 0.0,
+    # which is why the second quantile below is the minimum rather than an error.
+    Scenario: a NULL element in the percentage array reads as zero
+      When query
+        """
+        SELECT percentile_approx(v, array(0.5, CAST(NULL AS DOUBLE))) AS r
+        FROM VALUES (1), (2) AS t(v)
+        """
+      Then query result
+        | r      |
+        | [1, 1] |
+
   Rule: Nearest-rank selection
 
     # The examples from Spark's own @ExpressionDescription for this function.
@@ -667,13 +685,18 @@ Feature: approx_percentile / percentile_approx aggregate function
          |    |-- element: decimal(10,2) (containsNull = false)
         """
 
-  Rule: Input-type surface gaps (Sail-wide, tracked)
+  Rule: The input is implicitly cast
 
-    # Spark's `inputTypes` is a TypeCollection combined with ImplicitCastInputTypes,
-    # so it also accepts STRING and untyped NULL by casting them to DOUBLE. Sail
-    # rejects both at planning. Pre-existing; not introduced by the sketch port.
+    # `inputTypes` declares arg 0 as a TypeCollection under
+    # ImplicitCastInputTypes, so a STRING or an untyped NULL is CAST rather than
+    # rejected -- and the cast lands on DOUBLE, which then becomes the RESULT
+    # type. `implicitCast` walks the collection (TypeCoercion.scala:240);
+    # `(StringType, NumericType)` yields `NumericType.defaultConcreteType` =
+    # DOUBLE (:212, AbstractDataType.scala:131), and `(NullType, target)` yields
+    # the collection's own default, also DOUBLE (:202, :66). Both scenarios
+    # assert the type as well as the value: getting the value right through a
+    # different type would still be a divergence.
 
-    @sail-bug
     Scenario: percentile_approx accepts a string column and returns double
       When query
         """
@@ -686,7 +709,6 @@ Feature: approx_percentile / percentile_approx aggregate function
         | r   | type   |
         | 2.0 | double |
 
-    @sail-bug
     Scenario: percentile_approx accepts an untyped NULL and returns double
       When query
         """
@@ -697,6 +719,85 @@ Feature: approx_percentile / percentile_approx aggregate function
       Then query result
         | r    | type   |
         | NULL | double |
+
+    # Accepting STRING routes the argument through CAST(STRING AS DOUBLE), so
+    # that cast's semantics are now part of this function's surface. Sail's cast
+    # is stricter than Spark's in two Sail-wide ways: it does not trim, and it
+    # raises where Spark returns NULL under ANSI off. Both make the whole
+    # aggregate fail rather than skipping the one bad row.
+
+    @sail-bug
+    Scenario: an unparseable string is skipped rather than failing the aggregate
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) AS r
+        FROM VALUES ('abc'), ('2'), ('3') AS t(v)
+        """
+      Then query result
+        | r   |
+        | 2.0 |
+
+    @sail-bug
+    Scenario: an empty string is skipped rather than failing the aggregate
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) AS r
+        FROM VALUES (''), ('1'), ('3') AS t(v)
+        """
+      Then query result
+        | r   |
+        | 1.0 |
+
+    # Trimming is not ANSI-gated -- Spark accepts the padded string under both
+    # modes -- so this row is the one that isolates the trimming gap from the
+    # NULL-on-failure one above.
+    @sail-bug
+    Scenario Outline: a padded numeric string is trimmed: ansi <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT percentile_approx(v, 0.5) AS r
+        FROM VALUES (' 2 '), ('1'), ('3') AS t(v)
+        """
+      Then query result
+        | r   |
+        | 2.0 |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+  Rule: accuracy is rejected on its TYPE, not its value
+
+    # `accuracy` is declared `IntegralType`, and `implicitCast` reaches that only
+    # when the argument is ALREADY integral (TypeCoercion.scala:199) or an
+    # untyped NULL (:202). Nothing takes a STRING, a fractional or a BOOLEAN
+    # there: :212, :220 and :228 all target the `NumericType` CLASS, and the
+    # `IntegralType` object is not an instance of it. So all four below fail
+    # analysis whatever their value -- which is why an integral-VALUED
+    # `DECIMAL(10,0)` and the string `'100'` are rejected just like `100.7`.
+    #
+    # BOOLEAN is the one that changed the answer rather than merely being
+    # accepted: read as accuracy 1, its relative error of 1.0 short-circuits
+    # every percentile to the minimum, so the median of 0..10 came back as 0.
+
+    Scenario Outline: a <case> accuracy is rejected for its type
+      When query
+        """
+        SELECT percentile_approx(v, 0.5, <accuracy>) AS r
+        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
+        """
+      Then query error The third parameter requires the "INTEGRAL" type
+
+      Examples:
+        | case         | accuracy                   |
+        | fractional   | 100.7                      |
+        | string       | '100'                      |
+        | decimal      | CAST(100 AS DECIMAL(10,0)) |
+        | boolean      | true                       |
 
   Rule: Argument-handling gaps (Sail-wide, tracked)
 
@@ -712,48 +813,6 @@ Feature: approx_percentile / percentile_approx aggregate function
       Then query result
         | r |
         | 2 |
-
-    @sail-bug
-    Scenario: a NULL element in the percentage array reads as zero
-      When query
-        """
-        SELECT percentile_approx(v, array(0.5, CAST(NULL AS DOUBLE))) AS r
-        FROM VALUES (1), (2) AS t(v)
-        """
-      Then query result
-        | r      |
-        | [1, 1] |
-
-    @sail-bug
-    Scenario: a non-integral accuracy is rejected
-      When query
-        """
-        SELECT percentile_approx(v, 0.5, 100.7) AS r
-        FROM VALUES (0), (1), (2) AS t(v)
-        """
-      Then query error The third parameter requires the "INTEGRAL" type
-
-    # `accuracy` is declared as IntegralType, and none of these three has an
-    # implicit cast to it, so all fail analysis whatever their value — a rule
-    # about the TYPE, which is why an integral-valued `DECIMAL(10,0)` is
-    # rejected too. BOOLEAN is the one that changes the answer rather than
-    # merely being accepted: read as accuracy 1, its relative error of 1.0
-    # short-circuits every percentile to the minimum, so the median of 0..10
-    # comes back as 0 instead of 5.
-    @sail-bug
-    Scenario Outline: a <case> accuracy is rejected for its type
-      When query
-        """
-        SELECT percentile_approx(v, 0.5, <accuracy>) AS r
-        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
-        """
-      Then query error The third parameter requires the "INTEGRAL" type
-
-      Examples:
-        | case    | accuracy                   |
-        | string  | '100'                      |
-        | decimal | CAST(100 AS DECIMAL(10,0)) |
-        | boolean | true                       |
 
   Rule: Sliding window frames (Sail-wide, tracked)
 

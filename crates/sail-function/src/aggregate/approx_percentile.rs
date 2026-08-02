@@ -21,9 +21,8 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::physical_expr::PhysicalExpr;
 use half::f16;
 
-use crate::aggregate::percentile::{extract_literal, extract_percentiles_array};
 use crate::aggregate::quantile_summaries::{QuantileSummaries, Stats};
-use crate::aggregate::utils::cast_to_type;
+use crate::aggregate::utils::{cast_to_type, evaluate_percentile_literal, scalar_to_f64};
 use crate::error::invalid_arg_count_exec_err;
 
 /// Spark's `ApproximatePercentile.DEFAULT_PERCENTILE_ACCURACY`.
@@ -92,10 +91,25 @@ impl SparkApproxPercentile {
         // `coerce_types` has already normalized the percentage to `Float64` or
         // `List<Float64>`, so the shape is known: extracting the wrong one would
         // replace a precise error with a misleading one.
-        let percentiles = if is_array {
-            extract_percentiles_array(percentage_expr)?
-        } else {
-            vec![extract_literal(percentage_expr)?]
+        let percentiles = match evaluate_percentile_literal(percentage_expr)? {
+            ScalarValue::List(array) if is_array => {
+                let values = array.values();
+                (0..values.len())
+                    .map(|index| {
+                        // Spark reads the array with `ArrayData.toDoubleArray`
+                        // (`ApproximatePercentile.scala:118`), which reads every
+                        // slot with `getDouble` and no null check
+                        // (`ArrayData.scala:154-162`), so a NULL is 0.0. See
+                        // `coerce_types` for why the NULL gets this far.
+                        if values.is_null(index) {
+                            Ok(0.0)
+                        } else {
+                            scalar_to_f64(&ScalarValue::try_from_array(values.as_ref(), index)?)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+            scalar => vec![scalar_to_f64(&scalar)?],
         };
         for percentile in &percentiles {
             if !(0.0..=1.0).contains(percentile) {
@@ -106,7 +120,7 @@ impl SparkApproxPercentile {
         }
 
         let accuracy = match exprs.get(2) {
-            Some(expr) => extract_literal(expr)? as i64,
+            Some(expr) => scalar_to_f64(&evaluate_percentile_literal(expr)?)? as i64,
             None => DEFAULT_PERCENTILE_ACCURACY,
         };
         if accuracy <= 0 || accuracy > i32::MAX as i64 {
@@ -149,36 +163,82 @@ impl AggregateUDFImpl for SparkApproxPercentile {
                 arg_types.len(),
             ));
         }
-        let input = &arg_types[0];
         // Spark accepts NumericType, DateType, TimestampType, TimestampNTZType
         // and both ANSI interval types, since all of them are numeric
-        // internally.
-        let supported = input.is_numeric()
-            || matches!(
-                input,
-                DataType::Date32
-                    | DataType::Date64
-                    | DataType::Timestamp(_, _)
-                    | DataType::Interval(IntervalUnit::YearMonth)
-                    | DataType::Duration(_)
-            );
-        if !supported {
-            return Err(DataFusionError::Plan(format!(
-                "percentile_approx requires a numeric, date, timestamp or interval input type, got {input}"
-            )));
-        }
-        // The percentage is a single Float64 or an array of Float64; the input
-        // type is preserved (Spark returns the input type). Accuracy is read as
-        // an Int64 so that values above `i32::MAX` are rejected rather than
-        // wrapping, matching Spark's `accuracy > Int.MaxValue` check.
+        // internally. The argument is also `ImplicitCastInputTypes`, so a STRING
+        // or an untyped NULL is CAST rather than rejected, and the result type
+        // is then DOUBLE: `implicitCast` walks the collection
+        // (`TypeCoercion.scala:240`), `(StringType, NumericType)` yields
+        // `NumericType.defaultConcreteType` = DOUBLE (`:212`,
+        // `AbstractDataType.scala:131`), and `(NullType, target)` yields the
+        // collection's own default, also DOUBLE (`:202`, `:66`).
+        let input = match &arg_types[0] {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {
+                DataType::Float64
+            }
+            other
+                if other.is_numeric()
+                    || matches!(
+                        other,
+                        DataType::Date32
+                            | DataType::Date64
+                            | DataType::Timestamp(_, _)
+                            | DataType::Interval(IntervalUnit::YearMonth)
+                            | DataType::Duration(_)
+                    ) =>
+            {
+                other.clone()
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "percentile_approx requires a numeric, date, timestamp or interval input type, got {other}"
+                )));
+            }
+        };
+        // The percentage is a single Float64 or an array of Float64.
+        //
+        // The element is declared NULLABLE even though Spark's `inputTypes` says
+        // `ArrayType(DoubleType, containsNull = false)`
+        // (`ApproximatePercentile.scala:109`), because Spark never enforces that
+        // half of the declaration:
+        //
+        // - `implicitCast` REFUSES to convert a nullable array to a
+        //   non-nullable one — `case (ArrayType(_, true), ArrayType(_, false))
+        //   => null` (`TypeCoercion.scala:258`) — so no cast is inserted.
+        // - The type check passes anyway: `acceptsType` is `sameType`
+        //   (`DataType.scala:117`), which is `equalsIgnoreNullability`
+        //   (`:90`), and that drops `containsNull` for arrays (`:569`).
+        // - So the NULL reaches `eval` intact, and `ArrayData.toDoubleArray`
+        //   (`ArrayData.scala:154-162`) reads every slot with `getDouble` and
+        //   no null check, yielding 0.0.
+        //
+        // Arrow's cast does enforce the flag, so declaring the element
+        // non-nullable here would reject `array(0.5, CAST(NULL AS DOUBLE))`
+        // outright — a query Spark answers. `resolve_args` maps the NULL to 0.0.
         let percentage = match &arg_types[1] {
             DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
-                DataType::List(Arc::new(Field::new_list_field(DataType::Float64, false)))
+                DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true)))
             }
             _ => DataType::Float64,
         };
-        let mut coerced = vec![input.clone(), percentage];
-        if arg_types.len() == 3 {
+        let mut coerced = vec![input, percentage];
+        if let Some(accuracy) = arg_types.get(2) {
+            // Spark declares `accuracy` as `IntegralType`, and `implicitCast`
+            // reaches it ONLY when the argument is already integral (`:199`) or
+            // an untyped NULL (`:202` -> `IntegerType`,
+            // `AbstractDataType.scala:140`). Nothing takes a STRING, a
+            // fractional or a BOOLEAN there: `:212`, `:220` and `:228` all
+            // target the `NumericType` CLASS, and the `IntegralType` object is
+            // not an instance of it. So those fail analysis whatever their
+            // value — `accuracy` is a rule about the TYPE, which is why an
+            // integral-valued `DECIMAL(10,0)` is rejected too.
+            if !(accuracy.is_integer() || matches!(accuracy, DataType::Null)) {
+                return Err(DataFusionError::Plan(format!(
+                    "The third parameter requires the \"INTEGRAL\" type, however it has the type \"{accuracy}\"."
+                )));
+            }
+            // Read as Int64 so values above `i32::MAX` are rejected rather than
+            // wrapping, matching Spark's `accuracy > Int.MaxValue` check.
             coerced.push(DataType::Int64);
         }
         Ok(coerced)

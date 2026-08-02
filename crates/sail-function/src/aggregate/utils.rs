@@ -202,7 +202,7 @@ pub(crate) fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<
 /// `DataFusionError::Plan` so the failure is detected at planning time with a
 /// clear message, rather than as a low-level evaluation error against a
 /// synthetic empty `RecordBatch`.
-fn evaluate_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
+pub(crate) fn evaluate_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     // Evaluate against an empty 1-row batch: any foldable constant (a literal, or
     // a cast/expression over literals like `CAST(1 AS DOUBLE)`) yields a value,
     // while a column-dependent expression errors because the batch has no columns.
