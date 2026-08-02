@@ -12,6 +12,7 @@ use crate::worker_manager::WorkerManager;
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
     pub driver_external_host: String,
@@ -41,11 +42,13 @@ impl DriverOptions {
     pub fn new(
         config: &AppConfig,
         runtime: RuntimeHandle,
+        session_id: String,
         driver_id: DriverId,
         driver_server_port: u16,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
+            session_id,
             driver_id,
             driver_server_port,
             driver_external_host: config.cluster.driver_external_host.clone(),

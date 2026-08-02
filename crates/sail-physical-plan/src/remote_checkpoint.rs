@@ -933,9 +933,10 @@ mod tests {
             &RecordBatchOptions::new().with_row_count(Some(3)),
         )?;
         let input = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
-        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
-            "memory:///checkpoint".to_string(),
-        )));
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
         let config = SessionConfig::new().with_extension(Arc::clone(&registry));
         let context = SessionContext::new_with_config(config);
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
@@ -990,9 +991,10 @@ mod tests {
             Arc::clone(&logical_schema),
             None,
         )?;
-        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
-            "memory:///checkpoint".to_string(),
-        )));
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
         let config = SessionConfig::new().with_extension(Arc::clone(&registry));
         let context = SessionContext::new_with_config(config);
         let object_store_url = ObjectStoreUrl::parse("memory://")?;

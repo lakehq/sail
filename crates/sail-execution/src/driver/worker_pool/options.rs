@@ -10,6 +10,7 @@ use crate::shuffle::ShuffleBackendKind;
 #[readonly::make]
 pub struct WorkerPoolOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
     pub driver_external_host: String,
@@ -28,6 +29,7 @@ impl From<&DriverOptions> for WorkerPoolOptions {
     fn from(options: &DriverOptions) -> Self {
         Self {
             enable_tls: options.enable_tls,
+            session_id: options.session_id.clone(),
             driver_id: options.driver_id,
             driver_server_port: options.driver_server_port,
             driver_external_host: options.driver_external_host.clone(),

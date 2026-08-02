@@ -71,6 +71,12 @@
   description: Whether to enable TLS for cluster communication.
   experimental: true
 
+- key: cluster.session_id
+  type: string
+  default: ""
+  description:
+  hidden: true
+
 - key: cluster.driver_listen_host
   type: string
   default: "127.0.0.1"
@@ -262,7 +268,7 @@
 
 - key: cluster.shuffle_backend.storage.path
   type: string
-  default: "file:///tmp/sail/shuffle"
+  default: ""
   description: |
     The object storage base URL for storage-backed shuffle data.
     This is only used when `cluster.shuffle_backend.type` is `storage`.

@@ -32,6 +32,7 @@ impl StreamManager {
                 compression,
             } => Some(Arc::new(RemoteStreamManager::new(
                 path.clone(),
+                options.session_id.clone(),
                 *max_file_size,
                 *compression,
             ))),

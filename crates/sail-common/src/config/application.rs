@@ -186,6 +186,8 @@ pub struct TemporaryFilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
+    #[serde(skip_serializing)]
+    pub session_id: String,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
@@ -308,7 +310,11 @@ pub enum ShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageShuffleBackend {
-    pub path: String,
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
     pub max_file_size: usize,
     pub compression: ShuffleCompression,
 }
@@ -353,7 +359,7 @@ mod shuffle_backend {
                 super::ShuffleBackend::Streaming => ShuffleBackend {
                     r#type: Type::Streaming,
                     storage: super::StorageShuffleBackend {
-                        path: String::new(),
+                        path: None,
                         max_file_size: 0,
                         compression: super::ShuffleCompression::None,
                     },
@@ -767,6 +773,7 @@ macro_rules! define_cluster_config_env {
 impl ClusterConfigEnv {
     define_cluster_config_env! {
         ENABLE_TLS,
+        SESSION_ID,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
         DRIVER_ID,

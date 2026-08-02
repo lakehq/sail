@@ -115,6 +115,7 @@ impl KubernetesWorkerManager {
         let WorkerLaunchOptions {
             enable_tls,
             driver_id,
+            session_id,
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
@@ -178,6 +179,11 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
+                name: ClusterConfigEnv::SESSION_ID.to_string(),
+                value: Some(session_id),
+                value_from: None,
+            },
+            EnvVar {
                 name: ClusterConfigEnv::WORKER_ID.to_string(),
                 value: Some(u64::from(id).to_string()),
                 value_from: None,
@@ -236,12 +242,14 @@ impl KubernetesWorkerManager {
             compression,
         } = shuffle_backend
         {
-            env.extend([
-                EnvVar {
+            if let Some(path) = path {
+                env.push(EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__PATH.to_string(),
                     value: Some(path),
                     value_from: None,
-                },
+                });
+            }
+            env.extend([
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE.to_string(),
                     value: Some(max_file_size.to_string()),

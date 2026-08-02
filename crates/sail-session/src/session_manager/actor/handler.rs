@@ -89,6 +89,7 @@ impl SessionManagerActor {
                 }
             };
             let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
+                session_id: session_id.clone(),
                 driver_id,
                 driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
                 history_reporter: Box::new(SessionJobRunnerHistoryReporter {
