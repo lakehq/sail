@@ -1,3 +1,4 @@
+@identifier_clause
 Feature: IDENTIFIER clause
 
   Rule: IDENTIFIER in expression context

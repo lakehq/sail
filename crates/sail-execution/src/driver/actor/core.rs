@@ -6,36 +6,39 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
-use crate::driver::{DriverActor, DriverEvent, DriverOptions};
+use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverOptions};
 use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
 
 #[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverEvent;
-    type Options = DriverOptions;
+    type Options = (DriverOptions, DriverComponents);
 
     fn name() -> &'static str {
         "DriverActor"
     }
 
-    fn new(options: DriverOptions) -> Self {
-        let worker_pool = WorkerPool::new(
-            options.worker_manager.clone(),
-            WorkerPoolOptions::from(&options),
-        );
+    fn new(options: Self::Options) -> Self {
+        let (options, components) = options;
+        let DriverComponents {
+            worker_manager,
+            history_reporter,
+        } = components;
+        let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
         let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
+            history_reporter,
             worker_pool,
             job_scheduler,
             task_assigner,
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
-            history: None,
+            shutdown_notifier: None,
         }
     }
 
@@ -88,11 +91,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             DriverEvent::CreateRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
             DriverEvent::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
@@ -103,13 +106,13 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
             DriverEvent::FetchRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
-            DriverEvent::Shutdown { history } => self.handle_shutdown(ctx, history),
+            DriverEvent::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
     }
 
@@ -119,8 +122,10 @@ impl Actor for DriverActor {
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }
-        if let Some(history) = self.history.take() {
-            let _ = history.send(self.build_history());
+        let history = self.build_history();
+        self.history_reporter.report(history).await;
+        if let Some(result) = self.shutdown_notifier.take() {
+            let _ = result.send(());
         }
         info!("driver {} has stopped", self.options.driver_id);
     }

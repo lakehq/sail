@@ -55,7 +55,6 @@ impl SpanAttribute {
     pub const EXECUTION_TASK_MESSAGE: &'static str = "execution.task.message";
     pub const EXECUTION_TASK_ERROR_CAUSE: &'static str = "execution.task.error_cause";
     pub const EXECUTION_STREAM_LOCAL_STORAGE: &'static str = "execution.stream.local.storage";
-    pub const EXECUTION_STREAM_REMOTE_URI: &'static str = "execution.stream.remote.uri";
     pub const SESSION_ID: &'static str = "session.id";
 }
 

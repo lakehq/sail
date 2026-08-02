@@ -88,11 +88,11 @@ impl Actor for WorkerActor {
                 result,
             } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             WorkerEvent::CreateRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
             WorkerEvent::FetchDriverStream {
                 key,
                 schema,
@@ -102,11 +102,11 @@ impl Actor for WorkerActor {
                 self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
             WorkerEvent::FetchRemoteStream {
-                uri,
                 key,
                 schema,
+                context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
+            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
             WorkerEvent::CleanUpJob { job_id, stage } => {
                 self.handle_clean_up_job(ctx, job_id, stage)
             }

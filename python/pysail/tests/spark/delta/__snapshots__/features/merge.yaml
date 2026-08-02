@@ -2415,6 +2415,291 @@ data:
                         ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                             DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_src_id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+        DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 1 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+      MonotonicIdExec: col=__sail_merge_target_row_id
+        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+  
+    === stage 2 ===
+    inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
+    placement=Worker
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
+      StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
+      StageInputExec: input=1, partitioning=Hash([id@0], 1)
+  
+    === stage 3 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    FilterExec: NULL IS NULL AND column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 5 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_src_id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+        DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 6 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+      MonotonicIdExec: col=__sail_merge_target_row_id
+        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+  
+    === stage 7 ===
+    inputs=[StageInput(stage=5, mode=Shuffle), StageInput(stage=6, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
+    placement=Worker
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
+      StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
+      StageInputExec: input=1, partitioning=Hash([id@0], 1)
+  
+    === stage 8 ===
+    inputs=[StageInput(stage=7, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[__sail_file_path@0], channels=4)
+    placement=Worker
+    AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+      FilterExec: __sail_merge_target_row_present@3 IS NOT NULL AND (__sail_merge_source_row_present@5 IS NOT NULL AND id@0 = __sail_src_id@4 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@5 IS NULL AND category@1 = stale), projection=[__sail_file_path@2]
+        ProjectionExec: expr=[id@0 as id, category@1 as category, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+            StageInputExec: input=0, partitioning=Hash([__sail_merge_target_row_id@5], 4)
+  
+    === stage 9 ===
+    inputs=[StageInput(stage=8, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+      StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
+  
+    === stage 10 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_src_id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+        DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 11 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+      MonotonicIdExec: col=__sail_merge_target_row_id
+        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+  
+    === stage 12 ===
+    inputs=[StageInput(stage=10, mode=Shuffle), StageInput(stage=11, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
+    placement=Worker
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
+      StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
+      StageInputExec: input=1, partitioning=Hash([id@0], 1)
+  
+    === stage 13 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    FilterExec: column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 14 ===
+    inputs=[StageInput(stage=13, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 15 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_src_id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+        DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 16 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[id@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+      MonotonicIdExec: col=__sail_merge_target_row_id
+        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+  
+    === stage 17 ===
+    inputs=[StageInput(stage=15, mode=Shuffle), StageInput(stage=16, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
+    placement=Worker
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
+      StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
+      StageInputExec: input=1, partitioning=Hash([id@0], 1)
+  
+    === stage 18 ===
+    inputs=[StageInput(stage=17, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[__sail_file_path@0], channels=4)
+    placement=Worker
+    AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+      FilterExec: __sail_merge_target_row_present@3 IS NOT NULL AND (__sail_merge_source_row_present@5 IS NOT NULL AND id@0 = __sail_src_id@4 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@5 IS NULL AND category@1 = stale), projection=[__sail_file_path@2]
+        ProjectionExec: expr=[id@0 as id, category@1 as category, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+            StageInputExec: input=0, partitioning=Hash([__sail_merge_target_row_id@5], 4)
+  
+    === stage 19 ===
+    inputs=[StageInput(stage=18, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+      StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
+  
+    === stage 20 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+  
+    === stage 21 ===
+    inputs=[StageInput(stage=20, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[__sail_delta_replay_path@7], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 22 ===
+    inputs=[StageInput(stage=19, mode=Broadcast), StageInput(stage=21, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+        DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=1)
+          SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+            StageInputExec: input=1, partitioning=Hash([__sail_delta_replay_path@7], 4)
+  
+    === stage 23 ===
+    inputs=[StageInput(stage=2, mode=Shuffle), StageInput(stage=4, mode=Shuffle), StageInput(stage=9, mode=Broadcast), StageInput(stage=12, mode=Shuffle), StageInput(stage=14, mode=Shuffle), StageInput(stage=22, mode=Shuffle)]
+    mode=Pipelined
+    partitions=11
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
+        UnionExec
+          UnionExec
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@5 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@6 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@7 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@5) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@6 = stale THEN spark_concat(note@8, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@8 END as note, CASE WHEN __common_expr_4@3 THEN 3 WHEN __common_expr_2@1 THEN 6 WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@6 = stale THEN 8 WHEN __common_expr_5@4 AND category@6 = stale THEN 5 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+              ProjectionExec: expr=[__common_expr_6@0 AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_7@1 AND category@4 = vip as __common_expr_2, __common_expr_8@2 as __common_expr_3, __common_expr_6@0 as __common_expr_4, __common_expr_7@1 as __common_expr_5, id@3 as id, category@4 as category, amount@5 as amount, note@6 as note, __sail_file_path@7 as __sail_file_path, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
+                ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NULL as __common_expr_6, __common_expr_9@0 AND __sail_merge_source_row_present@11 IS NOT NULL as __common_expr_7, __common_expr_9@0 as __common_expr_8, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                  ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NOT NULL as __common_expr_9, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_category@7 as __sail_src_category, __sail_src_amount@8 as __sail_src_amount, __sail_src_note@9 as __sail_src_note, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                    FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@5 IS NOT NULL OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@10 IS NOT NULL)
+                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                        MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                          StageInputExec: input=0, partitioning=Hash([__sail_merge_target_row_id@5], 4)
+            ProjectionExec: expr=[NULL as id, NULL as category, NULL as amount, NULL as note, 9 as __sail_operation_type, __sail_merge_source_metric@0 as __sail_merge_source_metric]
+              AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_merge_source_metric]
+                StageInputExec: input=1, partitioning=UnknownPartitioning(1)
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, category@2, amount@3, note@4, __sail_operation_type@6, __sail_merge_source_metric@7]
+            StageInputExec: input=2, partitioning=UnknownPartitioning(1)
+            UnionExec
+              ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@5 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@6 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@7 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@5) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@6 = stale THEN spark_concat(note@8, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@8 END as note, __sail_file_path@9 as __sail_file_path, CASE WHEN __common_expr_4@3 THEN 3 WHEN __common_expr_2@1 THEN 6 WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@6 = stale THEN 8 WHEN __common_expr_5@4 AND category@6 = stale THEN 5 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+                ProjectionExec: expr=[__common_expr_6@0 AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_7@1 AND category@4 = vip as __common_expr_2, __common_expr_8@2 as __common_expr_3, __common_expr_6@0 as __common_expr_4, __common_expr_7@1 as __common_expr_5, id@3 as id, category@4 as category, amount@5 as amount, note@6 as note, __sail_file_path@7 as __sail_file_path, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
+                  ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NULL as __common_expr_6, __common_expr_9@0 AND __sail_merge_source_row_present@11 IS NOT NULL as __common_expr_7, __common_expr_9@0 as __common_expr_8, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                    ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NOT NULL as __common_expr_9, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_category@7 as __sail_src_category, __sail_src_amount@8 as __sail_src_amount, __sail_src_note@9 as __sail_src_note, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                      FilterExec: __sail_merge_target_row_present@5 IS NOT NULL OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@10 IS NOT NULL
+                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                            StageInputExec: input=3, partitioning=Hash([__sail_merge_target_row_id@5], 4)
+              ProjectionExec: expr=[NULL as id, NULL as category, NULL as amount, NULL as note, NULL as __sail_file_path, 9 as __sail_operation_type, __sail_merge_source_metric@0 as __sail_merge_source_metric]
+                AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_merge_source_metric]
+                  StageInputExec: input=4, partitioning=UnknownPartitioning(1)
+      DeltaRemoveActionsExec
+        StageInputExec: input=5, partitioning=UnknownPartitioning(1)
+  
+    === stage 24 ===
+    inputs=[StageInput(stage=23, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Driver
+    DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
+      StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  
+    === stage 25 ===
+    inputs=[StageInput(stage=24, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_extended_does_not_include_mergecardinalitycheck_when_source_is_grouped_by_join_keys"
 data:
