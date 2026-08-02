@@ -60,28 +60,24 @@ def _assert_parquet_struct_matches_delta(
         arrow_metadata = {key.decode(): value.decode() for key, value in (arrow_field.metadata or {}).items()}
         assert arrow_metadata["PARQUET:field_id"] == str(metadata["delta.columnMapping.id"])
 
-        nested_type = delta_field["type"]
-        if not isinstance(nested_type, dict):
-            continue
-        if nested_type["type"] == "struct":
-            _assert_parquet_struct_matches_delta(arrow_field.type, nested_type)
-        elif nested_type["type"] == "array" and isinstance(nested_type["elementType"], dict):
-            element_type = nested_type["elementType"]
-            if element_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(
-                    arrow_field.type.value_type,
-                    element_type,
-                )
-        elif nested_type["type"] == "map":
-            key_type = nested_type["keyType"]
-            value_type = nested_type["valueType"]
-            if isinstance(key_type, dict) and key_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(arrow_field.type.key_type, key_type)
-            if isinstance(value_type, dict) and value_type["type"] == "struct":
-                _assert_parquet_struct_matches_delta(
-                    arrow_field.type.item_type,
-                    value_type,
-                )
+        _assert_parquet_type_matches_delta(arrow_field.type, delta_field["type"])
+
+
+def _assert_parquet_type_matches_delta(
+    arrow_type: pa.DataType,
+    delta_type: dict | str,
+) -> None:
+    if not isinstance(delta_type, dict):
+        return
+
+    type_name = delta_type["type"]
+    if type_name == "struct":
+        _assert_parquet_struct_matches_delta(arrow_type, delta_type)
+    elif type_name == "array":
+        _assert_parquet_type_matches_delta(arrow_type.value_type, delta_type["elementType"])
+    elif type_name == "map":
+        _assert_parquet_type_matches_delta(arrow_type.key_type, delta_type["keyType"])
+        _assert_parquet_type_matches_delta(arrow_type.item_type, delta_type["valueType"])
 
 
 def _assert_parquet_files_match_delta_schema(
@@ -186,6 +182,27 @@ def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
     assert config.get("delta.columnMapping.mode") == "id"
     assert "delta.columnMapping.maxColumnId" in config
     assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("mapping_mode", ["name", "id"])
+def test_scalar_column_mapping_read_does_not_expose_parquet_field_ids(
+    spark: SparkSession,
+    tmp_path: Path,
+    mapping_mode: str,
+):
+    source_path = tmp_path / f"delta_cm_scalar_source_{mapping_mode}"
+    source = spark.createDataFrame([Row(id=1, label="a")])
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", mapping_mode)
+        .save(str(source_path))
+    )
+
+    loaded_schema = spark.read.format("delta").load(str(source_path)).schema
+    for field in loaded_schema.fields:
+        assert "PARQUET:field_id" not in field.metadata
+        assert "parquet.field.id" not in field.metadata
 
 
 def test_merge_schema_with_column_mapping_name(spark, tmp_path: Path):
@@ -338,6 +355,20 @@ def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
 
     rows = [r.asDict(recursive=True) for r in spark.read.format("delta").load(str(base)).collect()]
     assert {"ts": 2, "kind": "x"} in [event for row in rows for event in row["events"]]
+    _assert_parquet_files_match_delta_schema(base, latest_only=True)
+
+
+def test_merge_schema_after_consecutive_arrays_writes_mapped_parquet_fields(
+    spark: SparkSession,
+    tmp_path: Path,
+):
+    base = tmp_path / "delta_cm_consecutive_arrays"
+    initial = spark.createDataFrame([Row(matrix=[[Row(value=1)]])])
+    (initial.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    appended = spark.createDataFrame([Row(matrix=[[Row(value=2)]], label="new")])
+    appended.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
     _assert_parquet_files_match_delta_schema(base, latest_only=True)
 
 

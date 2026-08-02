@@ -32,8 +32,9 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
+use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
@@ -86,7 +87,8 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionCastColumnExpr, StructFieldMatching,
+    SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    SchemaEvolutionTimezoneMode, StructFieldMatching,
 };
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -107,9 +109,10 @@ use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
     DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
     DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
-    RelaxedTzCastExec,
 };
-use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
+use sail_delta_lake::spec::{
+    Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
+};
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -570,6 +573,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 predicate,
                 output_partitioning,
+                struct_field_matching,
+                timezone_mode,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
@@ -604,6 +609,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
                 )?;
+                let struct_field_matching =
+                    Self::try_decode_struct_field_matching(struct_field_matching)?;
+                let timezone_mode = Self::try_decode_schema_evolution_timezone_mode(timezone_mode)?;
+                let adapter_factory = match timezone_mode {
+                    SchemaEvolutionTimezoneMode::Strict => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                            struct_field_matching,
+                        )
+                    }
+                    SchemaEvolutionTimezoneMode::Relaxed => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
+                            struct_field_matching,
+                        )
+                    }
+                };
+                let source = FileScanConfigBuilder::from(source)
+                    .with_expr_adapter(Some(Arc::new(adapter_factory)))
+                    .build();
                 let scan = DataSourceExec::new(Arc::new(source));
                 let scan = if output_partitioning.is_empty() {
                     scan
@@ -1224,21 +1247,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan(ctx, self, &input)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
-                input,
-                schema,
-                column_mapping_mode,
-            }) => {
-                let input = try_decode_physical_plan(ctx, self, &input)?;
-                let schema = Arc::new(try_decode_schema(&schema)?);
-                let column_mapping_mode =
-                    self.try_decode_delta_column_mapping_mode(column_mapping_mode)?;
-                Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
-                    input,
-                    schema,
-                    column_mapping_mode,
-                )))
-            }
             NodeKind::DeletionVectorWriter(r#gen::DeletionVectorWriterExecNode {
                 input,
                 table_url,
@@ -1775,11 +1783,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .filter()
                         .map(|predicate| try_encode_physical_expr(self, &predicate))
                         .transpose()?;
+                    let (struct_field_matching, timezone_mode) =
+                        Self::parquet_schema_evolution_modes(file_scan)?;
                     NodeKind::Parquet(r#gen::ParquetExecNode {
                         base_config,
                         options,
                         predicate,
                         output_partitioning,
+                        struct_field_matching: Self::try_encode_struct_field_matching(
+                            struct_field_matching,
+                        ),
+                        timezone_mode: Self::try_encode_schema_evolution_timezone_mode(
+                            timezone_mode,
+                        ),
                     })
                 } else if file_source.is::<JsonSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -2139,16 +2155,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 output_partitions: u64::try_from(coalesce.output_partitions())
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
-            })
-        } else if let Some(relaxed_tz_cast) = node.downcast_ref::<RelaxedTzCastExec>() {
-            let input = try_encode_physical_plan(self, relaxed_tz_cast.input().clone())?;
-            let schema = try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
-            let column_mapping_mode =
-                Self::try_encode_delta_column_mapping_mode(relaxed_tz_cast.column_mapping_mode())?;
-            NodeKind::RelaxedTzCast(r#gen::RelaxedTzCastExecNode {
-                input,
-                schema,
-                column_mapping_mode,
             })
         } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
             let input = try_encode_physical_plan(self, dv_writer_exec.input().clone())?;
@@ -3398,15 +3404,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
             ExprKind::SchemaEvolutionCast(node) => {
-                let (input, input_field, target_field, matching) = self
+                let (input, input_field, target_field, matching, timezone_mode) = self
                     .try_decode_cast_column_expr(&node, inputs, "SchemaEvolutionCastColumnExpr")?;
-                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
-                    input,
-                    input_field,
-                    target_field,
-                    None,
-                    matching,
-                )))
+                let cast = match timezone_mode {
+                    SchemaEvolutionTimezoneMode::Strict => {
+                        SchemaEvolutionCastColumnExpr::new_with_matching(
+                            input,
+                            input_field,
+                            target_field,
+                            None,
+                            matching,
+                        )
+                    }
+                    SchemaEvolutionTimezoneMode::Relaxed => {
+                        SchemaEvolutionCastColumnExpr::new_relaxed_timezone(
+                            input,
+                            input_field,
+                            target_field,
+                            None,
+                            matching,
+                        )
+                    }
+                };
+                Ok(Arc::new(cast))
             }
             // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
             ExprKind::Lambda(node) => {
@@ -3439,6 +3459,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),
                 cast.matching(),
+                cast.timezone_mode(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
@@ -3475,11 +3496,13 @@ impl RemoteExecutionCodec {
         Arc<Field>,
         Arc<Field>,
         StructFieldMatching,
+        SchemaEvolutionTimezoneMode,
     )> {
         let CastColumnExprNode {
             input_schema,
             target_schema,
             struct_field_matching,
+            timezone_mode,
         } = node;
         if inputs.len() != 1 {
             return plan_err!(
@@ -3509,6 +3532,7 @@ impl RemoteExecutionCodec {
             Arc::new(input_field),
             Arc::new(target_field),
             Self::try_decode_struct_field_matching(*struct_field_matching)?,
+            Self::try_decode_schema_evolution_timezone_mode(*timezone_mode)?,
         ))
     }
 
@@ -3517,6 +3541,7 @@ impl RemoteExecutionCodec {
         input_field: &Field,
         target_field: &Field,
         matching: StructFieldMatching,
+        timezone_mode: SchemaEvolutionTimezoneMode,
     ) -> Result<CastColumnExprNode> {
         let input_schema = Schema::new(vec![input_field.clone()]);
         let input_schema = try_encode_schema(&input_schema)?;
@@ -3526,6 +3551,7 @@ impl RemoteExecutionCodec {
             input_schema,
             target_schema,
             struct_field_matching: Self::try_encode_struct_field_matching(matching),
+            timezone_mode: Self::try_encode_schema_evolution_timezone_mode(timezone_mode),
         })
     }
 
@@ -3545,6 +3571,101 @@ impl RemoteExecutionCodec {
             StructFieldMatching::PhysicalName => r#gen::StructFieldMatching::PhysicalName,
             StructFieldMatching::FieldId => r#gen::StructFieldMatching::FieldId,
         }) as i32
+    }
+
+    fn try_decode_schema_evolution_timezone_mode(mode: i32) -> Result<SchemaEvolutionTimezoneMode> {
+        match r#gen::SchemaEvolutionTimezoneMode::try_from(mode)
+            .map_err(|_| plan_datafusion_err!("invalid schema evolution timezone mode"))?
+        {
+            r#gen::SchemaEvolutionTimezoneMode::Strict => Ok(SchemaEvolutionTimezoneMode::Strict),
+            r#gen::SchemaEvolutionTimezoneMode::Relaxed => Ok(SchemaEvolutionTimezoneMode::Relaxed),
+        }
+    }
+
+    fn try_encode_schema_evolution_timezone_mode(mode: SchemaEvolutionTimezoneMode) -> i32 {
+        (match mode {
+            SchemaEvolutionTimezoneMode::Strict => r#gen::SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionTimezoneMode::Relaxed => r#gen::SchemaEvolutionTimezoneMode::Relaxed,
+        }) as i32
+    }
+
+    fn parquet_schema_evolution_modes(
+        file_scan: &FileScanConfig,
+    ) -> Result<(StructFieldMatching, SchemaEvolutionTimezoneMode)> {
+        let Some(factory) = file_scan.expr_adapter_factory.as_ref() else {
+            return Ok((
+                Self::parquet_struct_field_matching(file_scan),
+                SchemaEvolutionTimezoneMode::Strict,
+            ));
+        };
+
+        let field_name = "__sail_schema_evolution_codec_probe";
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            field_name,
+            DataType::Int64,
+            true,
+        )]));
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            field_name,
+            DataType::Int32,
+            true,
+        )]));
+        let adapter = factory.create(logical_schema, physical_schema)?;
+        let rewritten = adapter.rewrite(Arc::new(Column::new(field_name, 0)))?;
+        if let Some(cast) = rewritten.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
+            return Ok((cast.matching(), cast.timezone_mode()));
+        }
+
+        Ok((
+            Self::parquet_struct_field_matching(file_scan),
+            SchemaEvolutionTimezoneMode::Strict,
+        ))
+    }
+
+    fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
+        fn field_or_descendant_contains_metadata(field: &Field, keys: &[&str]) -> bool {
+            if keys.iter().any(|key| field.metadata().contains_key(*key)) {
+                return true;
+            }
+            match field.data_type() {
+                DataType::Struct(fields) => fields
+                    .iter()
+                    .any(|field| field_or_descendant_contains_metadata(field, keys)),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _)
+                | DataType::Map(field, _) => {
+                    field_or_descendant_contains_metadata(field.as_ref(), keys)
+                }
+                _ => false,
+            }
+        }
+
+        let fields = file_scan
+            .file_source()
+            .table_schema()
+            .file_schema()
+            .fields();
+        let has_metadata = |keys: &[&str]| {
+            fields
+                .iter()
+                .any(|field| field_or_descendant_contains_metadata(field, keys))
+        };
+
+        // `PARQUET:field_id` is present in both Delta name and ID modes, so prefer
+        // the mode-specific Delta metadata before using it as a generic fallback.
+        if has_metadata(&[
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            ColumnMetadataKey::ParquetFieldId.as_ref(),
+        ]) {
+            StructFieldMatching::FieldId
+        } else if has_metadata(&[ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()]) {
+            StructFieldMatching::PhysicalName
+        } else if has_metadata(&[PARQUET_FIELD_ID_META_KEY]) {
+            StructFieldMatching::FieldId
+        } else {
+            StructFieldMatching::Name
+        }
     }
 
     fn try_decode_physical_sink_mode(
@@ -4600,6 +4721,55 @@ mod tests {
             StructFieldMatching::Name
         );
         assert!(RemoteExecutionCodec::try_decode_struct_field_matching(i32::MAX).is_err());
+
+        for mode in [
+            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionTimezoneMode::Relaxed,
+        ] {
+            let encoded = RemoteExecutionCodec::try_encode_schema_evolution_timezone_mode(mode);
+            assert_eq!(
+                RemoteExecutionCodec::try_decode_schema_evolution_timezone_mode(encoded)?,
+                mode
+            );
+        }
+        assert!(RemoteExecutionCodec::try_decode_schema_evolution_timezone_mode(i32::MAX).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_schema_evolution_cast_preserves_timezone_mode() -> Result<()> {
+        let input_field = Arc::new(Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        ));
+        let target_field = Arc::new(Field::new(
+            "event_time",
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles")),
+            ),
+            true,
+        ));
+        let input_schema = Arc::new(Schema::new(vec![Arc::clone(&input_field)]));
+        let expression = Arc::new(SchemaEvolutionCastColumnExpr::new_relaxed_timezone(
+            Arc::new(Column::new("event_time", 0)),
+            input_field,
+            target_field,
+            None,
+            StructFieldMatching::PhysicalName,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let decoded = round_trip_expr(&expression, input_schema.as_ref())?;
+        let decoded = decoded
+            .downcast_ref::<SchemaEvolutionCastColumnExpr>()
+            .ok_or_else(|| plan_datafusion_err!("decoded expression is not a schema cast"))?;
+
+        assert_eq!(decoded.matching(), StructFieldMatching::PhysicalName);
+        assert_eq!(
+            decoded.timezone_mode(),
+            SchemaEvolutionTimezoneMode::Relaxed
+        );
         Ok(())
     }
 
