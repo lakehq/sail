@@ -150,6 +150,28 @@ def test_with_columns_renamed_matches_name_case_insensitively(spark):
     assert df.withColumnsRenamed({"a": "b", "b": "c"}).columns == ["c", "c"]
 
 
+def test_with_column_case_sensitive(spark):
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        df = spark.createDataFrame([(1, 10)], ["a", "b"])
+        # The names no longer match, so the column is appended instead of replaced.
+        assert df.withColumn("A", lit(1)).columns == ["a", "b", "A"]
+        assert df.withColumns({"a": lit(1), "A": lit(2)}).columns == ["a", "b", "A"]
+        # A rename that matches no column is ignored.
+        assert df.withColumnRenamed("A", "z").columns == ["a", "b"]
+        assert df.withColumnRenamed("a", "z").columns == ["z", "b"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_with_column_matches_non_ascii_names(spark):
+    assert spark.sql("SELECT 1 AS `Ä`").withColumn("ä", lit(2)).columns == ["ä"]
+    assert spark.sql("SELECT 1 AS `ä`").withColumnsRenamed({"Ä": "z"}).columns == ["z"]
+
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        _ = spark.range(1).withColumns({"Ä": lit(1), "ä": lit(2)}).columns
+
+
 def test_with_metadata_matches_name_case_insensitively(spark):
     df = spark.createDataFrame([(1, 10)], ["a", "b"])
 

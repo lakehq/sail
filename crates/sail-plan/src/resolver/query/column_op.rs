@@ -5,7 +5,6 @@ use datafusion_common::Column;
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
 };
-use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -88,16 +87,13 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let columns = input.schema().columns();
-        let mut names = columns
-            .iter()
-            .map(|column| Ok(state.get_field_info(column.name())?.name().to_string()))
-            .collect::<PlanResult<Vec<_>>>()?;
-        // Each rename is applied to the output of the previous one, and the column name is
-        // matched case-insensitively. A name that matches no column is ignored.
+        let mut names = Self::get_field_names(input.schema(), state)?;
+        // Each rename is applied to the output of the previous one. A name that matches no
+        // column is ignored.
         for (from, to) in rename_columns_map {
             let (from, to) = (from.as_ref(), to.as_ref());
             for name in names.iter_mut() {
-                if name.eq_ignore_ascii_case(from) {
+                if self.match_identifier(name, from) {
                     *name = to.to_string();
                 }
             }
@@ -173,10 +169,10 @@ impl PlanResolver<'_> {
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        // `AliasEntry` is `(resolved_expr, seen, explicit_metadata)` where `explicit_metadata` is
-        // `Some(meta)` when the user explicitly provided metadata via `withMetadata` (even empty),
-        // and `None` when no metadata was specified on the alias.
-        type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
+        // `AliasEntry` is `(name, resolved_expr, seen, explicit_metadata)` where
+        // `explicit_metadata` is `Some(meta)` when the user explicitly provided metadata via
+        // `withMetadata` (even empty), and `None` when no metadata was specified on the alias.
+        type AliasEntry = (String, Expr, bool, Option<Vec<(String, String)>>);
 
         let input = self.resolve_query_plan(input, state).await?;
         // If the input is a SubqueryAlias, save the alias and re-apply it after building the
@@ -187,83 +183,81 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let schema = input.schema();
-        // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, AliasEntry> = async {
-            let mut results: IndexMap<String, AliasEntry> = IndexMap::new();
-            for alias in aliases {
-                let (name, expr, metadata) = match alias {
-                    spec::Expr::Alias {
-                        name,
-                        expr,
-                        metadata,
-                    } => {
-                        let name = name
-                            .one()
-                            .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata)
-                    }
-                    _ => return Err(PlanError::invalid("alias expression expected for column")),
-                };
-                let expr = self.resolve_expression(expr, schema, state).await?;
-                results.insert(name.into(), (expr, false, metadata));
-            }
-            // Names that differ only in case are duplicates, and the first one in alphabetical
-            // order is reported.
-            let mut names = results
-                .keys()
-                .map(|name| name.to_ascii_lowercase())
-                .collect::<Vec<_>>();
-            names.sort();
-            let duplicate = names.windows(2).find_map(|names| match names {
-                [a, b] if a == b => Some(a),
-                _ => None,
-            });
-            if let Some(name) = duplicate {
-                return Err(PlanError::AnalysisError(format!(
-                    "[COLUMN_ALREADY_EXISTS] The column `{name}` already exists. \
-                     Choose another name or rename the existing column."
-                )));
-            }
-            Ok(results) as PlanResult<_>
+        // The alias names are collected first so that duplicates are rejected before the
+        // expressions are resolved, which is the order in which Spark reports the errors.
+        let aliases = aliases
+            .into_iter()
+            .map(|alias| match alias {
+                spec::Expr::Alias {
+                    name,
+                    expr,
+                    metadata,
+                } => {
+                    let name: String = name
+                        .one()
+                        .map_err(|_| PlanError::invalid("multi-alias for column"))?
+                        .into();
+                    Ok((name, *expr, metadata))
+                }
+                _ => Err(PlanError::invalid("alias expression expected for column")),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        // Names that differ only in case are duplicates, and the first one in alphabetical
+        // order is reported.
+        let mut folded = aliases
+            .iter()
+            .map(|(name, _, _)| self.fold_identifier(name))
+            .collect::<Vec<_>>();
+        folded.sort();
+        let duplicate = folded.windows(2).find_map(|names| match names {
+            [a, b] if a == b => Some(a),
+            _ => None,
+        });
+        if let Some(name) = duplicate {
+            let name = name.replace('`', "``");
+            return Err(PlanError::AnalysisError(format!(
+                "[COLUMN_ALREADY_EXISTS] The column `{name}` already exists. \
+                 Choose another name or rename the existing column."
+            )));
         }
-        .await?;
+        let mut aliases = {
+            let mut results: Vec<AliasEntry> = Vec::with_capacity(aliases.len());
+            for (name, expr, metadata) in aliases {
+                let expr = self.resolve_expression(expr, schema, state).await?;
+                results.push((name, expr, false, metadata));
+            }
+            results
+        };
+        let names = Self::get_field_names(schema, state)?;
         let mut expr = schema
             .columns()
             .into_iter()
-            .map(|column| {
-                let name = state.get_field_info(column.name())?.name();
-                // The column name is matched case-insensitively, and the alias name replaces
-                // the existing column name.
+            .zip(names)
+            .map(|(column, name)| {
+                // The alias name replaces the name of the column that it matches.
                 match aliases
                     .iter_mut()
-                    .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
+                    .find(|(alias, ..)| self.match_identifier(alias, &name))
                 {
-                    Some((alias, (e, exists, metadata))) => {
+                    Some((alias, e, exists, metadata)) => {
                         *exists = true;
-                        let name = alias.clone();
+                        let e = NamedExpr::new(vec![alias.clone()], e.clone());
                         match metadata {
-                            Some(m) if !m.is_empty() => {
-                                Ok(NamedExpr::new(vec![name], e.clone()).with_metadata(m.clone()))
-                            }
-                            _ => Ok(NamedExpr::new(vec![name], e.clone())),
+                            Some(m) if !m.is_empty() => e.with_metadata(m.clone()),
+                            _ => e,
                         }
                     }
-                    None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
+                    None => NamedExpr::new(vec![name], Expr::Column(column)),
                 }
             })
-            .collect::<PlanResult<Vec<_>>>()?;
-        for (name, (e, exists, metadata)) in &aliases {
+            .collect::<Vec<_>>();
+        for (name, e, exists, metadata) in &aliases {
             if !exists {
-                match metadata {
-                    Some(m) if !m.is_empty() => {
-                        expr.push(
-                            NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(m.clone()),
-                        );
-                    }
-                    _ => {
-                        expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
-                    }
-                }
+                let e = NamedExpr::new(vec![name.clone()], e.clone());
+                expr.push(match metadata {
+                    Some(m) if !m.is_empty() => e.with_metadata(m.clone()),
+                    _ => e,
+                });
             }
         }
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;

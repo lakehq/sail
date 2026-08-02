@@ -8,7 +8,48 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+/// Compares two strings the way `String.equalsIgnoreCase` does, so that identifiers are folded
+/// beyond ASCII. Note that this is not the same as comparing the lowercased strings, since the
+/// case mappings of a character are not always symmetric.
+fn equals_ignore_case(a: &str, b: &str) -> bool {
+    let mut a = a.chars();
+    let mut b = b.chars();
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) => {
+                if x != y
+                    && !x.to_uppercase().eq(y.to_uppercase())
+                    && !x.to_lowercase().eq(y.to_lowercase())
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
 impl PlanResolver<'_> {
+    /// Matches an identifier against another one the way the Spark analyzer resolver does.
+    pub(super) fn match_identifier(&self, a: &str, b: &str) -> bool {
+        if self.config.case_sensitive {
+            a == b
+        } else {
+            equals_ignore_case(a, b)
+        }
+    }
+
+    /// Folds an identifier so that duplicates can be detected. Spark lowercases the name here
+    /// instead of using the resolver, so this is deliberately not [`Self::match_identifier`].
+    pub(super) fn fold_identifier(&self, name: &str) -> String {
+        if self.config.case_sensitive {
+            name.to_string()
+        } else {
+            name.to_lowercase()
+        }
+    }
+
     pub(super) fn resolve_table_reference(
         &self,
         name: &spec::ObjectName,
