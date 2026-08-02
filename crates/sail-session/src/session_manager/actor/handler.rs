@@ -73,6 +73,10 @@ impl SessionManagerActor {
                 )))
             }
         } else {
+            // TODO: The session ID is used in various storage paths, so it is assumed to be unique
+            //   across all session managers, and it should contain only valid characters for a
+            //   path segment. Right now the session ID is generated as a UUID by the Spark client,
+            //   so this is true in practice, but we may still want some validation here.
             let session_id = session_id.clone();
             info!("creating session {session_id}");
             let span = Span::root(

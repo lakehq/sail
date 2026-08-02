@@ -271,7 +271,7 @@
   default: ""
   description: |
     The object storage base URL for storage-backed shuffle data.
-    This is only used when `cluster.shuffle_backend.type` is `storage`.
+    This is required when `cluster.shuffle_backend.type` is `storage`.
   experimental: true
 
 - key: cluster.shuffle_backend.storage.max_file_size
