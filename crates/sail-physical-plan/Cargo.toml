@@ -11,6 +11,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-cache = { path = "../sail-cache" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-logical-plan = { path = "../sail-logical-plan" }
+sail-parquet = { path = "../sail-parquet" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

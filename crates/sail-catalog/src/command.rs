@@ -2,12 +2,12 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::{
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatRegistry, is_lakehouse_format,
-};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::table_format::{
+    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
+    TableFormatRegistry,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -470,25 +470,30 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
-                    // Non-lakehouse formats (e.g., plain Parquet/Hive tables) have no
-                    // storage-layer metadata — the catalog is the sole source of truth.
-                    // Skip straight to catalog-only update.
-                    // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
-                    // for Delta tables but plain tables fall through to SessionCatalog.
-                    if !is_lakehouse_format(&format) {
-                        manager.alter_table(&table, options).await?;
-                        return Ok(display.bools().to_record_batch(vec![true])?);
-                    }
                     let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
                         CatalogError::External(format!(
                             "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let table_format = registry.get_optional(&format).map_err(|e| {
                         CatalogError::External(format!(
-                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                            "failed to inspect table format '{format}' for ALTER TABLE: {e}"
                         ))
                     })?;
+                    let table_format = match table_format {
+                        Some(table_format) => table_format,
+                        None if is_lakehouse_format(&format) => {
+                            return Err(CatalogError::External(format!(
+                                "unknown table format '{format}' for storage-backed ALTER TABLE"
+                            )));
+                        }
+                        None => {
+                            // Plain files and provider-owned data sources have no
+                            // storage protocol metadata; the catalog is authoritative.
+                            manager.alter_table(&table, options).await?;
+                            return Ok(display.bools().to_record_batch(vec![true])?);
+                        }
+                    };
                     let runtime = ctx.runtime_env();
                     let storage_operation = table_format_alter_operation(&options);
                     let lakehouse_table = manager
@@ -766,6 +771,19 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         )
         .await?;
 
+    if let LakehouseCreateMaterialization::AfterCatalogTableFormat { mode, .. } =
+        &create_plan.materialization
+        && !(matches!(
+            *mode,
+            crate::provider::TableFormatCreateMetadataMode::PathManaged
+        ) && options.is_external)
+    {
+        // Reject a missing client table-protocol implementation before the
+        // catalog object becomes visible. After-catalog materialization may
+        // still need the newly assigned catalog identity.
+        require_table_format(ctx, &options.format, "CREATE TABLE")?;
+    }
+
     let LakehouseCreateMaterialization::BeforeCatalogTableFormat { context, .. } =
         &create_plan.materialization
     else {
@@ -867,17 +885,8 @@ async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-) -> CatalogResult<sail_common_datafusion::datasource::TableFormatCreateTableResult> {
-    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
-        CatalogError::External(format!(
-            "missing TableFormatRegistry for CREATE TABLE on format '{format}': {e}"
-        ))
-    })?;
-    let table_format = registry.get(format).map_err(|e| {
-        CatalogError::External(format!(
-            "unknown table format '{format}' for CREATE TABLE: {e}"
-        ))
-    })?;
+) -> CatalogResult<sail_common_datafusion::table_format::TableFormatCreateTableResult> {
+    let table_format = require_table_format(ctx, format, "CREATE TABLE")?;
     table_format
         .create_table_metadata(
             ctx.runtime_env(),
@@ -904,6 +913,27 @@ async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
         )
         .await
         .map_err(CatalogError::DataFusionError)
+}
+
+fn require_table_format<C: SessionExtensionAccessor>(
+    ctx: &C,
+    format: &str,
+    operation: &str,
+) -> CatalogResult<std::sync::Arc<dyn sail_common_datafusion::table_format::TableFormat>> {
+    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        CatalogError::External(format!(
+            "missing TableFormatRegistry for {operation} on format '{format}': {e}"
+        ))
+    })?;
+    registry.get(format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown table format '{format}' for {operation}: {e}"
+        ))
+    })
+}
+
+fn is_lakehouse_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("delta") || format.eq_ignore_ascii_case("iceberg")
 }
 
 trait CreateTableColumnView {
@@ -1077,7 +1107,7 @@ struct DescribeFunctionRow {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use datafusion::catalog::Session;
@@ -1089,8 +1119,10 @@ mod tests {
     use sail_common_datafusion::catalog::{
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
-    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+    use sail_common_datafusion::data_source_format::DataSourceFormat;
+    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
+    use sail_common_datafusion::table_format::TableFormat;
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -1164,7 +1196,7 @@ mod tests {
     }
 
     struct TestProvider {
-        table_status: TableStatus,
+        table_status: Mutex<TableStatus>,
         alter_error: Option<String>,
         table_exists: bool,
         view_lookup_supported: bool,
@@ -1221,7 +1253,12 @@ mod tests {
             table: &str,
         ) -> CatalogResult<TableStatus> {
             if self.table_exists {
-                Ok(self.table_status.clone())
+                self.table_status
+                    .lock()
+                    .map(|status| status.clone())
+                    .map_err(|_| {
+                        CatalogError::External("test table status lock poisoned".to_string())
+                    })
             } else {
                 Err(CatalogError::NotFound(
                     CatalogObject::Table,
@@ -1250,11 +1287,37 @@ mod tests {
             &self,
             _database: &crate::provider::Namespace,
             _table: &str,
-            _options: AlterTableOptions,
+            options: AlterTableOptions,
         ) -> CatalogResult<()> {
-            match &self.alter_error {
-                Some(message) => Err(CatalogError::External(message.clone())),
-                None => Ok(()),
+            if let Some(message) = &self.alter_error {
+                return Err(CatalogError::External(message.clone()));
+            }
+            let mut status = self.table_status.lock().map_err(|_| {
+                CatalogError::External("test table status lock poisoned".to_string())
+            })?;
+            let TableKind::Table { properties, .. } = &mut status.kind else {
+                return Err(CatalogError::NotSupported(
+                    "ALTER TABLE is not supported for views".to_string(),
+                ));
+            };
+            match options {
+                AlterTableOptions::SetTableProperties {
+                    properties: updates,
+                } => {
+                    for (key, value) in updates {
+                        if let Some((_, current)) =
+                            properties.iter_mut().find(|(current, _)| current == &key)
+                        {
+                            *current = value;
+                        } else {
+                            properties.push((key, value));
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Err(CatalogError::NotSupported(
+                    "test provider only supports setting table properties".to_string(),
+                )),
             }
         }
 
@@ -1304,7 +1367,7 @@ mod tests {
     struct TestTableFormat;
 
     #[async_trait]
-    impl TableFormat for TestTableFormat {
+    impl DataSourceFormat for TestTableFormat {
         fn name(&self) -> &str {
             "delta"
         }
@@ -1324,7 +1387,10 @@ mod tests {
         ) -> datafusion_common::Result<LogicalPlan> {
             not_impl_err!("unused in test")
         }
+    }
 
+    #[async_trait]
+    impl TableFormat for TestTableFormat {
         async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -1343,6 +1409,16 @@ mod tests {
             register_result.is_ok(),
             "failed to register test table format: {register_result:?}"
         );
+        test_session_context_for_table_formats(registry)
+    }
+
+    fn test_session_context_without_table_formats() -> SessionContext {
+        test_session_context_for_table_formats(Arc::new(TableFormatRegistry::new()))
+    }
+
+    fn test_session_context_for_table_formats(
+        registry: Arc<TableFormatRegistry>,
+    ) -> SessionContext {
         let plan_service = Arc::new(PlanService::new(
             Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
             Box::new(TestPlanFormatter),
@@ -1358,6 +1434,22 @@ mod tests {
     }
 
     fn test_manager_with_catalog_behavior(
+        alter_error: Option<&str>,
+        table_exists: bool,
+        view_lookup_supported: bool,
+    ) -> CatalogManager {
+        test_manager_for_format(
+            "delta",
+            vec![],
+            alter_error,
+            table_exists,
+            view_lookup_supported,
+        )
+    }
+
+    fn test_manager_for_format(
+        format: &str,
+        properties: Vec<(String, String)>,
         alter_error: Option<&str>,
         table_exists: bool,
         view_lookup_supported: bool,
@@ -1382,11 +1474,11 @@ mod tests {
                 comment: None,
                 constraints: vec![],
                 location: Some("s3://bucket/items".to_string()),
-                format: "delta".to_string(),
+                format: format.to_string(),
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                properties: vec![],
+                properties,
                 is_external: true,
             },
         };
@@ -1394,7 +1486,7 @@ mod tests {
             catalogs: std::iter::once((
                 "test".to_string(),
                 Arc::new(TestProvider {
-                    table_status,
+                    table_status: Mutex::new(table_status),
                     alter_error: alter_error.map(ToString::to_string),
                     table_exists,
                     view_lookup_supported,
@@ -1480,6 +1572,48 @@ mod tests {
 
         assert!(
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn alter_delta_table_rejects_missing_format_without_catalog_mutation() {
+        assert_missing_table_format_rejects_alter_without_catalog_mutation("delta").await;
+    }
+
+    #[tokio::test]
+    async fn alter_iceberg_table_rejects_missing_format_without_catalog_mutation() {
+        assert_missing_table_format_rejects_alter_without_catalog_mutation("iceberg").await;
+    }
+
+    async fn assert_missing_table_format_rejects_alter_without_catalog_mutation(format: &str) {
+        let ctx = test_session_context_without_table_formats();
+        let original_properties = vec![("existing".to_string(), "preserved".to_string())];
+        let manager =
+            test_manager_for_format(format, original_properties.clone(), None, true, false);
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        let status = manager.get_table(&["items"]).await;
+        assert!(
+            status.is_ok(),
+            "failed to reload {format} table after ALTER: {status:?}"
+        );
+        let Ok(status) = status else {
+            return;
+        };
+        let TableKind::Table { properties, .. } = status.kind else {
+            unreachable!();
+        };
+
+        assert!(
+            result.is_err() && properties == original_properties,
+            "ALTER on {format} without its table format must fail without catalog mutation; result={result:?}, properties={properties:?}"
         );
     }
 }

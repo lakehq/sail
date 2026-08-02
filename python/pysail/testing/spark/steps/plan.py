@@ -13,6 +13,16 @@ if TYPE_CHECKING:
 def normalize_plan_text(plan_text: str) -> str:
     """Normalize plan text by scrubbing non-deterministic fields."""
     text = textwrap.dedent(plan_text).strip()
+    parquet_data_file = re.compile(
+        r"part-\d+-(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+        r"(?:-c|\.c)\d+(?:\.(?P<codec>snappy|gz|lzo|br|lz4hadoop|lz4raw|zstd))?\.parquet",
+        flags=re.IGNORECASE,
+    )
+
+    def normalize_parquet_data_file(match: re.Match[str]) -> str:
+        codec = match.group("codec")
+        suffix = f".{codec}" if codec else ""
+        return f"part-<id>{suffix}.parquet"
 
     # Add an explicit marker at the end of line for lines ending with whitespaces.
     # Otherwise, PyYAML would force quoted style (instead of using multi-line style)
@@ -47,13 +57,7 @@ def normalize_plan_text(plan_text: str) -> str:
     def normalize_path(path: str) -> str:
         path = path.replace("\\", "/")
         path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
-        # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
-        path = re.sub(
-            r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
-            "part-<id>.snappy.parquet",
-            path,
-            flags=re.IGNORECASE,
-        )
+        path = parquet_data_file.sub(normalize_parquet_data_file, path)
         # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet.
         # The sequence is assigned by write order and is not semantically meaningful in EXPLAIN snapshots.
         return re.sub(
@@ -88,13 +92,7 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
-    text = re.sub(
-        r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
-        "part-<id>.snappy.parquet",
-        text,
-        flags=re.IGNORECASE,
-    )
+    text = parquet_data_file.sub(normalize_parquet_data_file, text)
     # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet.
     text = re.sub(
         r"part-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+\.parquet",
@@ -117,14 +115,6 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # Normalize Sail default CTAS parquet filenames: <16-char random>_<partition>.<codec>.parquet
-    # Preserve partition number so multi-file plans stay distinguishable.
-    text = re.sub(
-        r"[A-Za-z0-9]{16}_(\d+)\.(zst|snappy|gzip|lz4|brotli)\.parquet",
-        r"<id>_\1.\2.parquet",
-        text,
-    )
-
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
 

@@ -1,6 +1,8 @@
 use datafusion_common::Result;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, lit, when};
-pub use sail_common_datafusion::datasource::{DeltaCheckConstraintExpr, DeltaConstraintViolation};
+pub use sail_common_datafusion::table_format::{
+    DeltaCheckConstraintExpr, DeltaConstraintViolation,
+};
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 pub fn apply_delta_check_constraint_filter(

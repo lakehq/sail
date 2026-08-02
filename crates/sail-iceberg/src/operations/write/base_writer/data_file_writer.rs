@@ -10,10 +10,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use sail_parquet::WrittenParquetFile;
 
 use crate::operations::write::WriteOutcome;
-use crate::operations::write::arrow_parquet::ParquetFileMeta;
 use crate::spec::types::values::Literal;
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Datum};
 
@@ -36,7 +37,7 @@ impl DataFileWriter {
         }
     }
 
-    pub fn finish(self, meta: ParquetFileMeta) -> Result<WriteOutcome, String> {
+    pub fn finish(self, meta: WrittenParquetFile) -> Result<WriteOutcome, String> {
         let (
             column_sizes,
             value_counts,
@@ -51,7 +52,7 @@ impl DataFileWriter {
             file_path: self.file_path,
             file_format: DataFileFormat::Parquet,
             partition: self.partition_values,
-            record_count: meta.num_rows,
+            record_count: meta.row_count,
             file_size_in_bytes: meta.file_size,
             column_sizes,
             value_counts,
@@ -92,6 +93,7 @@ fn aggregate_from_parquet_metadata(
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();
     let mut val_counts: HashMap<i32, u64> = HashMap::new();
     let mut null_counts: HashMap<i32, u64> = HashMap::new();
+    let mut missing_null_counts: HashSet<i32> = HashSet::new();
     let lower_bounds: HashMap<i32, Datum> = HashMap::new();
     let upper_bounds: HashMap<i32, Datum> = HashMap::new();
     let mut split_offsets: Vec<i64> = Vec::new();
@@ -115,15 +117,25 @@ fn aggregate_from_parquet_metadata(
             }) else {
                 continue;
             };
-            *col_sizes.entry(field_id).or_insert(0) += c.compressed_size() as u64;
-            *val_counts.entry(field_id).or_insert(0) += c.num_values() as u64;
-            if let Some(stats) = c.statistics() {
-                if let Some(n) = stats.null_count_opt() {
-                    *null_counts.entry(field_id).or_insert(0) += n;
+            let compressed_size = u64::try_from(c.compressed_size())
+                .map_err(|_| "negative Parquet compressed column size".to_string())?;
+            let value_count = u64::try_from(c.num_values())
+                .map_err(|_| "negative Parquet column value count".to_string())?;
+            *col_sizes.entry(field_id).or_insert(0) += compressed_size;
+            *val_counts.entry(field_id).or_insert(0) += value_count;
+            if let Some(null_count) = c
+                .statistics()
+                .and_then(|statistics| statistics.null_count_opt())
+            {
+                if !missing_null_counts.contains(&field_id) {
+                    *null_counts.entry(field_id).or_insert(0) += null_count;
                 }
-                // Do not attempt to parse typed bounds here; leave empty per-field for now
-                let _ = _path; // silence unused
+            } else {
+                null_counts.remove(&field_id);
+                missing_null_counts.insert(field_id);
             }
+            // Do not attempt to parse typed bounds here; leave empty per-field for now.
+            let _ = _path;
         }
     }
 

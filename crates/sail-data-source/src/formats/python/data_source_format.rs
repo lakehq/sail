@@ -1,48 +1,30 @@
-/// TableFormat implementation for Python data sources.
-///
-/// This enables Python data sources to be used with `spark.read.format("name")` syntax
-/// by integrating with the TableFormatRegistry.
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
-use datafusion::execution::SessionState;
-use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
-use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
-use educe::Educe;
-use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
-};
-use sail_common_datafusion::utils::items::ItemTaker;
+use datafusion::logical_expr::{Extension, LogicalPlan, TableSource};
+use datafusion_common::Result;
+use sail_common_datafusion::data_source_format::{DataSourceFormat, DataSourceFormatRegistry};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
+use super::write_planner::PythonWriteNode;
 
-/// TableFormat implementation for a Python data source.
-///
-/// Each registered Python datasource gets its own PythonTableFormat instance,
-/// keyed by the datasource name.
-///
-/// For session-registered data sources, the pickled class bytes are embedded directly
-/// in the format instance. For entry-point discovered data sources, the bytes are
-/// looked up from the global registry.
 #[derive(Debug)]
-pub struct PythonTableFormat {
+pub struct PythonDataSourceFormat {
     /// The name of the Python datasource
     name: String,
     /// Pickled datasource class bytes (None = lookup from global registry)
     pickled_class: Option<Vec<u8>>,
 }
 
-impl PythonTableFormat {
-    /// Create a new PythonTableFormat for an entry-point discovered datasource.
+impl PythonDataSourceFormat {
+    /// Create a new format for an entry-point discovered datasource.
     ///
     /// The pickled class will be looked up from the global `DATA_SOURCE_REGISTRY`.
     pub fn new(name: String) -> Self {
@@ -52,7 +34,7 @@ impl PythonTableFormat {
         }
     }
 
-    /// Create a PythonTableFormat with embedded pickled class bytes.
+    /// Create a format with embedded pickled class bytes.
     ///
     /// Used for session-registered data sources where the pickled bytes are stored
     /// directly in the format instance for session isolation.
@@ -63,11 +45,11 @@ impl PythonTableFormat {
         }
     }
 
-    /// Register all discovered Python data sources with the TableFormatRegistry.
+    /// Register all discovered Python data sources with the data-source registry.
     ///
     /// This should be called during session initialization after calling
     /// `discover_data_sources()`.
-    pub fn register_all(registry: &TableFormatRegistry) -> Result<()> {
+    pub fn register_all(registry: &DataSourceFormatRegistry) -> Result<()> {
         for name in DATA_SOURCE_REGISTRY.list() {
             let format = Arc::new(Self::new(name));
             registry.register(format)?;
@@ -98,7 +80,10 @@ impl PythonTableFormat {
     }
 
     /// Create PythonDataSource from options.
-    fn create_datasource(&self, options: &[HashMap<String, String>]) -> Result<PythonDataSource> {
+    pub(super) fn create_datasource(
+        &self,
+        options: &[HashMap<String, String>],
+    ) -> Result<PythonDataSource> {
         // Get pickled class bytes: prefer embedded (session-scoped) over global registry
         let pickled_class = match &self.pickled_class {
             Some(bytes) => bytes.clone(),
@@ -170,7 +155,7 @@ impl PythonTableFormat {
 use super::error::{import_cloudpickle, py_err};
 
 #[async_trait]
-impl TableFormat for PythonTableFormat {
+impl DataSourceFormat for PythonDataSourceFormat {
     fn name(&self) -> &str {
         &self.name
     }
@@ -238,137 +223,13 @@ impl TableFormat for PythonTableFormat {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
-#[educe(PartialOrd)]
-pub struct PythonWriteNode {
-    input: Arc<LogicalPlan>,
-    name: String,
-    pickled_class: Option<Vec<u8>>,
-    mode: SinkMode,
-    options: Vec<OptionLayer>,
-    #[educe(PartialOrd(ignore))]
-    schema: DFSchemaRef,
-}
-
-impl PythonWriteNode {
-    fn new(
-        input: Arc<LogicalPlan>,
-        name: String,
-        pickled_class: Option<Vec<u8>>,
-        mode: SinkMode,
-        options: Vec<OptionLayer>,
-    ) -> Self {
-        Self {
-            input,
-            name,
-            pickled_class,
-            mode,
-            options,
-            schema: Arc::new(DFSchema::empty()),
-        }
-    }
-}
-
-impl UserDefinedLogicalNodeCore for PythonWriteNode {
-    fn name(&self) -> &str {
-        "PythonWrite"
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![self.input.as_ref()]
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        &self.schema
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "PythonWrite: name={}", self.name)
-    }
-
-    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
-        exprs.zero()?;
-        Ok(Self {
-            input: Arc::new(inputs.one()?),
-            name: self.name.clone(),
-            pickled_class: self.pickled_class.clone(),
-            mode: self.mode.clone(),
-            options: self.options.clone(),
-            schema: self.schema.clone(),
-        })
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct PythonPhysicalPlanner;
-
-#[async_trait]
-impl ExtensionPlanner for PythonPhysicalPlanner {
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(node) = node.as_any().downcast_ref::<PythonWriteNode>() else {
-            return Ok(None);
-        };
-        let [input] = physical_inputs else {
-            return internal_err!("PythonWriteNode requires exactly one physical input");
-        };
-        let overwrite = matches!(
-            node.mode,
-            SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
-        );
-        let opaque_options: Vec<HashMap<String, String>> = node
-            .options
-            .clone()
-            .into_iter()
-            .map(|l| l.into_opaque_options())
-            .collect();
-        let table_format = PythonTableFormat {
-            name: node.name.clone(),
-            pickled_class: node.pickled_class.clone(),
-        };
-        let datasource = table_format.create_datasource(&opaque_options)?;
-        let executor: Arc<dyn super::executor::PythonExecutor> =
-            Arc::new(InProcessExecutor::from_app_config());
-        let schema = input.schema();
-        let expected_partitions = input.properties().partitioning.partition_count();
-        let writer_plan = executor
-            .get_writer(datasource.command(), &schema, overwrite)
-            .await?;
-        let pickled_writer = writer_plan.pickled_writer;
-        let write_exec: Arc<dyn ExecutionPlan> =
-            Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
-                input.clone(),
-                pickled_writer.clone(),
-                writer_plan.is_arrow,
-            ));
-
-        Ok(Some(Arc::new(
-            super::commit_exec::PythonDataSourceWriteCommitExec::new(
-                write_exec,
-                pickled_writer,
-                expected_partitions,
-            ),
-        )))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_python_table_format_name() {
-        let format = PythonTableFormat::new("test_datasource".to_string());
+    fn test_python_data_source_format_name() {
+        let format = PythonDataSourceFormat::new("test_datasource".to_string());
         assert_eq!(format.name(), "test_datasource");
     }
 }

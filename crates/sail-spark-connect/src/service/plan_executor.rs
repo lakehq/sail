@@ -670,18 +670,21 @@ pub(crate) async fn handle_execute_register_datasource(
         }
     };
 
-    // Register in the session-scoped TableFormatRegistry with embedded pickled bytes
+    // Register in the session-scoped data-source registry with embedded pickled bytes.
     {
         use std::sync::Arc;
 
-        use sail_common_datafusion::datasource::TableFormatRegistry;
-        use sail_data_source::formats::python::PythonTableFormat;
+        use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
+        use sail_data_source::formats::python::PythonDataSourceFormat;
 
-        // Register format in session's TableFormatRegistry with embedded pickled class
+        // Embed the class in this session's provider entry for session isolation.
         // This provides session isolation - the format is only visible to this session
-        match ctx.extension::<TableFormatRegistry>() {
+        match ctx.extension::<DataSourceFormatRegistry>() {
             Ok(registry) => {
-                let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
+                let format = Arc::new(PythonDataSourceFormat::with_pickled_class(
+                    name.clone(),
+                    command,
+                ));
                 // Ignore error if already registered (allows re-registration to update)
                 if let Err(e) = registry.register(format) {
                     warn!("Failed to register python datasource {}: {}", name, e);
@@ -690,7 +693,7 @@ pub(crate) async fn handle_execute_register_datasource(
             }
             _ => {
                 return Err(SparkError::internal(
-                    "TableFormatRegistry not found in session context",
+                    "DataSourceFormatRegistry not found in session context",
                 ));
             }
         }

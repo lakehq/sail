@@ -10,7 +10,8 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion_common::{Result, plan_err};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::data_source_format::DataSourceFormat;
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 pub use crate::formats::rate::reader::RateSourceExec;
@@ -21,10 +22,10 @@ use crate::options::r#gen::RateReadOptions;
 /// Generate record batches at a fixed rate for testing purposes.
 /// The record batches contain two columns, a timestamp and an integer value.
 #[derive(Debug)]
-pub struct RateTableFormat;
+pub struct RateDataSourceFormat;
 
 #[async_trait]
-impl TableFormat for RateTableFormat {
+impl DataSourceFormat for RateDataSourceFormat {
     fn name(&self) -> &str {
         "rate"
     }

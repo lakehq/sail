@@ -576,12 +576,19 @@ impl ExecutionPlan for IcebergWriterExec {
             let data_object_store = get_object_store_from_context(&context, &data_location)?;
             let writer_root = crate::utils::url_to_object_path(&data_location)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+            let object_store_buffer_size = context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size;
             let mut writer = IcebergTableWriter::new(
                 data_object_store,
                 writer_root,
                 writer_config,
                 spec_id_val,
                 data_location,
+                Arc::clone(context.memory_pool()),
+                object_store_buffer_size,
             );
 
             let mut total_rows = 0u64;

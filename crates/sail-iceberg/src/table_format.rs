@@ -30,10 +30,14 @@ use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
+use sail_common_datafusion::data_source_format::{DataSourceFormat, DataSourceFormatRegistry};
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatCreateTableResult, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
+    find_path_in_options,
+};
+use sail_common_datafusion::table_format::{
+    TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatRegistry,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -70,13 +74,18 @@ const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 pub struct IcebergTableFormat;
 
 impl IcebergTableFormat {
-    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self))
+    pub fn register(
+        data_source_formats: &DataSourceFormatRegistry,
+        table_formats: &TableFormatRegistry,
+    ) -> Result<()> {
+        let format = Arc::new(Self);
+        data_source_formats.register(format.clone())?;
+        table_formats.register(format)
     }
 }
 
 #[async_trait]
-impl TableFormat for IcebergTableFormat {
+impl DataSourceFormat for IcebergTableFormat {
     fn name(&self) -> &str {
         "iceberg"
     }
@@ -102,11 +111,13 @@ impl TableFormat for IcebergTableFormat {
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<sail_common_datafusion::datasource::TableFormatMetadata> {
-        Ok(sail_common_datafusion::datasource::TableFormatMetadata {
-            schema: self.infer_schema(ctx, info).await?,
-            properties: vec![],
-        })
+    ) -> Result<sail_common_datafusion::data_source_format::DataSourceMetadata> {
+        Ok(
+            sail_common_datafusion::data_source_format::DataSourceMetadata {
+                schema: self.infer_schema(ctx, info).await?,
+                properties: vec![],
+            },
+        )
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
@@ -141,7 +152,10 @@ impl TableFormat for IcebergTableFormat {
             )),
         }))
     }
+}
 
+#[async_trait]
+impl TableFormat for IcebergTableFormat {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,

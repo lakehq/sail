@@ -1,0 +1,25 @@
+[package]
+name = "sail-parquet"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+bytes = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-datasource-parquet = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
+parquet = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

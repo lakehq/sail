@@ -37,6 +37,9 @@ hf-hub = { workspace = true }
 fastrace = { workspace = true }
 fastrace-futures = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
 default = ["hdfs"]

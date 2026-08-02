@@ -20,6 +20,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-parquet = { path = "../sail-parquet" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 # DataFusion dependencies
@@ -59,6 +60,9 @@ educe = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

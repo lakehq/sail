@@ -246,12 +246,15 @@ pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStor
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
 
     use datafusion::execution::object_store::ObjectStoreRegistry;
-    use object_store::ObjectStore;
     use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
     use sail_common::runtime::RuntimeHandle;
+    use tempfile::tempdir;
     use tokio::runtime::Handle;
     use url::Url;
 
@@ -296,6 +299,40 @@ mod tests {
             .unwrap();
         let default_store = registry.get_store(&url).unwrap();
         assert!(Arc::ptr_eq(&fallback, &default_store));
+    }
+
+    #[tokio::test]
+    async fn local_registry_delete_preserves_caller_owned_parent_directory() {
+        let sandbox = tempdir().unwrap();
+        let cleanup_boundary_guard = sandbox.path().join("cleanup-boundary-guard");
+        fs::write(&cleanup_boundary_guard, b"guard").unwrap();
+
+        let caller_owned_parent = sandbox.path().join("caller-owned-parent");
+        fs::create_dir(&caller_owned_parent).unwrap();
+        let object_file = caller_owned_parent
+            .join("nested")
+            .join("only-object.parquet");
+        let object_url = Url::from_file_path(&object_file).unwrap();
+        let object_path = Path::from_absolute_path(&object_file).unwrap();
+
+        let handle = Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let registry = DynamicObjectStoreRegistry::new(runtime);
+        let store = registry.get_store(&object_url).unwrap();
+
+        store
+            .put(&object_path, PutPayload::from(vec![1_u8]))
+            .await
+            .unwrap();
+        assert!(object_file.is_file());
+
+        store.delete(&object_path).await.unwrap();
+
+        assert!(cleanup_boundary_guard.is_file());
+        assert!(
+            caller_owned_parent.is_dir(),
+            "deleting Sail's only object must preserve its caller-owned parent directory"
+        );
     }
 
     #[test]

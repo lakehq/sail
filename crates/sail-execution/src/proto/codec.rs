@@ -1,7 +1,9 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -20,7 +22,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
@@ -101,6 +103,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::commit::ListingWriteCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
@@ -252,6 +255,7 @@ use sail_iceberg::physical_plan::{
 };
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_parquet::{ParquetWriteExecutionOptions, ParquetWriterExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
@@ -305,6 +309,58 @@ use crate::proto::encode::{
 };
 
 pub struct RemoteExecutionCodec;
+
+static DATAFUSION_SCALAR_UDFS: LazyLock<HashMap<String, Arc<ScalarUDF>>> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for udf in SessionStateDefaults::default_scalar_functions() {
+        registry.insert(udf.name().to_ascii_lowercase(), Arc::clone(&udf));
+        for alias in udf.aliases() {
+            registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udf));
+        }
+    }
+    registry
+});
+
+static DATAFUSION_AGGREGATE_UDAFS: LazyLock<HashMap<String, Arc<AggregateUDF>>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::new();
+        for udaf in SessionStateDefaults::default_aggregate_functions() {
+            registry.insert(udaf.name().to_ascii_lowercase(), Arc::clone(&udaf));
+            for alias in udaf.aliases() {
+                registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udaf));
+            }
+        }
+        registry
+    });
+
+static DATAFUSION_WINDOW_UDWFS: LazyLock<HashMap<String, Arc<WindowUDF>>> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for udwf in SessionStateDefaults::default_window_functions() {
+        registry.insert(udwf.name().to_ascii_lowercase(), Arc::clone(&udwf));
+        for alias in udwf.aliases() {
+            registry.insert(alias.to_ascii_lowercase(), Arc::clone(&udwf));
+        }
+    }
+    registry
+});
+
+fn find_datafusion_scalar_udf(name: &str) -> Option<Arc<ScalarUDF>> {
+    DATAFUSION_SCALAR_UDFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
+
+fn find_datafusion_aggregate_udaf(name: &str) -> Option<Arc<AggregateUDF>> {
+    DATAFUSION_AGGREGATE_UDAFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
+
+fn find_datafusion_window_udwf(name: &str) -> Option<Arc<WindowUDF>> {
+    DATAFUSION_WINDOW_UDWFS
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+}
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -472,6 +528,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 prefix,
                 storage_schema,
+                parquet_options,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let object_store_url =
@@ -479,11 +536,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let prefix = object_store::path::Path::parse(prefix)
                     .map_err(|error| plan_datafusion_err!("invalid checkpoint prefix: {error}"))?;
                 let storage_schema = Arc::new(try_decode_schema(&storage_schema)?);
+                let parquet_options = try_decode_message::<
+                    gen_datafusion_common::TableParquetOptions,
+                >(&parquet_options)?;
+                let parquet_options: TableParquetOptions = (&parquet_options).try_into()?;
                 Ok(Arc::new(RemoteCheckpointWriteExec::try_new(
                     input,
                     object_store_url,
                     prefix,
                     storage_schema,
+                    parquet_options,
                 )?))
             }
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -1149,6 +1211,131 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sort_order,
                 )))
             }
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input,
+                base_config,
+                options,
+                sort_order,
+                original_url,
+                write_id,
+                minimum_parallel_output_files,
+                soft_max_rows_per_output_file,
+                max_buffered_batches_per_output_file,
+                objectstore_writer_buffer_size,
+                max_records_per_file,
+                key_value_metadata,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let input_schema = input.schema();
+                let file_sink_config: datafusion_proto::protobuf::FileSinkConfig =
+                    try_decode_message(&base_config)?;
+                let mut file_sink_config = FileSinkConfig::try_from(&file_sink_config)?;
+                file_sink_config.original_url = original_url;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let mut options: TableParquetOptions = (&options).try_into()?;
+                options.key_value_metadata = key_value_metadata
+                    .into_iter()
+                    .map(|entry| (entry.key, entry.value))
+                    .collect();
+                let physical_sort_expr_nodes = if let Some(sort_order) = sort_order {
+                    let nodes: Vec<PhysicalSortExprNode> = sort_order
+                        .physical_sort_expr_nodes
+                        .iter()
+                        .map(|value| try_decode_message(value))
+                        .collect::<Result<_>>()?;
+                    Some(nodes)
+                } else {
+                    None
+                };
+                let sort_order = physical_sort_expr_nodes
+                    .as_ref()
+                    .map(|nodes| {
+                        parse_physical_sort_exprs(
+                            nodes,
+                            &PhysicalPlanDecodeContext::new(ctx, self),
+                            &input_schema,
+                            &RemotePhysicalProtoConverter {},
+                        )
+                        .map(|expressions| {
+                            LexRequirement::new(expressions.into_iter().map(Into::into))
+                        })
+                    })
+                    .transpose()?
+                    .flatten();
+                let execution_options = ParquetWriteExecutionOptions {
+                    minimum_parallel_output_files: usize::try_from(minimum_parallel_output_files)
+                        .map_err(|_| {
+                        plan_datafusion_err!("minimum parallel output files is too large")
+                    })?,
+                    soft_max_rows_per_output_file: usize::try_from(soft_max_rows_per_output_file)
+                        .map_err(|_| {
+                        plan_datafusion_err!("soft maximum rows per output file is too large")
+                    })?,
+                    max_records_per_file: max_records_per_file
+                        .map(|value| {
+                            let value = usize::try_from(value).map_err(|_| {
+                                plan_datafusion_err!("maximum records per output file is too large")
+                            })?;
+                            NonZeroUsize::new(value).ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "maximum records per output file must be positive"
+                                )
+                            })
+                        })
+                        .transpose()?,
+                    max_buffered_batches_per_output_file: usize::try_from(
+                        max_buffered_batches_per_output_file,
+                    )
+                    .map_err(|_| {
+                        plan_datafusion_err!("maximum buffered output batches is too large")
+                    })?,
+                    objectstore_writer_buffer_size: usize::try_from(objectstore_writer_buffer_size)
+                        .map_err(|_| {
+                            plan_datafusion_err!("object store writer buffer size is too large")
+                        })?,
+                };
+                Ok(Arc::new(ParquetWriterExec::try_new_with_write_id(
+                    input,
+                    file_sink_config,
+                    options,
+                    execution_options,
+                    sort_order,
+                    write_id,
+                )?))
+            }
+            NodeKind::ListingWriteCommit(r#gen::ListingWriteCommitExecNode {
+                input,
+                object_store_url,
+                target_prefix,
+                staging_prefix,
+                write_id,
+                overwrite,
+                expected_task_count,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let target_prefix =
+                    object_store::path::Path::parse(target_prefix).map_err(|error| {
+                        plan_datafusion_err!("invalid listing target path: {error}")
+                    })?;
+                let staging_prefix =
+                    object_store::path::Path::parse(staging_prefix).map_err(|error| {
+                        plan_datafusion_err!("invalid listing staging path: {error}")
+                    })?;
+                let expected_task_count = usize::try_from(expected_task_count)
+                    .map_err(|_| plan_datafusion_err!("listing writer task count is too large"))?;
+                Ok(Arc::new(ListingWriteCommitExec::try_new(
+                    input,
+                    object_store_url,
+                    target_prefix,
+                    staging_prefix,
+                    write_id,
+                    overwrite,
+                    expected_task_count,
+                )?))
+            }
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
@@ -1600,6 +1787,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: checkpoint.object_store_url().as_str().to_string(),
                 prefix: checkpoint.prefix().to_string(),
                 storage_schema: try_encode_schema(checkpoint.storage_schema().as_ref())?,
+                parquet_options: try_encode_message(
+                    gen_datafusion_common::TableParquetOptions::try_from(
+                        checkpoint.parquet_options(),
+                    )?,
+                )?,
             })
         } else if let Some(checkpoint) = node.downcast_ref::<RemoteCheckpointCommitExec>() {
             NodeKind::RemoteCheckpointCommit(r#gen::RemoteCheckpointCommitExecNode {
@@ -2031,6 +2223,106 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             })
+        } else if let Some(writer) = node.downcast_ref::<ParquetWriterExec>() {
+            let input = try_encode_physical_plan(self, writer.input().clone())?;
+            let base_config = try_encode_message(
+                datafusion_proto::protobuf::FileSinkConfig::try_from(writer.sink_config())
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to encode Parquet sink: {error}")
+                    })?,
+            )?;
+            let options = try_encode_message(
+                gen_datafusion_common::TableParquetOptions::try_from(writer.parquet_options())?,
+            )?;
+            let sort_order = writer
+                .sort_order()
+                .as_ref()
+                .map(|requirements| {
+                    requirements
+                        .iter()
+                        .map(|requirement| {
+                            let expression: PhysicalSortExpr = requirement.to_owned().into();
+                            let node = PhysicalSortExprNode {
+                                expr: Some(Box::new(physical_expr_to_proto(
+                                    self,
+                                    &expression.expr,
+                                )?)),
+                                asc: !expression.options.descending,
+                                nulls_first: expression.options.nulls_first,
+                            };
+                            try_encode_message(node)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                        .map(
+                            |physical_sort_expr_nodes| r#gen::PhysicalSortExprNodeCollection {
+                                physical_sort_expr_nodes,
+                            },
+                        )
+                })
+                .transpose()?;
+            let mut key_value_metadata = writer
+                .parquet_options()
+                .key_value_metadata
+                .iter()
+                .map(|(key, value)| r#gen::ParquetKeyValueMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect::<Vec<_>>();
+            key_value_metadata.sort_unstable_by(|left, right| left.key.cmp(&right.key));
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input,
+                base_config,
+                options,
+                sort_order,
+                original_url: writer.sink_config().original_url.clone(),
+                write_id: writer.write_id().to_string(),
+                minimum_parallel_output_files: u64::try_from(
+                    writer.execution_options().minimum_parallel_output_files,
+                )
+                .map_err(|_| plan_datafusion_err!("minimum parallel output files is too large"))?,
+                soft_max_rows_per_output_file: u64::try_from(
+                    writer.execution_options().soft_max_rows_per_output_file,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("soft maximum rows per output file is too large")
+                })?,
+                max_buffered_batches_per_output_file: u64::try_from(
+                    writer
+                        .execution_options()
+                        .max_buffered_batches_per_output_file,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("maximum buffered output batches is too large")
+                })?,
+                objectstore_writer_buffer_size: u64::try_from(
+                    writer.execution_options().objectstore_writer_buffer_size,
+                )
+                .map_err(|_| {
+                    plan_datafusion_err!("object store writer buffer size is too large")
+                })?,
+                max_records_per_file: writer
+                    .execution_options()
+                    .max_records_per_file
+                    .map(|value| {
+                        u64::try_from(value.get()).map_err(|_| {
+                            plan_datafusion_err!("maximum records per output file is too large")
+                        })
+                    })
+                    .transpose()?,
+                key_value_metadata,
+            })
+        } else if let Some(commit) = node.downcast_ref::<ListingWriteCommitExec>() {
+            NodeKind::ListingWriteCommit(r#gen::ListingWriteCommitExecNode {
+                input: try_encode_physical_plan(self, commit.input().clone())?,
+                object_store_url: commit.object_store_url().to_string(),
+                target_prefix: commit.target_prefix().to_string(),
+                staging_prefix: commit.staging_prefix().to_string(),
+                write_id: commit.write_id().to_string(),
+                overwrite: commit.overwrite(),
+                expected_task_count: u64::try_from(commit.expected_task_count())
+                    .map_err(|_| plan_datafusion_err!("listing writer task count is too large"))?,
+            })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan(self, data_sink.input().clone())?;
             let sort_order = match data_sink.sort_order() {
@@ -2336,33 +2628,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry to avoid codec for built-in functions.
-        // The `match name` below has no session-registry fallback, so every
-        // scalar UDF needs an explicit arm or distributed decode fails with
-        // "could not find scalar function". DataFusion built-ins without an arm
-        // (e.g. `array_length`, `cardinality` — what Spark `size` lowers to) thus
-        // break ANY cluster query that uses them, including
-        // `filter(arr, x -> size(filter(x, ...)) > 0)`. A registry fallback for
-        // DF built-ins would fix this class at once (Spark* custom UDFs + HOFs
-        // would still need their oneof/arm). This is the prerequisite for
-        // distributing HOFs in aggregate/window nodes (see the TODO in
-        // `WrapHigherOrderFunctions`).
-        //
-        // The fix needs NO proto change. datafusion-proto's from_proto.rs already
-        // resolves a scalar UDF from the session registry FIRST when the encoded
-        // extension buffer is empty: `ctx.udf(name).or_else(|_| codec.try_decode_udf(name, &[]))`.
-        // Today `try_encode_udf` writes an `ExtendedScalarUdf` (UdfKind::Standard {})
-        // for built-ins too, so the non-empty buffer forces this codec path instead.
-        // Fix: in `try_encode_udf`, DON'T write a buffer for plain DataFusion
-        // built-ins (leave it empty), so decode falls through to `ctx.udf(name)`
-        // from the session registry (which already has array_length/cardinality/...).
-        // Keep the explicit oneof/buffer only for Sail's Spark* custom UDFs and HOFs.
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
         let udf_kind = match udf_kind {
             Some(x) => x,
-            None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+            None => {
+                return find_datafusion_scalar_udf(name).ok_or_else(|| {
+                    plan_datafusion_err!("ExtendedScalarUdf: no UDF found for {name}")
+                });
+            }
         };
         match udf_kind {
             UdfKind::Standard(r#gen::StandardUdf {}) => {}
@@ -3226,7 +3501,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             Some(UdafKind::PercentileDisc(r#gen::PercentileDiscUdaf { ansi_mode })) => {
                 Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
             }
-            None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
+            None => find_datafusion_aggregate_udaf(name).ok_or_else(|| {
+                plan_datafusion_err!("ExtendedAggregateUdf: no UDF found for {name}")
+            }),
         }
     }
 
@@ -3348,7 +3625,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 Ok(Arc::new(WindowUDF::from(fun)))
             }
-            None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
+            None => find_datafusion_window_udwf(name)
+                .ok_or_else(|| plan_datafusion_err!("ExtendedWindowUdf: no UDWF found for {name}")),
         }
     }
 
@@ -4512,10 +4790,14 @@ mod tests {
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
+        round_trip_udf_arc(Arc::new(udf))
+    }
+
+    fn round_trip_udf_arc(udf: Arc<ScalarUDF>) -> Result<Arc<ScalarUDF>> {
         let codec = RemoteExecutionCodec;
         let name = udf.name().to_string();
         let mut buf = vec![];
-        codec.try_encode_udf(&udf, &mut buf)?;
+        codec.try_encode_udf(udf.as_ref(), &mut buf)?;
         codec.try_decode_udf(&name, &buf)
     }
 
@@ -4535,6 +4817,14 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    fn round_trip_udaf_arc(udaf: Arc<AggregateUDF>) -> Result<Arc<AggregateUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udaf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udaf(udaf.as_ref(), &mut buf)?;
+        codec.try_decode_udaf(&name, &buf)
     }
 
     #[test]
@@ -4673,6 +4963,68 @@ mod tests {
         let decoded = round_trip_udwf(WindowUDF::from(SparkNtile::new()))?;
         assert!(decoded.inner().downcast_ref::<SparkNtile>().is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_datafusion_scalar_udfs_from_registry() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        for udf in datafusion::execution::SessionStateDefaults::default_scalar_functions() {
+            let expected_name = udf.name().to_string();
+            let decoded = round_trip_udf_arc(Arc::clone(&udf))?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let decoded = codec.try_decode_udf(&expected_name, &[])?;
+            assert_eq!(decoded.name(), expected_name);
+
+            for alias in udf.aliases() {
+                let decoded = codec.try_decode_udf(alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_datafusion_window_udwfs_from_registry() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        for udwf in datafusion::execution::SessionStateDefaults::default_window_functions() {
+            let expected_name = udwf.name().to_string();
+            let decoded = round_trip_udwf_arc(Arc::clone(&udwf))?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let decoded = codec.try_decode_udwf(&expected_name, &[])?;
+            assert_eq!(decoded.name(), expected_name);
+
+            for alias in udwf.aliases() {
+                let decoded = codec.try_decode_udwf(alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_datafusion_aggregate_udafs() -> Result<()> {
+        for udaf in datafusion::execution::SessionStateDefaults::default_aggregate_functions() {
+            let expected_name = udaf.name().to_string();
+            let aliases = udaf.aliases().to_vec();
+            let decoded = round_trip_udaf_arc(udaf)?;
+            assert_eq!(decoded.name(), expected_name);
+
+            let codec = RemoteExecutionCodec;
+            for alias in aliases {
+                let decoded = codec.try_decode_udaf(&alias, &[])?;
+                assert_eq!(decoded.name(), expected_name);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_sail_aggregate_udaf_takes_precedence_over_datafusion_default() -> Result<()> {
+        let decoded = round_trip_udaf_arc(Arc::new(AggregateUDF::from(MaxByFunction::new())))?;
+        assert!(decoded.inner().downcast_ref::<MaxByFunction>().is_some());
         Ok(())
     }
 
@@ -5038,11 +5390,16 @@ mod tests {
             true,
         )]));
         let storage_schema = Arc::new(Schema::new(vec![Field::new("_c0", DataType::Int64, true)]));
+        let mut parquet_options = TableParquetOptions::default();
+        parquet_options.global.skip_arrow_metadata = true;
+        parquet_options.global.max_row_group_size = 321;
+        parquet_options.global.created_by = "checkpoint-codec-test".to_string();
         let checkpoint = RemoteCheckpointWriteExec::try_new(
             Arc::new(EmptyExec::new(input_schema)),
             datafusion::execution::object_store::ObjectStoreUrl::parse("s3://checkpoint-bucket")?,
             object_store::path::Path::from("checkpoints/session/relation"),
             Arc::clone(&storage_schema),
+            parquet_options,
         )?;
         let codec = RemoteExecutionCodec;
 
@@ -5062,6 +5419,158 @@ mod tests {
         );
         assert_eq!(decoded.storage_schema(), &storage_schema);
         assert_eq!(decoded.input().schema().field(0).name(), "logical_name");
+        assert!(decoded.parquet_options().global.skip_arrow_metadata);
+        assert_eq!(decoded.parquet_options().global.max_row_group_size, 321);
+        assert_eq!(
+            decoded.parquet_options().global.created_by,
+            "checkpoint-codec-test"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_writer_plan() -> Result<()> {
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::physical_plan::FileOutputMode;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_expr::PhysicalSortRequirement;
+        use datafusion::physical_expr::expressions::Column;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let input =
+            MemorySourceConfig::try_new_exec(&[vec![], vec![], vec![]], Arc::clone(&schema), None)?;
+        let sink_config = FileSinkConfig {
+            original_url: "memory:///codec/output".to_string(),
+            object_store_url: ObjectStoreUrl::parse("memory://")?,
+            file_group: Default::default(),
+            table_paths: vec![ListingTableUrl::parse("memory:///codec/output")?],
+            output_schema: Arc::clone(&schema),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".to_string(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+        let mut parquet_options = TableParquetOptions::default();
+        parquet_options.global.skip_arrow_metadata = true;
+        parquet_options.global.max_row_group_size = 456;
+        parquet_options.key_value_metadata = [
+            (
+                "sail.codec.owner".to_string(),
+                Some("distributed-writer".to_string()),
+            ),
+            (
+                "sail.codec.write-id".to_string(),
+                Some("codec-write-id".to_string()),
+            ),
+        ]
+        .into();
+        let expected_key_value_metadata = parquet_options.key_value_metadata.clone();
+        let execution_options = ParquetWriteExecutionOptions {
+            minimum_parallel_output_files: 7,
+            soft_max_rows_per_output_file: 89,
+            max_records_per_file: NonZeroUsize::new(97),
+            max_buffered_batches_per_output_file: 11,
+            objectstore_writer_buffer_size: 13,
+        };
+        let sort_options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let sort_order = LexRequirement::from([PhysicalSortRequirement::new(
+            Arc::new(Column::new("value", 0)),
+            Some(sort_options),
+        )]);
+        let writer = ParquetWriterExec::try_new_with_write_id(
+            input,
+            sink_config,
+            parquet_options,
+            execution_options.clone(),
+            Some(sort_order),
+            "codec-write-id".to_string(),
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(writer))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ParquetWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet writer"))?;
+
+        assert_eq!(
+            decoded
+                .input()
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            3
+        );
+        assert_eq!(decoded.sink_config().original_url, "memory:///codec/output");
+        assert_eq!(decoded.write_id(), "codec-write-id");
+        assert_eq!(decoded.execution_options(), &execution_options);
+        assert!(decoded.parquet_options().global.skip_arrow_metadata);
+        assert_eq!(decoded.parquet_options().global.max_row_group_size, 456);
+        assert_eq!(
+            decoded.parquet_options().key_value_metadata,
+            expected_key_value_metadata
+        );
+        let requirement = decoded
+            .sort_order()
+            .as_ref()
+            .ok_or_else(|| plan_datafusion_err!("decoded writer lost its sort order"))?
+            .first();
+        let column = requirement.expr.downcast_ref::<Column>().ok_or_else(|| {
+            plan_datafusion_err!("decoded writer sort expression is not a column")
+        })?;
+        assert_eq!(column.name(), "value");
+        assert_eq!(column.index(), 0);
+        assert_eq!(requirement.options, Some(sort_options));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_listing_write_commit_plan() -> Result<()> {
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::listing_write::listing_write_manifest_schema;
+
+        let input = Arc::new(EmptyExec::new(listing_write_manifest_schema()));
+        let commit = ListingWriteCommitExec::try_new(
+            input,
+            ObjectStoreUrl::parse("memory://")?,
+            object_store::path::Path::from("codec/output"),
+            object_store::path::Path::from("codec/output/_temporary/sail/codec-write-id"),
+            "codec-write-id".to_string(),
+            true,
+            3,
+        )?;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ListingWriteCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a listing write commit"))?;
+
+        assert_eq!(decoded.object_store_url().as_str(), "memory:///");
+        assert_eq!(
+            decoded.target_prefix(),
+            &object_store::path::Path::from("codec/output")
+        );
+        assert_eq!(
+            decoded.staging_prefix(),
+            &object_store::path::Path::from("codec/output/_temporary/sail/codec-write-id")
+        );
+        assert_eq!(decoded.write_id(), "codec-write-id");
+        assert!(decoded.overwrite());
+        assert_eq!(decoded.expected_task_count(), 3);
+        assert_eq!(decoded.input().schema(), listing_write_manifest_schema());
         Ok(())
     }
 
@@ -5460,14 +5969,6 @@ mod tests {
     /// expression encode/decode with the base schema. The extended-schema
     /// lambda-body branch is covered by
     /// `test_round_trip_distributed_filter_nested_in_lambda_body`.
-    ///
-    /// Note: the original "nested inside a lambda body via `cardinality(...)`"
-    /// formulation could not be used because `cardinality` (a
-    /// `datafusion-functions-nested` scalar UDF) is not registered in the Sail
-    /// codec's scalar-function deserialization table, so it fails to round-trip
-    /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
-    /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
-    /// roundtrip under test, so we nest two `filter's directly instead.
     #[test]
     fn test_round_trip_distributed_filter_nested() -> Result<()> {
         use std::collections::HashMap;
@@ -5524,16 +6025,11 @@ mod tests {
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
-    /// A `filter` HOF nested INSIDE the outer lambda's BODY:
-    /// `filter(arr2d, a -> filter(a, y -> y > 1) IS NOT NULL)` over a single
-    /// `List<List<Int32>>` column. Because the inner filter appears in the
-    /// outer lambda's body (not in an array-argument position), this exercises
-    /// lambda-body decode with the base schema extended by the outer lambda
-    /// parameter field.
-    ///
-    /// The outer lambda body uses only natively-serialized exprs (`IS NOT NULL`
-    /// over the inner filter's list result) so no unregistered scalar UDF is
-    /// needed.
+    /// A `filter` HOF nested inside the outer lambda's body:
+    /// `filter(arr2d, a -> cardinality(filter(a, y -> y > 2)) > 0)` over a
+    /// `List<List<Int32>>` column. This exercises a DataFusion scalar UDF inside
+    /// a Sail higher-order UDF while decoding against a task context without a
+    /// function registry.
     #[test]
     fn test_round_trip_distributed_filter_nested_in_lambda_body() -> Result<()> {
         use std::collections::HashMap;
@@ -5542,6 +6038,7 @@ mod tests {
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
         use datafusion::common::DFSchema;
+        use datafusion::functions_nested::expr_fn::cardinality;
         use datafusion::logical_expr::execution_props::ExecutionProps;
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
@@ -5585,11 +6082,14 @@ mod tests {
         // Inner HOF lives inside the outer lambda body.
         let inner = Expr::HigherOrderFunction(HigherOrderFunction::new(
             filter_udf(),
-            vec![a_var, lambda(["y"], y_var.gt(lit(1i32)))],
+            vec![a_var, lambda(["y"], y_var.gt(lit(2i32)))],
         ));
         let outer = Expr::HigherOrderFunction(HigherOrderFunction::new(
             filter_udf(),
-            vec![col("arr2d"), lambda(["a"], inner.is_not_null())],
+            vec![
+                col("arr2d"),
+                lambda(["a"], cardinality(inner).gt(lit(0u64))),
+            ],
         ));
         let physical = create_physical_expr(&outer, &dfschema, &ExecutionProps::new())?;
 

@@ -2,7 +2,7 @@ use datafusion::catalog::Session;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::listing::source::{FormatFactory, ListingDataSourceFormat};
 
 // Some of the code in the `read` and `write` modules is adapted from the DataFusion `AvroFormat` implementation.
 // [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-avro/src/file_format.rs
@@ -13,7 +13,7 @@ mod write;
 pub use read::AvroReadFormat;
 pub use write::AvroWriteFormat;
 
-pub type AvroTableFormat = ListingTableFormat<AvroFormatFactory>;
+pub type AvroDataSourceFormat = ListingDataSourceFormat<AvroFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct AvroFormatFactory;

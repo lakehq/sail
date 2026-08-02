@@ -8,6 +8,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_data_source::listing::commit::ListingWriteCommitExec;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
@@ -16,7 +17,9 @@ use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
+use crate::driver::job_scheduler::{
+    JobAction, JobScheduler, JobSchedulerOptions, ListingWriteStaging,
+};
 use crate::driver::output::build_job_output;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
@@ -113,8 +116,8 @@ impl JobScheduler {
     ///      in the region are canceled if not already.
     ///   2. If any task in the final stages is running or has succeeded, all its channels are
     ///      added as job output streams if not already.
-    ///   3. For each stage, if all the stages that consume it have succeeded, remove
-    ///      the output streams of the stage if not already.
+    ///   3. For each stage, if all task regions containing its consumers have succeeded,
+    ///      remove the output streams of the stage if not already.
     ///   4. If any task exceeds the maximum allowed attempts, the task region and the job
     ///      are marked as failed.
     ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
@@ -126,16 +129,15 @@ impl JobScheduler {
             return vec![];
         };
         if !matches!(job.state, JobState::Running { .. }) {
-            return vec![];
+            return Self::clean_up_listing_write_staging_actions(job);
         }
 
         let mut actions = vec![];
 
         actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
         actions.extend(Self::extend_job_output(job_id, job));
-        actions.extend(Self::clean_up_job_by_stage(job_id, job));
-
         Self::update_task_regions(job, &self.options);
+        actions.extend(Self::clean_up_job_by_stage(job_id, job));
 
         if job
             .regions
@@ -247,20 +249,18 @@ impl JobScheduler {
             if matches!(job.stages[s].state, StageState::Inactive) {
                 continue;
             }
-            let all_consumers_succeeded = stage.consumers.iter().all(|&c| {
-                let partitions = job.graph.stages()[c]
-                    .plan
-                    .output_partitioning()
-                    .partition_count();
-                (0..partitions).all(|p| {
-                    job.stages[c].tasks[p]
-                        .attempts
-                        .last()
-                        .is_some_and(|a| matches!(a.state, TaskState::Succeeded))
-                })
+            let all_consumer_regions_succeeded = stage.consumers.iter().all(|consumer| {
+                job.topology
+                    .regions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, region)| region.tasks.iter().any(|task| task.stage == *consumer))
+                    .all(|(region, _)| {
+                        matches!(job.regions[region].state, TaskRegionState::Succeeded)
+                    })
             });
 
-            if all_consumers_succeeded && !stage.consumers.is_empty() {
+            if all_consumer_regions_succeeded && !stage.consumers.is_empty() {
                 job.stages[s].state = StageState::Inactive;
                 job.stages[s].stopped_at = Some(Utc::now());
                 actions.push(JobAction::CleanUpJob {
@@ -497,6 +497,7 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
+        actions.extend(Self::clean_up_listing_write_staging_actions(job));
         if matches!(job.state, JobState::Draining) {
             job.state = JobState::Succeeded;
         } else {
@@ -504,6 +505,47 @@ impl JobScheduler {
         }
         job.stopped_at = Some(Utc::now());
         actions
+    }
+
+    fn listing_write_staging(job: &JobDescriptor) -> Vec<ListingWriteStaging> {
+        let mut locations = Vec::new();
+        for stage in job.graph.stages() {
+            Self::collect_listing_write_staging(&stage.plan, &mut locations);
+        }
+        locations
+    }
+
+    fn clean_up_listing_write_staging_actions(job: &JobDescriptor) -> Vec<JobAction> {
+        let locations = Self::listing_write_staging(job);
+        if locations.is_empty() {
+            Vec::new()
+        } else {
+            vec![JobAction::CleanUpListingWrites {
+                locations,
+                context: job.context.clone(),
+            }]
+        }
+    }
+
+    fn collect_listing_write_staging(
+        plan: &Arc<dyn ExecutionPlan>,
+        locations: &mut Vec<ListingWriteStaging>,
+    ) {
+        if let Some(commit) = plan.downcast_ref::<ListingWriteCommitExec>() {
+            let location = ListingWriteStaging {
+                object_store_url: commit.object_store_url().clone(),
+                prefix: commit.staging_prefix().clone(),
+            };
+            if !locations.iter().any(|existing| {
+                existing.object_store_url.as_str() == location.object_store_url.as_str()
+                    && existing.prefix == location.prefix
+            }) {
+                locations.push(location);
+            }
+        }
+        for child in plan.children() {
+            Self::collect_listing_write_staging(child, locations);
+        }
     }
 
     /// Builds the serialized task definition and context for the given task key.
@@ -540,8 +582,10 @@ impl JobScheduler {
         Ok((definition, job.context.clone()))
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> Vec<JobAction> {
+        let mut actions = Vec::new();
         for (_, job) in self.jobs.iter_mut() {
+            actions.extend(Self::clean_up_listing_write_staging_actions(job));
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 // For running jobs, the job output is dropped here.
                 // Internally, the job output manages the receiving end of the output stream.
@@ -569,6 +613,7 @@ impl JobScheduler {
                 }
             }
         }
+        actions
     }
 
     fn get_task_input(
@@ -803,4 +848,154 @@ struct StageGroupKey {
 struct StageGroup {
     stages: IndexSet<usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use object_store::path::Path;
+    use sail_common_datafusion::listing_write::listing_write_manifest_schema;
+
+    use super::*;
+    use crate::driver::job_scheduler::state::{StageDescriptor, TaskRegionDescriptor};
+    use crate::driver::job_scheduler::topology::{
+        JobTopology, StageTopology, TaskRegionTopology, TaskTopology,
+    };
+
+    #[test]
+    fn blocking_output_survives_until_the_consumer_retry_region_succeeds() -> ExecutionResult<()> {
+        let graph = JobGraph::try_new(
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+            crate::job_graph::JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        job.topology = JobTopology::from_parts(
+            vec![TaskRegionTopology {
+                tasks: vec![
+                    TaskTopology {
+                        stage: 1,
+                        partition: 0,
+                    },
+                    TaskTopology {
+                        stage: 2,
+                        partition: 0,
+                    },
+                ],
+                dependencies: IndexSet::new(),
+            }],
+            vec![
+                StageTopology { consumers: vec![1] },
+                StageTopology { consumers: vec![] },
+                StageTopology { consumers: vec![] },
+            ],
+        );
+        job.stages = (0..3)
+            .map(|_| StageDescriptor {
+                tasks: vec![],
+                state: StageState::Active,
+                created_at: Utc::now(),
+                stopped_at: None,
+            })
+            .collect();
+        job.regions = vec![TaskRegionDescriptor {
+            state: TaskRegionState::Running,
+        }];
+
+        let job_id = 1_u64.into();
+        assert!(JobScheduler::clean_up_job_by_stage(job_id, &mut job).is_empty());
+        assert!(matches!(job.stages[0].state, StageState::Active));
+
+        job.regions[0].state = TaskRegionState::Succeeded;
+        let actions = JobScheduler::clean_up_job_by_stage(job_id, &mut job);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            JobAction::CleanUpJob { stage: Some(0), .. }
+        ));
+        assert!(matches!(job.stages[0].state, StageState::Inactive));
+        Ok(())
+    }
+
+    #[test]
+    fn finds_listing_staging_for_terminal_job_cleanup() -> ExecutionResult<()> {
+        let commit = ListingWriteCommitExec::try_new(
+            Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            Path::from("table/_temporary/sail/write-id"),
+            "write-id".to_string(),
+            false,
+            1,
+        )?;
+        let graph = JobGraph::try_new(
+            Arc::new(commit),
+            crate::job_graph::JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )?;
+        let job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+
+        let locations = JobScheduler::listing_write_staging(&job);
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].object_store_url.as_str(), "memory:///");
+        assert_eq!(
+            locations[0].prefix,
+            Path::from("table/_temporary/sail/write-id")
+        );
+        assert!(matches!(
+            JobScheduler::clean_up_listing_write_staging_actions(&job).as_slice(),
+            [JobAction::CleanUpListingWrites { .. }]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stop_emits_listing_staging_cleanup_actions() -> ExecutionResult<()> {
+        let commit = ListingWriteCommitExec::try_new(
+            Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            Path::from("table/_temporary/sail/write-id"),
+            "write-id".to_string(),
+            false,
+            1,
+        )?;
+        let graph = JobGraph::try_new(
+            Arc::new(commit),
+            crate::job_graph::JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )?;
+        let context = Arc::new(TaskContext::default());
+        let job = JobDescriptor::try_new(graph, JobState::Draining, Arc::clone(&context))?;
+        let job_id = 1_u64.into();
+        let mut scheduler = JobScheduler::new(JobSchedulerOptions::default());
+        scheduler.jobs.insert(job_id, job);
+
+        let actions: Vec<JobAction> = scheduler.stop();
+
+        let cleanup = actions.iter().find_map(|action| match action {
+            JobAction::CleanUpListingWrites { locations, context } => Some((locations, context)),
+            _ => None,
+        });
+        let (locations, cleanup_context) = cleanup.ok_or_else(|| {
+            ExecutionError::InternalError(
+                "driver stop did not emit listing staging cleanup".to_string(),
+            )
+        })?;
+        assert!(Arc::ptr_eq(cleanup_context, &context));
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].object_store_url.as_str(), "memory:///");
+        assert_eq!(
+            locations[0].prefix,
+            Path::from("table/_temporary/sail/write-id")
+        );
+        Ok(())
+    }
 }

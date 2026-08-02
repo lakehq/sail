@@ -6,7 +6,7 @@ use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::listing::source::{FormatFactory, ListingDataSourceFormat};
 use crate::options::ResolveOptions;
 use crate::options::r#gen::BinaryReadOptions;
 
@@ -19,7 +19,7 @@ mod write;
 pub use read::BinaryReadFormat;
 pub use write::BinaryWriteFormat;
 
-pub type BinaryTableFormat = ListingTableFormat<BinaryFormatFactory>;
+pub type BinaryDataSourceFormat = ListingDataSourceFormat<BinaryFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct BinaryFormatFactory;

@@ -21,7 +21,7 @@ use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers}
 use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_table_format_registry;
+use crate::formats::create_format_registries;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
@@ -105,11 +105,13 @@ impl ServerSessionFactory {
         let Some(job_runner) = info.job_runner.take() else {
             return internal_err!("job runner is missing from server session information");
         };
+        let (data_source_formats, table_formats) = create_format_registries()?;
         let mut config = SessionConfig::new()
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(data_source_formats)
+            .with_extension(table_formats)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),

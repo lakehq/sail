@@ -27,9 +27,9 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
+use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
-    find_path_in_options,
+    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -525,7 +525,24 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         sink_info.input = input;
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        if write_format.eq_ignore_ascii_case("parquet") {
+            sink_info.options.insert(
+                0,
+                OptionLayer::OptionList {
+                    items: vec![
+                        (
+                            "compression".to_string(),
+                            self.config.parquet_compression_codec.clone(),
+                        ),
+                        (
+                            "maxRecordsPerFile".to_string(),
+                            self.config.max_records_per_file.to_string(),
+                        ),
+                    ],
+                },
+            );
+        }
+        let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
         let plan = registry
             .get(&write_format)?
             .create_writer(&self.ctx.state(), sink_info)
@@ -630,11 +647,13 @@ impl PlanResolver<'_> {
                 // Discover the schema from the table format so that write operations
                 // (INSERT INTO) can validate the input schema correctly.
                 if columns.is_empty() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
-                        ))
-                    })?;
+                    let registry = self.ctx.extension::<DataSourceFormatRegistry>().map_err(
+                        |e| {
+                            PlanError::invalid(format!(
+                                "failed to access table format registry for table `{table:?}`: {e}",
+                            ))
+                        },
+                    )?;
                     let table_format = registry.get(&format).map_err(|e| {
                         PlanError::invalid(format!(
                             "failed to resolve table format `{format}` for table `{table:?}`: {e}",
@@ -668,11 +687,13 @@ impl PlanResolver<'_> {
                         properties = merged_properties;
                     }
                 } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
-                        ))
-                    })?;
+                    let registry = self.ctx.extension::<DataSourceFormatRegistry>().map_err(
+                        |e| {
+                            PlanError::invalid(format!(
+                                "failed to access table format registry for table `{table:?}`: {e}",
+                            ))
+                        },
+                    )?;
                     let table_format = registry.get(&format).map_err(|e| {
                         PlanError::invalid(format!(
                             "failed to resolve table format `{format}` for table `{table:?}`: {e}",

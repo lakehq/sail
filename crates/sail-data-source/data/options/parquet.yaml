@@ -355,6 +355,30 @@
         - option.maxPredicateCacheSize
       parser: crate::options::parsers::parse_optional_usize
 
+- key: max_records_per_file
+  description: |
+    (Writing) The maximum number of records in each output file.
+    A value less than or equal to `0` means there is no hard row limit.
+    Defaults to `spark.sql.files.maxRecordsPerFile` for Spark writes.
+  default:
+    value: "0"
+    parser: crate::options::parsers::parse_i64
+  supported: true
+  rust_type: i64
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - max_records_per_file
+        - maxRecordsPerFile
+      parser: crate::options::parsers::parse_i64
+    - type: table_property
+      keys:
+        - option.max_records_per_file
+        - option.maxRecordsPerFile
+      parser: crate::options::parsers::parse_i64
+
 - key: data_page_size_limit
   description: |
     (Writing) The best-effort maximum size of a data page in bytes.
@@ -451,11 +475,13 @@
     - type: option
       keys:
         - compression
+        - parquet.compression
         - codec
       parser: crate::options::parsers::parse_optional_string
     - type: table_property
       keys:
         - option.compression
+        - option.parquet.compression
         - option.codec
       parser: crate::options::parsers::parse_optional_string
 

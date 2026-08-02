@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod arrow_parquet;
 pub mod base_writer;
 pub mod config;
 pub mod file_writer;

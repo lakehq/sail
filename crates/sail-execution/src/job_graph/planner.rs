@@ -24,6 +24,7 @@ use datafusion::physical_plan::{
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::listing::commit::ListingWriteCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
 use sail_iceberg::physical_plan::IcebergCommitExec;
@@ -465,6 +466,7 @@ fn plan_job_graph_stages(
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
         || subtree.plan.is::<FileDeleteExec>()
+        || subtree.plan.is::<ListingWriteCommitExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
         || subtree.plan.is::<RemoteCheckpointCommitExec>()
@@ -616,6 +618,7 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
         || plan.is::<FileDeleteExec>()
+        || plan.is::<ListingWriteCommitExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
@@ -970,6 +973,7 @@ mod tests {
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::{Partitioning, PhysicalExpr};
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
@@ -978,6 +982,8 @@ mod tests {
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
+    use sail_common_datafusion::listing_write::listing_write_manifest_schema;
+    use sail_data_source::listing::commit::ListingWriteCommitExec;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
@@ -1136,6 +1142,52 @@ mod tests {
                 mode: InputMode::Forward,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_places_listing_write_commit_on_driver_after_coalesce() {
+        for use_blocking_shuffle in [false, true] {
+            let input = UnionExec::try_new(vec![
+                Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+                Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+                Arc::new(EmptyExec::new(listing_write_manifest_schema())),
+            ])
+            .unwrap();
+            let commit = ListingWriteCommitExec::try_new(
+                Arc::new(CoalescePartitionsExec::new(input)),
+                ObjectStoreUrl::parse("memory://").unwrap(),
+                object_store::path::Path::from("table"),
+                object_store::path::Path::from("table/_temporary/sail/write-id"),
+                "write-id".to_string(),
+                false,
+                3,
+            )
+            .unwrap();
+
+            let graph = JobGraph::try_new(
+                Arc::new(commit),
+                JobGraphOptions {
+                    use_blocking_shuffle,
+                },
+            )
+            .unwrap();
+            let commit_stages = graph
+                .stages()
+                .iter()
+                .filter(|stage| stage.plan.is::<ListingWriteCommitExec>())
+                .collect::<Vec<_>>();
+
+            assert_eq!(commit_stages.len(), 1);
+            assert_eq!(commit_stages[0].placement, TaskPlacement::Driver);
+            assert_eq!(
+                commit_stages[0]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                1
+            );
+            assert!(commit_stages[0].plan.children()[0].is::<StageInputExec<usize>>());
+        }
     }
 
     #[test]

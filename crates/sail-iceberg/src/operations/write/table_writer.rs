@@ -16,14 +16,14 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, new_null_array};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::execution::memory_pool::MemoryPool;
 use datafusion_common::{DataFusionError, Result};
-use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_parquet::ParquetFileWriter;
 use url::Url;
 
-use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::file_writer::location_generator::{
@@ -46,7 +46,9 @@ enum PartitionWriterState {
         num_rows: usize,
     },
     Open {
-        writer: Box<ArrowParquetWriter>,
+        writer: Box<ParquetFileWriter>,
+        relative_path: String,
+        physical_schema: SchemaRef,
         variant_shredding_plan: Option<VariantShreddingPlan>,
     },
 }
@@ -56,6 +58,8 @@ pub struct IcebergTableWriter {
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
     pub data_url: Url,
+    memory_pool: Arc<dyn MemoryPool>,
+    object_store_buffer_size: usize,
     // partition_dir -> writer
     writers: HashMap<String, PartitionWriterState>,
     // partition_dir -> partition values aligned with spec
@@ -71,12 +75,16 @@ impl IcebergTableWriter {
         config: WriterConfig,
         partition_spec_id: i32,
         data_url: Url,
+        memory_pool: Arc<dyn MemoryPool>,
+        object_store_buffer_size: usize,
     ) -> Self {
         Self {
             generator: DefaultLocationGenerator::new(root),
             store,
             config,
             data_url,
+            memory_pool,
+            object_store_buffer_size,
             writers: HashMap::new(),
             partition_values_map: HashMap::new(),
             written: Vec::new(),
@@ -139,32 +147,34 @@ impl IcebergTableWriter {
         partition_dir: String,
         batch: RecordBatch,
     ) -> Result<(), String> {
+        let state = match self.writers.remove(&partition_dir) {
+            Some(state) => state,
+            None => self.new_partition_writer_state(&partition_dir)?,
+        };
         let state = self
-            .writers
-            .remove(&partition_dir)
-            .map(Ok)
-            .unwrap_or_else(|| self.new_partition_writer_state())?;
-        let state = self.write_partition_state(state, batch).await?;
+            .write_partition_state(&partition_dir, state, batch)
+            .await?;
         self.writers.insert(partition_dir, state);
         Ok(())
     }
 
-    fn new_partition_writer_state(&self) -> Result<PartitionWriterState, String> {
+    fn new_partition_writer_state(
+        &self,
+        partition_dir: &str,
+    ) -> Result<PartitionWriterState, String> {
         if self.config.variant_shredding.enabled {
             Ok(PartitionWriterState::Pending {
                 batches: Vec::new(),
                 num_rows: 0,
             })
         } else {
-            Ok(PartitionWriterState::Open {
-                writer: Box::new(self.new_arrow_writer(self.config.table_schema.clone())?),
-                variant_shredding_plan: None,
-            })
+            self.open_partition_writer_state(partition_dir, self.config.table_schema.clone(), None)
         }
     }
 
     async fn write_partition_state(
         &mut self,
+        partition_dir: &str,
         state: PartitionWriterState,
         batch: RecordBatch,
     ) -> Result<PartitionWriterState, String> {
@@ -176,13 +186,16 @@ impl IcebergTableWriter {
                 num_rows += batch.num_rows();
                 batches.push(batch);
                 if num_rows >= self.config.variant_shredding.inference_buffer_size.max(1) {
-                    self.open_and_write_pending_batches(batches).await
+                    self.open_and_write_pending_batches(partition_dir, batches)
+                        .await
                 } else {
                     Ok(PartitionWriterState::Pending { batches, num_rows })
                 }
             }
             PartitionWriterState::Open {
-                mut writer,
+                writer,
+                relative_path,
+                physical_schema,
                 variant_shredding_plan,
             } => {
                 let batch = if let Some(plan) = variant_shredding_plan.as_ref() {
@@ -190,17 +203,22 @@ impl IcebergTableWriter {
                 } else {
                     batch
                 };
-                writer.write_batch(&batch).await?;
-                Ok(PartitionWriterState::Open {
+                self.write_open_batch(
+                    partition_dir,
                     writer,
+                    relative_path,
+                    physical_schema,
                     variant_shredding_plan,
-                })
+                    batch,
+                )
+                .await
             }
         }
     }
 
     async fn open_and_write_pending_batches(
         &mut self,
+        partition_dir: &str,
         batches: Vec<RecordBatch>,
     ) -> Result<PartitionWriterState, String> {
         let plan = build_variant_shredding_plan(
@@ -225,17 +243,83 @@ impl IcebergTableWriter {
             .first()
             .map(|batch| batch.schema())
             .unwrap_or_else(|| self.config.table_schema.clone());
-        let mut writer = self.new_arrow_writer(schema)?;
+        let mut state = self.open_partition_writer_state(partition_dir, schema, plan.clone())?;
         for batch in physical_batches {
-            writer.write_batch(&batch).await?;
+            let PartitionWriterState::Open {
+                writer,
+                relative_path,
+                physical_schema,
+                variant_shredding_plan,
+            } = state
+            else {
+                return Err("failed to open pending Iceberg partition writer".to_string());
+            };
+            state = self
+                .write_open_batch(
+                    partition_dir,
+                    writer,
+                    relative_path,
+                    physical_schema,
+                    variant_shredding_plan,
+                    batch,
+                )
+                .await?;
+        }
+        Ok(state)
+    }
+
+    async fn write_open_batch(
+        &mut self,
+        partition_dir: &str,
+        mut writer: Box<ParquetFileWriter>,
+        mut relative_path: String,
+        physical_schema: SchemaRef,
+        variant_shredding_plan: Option<VariantShreddingPlan>,
+        batch: RecordBatch,
+    ) -> Result<PartitionWriterState, String> {
+        let write_batch_size = self.config.write_batch_size.max(1);
+        for offset in (0..batch.num_rows()).step_by(write_batch_size) {
+            let length = write_batch_size.min(batch.num_rows() - offset);
+            writer
+                .write(&batch.slice(offset, length))
+                .await
+                .map_err(|error| error.to_string())?;
+            if writer.estimated_file_size() >= self.config.target_file_size
+                && writer.row_count() > 0
+            {
+                self.finish_open_writer(partition_dir, *writer, relative_path)
+                    .await?;
+                let next = self.open_partition_writer_state(
+                    partition_dir,
+                    Arc::clone(&physical_schema),
+                    variant_shredding_plan.clone(),
+                )?;
+                let PartitionWriterState::Open {
+                    writer: next_writer,
+                    relative_path: next_relative_path,
+                    ..
+                } = next
+                else {
+                    return Err("failed to roll Iceberg partition writer".to_string());
+                };
+                writer = next_writer;
+                relative_path = next_relative_path;
+            }
         }
         Ok(PartitionWriterState::Open {
-            writer: Box::new(writer),
-            variant_shredding_plan: plan,
+            writer,
+            relative_path,
+            physical_schema,
+            variant_shredding_plan,
         })
     }
 
-    fn new_arrow_writer(&self, schema: SchemaRef) -> Result<ArrowParquetWriter, String> {
+    fn open_partition_writer_state(
+        &self,
+        partition_dir: &str,
+        schema: SchemaRef,
+        variant_shredding_plan: Option<VariantShreddingPlan>,
+    ) -> Result<PartitionWriterState, String> {
         for (i, f) in schema.fields().iter().enumerate() {
             log::trace!(
                 "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
@@ -245,56 +329,84 @@ impl IcebergTableWriter {
                 f.metadata().get(PARQUET_FIELD_ID_META_KEY)
             );
         }
-        ArrowParquetWriter::try_new(schema.as_ref(), self.config.writer_properties.clone())
+        let (relative_path, full_path) = self.generator.with_partition_dir(Some(partition_dir));
+        let writer = ParquetFileWriter::try_new(
+            Arc::clone(&self.store),
+            full_path,
+            Arc::clone(&schema),
+            self.config.writer_properties.clone(),
+            self.object_store_buffer_size,
+            &self.memory_pool,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(PartitionWriterState::Open {
+            writer: Box::new(writer),
+            relative_path,
+            physical_schema: schema,
+            variant_shredding_plan,
+        })
     }
 
     async fn finish_partition_state(
         &mut self,
+        partition_dir: &str,
         state: PartitionWriterState,
-    ) -> Result<ArrowParquetWriter, String> {
-        match state {
+    ) -> Result<(), String> {
+        let state = match state {
             PartitionWriterState::Pending { batches, .. } => {
-                let PartitionWriterState::Open { writer, .. } =
-                    self.open_and_write_pending_batches(batches).await?
-                else {
-                    return Err("failed to open pending Iceberg partition writer".to_string());
-                };
-                Ok(*writer)
+                self.open_and_write_pending_batches(partition_dir, batches)
+                    .await?
             }
-            PartitionWriterState::Open { writer, .. } => Ok(*writer),
-        }
+            open @ PartitionWriterState::Open { .. } => open,
+        };
+        let PartitionWriterState::Open {
+            writer,
+            relative_path,
+            ..
+        } = state
+        else {
+            return Err("failed to finish Iceberg partition writer".to_string());
+        };
+        self.finish_open_writer(partition_dir, *writer, relative_path)
+            .await
     }
 
-    pub async fn flush_partition(
+    async fn finish_open_writer(
         &mut self,
         partition_dir: &str,
-        partition_values: Vec<Option<Literal>>,
+        writer: ParquetFileWriter,
+        relative_path: String,
     ) -> Result<(), String> {
+        if writer.row_count() == 0 {
+            writer.abort().await;
+            return Ok(());
+        }
+        let written = writer.finish().await.map_err(|error| error.to_string())?;
+        log::trace!(
+            "iceberg.table_writer.flush_partition.written: rel={} full={}",
+            relative_path,
+            written.path
+        );
+        // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
+        let file_path = match self.data_url.join(&format!("./{relative_path}")) {
+            Ok(url) => url.to_string(),
+            Err(_) => format!("{}{}", self.data_url.as_str(), relative_path),
+        };
+        let partition_values = self
+            .partition_values_map
+            .get(partition_dir)
+            .cloned()
+            .unwrap_or_default();
+        let data_file = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
+            .finish(written)?
+            .data_file;
+        self.written.push(data_file);
+        Ok(())
+    }
+
+    pub async fn flush_partition(&mut self, partition_dir: &str) -> Result<(), String> {
         if let Some(state) = self.writers.remove(partition_dir) {
-            let writer = self.finish_partition_state(state).await?;
-            let (bytes, meta) = writer.close().await?;
-            let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
-            log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
-            self.store
-                .put(&full, object_store::PutPayload::from(bytes))
-                .await
-                .map_err(|e| e.to_string())?;
-            log::trace!(
-                "iceberg.table_writer.flush_partition.written: rel={} full={}",
-                rel,
-                full
-            );
-            // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
-            let file_path = match self.data_url.join(&format!("./{rel}")) {
-                Ok(u) => u.to_string(),
-                Err(_) => {
-                    format!("{}{}", self.data_url.as_str(), rel)
-                }
-            };
-            let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
-                .finish(meta)?
-                .data_file;
-            self.written.push(df);
+            self.finish_partition_state(partition_dir, state).await?;
         }
         Ok(())
     }
@@ -302,13 +414,8 @@ impl IcebergTableWriter {
     pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
         let keys: Vec<String> = self.writers.keys().cloned().collect();
         for k in keys {
-            let vals = self
-                .partition_values_map
-                .remove(&k)
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            self.flush_partition(&k, vals).await?;
+            self.flush_partition(&k).await?;
+            self.partition_values_map.remove(&k);
         }
         Ok(self.written)
     }
@@ -382,5 +489,82 @@ impl IcebergTableWriter {
             return Ok(Some(array));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{ArrayRef, Int64Array};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::execution::TaskContext;
+    use datafusion_common::{DataFusionError, Result};
+    use futures::TryStreamExt;
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+    use parquet::file::properties::WriterProperties;
+
+    use super::*;
+    use crate::datasource::type_converter::iceberg_schema_to_arrow;
+    use crate::operations::write::config::VariantShreddingConfig;
+    use crate::spec::partition::UnboundPartitionSpec;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    #[tokio::test]
+    async fn streams_files_and_rolls_over_at_target_size() -> Result<()> {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_fields([Arc::new(NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .map_err(DataFusionError::Plan)?;
+        let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&table_schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let store = Arc::new(InMemory::new());
+        let context = TaskContext::default();
+        let config = WriterConfig {
+            table_schema,
+            partition_columns: vec![],
+            writer_properties: WriterProperties::default(),
+            target_file_size: 1,
+            write_batch_size: 1,
+            num_indexed_cols: 32,
+            stats_columns: None,
+            iceberg_schema: Arc::new(iceberg_schema),
+            partition_spec: UnboundPartitionSpec { fields: vec![] },
+            variant_shredding: VariantShreddingConfig::default(),
+        };
+        let mut writer = IcebergTableWriter::new(
+            store.clone(),
+            ObjectPath::from("table/data"),
+            config,
+            0,
+            Url::parse("memory:///table/data/")
+                .map_err(|error| DataFusionError::Plan(error.to_string()))?,
+            Arc::clone(context.memory_pool()),
+            64,
+        );
+
+        writer.write(&batch).await.map_err(DataFusionError::Plan)?;
+        let files = writer.close().await.map_err(DataFusionError::Plan)?;
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(files.iter().map(|file| file.record_count).sum::<u64>(), 3);
+        assert!(
+            files
+                .iter()
+                .all(|file| file.file_path.starts_with("memory:///table/data/part-"))
+        );
+        let objects = store
+            .list(Some(&ObjectPath::from("table/data")))
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| DataFusionError::ObjectStore(Box::new(error)))?;
+        assert_eq!(objects.len(), 3);
+        Ok(())
     }
 }

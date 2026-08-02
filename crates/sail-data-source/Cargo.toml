@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-parquet = { path = "../sail-parquet" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-pyarrow = { path = "../sail-pyarrow" }
@@ -44,3 +45,6 @@ educe = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

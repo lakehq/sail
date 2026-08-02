@@ -10,7 +10,8 @@ use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -44,8 +45,8 @@ impl PlanResolver<'_> {
         // registered table format. In that case, treat it as a direct data source read.
         if let [format, path] = name.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if registry.get(&format).is_ok() {
+            let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
+            if registry.get_optional(&format)?.is_some() {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
@@ -130,7 +131,7 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
                 let table_source = registry
                     .get(&format)?
                     .create_source(&self.ctx.state(), info)
@@ -480,7 +481,7 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceFormatRegistry>()?;
         let table_source = registry
             .get(&format)?
             .create_source(&self.ctx.state(), info)

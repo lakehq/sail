@@ -26,6 +26,10 @@ pub struct PlanConfig {
     pub pyspark_udf_config: Arc<PySparkUdfConfig>,
     /// The default table file format.
     pub default_table_file_format: String,
+    /// The Spark Parquet compression codec used when a write does not override it.
+    pub parquet_compression_codec: String,
+    /// The Spark row limit for each output file. Non-positive values mean unlimited.
+    pub max_records_per_file: i64,
     /// The default location for managed databases and tables.
     pub default_warehouse_directory: String,
     pub session_user_id: String,
@@ -62,6 +66,8 @@ impl Default for PlanConfig {
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_table_file_format: "PARQUET".to_string(),
+            parquet_compression_codec: "snappy".to_string(),
+            max_records_per_file: 0,
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: true,

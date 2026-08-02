@@ -13,9 +13,8 @@ use sail_catalog::provider::AlterTableOptions;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry, find_path_in_options,
-};
+use sail_common_datafusion::data_source_format::DataSourceFormatRegistry;
+use sail_common_datafusion::datasource::{OptionLayer, SinkInfo, SourceInfo, find_path_in_options};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
@@ -108,11 +107,14 @@ impl PlanResolver<'_> {
             return Ok(input);
         };
 
-        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-            PlanError::invalid(format!(
-                "failed to access table format registry for Delta path `{path}`: {e}",
-            ))
-        })?;
+        let registry = self
+            .ctx
+            .extension::<DataSourceFormatRegistry>()
+            .map_err(|e| {
+                PlanError::invalid(format!(
+                    "failed to access table format registry for Delta path `{path}`: {e}",
+                ))
+            })?;
         let table_format = registry.get(format).map_err(|e| {
             PlanError::invalid(format!(
                 "failed to resolve table format `{}` for Delta path `{path}`: {e}",
@@ -507,15 +509,18 @@ impl PlanResolver<'_> {
     async fn infer_existing_delta_metadata(
         &self,
         info: &TableInfo,
-    ) -> PlanResult<Option<sail_common_datafusion::datasource::TableFormatMetadata>> {
+    ) -> PlanResult<Option<sail_common_datafusion::data_source_format::DataSourceMetadata>> {
         let Some(location) = info.location.as_ref() else {
             return Ok(None);
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-            PlanError::invalid(format!(
-                "failed to access table format registry for Delta table `{location}`: {e}"
-            ))
-        })?;
+        let registry = self
+            .ctx
+            .extension::<DataSourceFormatRegistry>()
+            .map_err(|e| {
+                PlanError::invalid(format!(
+                    "failed to access table format registry for Delta table `{location}`: {e}"
+                ))
+            })?;
         let table_format = registry.get(&info.format).map_err(|e| {
             PlanError::invalid(format!(
                 "failed to resolve table format `{}` for Delta table `{location}`: {e}",

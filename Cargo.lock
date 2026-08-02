@@ -7633,10 +7633,12 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-parquet",
  "sail-physical-plan",
  "sail-pyarrow",
  "sail-sql-analyzer",
  "serde",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -7678,6 +7680,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-logical-plan",
+ "sail-parquet",
  "sail-physical-plan",
  "serde",
  "serde_arrow",
@@ -7718,6 +7721,7 @@ dependencies = [
  "sail-iceberg",
  "sail-logical-plan",
  "sail-object-store",
+ "sail-parquet",
  "sail-physical-plan",
  "sail-python-udf",
  "sail-server",
@@ -7852,10 +7856,12 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-parquet",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
+ "tokio",
  "url",
  "uuid",
 ]
@@ -7912,11 +7918,31 @@ dependencies = [
  "reqwest 0.12.28",
  "sail-common",
  "sail-telemetry",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
  "tonic",
  "url",
+]
+
+[[package]]
+name = "sail-parquet"
+version = "0.6.6"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
+ "futures",
+ "log",
+ "object_store",
+ "parquet",
+ "sail-common-datafusion",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -7946,6 +7972,7 @@ dependencies = [
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",
+ "sail-parquet",
  "serde",
  "serde_json",
  "tokio",

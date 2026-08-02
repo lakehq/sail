@@ -16,6 +16,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::hive_partition::unescape_path_name;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -179,7 +180,10 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
                 .skip(1) // get parents only and skip the file itself
                 .rev()
                 .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
+                .filter_map(|part| part.split_once('=').map(|(name, _)| name))
+                .map(unescape_path_name)
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>();
 
