@@ -1,4 +1,3 @@
-@unix_timestamp
 Feature: unix_timestamp with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: unix_timestamp with an argument coming from a column
 
   Rule: unix_timestamp — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: unix_timestamp with the argument as a literal
       When query
         """
@@ -16,7 +15,7 @@ Feature: unix_timestamp with an argument coming from a column
         | result     |
         | 1460073600 |
 
-    @column_args
+    @function(columnargs)
     Scenario: unix_timestamp takes argument 2 from a column
       When query
         """
@@ -248,7 +247,7 @@ Feature: unix_timestamp with an argument coming from a column
          |-- timestamp_ntz_result: long (nullable = false)
         """
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null string literal yields a bigint

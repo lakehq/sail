@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+from pathlib import Path
 
 
 def pytest_configure(config):
@@ -36,6 +37,18 @@ def pytest_configure(config):
     )
 
     configure_sail_environment()
+
+
+def pytest_collection_modifyitems(items):
+    # Add BDD feature file paths as an extra keyword to support test selection based on feature files.
+    package_root = Path(__file__).resolve().parents[1]
+    for item in items:
+        scenario = getattr(getattr(item, "function", None), "__scenario__", None)
+        feature = getattr(scenario, "feature", None)
+        filename = getattr(feature, "filename", None)
+        if filename:
+            path = Path(filename).resolve().relative_to(package_root)
+            item.extra_keyword_matches.add(path.as_posix())
 
 
 def configure_sail_environment():

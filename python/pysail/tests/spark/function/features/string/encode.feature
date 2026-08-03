@@ -1,4 +1,3 @@
-@encode
 Feature: encode with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: encode with an argument coming from a column
 
   Rule: encode — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: encode with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: encode with an argument coming from a column
         | 616263 |
 
     # Sail rejects the column: Sail errors: Unsupported args [Scalar(Utf8("abc")), Array(StringArray [ "utf-8", null, ])] for Spark fu...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: encode takes argument 2 from a column containing NULL
       When query
         """
@@ -29,7 +28,7 @@ Feature: encode with an argument coming from a column
         | NULL   |
 
     # Sail rejects the column: Sail errors: Unsupported args [Scalar(Utf8("abc")), Array(StringArray [ "utf-8", "utf-8", ])] for Spark...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: encode takes argument 2 from a column
       When query
         """
@@ -40,7 +39,7 @@ Feature: encode with an argument coming from a column
         | 616263 |
         | 616263 |
 
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: encode takes argument 2 from a column holding two different values
       When query
         """
@@ -51,7 +50,7 @@ Feature: encode with an argument coming from a column
         | 6162         |
         | FEFF00610062 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null string literal is nullable (encode is inherently nullable in Spark)

@@ -1,7 +1,6 @@
-@sin
 Feature: sin output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to sin yields the schema Spark declares

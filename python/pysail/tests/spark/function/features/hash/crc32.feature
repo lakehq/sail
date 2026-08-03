@@ -1,7 +1,6 @@
-@crc32
 Feature: crc32 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to crc32 yields the schema Spark declares

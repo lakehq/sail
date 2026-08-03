@@ -1,7 +1,6 @@
-@regexp
 Feature: regexp output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to regexp yields the schema Spark declares

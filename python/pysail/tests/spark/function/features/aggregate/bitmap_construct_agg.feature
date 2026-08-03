@@ -1,4 +1,3 @@
-@bitmap_construct_agg
 Feature: bitmap_construct_agg builds a bitmap from bit positions
 
   Rule: bitmap_construct_agg sets bits from bitmap_bit_position

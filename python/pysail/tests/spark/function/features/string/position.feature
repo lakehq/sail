@@ -1,4 +1,3 @@
-@position
 Feature: position() finds the position of a substring in a string
 
   Rule: Basic usage
@@ -50,7 +49,7 @@ Feature: position() finds the position of a substring in a string
         | position with start position 1 finds substring        | 1     | 4 |
         | position with start position past the match returns 0 | 5     | 0 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to position yields the schema Spark declares

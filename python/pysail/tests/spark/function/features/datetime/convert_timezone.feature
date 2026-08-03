@@ -1,4 +1,3 @@
-@convert_timezone
 Feature: convert_timezone
 
   Rule: Type coercion
@@ -66,7 +65,7 @@ Feature: convert_timezone
         | '2025-03-09 10:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 01:30:00 |
         | '2025-03-09 11:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 03:30:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

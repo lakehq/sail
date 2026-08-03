@@ -1,4 +1,3 @@
-@cast_date_to_numeric
 Feature: CAST date to numeric types returns null
 
   In Spark legacy mode, casting a DATE to any numeric type returns NULL.

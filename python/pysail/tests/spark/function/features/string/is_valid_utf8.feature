@@ -1,7 +1,6 @@
-@is_valid_utf8
 Feature: is_valid_utf8 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

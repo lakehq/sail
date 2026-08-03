@@ -1,7 +1,6 @@
-@make_valid_utf8
 Feature: make_valid_utf8 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to make_valid_utf8 yields the schema Spark declares

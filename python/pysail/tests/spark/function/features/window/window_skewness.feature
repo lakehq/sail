@@ -1,4 +1,3 @@
-@window_skewness
 Feature: skewness and kurtosis over window functions
 
   Rule: skewness over expanding window

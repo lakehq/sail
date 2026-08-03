@@ -1,4 +1,3 @@
-@to_timestamp
 Feature: to_timestamp (strict variant)
   Strict to_timestamp that throws on invalid input,
   contrasting with try_to_timestamp which returns NULL.
@@ -130,7 +129,7 @@ Feature: to_timestamp (strict variant)
         | 2024-01-15 10:30:00 |
         | 2024-01-15 10:30:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null string literal yields a timestamp

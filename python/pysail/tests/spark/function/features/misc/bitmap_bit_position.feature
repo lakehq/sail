@@ -1,7 +1,6 @@
-@bitmap_bit_position
 Feature: bitmap_bit_position output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug
