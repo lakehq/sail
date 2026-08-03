@@ -302,7 +302,7 @@ def append_query_to_delta_table_with_merge_schema(
     spark.sql(docstring).write.format("delta").mode("append").option(
         "mergeSchema",
         "true",
-    ).save(location.path.absolute().as_uri())
+    ).save(str(location.path.absolute()))
 
 
 def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, dict]) -> dict:
