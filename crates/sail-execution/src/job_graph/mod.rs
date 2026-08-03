@@ -48,7 +48,10 @@ impl JobGraph {
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale => 1,
+                        InputMode::Forward
+                        | InputMode::Shuffle
+                        | InputMode::Barrier
+                        | InputMode::Rescale => 1,
                         InputMode::Merge | InputMode::Broadcast => {
                             x.plan.output_partitioning().partition_count()
                         }
@@ -147,6 +150,9 @@ pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input
     /// which reads data from the corresponding channel of all partitions in the input stage.
     Shuffle,
+    /// Read the input like a shuffle, but do not schedule the current stage until every input
+    /// partition has succeeded.
+    Barrier,
     /// For each partition in the current stage, execute a single partition to fetch the input
     /// which reads all channels from all partitions in the input stage.
     Broadcast,
@@ -162,6 +168,7 @@ impl fmt::Display for InputMode {
             InputMode::Forward => write!(f, "Forward"),
             InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
+            InputMode::Barrier => write!(f, "Barrier"),
             InputMode::Broadcast => write!(f, "Broadcast"),
             InputMode::Rescale => write!(f, "Rescale"),
         }

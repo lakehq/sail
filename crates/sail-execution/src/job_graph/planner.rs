@@ -8,6 +8,7 @@ use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
@@ -569,14 +570,10 @@ fn build_barrier_job_graph(
                 scalar_context,
             )
         })
-        .collect::<ExecutionResult<Vec<_>>>()?;
-    let preconditions_have_pending_scalar_subquery_expr = preconditions
-        .iter()
-        .any(|precondition| precondition.has_pending_scalar_subquery_expr);
-    let preconditions = preconditions
+        .collect::<ExecutionResult<Vec<_>>>()?
         .into_iter()
-        .map(|precondition| precondition.plan)
-        .collect::<Vec<_>>();
+        .map(|precondition| create_barrier_input(precondition, graph, scalar_context))
+        .collect::<ExecutionResult<Vec<_>>>()?;
     let plan_is_driver_stage = is_driver_stage_plan(barrier.plan());
     let plan = if plan_is_driver_stage {
         plan_job_graph_stages(
@@ -595,8 +592,7 @@ fn build_barrier_job_graph(
             scalar_context,
         )?
     };
-    let barrier_has_pending_scalar_subquery_expr =
-        preconditions_have_pending_scalar_subquery_expr || plan.has_pending_scalar_subquery_expr;
+    let barrier_has_pending_scalar_subquery_expr = plan.has_pending_scalar_subquery_expr;
     let barrier = Arc::new(BarrierExec::new(preconditions, plan.plan)) as Arc<dyn ExecutionPlan>;
     let barrier = PlannedSubtree::new(barrier, barrier_has_pending_scalar_subquery_expr);
     if plan_is_driver_stage {
@@ -606,6 +602,29 @@ fn build_barrier_job_graph(
     } else {
         Ok(barrier)
     }
+}
+
+fn create_barrier_input(
+    precondition: PlannedSubtree,
+    graph: &mut JobGraph,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let precondition = wrap_pending_scalar_subqueries(precondition, scalar_context);
+    let partitions = precondition.output_partitioning().partition_count();
+    let empty = Arc::new(EmptyExec::new(precondition.schema()).with_partitions(partitions))
+        as Arc<dyn ExecutionPlan>;
+    let guard = Arc::new(BarrierExec::new(vec![precondition], empty));
+    let stage = push_stage(
+        guard,
+        graph,
+        OutputDistribution::RoundRobin {
+            channels: partitions,
+        },
+        TaskPlacement::Worker,
+        OutputMode::Pipelined,
+    )?;
+    let properties = graph.stages[stage].plan.properties().clone();
+    Ok(stage_input_exec(stage, InputMode::Barrier, properties))
 }
 
 fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -985,6 +1004,7 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions};
+    use crate::driver::job_scheduler::JobTopology;
     use crate::error::ExecutionResult;
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
@@ -1150,10 +1170,25 @@ mod tests {
         let command = Arc::new(CooperativeExec::new(command));
         let graph = job_graph(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
 
-        assert_eq!(graph.stages().len(), 3);
-        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        assert_eq!(graph.stages().len(), 4);
+        assert_eq!(graph.stages()[1].placement, TaskPlacement::Worker);
         #[expect(clippy::expect_used)]
-        let barrier = graph.stages()[1]
+        let guard = graph.stages()[1]
+            .plan
+            .downcast_ref::<BarrierExec>()
+            .expect("precondition stage should contain BarrierExec");
+        assert!(guard.plan().is::<EmptyExec>());
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+
+        assert_eq!(graph.stages()[2].placement, TaskPlacement::Driver);
+        #[expect(clippy::expect_used)]
+        let barrier = graph.stages()[2]
             .plan
             .downcast_ref::<BarrierExec>()
             .expect("driver stage should contain BarrierExec");
@@ -1164,19 +1199,39 @@ mod tests {
             .expect("barrier actual plan should preserve CooperativeExec");
         assert!(cooperative.input().is::<CatalogCommandExec>());
         assert!(matches!(
-            graph.stages()[1].inputs.as_slice(),
-            [StageInput {
-                stage: 0,
-                mode: InputMode::Shuffle,
-            }]
-        ));
-        assert!(matches!(
             graph.stages()[2].inputs.as_slice(),
             [StageInput {
                 stage: 1,
+                mode: InputMode::Barrier,
+            }]
+        ));
+        assert!(matches!(
+            graph.stages()[3].inputs.as_slice(),
+            [StageInput {
+                stage: 2,
                 mode: InputMode::Forward,
             }]
         ));
+
+        let topology = JobTopology::try_new(&graph).unwrap();
+        #[expect(clippy::expect_used)]
+        let command_region = topology
+            .regions
+            .iter()
+            .position(|region| region.tasks.iter().any(|task| task.stage == 2))
+            .expect("command stage should belong to a task region");
+        #[expect(clippy::expect_used)]
+        let guard_region = topology
+            .regions
+            .iter()
+            .position(|region| region.tasks.iter().any(|task| task.stage == 1))
+            .expect("precondition guard should belong to a task region");
+        assert_ne!(command_region, guard_region);
+        assert!(
+            topology.regions[command_region]
+                .dependencies
+                .contains(&guard_region)
+        );
     }
 
     #[test]

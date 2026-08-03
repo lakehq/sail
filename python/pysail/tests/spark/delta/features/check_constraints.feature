@@ -87,6 +87,9 @@ Feature: Delta Lake CHECK Constraints
         ALTER TABLE delta_check_constraints_test
         ADD CONSTRAINT positive_id CHECK (id > 0)
         """
+      Then delta log latest effective protocol and metadata does not contain paths
+        | path                                                    |
+        | metaData.configuration['delta.constraints.positive_id'] |
       When query
         """
         SELECT id, value FROM delta_check_constraints_test

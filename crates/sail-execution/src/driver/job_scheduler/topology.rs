@@ -47,7 +47,9 @@ impl JobTopology {
         for (s, stage) in graph.stages().iter().enumerate() {
             for input in &stage.inputs {
                 stages[input.stage].consumers.push(s);
-                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined) {
+                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined)
+                    && !matches!(input.mode, InputMode::Barrier)
+                {
                     pipelined_adjacency[s].push(input.stage);
                     pipelined_adjacency[input.stage].push(s);
                 }
