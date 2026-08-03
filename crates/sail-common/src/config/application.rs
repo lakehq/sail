@@ -303,7 +303,7 @@ mod retry_strategy {
     from = "shuffle_backend::ShuffleBackend"
 )]
 pub enum ShuffleBackend {
-    Streaming,
+    Flight,
     Storage(StorageShuffleBackend),
 }
 
@@ -333,7 +333,7 @@ mod shuffle_backend {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
-        Streaming,
+        Flight,
         Storage,
     }
 
@@ -347,7 +347,7 @@ mod shuffle_backend {
     impl From<ShuffleBackend> for super::ShuffleBackend {
         fn from(value: ShuffleBackend) -> Self {
             match value.r#type {
-                Type::Streaming => super::ShuffleBackend::Streaming,
+                Type::Flight => super::ShuffleBackend::Flight,
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
             }
         }
@@ -356,8 +356,8 @@ mod shuffle_backend {
     impl From<super::ShuffleBackend> for ShuffleBackend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
-                super::ShuffleBackend::Streaming => ShuffleBackend {
-                    r#type: Type::Streaming,
+                super::ShuffleBackend::Flight => ShuffleBackend {
+                    r#type: Type::Flight,
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
