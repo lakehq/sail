@@ -45,7 +45,7 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | [Memory](./memory)                        | :white_check_mark: | :white_check_mark: |
 | [AWS S3](./s3)                            | :white_check_mark: | :white_check_mark: |
 | [Cloudflare R2](./s3)                     | :white_check_mark: | :white_check_mark: |
-| [Aliyun OSS](./s3)                        | :white_check_mark: | :white_check_mark: |
+| [Aliyun OSS](./s3#aliyun-oss)             | :white_check_mark: | :white_check_mark: |
 | [Azure Data Lake Storage (ADLS)](./azure) | :white_check_mark: | :white_check_mark: |
 | [Azure Blob Storage](./azure)             | :white_check_mark: | :white_check_mark: |
 | [Google Cloud Storage](./gcs)             | :white_check_mark: | :white_check_mark: |

@@ -102,6 +102,12 @@ The Sail Spark Connect server runs as a Kubernetes deployment, and the gRPC port
 kubectl apply -f k8s/sail.yaml
 ```
 
+::: info
+
+The example sets the `SAIL_MODE` environment variable to `kubernetes-cluster` for distributed execution. You can still run Sail in local mode in Kubernetes by setting `SAIL_MODE` to `local` or removing the environment variable. In local mode, the Sail server runs in a single pod and does not launch worker pods.
+
+:::
+
 ## Overriding the Default Pod Spec
 
 By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into

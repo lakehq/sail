@@ -7,23 +7,19 @@ rank: 2
 
 The Iceberg REST catalog provider in Sail allows you to connect to an external catalog that exposes the [Iceberg REST Catalog API](https://iceberg.apache.org/rest-catalog-spec/).
 
-An Iceberg REST catalog can be configured using the following options:
+## Options
 
-- `type` (required): The string `iceberg-rest`.
-- `name` (required): The name of the catalog.
+An Iceberg REST catalog can be configured using the following options.
+
+- `type` (required): The catalog provider. Set this option to `iceberg-rest`.
+- `name` (required): The catalog name.
 - `uri` (required): The base URI of the Iceberg REST catalog server.
-- `warehouse` (optional): The warehouse location for the catalog.
-- `prefix` (optional): The prefix for all catalog API endpoints.
-- `namespace_separator` (optional): A client-side fallback for the Iceberg REST `namespace-separator` catalog property.
-  Use the separator string the REST server expects, such as `::` or `/`.
-  Sail also accepts URL-encoded values returned by REST servers, such as `%3A%3A` for `::`.
-  If unset or empty, Sail uses the Iceberg REST default unit separator.
+- `warehouse` (optional): The catalog warehouse location.
+- `prefix` (optional): The prefix for catalog API endpoints.
+- `namespace_separator` (optional): The client-side fallback for the Iceberg REST `namespace-separator` catalog property. Use the separator that the REST server expects, such as `::` or `/`. Sail also accepts URL-encoded values returned by REST servers, such as `%3A%3A` for `::`. If this option is not set or is empty, Sail uses the Iceberg REST default unit separator.
 - `oauth_access_token` (optional): The OAuth 2.0 access token.
-- `bearer_access_token` (optional): The bearer token for authentication.
-- `bearer_access_token_file` (optional): Path to a file that holds the bearer token.
-  Sail reads the token from this file for every request, so a rotated token (for example a kubelet-projected service account token) is picked up without restarting the server.
-  If a request is rejected with `401 Unauthorized`, Sail reloads the file and retries the request once, so a token that rotates midway through a multi-step operation is recovered.
-  This option takes precedence over `bearer_access_token`.
+- `bearer_access_token` (optional): The bearer token for authentication. This option takes precedence over `oauth_access_token`.
+- `bearer_access_token_file` (optional): The path to a file that holds the bearer token. This option takes precedence over `bearer_access_token` and `oauth_access_token`. Sail reads the token from this file for every request, so it picks up a rotated token, such as a kubelet-projected service account token, without restarting the server. If a request is rejected with `401 Unauthorized`, Sail reloads the file and retries the request once. The file must contain the raw token without the `Bearer ` prefix for the HTTP `Authorization` header. Surrounding whitespace in the file is trimmed. Empty or unreadable files produce an error rather than falling back to other options.
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -31,26 +27,40 @@ See [Common Options](./index.md#common-options) for caching configuration.
 
 Sail calls `GET /v1/config` before catalog operations. The final Iceberg REST catalog configuration is merged in this order:
 
-1. Server `defaults`
-2. Sail client configuration
-3. Server `overrides`
+1. Server `defaults`.
+2. Sail client configuration.
+3. Server `overrides`.
 
-Server overrides take precedence over matching values configured in Sail. For example, if the REST server returns `namespace-separator` in `overrides`, Sail uses that value to encode multipart namespaces even when `namespace_separator` is configured locally. Configuring `namespace_separator` in Sail does not configure the REST server; the server must already decode the same separator, usually by advertising it from `/v1/config`.
+Server overrides take precedence over matching values configured in Sail. For example, if the REST server returns `namespace-separator` in `overrides`, Sail uses that value to encode multipart namespaces even when `namespace_separator` is configured locally. Configuring `namespace_separator` in Sail does not configure the REST server. The server must already decode the same separator, usually by advertising it from `/v1/config`.
 
 ## Examples
 
+This example configures an Iceberg REST catalog without authentication.
+
 ```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com"}]'
+```
 
-# OAuth authentication
+This example uses an OAuth access token.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", oauth_access_token="..."}]'
+```
 
-# Bearer token authentication
+This example uses a bearer token.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", bearer_access_token="..."}]'
+```
 
-# Bearer token read from a file (for example a kubelet-projected service account token)
+This example reads a bearer token from a file, such as a kubelet-projected service account token.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", bearer_access_token_file="/var/run/secrets/tokens/catalog-token"}]'
+```
 
-# Client-side namespace separator fallback
+This example configures a client-side namespace separator fallback.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", namespace_separator="::"}]'
 ```
