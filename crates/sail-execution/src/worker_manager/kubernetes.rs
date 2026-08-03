@@ -228,7 +228,7 @@ impl KubernetesWorkerManager {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
                     match &shuffle_backend {
-                        ShuffleBackendKind::Streaming => "streaming",
+                        ShuffleBackendKind::Flight => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
                     }
                     .to_string(),

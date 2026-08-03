@@ -258,10 +258,10 @@
 
 - key: cluster.shuffle_backend.type
   type: string
-  default: "streaming"
+  default: "flight"
   description: |
-    The shuffle backend type. Valid values are `streaming` and `storage`.
-    The `streaming` shuffle backend streams shuffle data directly among tasks.
+    The shuffle backend type. Valid values are `flight` and `storage`.
+    The `flight` shuffle backend streams shuffle data directly among tasks via Arrow Flight.
     The `storage` shuffle backend materializes merged shuffle partitions in object storage
     before running dependent stages.
   experimental: true

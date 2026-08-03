@@ -25,7 +25,7 @@ use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessag
 impl StreamManager {
     pub fn new(options: StreamManagerOptions) -> Self {
         let remote_streams = match &options.shuffle_backend {
-            crate::shuffle::ShuffleBackendKind::Streaming => None,
+            crate::shuffle::ShuffleBackendKind::Flight => None,
             crate::shuffle::ShuffleBackendKind::Storage {
                 path,
                 max_file_size,
