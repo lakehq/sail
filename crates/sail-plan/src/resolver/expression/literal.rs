@@ -13,6 +13,7 @@ use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 use crate::config::DefaultTimestampType;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
+use crate::resolver::data_type::interval_field_metadata;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
@@ -22,15 +23,29 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        // The interval fields are part of the Spark type but not of the Arrow type, so they are
+        // carried in the field metadata of the projected column.
+        let metadata = match &literal {
+            spec::Literal::IntervalYearMonth {
+                months: _,
+                start_field,
+                end_field,
+            }
+            | spec::Literal::DurationMicrosecond {
+                microseconds: _,
+                start_field,
+                end_field,
+            } => interval_field_metadata(*start_field, *end_field)?
+                .map(|x| vec![(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), x)])
+                .unwrap_or_default(),
+            _ => vec![],
+        };
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
             .plan_formatter()
             .literal_to_string(&literal, &self.config.session_timezone)?;
-        Ok(NamedExpr::new(
-            vec![name],
-            expr::Expr::Literal(literal, None),
-        ))
+        Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal, None)).with_metadata(metadata))
     }
 
     pub(super) fn resolve_expression_date(

@@ -116,11 +116,17 @@ impl TryFrom<Literal> for spec::Literal {
                     nanoseconds: x.microseconds * 1_000,
                 }),
             },
-            LiteralType::YearMonthInterval(x) => {
-                spec::Literal::IntervalYearMonth { months: Some(x) }
-            }
+            // The Spark Connect literal messages carry no interval fields, so the Spark default
+            // range applies.
+            LiteralType::YearMonthInterval(x) => spec::Literal::IntervalYearMonth {
+                months: Some(x),
+                start_field: None,
+                end_field: None,
+            },
             LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
                 microseconds: Some(x),
+                start_field: None,
+                end_field: None,
             },
             #[expect(deprecated)]
             LiteralType::Array(Array {

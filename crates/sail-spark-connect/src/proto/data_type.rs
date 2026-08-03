@@ -22,6 +22,27 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[expect(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
+/// Resolves the leading and trailing fields of a Spark interval type. A type that declares a
+/// single field spans that field only (`YearMonthIntervalType.apply(field)` and
+/// `DayTimeIntervalType.apply(field)` in Spark), while a type that declares none spans the
+/// default range (`YEAR TO MONTH` and `DAY TO SECOND`).
+pub(super) fn interval_fields(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+    default_start: spec::IntervalFieldType,
+    default_end: spec::IntervalFieldType,
+) -> (
+    Option<spec::IntervalFieldType>,
+    Option<spec::IntervalFieldType>,
+) {
+    match (start_field, end_field) {
+        (Some(start), Some(end)) => (Some(start), Some(end)),
+        (Some(start), None) => (Some(start), Some(start)),
+        (None, Some(end)) => (Some(default_start), Some(end)),
+        (None, None) => (Some(default_start), Some(default_end)),
+    }
+}
+
 /// Parse a Spark data type string of various forms.
 /// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
@@ -164,8 +185,12 @@ impl TryFrom<DataType> for spec::DataType {
                     .transpose()?
                     .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Year));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Month));
+                let (start_field, end_field) = interval_fields(
+                    start_field,
+                    end_field,
+                    spec::IntervalFieldType::Year,
+                    spec::IntervalFieldType::Month,
+                );
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::YearMonth,
                     start_field,
@@ -187,8 +212,12 @@ impl TryFrom<DataType> for spec::DataType {
                     .transpose()?
                     .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Day));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Second));
+                let (start_field, end_field) = interval_fields(
+                    start_field,
+                    end_field,
+                    spec::IntervalFieldType::Day,
+                    spec::IntervalFieldType::Second,
+                );
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::DayTime,
                     start_field,
