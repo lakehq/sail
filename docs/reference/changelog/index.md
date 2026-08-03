@@ -5,6 +5,68 @@ next: false
 
 # Changelog
 
+## 0.7.0
+
+_August 3, 2026_
+
+- Added support for Spark 4.2 ([#2289](https://github.com/lakehq/sail/pull/2289) and [#2334](https://github.com/lakehq/sail/pull/2334)).
+- Added support for version-aware Spark configuration ([#2296](https://github.com/lakehq/sail/pull/2296)).
+- Added support for `DataFrame.checkpoint()` in the Spark DataFrame API ([#2270](https://github.com/lakehq/sail/pull/2270)).
+- Added support for storage-backed shuffles ([#2232](https://github.com/lakehq/sail/pull/2232), [#2341](https://github.com/lakehq/sail/pull/2341), and [#2347](https://github.com/lakehq/sail/pull/2347)).
+- Added heartbeat support in the Spark Connect server for command execution ([#2323](https://github.com/lakehq/sail/pull/2323)).
+- Improved distributed processing internals ([#2253](https://github.com/lakehq/sail/pull/2253), [#2269](https://github.com/lakehq/sail/pull/2269), [#2329](https://github.com/lakehq/sail/pull/2329), [#2327](https://github.com/lakehq/sail/pull/2327), and [#2326](https://github.com/lakehq/sail/pull/2326)).
+- Added projection pushdown support for explicit repartitioning ([#2183](https://github.com/lakehq/sail/pull/2183)).
+- Improved the performance of queries involving common aggregation expressions ([#2244](https://github.com/lakehq/sail/pull/2244)).
+- Added support for the `DataFrame.inputFiles()` method in the Spark DataFrame API ([#2239](https://github.com/lakehq/sail/pull/2239)).
+- Improved Delta Lake integration ([#2324](https://github.com/lakehq/sail/pull/2324), [#2266](https://github.com/lakehq/sail/pull/2266), [#2263](https://github.com/lakehq/sail/pull/2263), and [#1654](https://github.com/lakehq/sail/pull/1654)).
+- Improved Iceberg integration ([#2292](https://github.com/lakehq/sail/pull/2292), [#2274](https://github.com/lakehq/sail/pull/2274), and [#2229](https://github.com/lakehq/sail/pull/2229)).
+- Added support for bearer token files for the Iceberg REST catalog ([#2288](https://github.com/lakehq/sail/pull/2288)).
+- Improved Hive Metastore integration ([#2230](https://github.com/lakehq/sail/pull/2230)).
+- Added support for explicit AWS Glue catalog IDs ([#2285](https://github.com/lakehq/sail/pull/2285)).
+- Added support for accessing Aliyun OSS S3-compatible endpoints via `oss://` and `https://` URLs ([#2283](https://github.com/lakehq/sail/pull/2283)).
+- Improved datetime format handling for better parity with the Java implementation ([#2099](https://github.com/lakehq/sail/pull/2099) and [#2322](https://github.com/lakehq/sail/pull/2322)).
+- Added support for the `pathGlobFilter` option for all file data sources ([#2284](https://github.com/lakehq/sail/pull/2284)).
+- Added support for the `from_xml` SQL function ([#2098](https://github.com/lakehq/sail/pull/2098)).
+- Improved the following SQL functions ([#2303](https://github.com/lakehq/sail/pull/2303), [#2255](https://github.com/lakehq/sail/pull/2255), [#2260](https://github.com/lakehq/sail/pull/2260), [#2254](https://github.com/lakehq/sail/pull/2254), [#2238](https://github.com/lakehq/sail/pull/2238), [#2190](https://github.com/lakehq/sail/pull/2190), [#2233](https://github.com/lakehq/sail/pull/2233), [#1729](https://github.com/lakehq/sail/pull/1729), [#2157](https://github.com/lakehq/sail/pull/2157), [#2272](https://github.com/lakehq/sail/pull/2272), and [#2312](https://github.com/lakehq/sail/pull/2312)):
+  - `arrays_zip`
+  - `bit_length`
+  - `char_length`
+  - `character_length`
+  - `ceil`
+  - `concat_ws`
+  - `count_min_sketch`
+  - `exists`
+  - `floor`
+  - `forall`
+  - `from_csv`
+  - `hll_sketch_agg`
+  - `len`
+  - `length`
+  - `next_day`
+  - `octet_length`
+  - `regexp_replace`
+  - `schema_of_csv`
+  - `schema_of_json`
+  - `schema_of_variant`
+  - `schema_of_variant_agg`
+  - `theta_sketch_agg`
+  - `to_csv`
+  - `to_xml`
+- Improved ordering semantics for aggregate and window functions ([#2228](https://github.com/lakehq/sail/pull/2228)).
+- Improved the memory catalog by requiring `CASCADE` when dropping non-empty databases ([#2336](https://github.com/lakehq/sail/pull/2336)).
+- Improved OpenAPI client implementations for catalogs ([#2215](https://github.com/lakehq/sail/pull/2215), [#2226](https://github.com/lakehq/sail/pull/2226), and [#2227](https://github.com/lakehq/sail/pull/2227)).
+- Upgraded DataFusion to 54.1.0 ([#2293](https://github.com/lakehq/sail/pull/2293)).
+- Migrated to Rust edition 2024 and increased the MSRV to 1.96.0 ([#2208](https://github.com/lakehq/sail/pull/2208) and [#2224](https://github.com/lakehq/sail/pull/2224)).
+
+### Breaking Changes
+
+- The OpenTelemetry OTLP exporter configuration options were renamed from `telemetry.otlp_*` to `telemetry.exporter.otlp.*` ([#2340](https://github.com/lakehq/sail/pull/2340)).
+- The Parquet `extension` and `fileExtension` data source options were removed. Use `pathGlobFilter` to select files with non-standard suffixes ([#2330](https://github.com/lakehq/sail/pull/2330)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@rohankumardubey](https://github.com/rohankumardubey) (_first-time contributor_), [@twsl](https://github.com/twsl), [@zemin-piao](https://github.com/zemin-piao), [@anarefolio](https://github.com/anarefolio), [@santosh-d3vpl3x](https://github.com/santosh-d3vpl3x), [@Robin-Everaars](https://github.com/Robin-Everaars) (_first-time contributor_), [@fangchenli](https://github.com/fangchenli) (_first-time contributor_), [@weixiuli](https://github.com/weixiuli) (_first-time contributor_), [@nis12ram](https://github.com/nis12ram), and [@ShiroKSH](https://github.com/ShiroKSH) (_first-time contributor_) for your contributions!
+
 ## 0.6.6
 
 _July 7, 2026_
