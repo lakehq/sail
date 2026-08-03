@@ -6,11 +6,13 @@ use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
 use crate::id::{DriverId, WorkerId};
+use crate::shuffle::ShuffleBackendKind;
 use crate::worker_manager::WorkerLaunchOptions;
 
 #[readonly::make]
 pub struct WorkerOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_host: String,
     pub driver_port: u16,
@@ -23,6 +25,7 @@ pub struct WorkerOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_backend: ShuffleBackendKind,
     pub runtime: RuntimeHandle,
     pub session: SessionContext,
 }
@@ -31,6 +34,7 @@ impl WorkerOptions {
     pub fn new(config: &AppConfig, runtime: RuntimeHandle, session: SessionContext) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
+            session_id: config.cluster.session_id.clone(),
             driver_id: config.cluster.driver_id.into(),
             driver_host: config.cluster.driver_external_host.clone(),
             driver_port: if config.cluster.driver_external_port > 0 {
@@ -51,6 +55,7 @@ impl WorkerOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
+            shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
             session,
         }
@@ -64,6 +69,7 @@ impl WorkerOptions {
     ) -> Self {
         WorkerOptions {
             enable_tls: options.enable_tls,
+            session_id: options.session_id,
             driver_id: options.driver_id,
             driver_host: options.driver_external_host,
             driver_port: options.driver_external_port,
@@ -76,6 +82,7 @@ impl WorkerOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy,
+            shuffle_backend: options.shuffle_backend,
             runtime: runtime.clone(),
             session,
         }

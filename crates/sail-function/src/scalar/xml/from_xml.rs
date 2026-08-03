@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -20,7 +19,7 @@ use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -60,9 +59,9 @@ struct SparkFromXmlOptions {
     null_value: Option<String>,
     attribute_prefix: String,
     value_tag: String,
-    timestamp_ltz_format: String,
-    timestamp_ntz_format: String,
-    date_format: String,
+    timestamp_ltz_format: DateTimeFormat,
+    timestamp_ntz_format: DateTimeFormat,
+    date_format: DateTimeFormat,
     mode: ParseMode,
 }
 
@@ -76,9 +75,9 @@ impl SparkFromXmlOptions {
     const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     const MODE_OPTION: &'static str = "mode";
-    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
@@ -94,19 +93,31 @@ impl SparkFromXmlOptions {
         }
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_LTZ_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp LTZ format should be valid")
+            });
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp NTZ format should be valid")
+            });
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
         let mode = match find_key_value(map, Self::MODE_OPTION)
             .as_deref()
             .map(|s| s.to_ascii_uppercase())
@@ -136,9 +147,21 @@ impl Default for SparkFromXmlOptions {
             null_value: None,
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
-            timestamp_ltz_format: Self::TIMESTAMP_LTZ_FORMAT_DEFAULT.to_string(),
-            timestamp_ntz_format: Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_ltz_format: {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp LTZ format should be valid")
+            },
+            timestamp_ntz_format: {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp NTZ format should be valid")
+            },
+            date_format: {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            },
             mode: ParseMode::Permissive,
         }
     }
@@ -813,7 +836,7 @@ fn append_text(
         },
 
         XmlFieldBuilder::String(b) => b.append_value(raw),
-        XmlFieldBuilder::Date32(b) => match NaiveDate::parse_from_str(raw, &options.date_format) {
+        XmlFieldBuilder::Date32(b) => match options.date_format.parse_date_value(raw) {
             Ok(d) => b.append_value(Date32Type::from_naive_date(d)),
             Err(_) => b.append_null(),
         },
@@ -823,12 +846,12 @@ fn append_text(
             } else {
                 &options.timestamp_ntz_format
             };
-            match parse_naive_datetime(raw, fmt) {
-                Some(naive) => {
-                    let micros = to_utc_micros(naive, *has_tz, session_timezone)?;
+            match fmt.parse_datetime_value(raw) {
+                Ok(parsed) => {
+                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
                     b.append_value(micros);
                 }
-                None => b.append_null(),
+                Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::TimestampNanosecond { builder: b, has_tz } => {
@@ -837,12 +860,12 @@ fn append_text(
             } else {
                 &options.timestamp_ntz_format
             };
-            match parse_naive_datetime(raw, fmt) {
-                Some(naive) => {
-                    let micros = to_utc_micros(naive, *has_tz, session_timezone)?;
+            match fmt.parse_datetime_value(raw) {
+                Ok(parsed) => {
+                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
                     b.append_value(micros * 1_000);
                 }
-                None => b.append_null(),
+                Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::List { .. } | XmlFieldBuilder::Struct { .. } => {
@@ -853,24 +876,29 @@ fn append_text(
     Ok(())
 }
 
-fn parse_naive_datetime(raw: &str, fmt: &str) -> Option<NaiveDateTime> {
-    NaiveDateTime::parse_from_str(raw, fmt).ok().or_else(|| {
-        NaiveDate::parse_from_str(raw, fmt)
-            .ok()
-            .and_then(|d| d.and_hms_opt(0, 0, 0))
-    })
-}
-
-fn to_utc_micros(naive: NaiveDateTime, has_tz: bool, session_timezone: &str) -> Result<i64> {
-    if has_tz {
-        let tz: Tz = session_timezone
-            .parse()
-            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone: {e}")))?;
-        let localized = localize_with_fallback(&tz, &naive)?;
-        Ok(localized.timestamp_micros())
-    } else {
-        Ok(naive.and_utc().timestamp_micros())
+fn parsed_timestamp_to_micros(
+    parsed: ParsedDateTime,
+    has_timezone: bool,
+    session_timezone: &str,
+) -> Result<i64> {
+    if !has_timezone {
+        return Ok(parsed.datetime.and_utc().timestamp_micros());
     }
+
+    if let Some(offset) = parsed.offset {
+        return parsed
+            .datetime
+            .and_local_timezone(offset)
+            .single()
+            .map(|datetime| datetime.to_utc().timestamp_micros())
+            .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()));
+    }
+
+    let timezone_name = parsed.timezone.as_deref().unwrap_or(session_timezone);
+    let timezone: Tz = timezone_name.parse().map_err(|e| {
+        DataFusionError::Execution(format!("Invalid timezone '{timezone_name}': {e}"))
+    })?;
+    Ok(localize_with_fallback(&timezone, &parsed.datetime)?.timestamp_micros())
 }
 
 fn parse_decimal128(raw: &str, precision: u8, scale: i8) -> Option<i128> {

@@ -378,7 +378,7 @@ fn distributed_plan_string(
     let plan = physical.as_ref()?;
     let service = ctx.extension::<JobService>().ok()?;
     match service.runner().explain(Arc::clone(plan)) {
-        Ok(plan) => plan,
+        Ok(plan) => Some(plan),
         Err(err) => Some(format!("Distributed plan error: {err}")),
     }
 }
@@ -427,9 +427,8 @@ async fn explain_from_collected(
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
     let mut physical = PhysicalStrings::default();
-    let distributed_plan = distributed_plan_string(ctx, &collected.physical_plan);
 
-    let mut sections = match options.kind {
+    let sections = match options.kind {
         ExplainKind::Simple => {
             let physical_for_mode = if options.analyze {
                 physical.full_with_metrics(&collected)
@@ -466,7 +465,7 @@ async fn explain_from_collected(
             ]
         }
         ExplainKind::Codegen => {
-            vec![
+            let mut sections = vec![
                 render_section(
                     "Codegen",
                     "Whole-stage codegen is not supported; showing physical plan instead.",
@@ -483,7 +482,11 @@ async fn explain_from_collected(
                         physical.plain(&collected, options.verbose)
                     },
                 ),
-            ]
+            ];
+            if let Some(plan) = distributed_plan_string(ctx, &collected.physical_plan) {
+                sections.push(render_section("Distributed Plan", &plan));
+            }
+            sections
         }
         ExplainKind::Cost => {
             vec![
@@ -505,9 +508,6 @@ async fn explain_from_collected(
             vec![render_section("Physical Plan", physical.full(&collected))]
         }
     };
-    if let Some(plan) = distributed_plan {
-        sections.push(render_section("Distributed Plan", &plan));
-    }
     let output = sections.join("\n\n");
 
     Ok(ExplainString {

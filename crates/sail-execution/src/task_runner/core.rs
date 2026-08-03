@@ -91,7 +91,7 @@ impl TaskRunner {
             &definition.inputs,
             &definition.output,
             plan,
-            &context,
+            context.clone(),
         )?;
         debug!(
             "{} execution plan\n{}",
@@ -126,7 +126,9 @@ impl TaskRunner {
                 // work sharing and keeps each task on its own file group.
                 let mut builder =
                     FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                if ds.downcast_to_file_source::<ParquetSource>().is_some()
+                    && base_config.expr_adapter_factory.is_none()
+                {
                     let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
                         Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                     builder = builder.with_expr_adapter(Some(adapter_factory));
@@ -146,36 +148,37 @@ impl TaskRunner {
         inputs: &[TaskInput],
         output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
-        context: &TaskContext,
+        context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let handle = ctx.handle();
-        let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
-                let Some(input) = inputs.get(*placeholder.input()) else {
-                    return internal_err!(
-                        "stage input index {} out of bounds for {}",
-                        placeholder.input(),
-                        TaskKeyDisplay(key)
+        let accessor = StreamAccessor::new(ctx.handle().clone(), context.clone());
+        let result = {
+            let accessor = accessor.clone();
+            plan.transform(move |node| {
+                if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
+                    let Some(input) = inputs.get(*placeholder.input()) else {
+                        return internal_err!(
+                            "stage input index {} out of bounds for {}",
+                            placeholder.input(),
+                            TaskKeyDisplay(key)
+                        );
+                    };
+                    let locations = input.locations(key.job_id);
+                    let shuffle = ShuffleReadExec::new(
+                        locations,
+                        Arc::new(accessor.clone()),
+                        placeholder.properties().clone(),
                     );
-                };
-                let locations = input.locations(key.job_id);
-                let accessor = StreamAccessor::new(handle.clone());
-                let shuffle = ShuffleReadExec::new(
-                    locations,
-                    Arc::new(accessor),
-                    placeholder.properties().clone(),
-                );
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else {
-                Ok(Transformed::no(node))
-            }
-        });
+                    Ok(Transformed::yes(Arc::new(shuffle)))
+                } else {
+                    Ok(Transformed::no(node))
+                }
+            })
+        };
         let plan = result.data()?;
         let schema = plan.schema();
-        let accessor = StreamAccessor::new(handle.clone());
         let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
         match locations.get_mut(key.partition) {
             Some(x) => x.extend(output.locations(key)),
@@ -186,7 +189,7 @@ impl TaskRunner {
                 )));
             }
         };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
+        let partitioning = output.partitioning(&context, &schema, self.codec.as_ref())?;
         let row_based = output.row_based();
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);

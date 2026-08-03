@@ -71,6 +71,12 @@
   description: Whether to enable TLS for cluster communication.
   experimental: true
 
+- key: cluster.session_id
+  type: string
+  default: ""
+  description:
+  hidden: true
+
 - key: cluster.driver_listen_host
   type: string
   default: "127.0.0.1"
@@ -250,6 +256,40 @@
     when using the `exponential_backoff` retry strategy.
   experimental: true
 
+- key: cluster.shuffle_backend.type
+  type: string
+  default: "flight"
+  description: |
+    The shuffle backend type. Valid values are `flight` and `storage`.
+    The `flight` shuffle backend streams shuffle data directly among tasks via Arrow Flight.
+    The `storage` shuffle backend materializes merged shuffle partitions in object storage
+    before running dependent stages.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.path
+  type: string
+  default: ""
+  description: |
+    The object storage base URL for storage-backed shuffle data.
+    This is required when `cluster.shuffle_backend.type` is `storage`.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.max_file_size
+  type: number
+  default: "134217728"
+  description: |
+    The maximum size in bytes of each storage-backed shuffle file. Larger partitions are
+    split into multiple Arrow IPC files.
+  experimental: true
+
+- key: cluster.shuffle_backend.storage.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
 - key: execution.batch_size
   type: number
   default: "8192"
@@ -315,6 +355,17 @@
     This setting is only effective when the cache is enabled.
     Setting the value to `0` disables the limit.
     This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: execution.checkpoint.path
+  type: string
+  default: ""
+  description: |
+    The object storage base path for DataFrame checkpoints managed by the server. The path must be
+    readable and writable by the driver and every worker. Checkpoint operations are rejected when
+    this value is empty. Sail does not fall back to driver memory or local worker storage. Sail
+    removes each session namespace on shutdown. An object storage lifecycle policy can clean up
+    data left by an ungraceful process exit.
   experimental: true
 
 - key: parquet.enable_page_index
@@ -805,13 +856,15 @@
   description: Whether to export logs to an OpenTelemetry collector.
   experimental: true
 
-- key: telemetry.otlp_endpoint
+- key: telemetry.exporter.otlp.endpoint
   type: string
-  default: "http://localhost:4317"
-  description: The OTLP endpoint for telemetry data export.
+  default: ""
+  description: |
+    The OTLP endpoint for telemetry data export.
+    The OTLP exporter is disabled unless this option is set.
   experimental: true
 
-- key: telemetry.otlp_protocol
+- key: telemetry.exporter.otlp.protocol
   type: string
   default: "grpc"
   description: |
@@ -819,7 +872,7 @@
     Valid values are `grpc`, `http-binary`, and `http-json`.
   experimental: true
 
-- key: telemetry.otlp_timeout_secs
+- key: telemetry.exporter.otlp.timeout_secs
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.

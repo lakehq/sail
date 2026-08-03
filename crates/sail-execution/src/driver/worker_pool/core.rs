@@ -40,7 +40,7 @@ impl WorkerPool {
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.generate() else {
             error!("failed to generate worker ID");
-            ctx.send(DriverEvent::Shutdown { history: None });
+            ctx.send(DriverEvent::Shutdown { result: None });
             return;
         };
         let descriptor = WorkerDescriptor {
@@ -68,6 +68,7 @@ impl WorkerPool {
         let _guard = span.set_local_parent();
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            session_id: self.options.session_id.clone(),
             driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
             driver_external_port: if self.options.driver_external_port > 0 {
@@ -79,6 +80,7 @@ impl WorkerPool {
             task_stream_buffer: self.options.task_stream_buffer,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
+            shuffle_backend: self.options.shuffle_backend.clone(),
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {

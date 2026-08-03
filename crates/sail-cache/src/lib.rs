@@ -4,6 +4,7 @@ pub mod error;
 pub mod file_listing_cache;
 pub mod file_metadata_cache;
 pub mod file_statistics_cache;
+pub mod remote_checkpoint;
 
 #[expect(dead_code)]
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {

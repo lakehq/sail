@@ -303,12 +303,15 @@ impl DriverActor {
     pub(super) fn handle_create_remote_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.create_remote_stream(uri, key, schema));
+        let _ = result.send(
+            self.stream_manager
+                .create_remote_stream(key, schema, &context),
+        );
         ActorAction::Continue
     }
 
@@ -340,14 +343,14 @@ impl DriverActor {
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.stream_manager
-                .fetch_remote_stream(ctx, uri, &key, schema),
+                .fetch_remote_stream(ctx, &key, schema, &context),
         );
         ActorAction::Continue
     }
@@ -409,12 +412,12 @@ impl DriverActor {
     pub(super) fn handle_shutdown(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        history: Option<oneshot::Sender<JobRunnerHistory>>,
+        result: Option<oneshot::Sender<()>>,
     ) -> ActorAction {
-        if self.history.is_some() {
-            warn!("overriding existing history sender");
+        if self.shutdown_notifier.is_some() {
+            warn!("overriding existing shutdown notifier");
         }
-        self.history = history;
+        self.shutdown_notifier = result;
         ActorAction::Stop
     }
 
@@ -497,10 +500,14 @@ impl DriverActor {
                     handle.send(JobOutputItem::Error { cause }).await;
                 });
             }
-            JobAction::CleanUpJob { job_id, stage } => {
+            JobAction::CleanUpJob {
+                job_id,
+                stage,
+                context,
+            } => {
                 if self.task_assigner.untrack_remote_streams(job_id, stage) {
                     self.stream_manager
-                        .remove_remote_streams(ctx, job_id, stage);
+                        .remove_remote_streams(ctx, job_id, stage, context);
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {

@@ -5,10 +5,12 @@ use sail_server::RetryStrategy;
 
 use crate::driver::DriverOptions;
 use crate::id::DriverId;
+use crate::shuffle::ShuffleBackendKind;
 
 #[readonly::make]
 pub struct WorkerPoolOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
     pub driver_external_host: String,
@@ -20,12 +22,14 @@ pub struct WorkerPoolOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_backend: ShuffleBackendKind,
 }
 
 impl From<&DriverOptions> for WorkerPoolOptions {
     fn from(options: &DriverOptions) -> Self {
         Self {
             enable_tls: options.enable_tls,
+            session_id: options.session_id.clone(),
             driver_id: options.driver_id,
             driver_server_port: options.driver_server_port,
             driver_external_host: options.driver_external_host.clone(),
@@ -37,6 +41,7 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
+            shuffle_backend: options.shuffle_backend.clone(),
         }
     }
 }

@@ -14,7 +14,7 @@ use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
@@ -85,12 +85,14 @@ fn init_traces(
     _: &mut TelemetryState,
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
-    if config.export_traces {
+    if config.export_traces
+        && let Some(endpoint) = &config.exporter.otlp.endpoint
+    {
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
-            .with_endpoint(config.otlp_endpoint.clone())
-            .with_protocol(get_otlp_protocol(&config.otlp_protocol))
-            .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
+            .with_endpoint(endpoint.clone())
+            .with_protocol(get_otlp_protocol(&config.exporter.otlp.protocol))
+            .with_timeout(Duration::from_secs(config.exporter.otlp.timeout_secs))
             .build()?;
         let reporter = OpenTelemetryReporter::new(
             exporter,
@@ -114,12 +116,17 @@ fn init_metrics(
     state: &mut TelemetryState,
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
-    if config.export_metrics {
+    if config.export_metrics
+        && let Some(endpoint) = &config.exporter.otlp.endpoint
+    {
         let exporter = opentelemetry_otlp::MetricExporter::builder()
             .with_tonic()
-            .with_endpoint(config.otlp_endpoint.clone())
-            .with_protocol(get_otlp_protocol(&config.otlp_protocol))
-            .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
+            .with_endpoint(endpoint.clone())
+            .with_protocol(get_otlp_protocol(&config.exporter.otlp.protocol))
+            .with_timeout(Duration::from_secs(config.exporter.otlp.timeout_secs))
+            // Emit only active metrics. Since metrics may have attributes for sessions or jobs,
+            // we do not want to emit metrics after the session or job has ended.
+            .with_temporality(Temporality::Delta)
             .build()?;
         let reader = PeriodicReader::builder(exporter)
             .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
@@ -161,12 +168,14 @@ fn init_logs(
 
     let mut secondary: Vec<Box<dyn Log>> = vec![];
 
-    if config.export_logs {
+    if config.export_logs
+        && let Some(endpoint) = &config.exporter.otlp.endpoint
+    {
         let exporter = LogExporter::builder()
             .with_tonic()
-            .with_endpoint(config.otlp_endpoint.clone())
-            .with_protocol(get_otlp_protocol(&config.otlp_protocol))
-            .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
+            .with_endpoint(endpoint.clone())
+            .with_protocol(get_otlp_protocol(&config.exporter.otlp.protocol))
+            .with_timeout(Duration::from_secs(config.exporter.otlp.timeout_secs))
             .build()?;
         let batch_config = BatchConfigBuilder::default()
             .with_scheduled_delay(Duration::from_secs(config.logs_export_interval_secs))
@@ -189,7 +198,7 @@ fn init_logs(
         secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
         state.logger_provider = Some(provider);
     }
-    if config.export_traces {
+    if config.export_traces && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(SpanEventLogger));
     }
 

@@ -38,12 +38,16 @@ impl PySpark {
         udf: Bound<'py, PyAny>,
         input_types: &[DataType],
         output_type: &DataType,
-        _config: &PySparkUdfConfig,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkBatchUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (
+                udf,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
+                output_type.try_to_py(py, config.arrow_use_large_var_types)?,
+            ),
         )
     }
 
@@ -202,9 +206,9 @@ impl PySpark {
             intern!(py, "PySparkTableUdf"),
             (
                 udf,
-                input_types.try_to_py(py)?,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
                 passthrough_columns,
-                output_schema.try_to_py(py)?,
+                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
                 config.clone(),
             ),
         )
@@ -225,9 +229,9 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
-                input_types.try_to_py(py)?,
+                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
                 passthrough_columns,
-                output_schema.try_to_py(py)?,
+                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
                 config.clone(),
             ),
         )

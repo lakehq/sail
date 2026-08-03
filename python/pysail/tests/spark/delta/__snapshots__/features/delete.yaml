@@ -434,6 +434,91 @@ data:
                           ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                               DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[__sail_delta_replay_path@7], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 2 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+  
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=Hash(keys=[__sail_delta_replay_path@7], channels=4)
+    placement=Worker
+    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
+      FilterExec: (get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Engineering AND get_field(stats_parsed@7, maxValues, department) >= Engineering OR get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Marketing AND get_field(stats_parsed@7, maxValues, department) >= Marketing) AND (get_field(stats_parsed@7, nullCount, active) IS NULL OR get_field(stats_parsed@7, numRecords) IS NULL OR get_field(stats_parsed@7, nullCount, active) < get_field(stats_parsed@7, numRecords))
+        DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, age, department, salary])
+          DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=1)
+            SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+              StageInputExec: input=0, partitioning=Hash([__sail_delta_replay_path@7], 4)
+  
+    === stage 5 ===
+    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=4, mode=Shuffle)]
+    mode=Pipelined
+    partitions=5
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+          DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/, version=1, projection=None, limit=None, pushdown=false)
+            DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
+              FilterExec: (get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Engineering AND get_field(stats_parsed@7, maxValues, department) >= Engineering OR get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Marketing AND get_field(stats_parsed@7, maxValues, department) >= Marketing) AND (get_field(stats_parsed@7, nullCount, active) IS NULL OR get_field(stats_parsed@7, numRecords) IS NULL OR get_field(stats_parsed@7, nullCount, active) < get_field(stats_parsed@7, numRecords))
+                DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, age, department, salary])
+                  DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=1)
+                    SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+                      StageInputExec: input=0, partitioning=Hash([__sail_delta_replay_path@7], 4)
+      DeltaRemoveActionsExec
+        StageInputExec: input=1, partitioning=UnknownPartitioning(1)
+  
+    === stage 6 ===
+    inputs=[StageInput(stage=5, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Driver
+    DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+      StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  
+    === stage 7 ===
+    inputs=[StageInput(stage=6, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_includes_json_delta_log_commits_when_present"
 data:

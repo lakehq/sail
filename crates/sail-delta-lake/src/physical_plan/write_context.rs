@@ -20,7 +20,7 @@ use crate::schema::{
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_column_defaults,
-    schema_has_generated_columns, schema_has_identity_columns,
+    schema_has_generated_columns, schema_has_identity_columns, strip_column_mapping_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
@@ -121,7 +121,7 @@ impl DeltaWriteContext {
             Ok(Arc::new(get_physical_schema(
                 logical_kernel,
                 self.effective_column_mapping_mode,
-            )))
+            )?))
         }
     }
 }
@@ -145,10 +145,11 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(&apply_target_nullability(
-        &schema_without_writer_metric_columns(input_schema),
-        &options.target_nullability,
-    ));
+    let input_schema =
+        strip_column_mapping_metadata(&normalize_delta_schema(&apply_target_nullability(
+            &schema_without_writer_metric_columns(input_schema),
+            &options.target_nullability,
+        )));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
@@ -576,4 +577,62 @@ fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+    use super::*;
+    use crate::spec::{DataType, MetadataValue, StructField};
+
+    fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> StructField {
+        StructField::new(name, data_type, true).with_metadata([
+            ("delta.columnMapping.id", MetadataValue::Number(id)),
+            (
+                "delta.columnMapping.physicalName",
+                MetadataValue::String(physical_name.to_string()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn writer_schema_preserves_nested_parquet_field_ids() -> Result<()> {
+        let nested = StructType::try_new(vec![mapped_field("rate", "col-rate", 2, DataType::LONG)])
+            .expect("nested schema");
+        let logical = StructType::try_new(vec![mapped_field(
+            "details",
+            "col-details",
+            1,
+            DataType::Struct(Box::new(nested)),
+        )])
+        .expect("logical schema");
+        let context = DeltaWriteContext {
+            commit_context: DeltaCommitContext::default(),
+            final_schema: logical.clone(),
+            effective_column_mapping_mode: ColumnMappingMode::Name,
+            initial_actions: Vec::new(),
+            schema_actions: Vec::new(),
+            operation: None,
+            logical_kernel_for_mapping: Some(logical),
+            physical_partition_columns: Vec::new(),
+        };
+
+        let writer_schema = context.writer_schema()?;
+        let details = writer_schema.field_with_name("col-details")?;
+        let datafusion::arrow::datatypes::DataType::Struct(children) = details.data_type() else {
+            panic!("details must be a struct");
+        };
+        let rate = children.first().expect("nested rate field");
+
+        assert_eq!(rate.name(), "col-rate");
+        assert_eq!(
+            rate.metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .map(String::as_str),
+            Some("2")
+        );
+        Ok(())
+    }
 }

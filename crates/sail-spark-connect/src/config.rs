@@ -1,23 +1,12 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_CASE_SENSITIVE, SPARK_SQL_CROSS_JOIN_ENABLED,
-    SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS,
-    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH, SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
-    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
-    SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
-    SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED,
-    SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
-    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
-    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED,
-    SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION, SPARK_SQL_PIVOT_MAX_VALUES,
-    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
-    SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED, SPARK_SQL_WAREHOUSE_DIR,
+    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SparkConfigKey,
 };
 use crate::spark::connect;
 
@@ -46,18 +35,44 @@ impl From<ConfigKeyValue> for connect::KeyValue {
 }
 
 pub(crate) struct SparkRuntimeConfig {
+    entries:
+        &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,
     config: HashMap<String, String>,
 }
 
 impl SparkRuntimeConfig {
-    pub(crate) fn new() -> Self {
-        Self {
+    pub(crate) fn try_new() -> SparkResult<Self> {
+        let entries = match get_pyspark_version() {
+            Ok(version) => {
+                let mut parts = version.split('.');
+                match (parts.next(), parts.next()) {
+                    // Use the Spark 3.5 configuration to provide best-effort support
+                    // for all 3.x versions.
+                    (Some("3"), _) => &SPARK_CONFIG_V3_5,
+                    (Some("4"), Some("0")) => &SPARK_CONFIG_V4_0,
+                    (Some("4"), Some("1")) => &SPARK_CONFIG_V4_1,
+                    (Some("4"), Some("2")) => &SPARK_CONFIG_V4_2,
+                    _ => {
+                        return Err(SparkError::invalid(format!(
+                            "unsupported PySpark version: {version}"
+                        )));
+                    }
+                }
+            }
+            Err(_) => {
+                // Use the earliest Spark configuration when we cannot determine the PySpark version,
+                // which can happen when running Rust tests for example.
+                &SPARK_CONFIG_V3_5
+            }
+        };
+        Ok(Self {
+            entries,
             config: HashMap::new(),
-        }
+        })
     }
 
-    fn validate_removed_key(key: &str, value: &str) -> SparkResult<()> {
-        if let Some(entry) = SPARK_CONFIG.get(key)
+    fn validate_removed_key(&self, key: &str, value: &str) -> SparkResult<()> {
+        if let Some(entry) = self.entries.get(key)
             && entry.removed.is_some()
             && entry.default_value != Some(value)
         {
@@ -74,7 +89,7 @@ impl SparkRuntimeConfig {
         if let Some(value) = self.config.get(key) {
             return Some(value.as_str());
         }
-        let entry = SPARK_CONFIG.get(key);
+        let entry = self.entries.get(key);
         for alt in entry.map(|x| x.alternatives).unwrap_or(&[]) {
             if let Some(value) = self.config.get(*alt) {
                 return Some(value.as_str());
@@ -87,12 +102,9 @@ impl SparkRuntimeConfig {
         if let Some(value) = self.get_by_key(key) {
             return Ok(Some(value));
         }
-        let entry = SPARK_CONFIG.get(key);
+        let entry = self.entries.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get(fallback);
-        }
-        if let Some(value) = versioned_default_value(key) {
-            return Ok(Some(value));
         }
         if let Some(entry) = entry {
             return Ok(entry.default_value);
@@ -106,12 +118,9 @@ impl SparkRuntimeConfig {
         if let Some(value) = self.get_by_key(key) {
             return Some(value);
         }
-        let entry = SPARK_CONFIG.get(key);
+        let entry = self.entries.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_option(fallback);
-        }
-        if let Some(value) = versioned_default_value(key) {
-            return Some(value);
         }
         entry.and_then(|x| x.default_value)
     }
@@ -124,18 +133,15 @@ impl SparkRuntimeConfig {
         if let Some(value) = self.get_by_key(key) {
             return Some(value);
         }
-        let entry = SPARK_CONFIG.get(key);
+        let entry = self.entries.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_with_default(fallback, default);
-        }
-        if let Some(value) = versioned_default_value(key) {
-            return Some(value);
         }
         default
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
-        Self::validate_removed_key(key.as_str(), value.as_str())?;
+        self.validate_removed_key(key.as_str(), value.as_str())?;
         self.config.insert(key, value);
         Ok(())
     }
@@ -162,52 +168,33 @@ impl SparkRuntimeConfig {
             .collect())
     }
 
-    pub(crate) fn is_modifiable(key: &str) -> bool {
-        SPARK_CONFIG
+    pub(crate) fn is_modifiable(&self, key: &str) -> bool {
+        self.entries
             .get(key)
             .map(|entry| !entry.is_static && entry.removed.is_none())
             .unwrap_or(false)
     }
 
-    fn get_warning(key: &str) -> Option<&str> {
-        SPARK_CONFIG
+    fn get_warning(&self, key: &str) -> Option<&str> {
+        self.entries
             .get(key)
             .and_then(|entry| entry.deprecated.as_ref())
             .map(|x| x.comment)
     }
 
-    pub(crate) fn get_warnings(kv: &[ConfigKeyValue]) -> Vec<String> {
+    pub(crate) fn get_warnings(&self, kv: &[ConfigKeyValue]) -> Vec<String> {
         kv.iter()
-            .flat_map(|x| Self::get_warning(x.key.as_str()))
+            .flat_map(|x| self.get_warning(x.key.as_str()))
             .map(|x| x.to_string())
             .collect()
     }
 
-    pub(crate) fn get_warnings_by_keys(keys: &[String]) -> Vec<String> {
+    pub(crate) fn get_warnings_by_keys(&self, keys: &[String]) -> Vec<String> {
         keys.iter()
-            .flat_map(|x| Self::get_warning(x.as_str()))
+            .flat_map(|x| self.get_warning(x.as_str()))
             .map(|x| x.to_string())
             .collect()
     }
-}
-
-fn versioned_default_value(key: &str) -> Option<&'static str> {
-    match key {
-        SPARK_SQL_ANSI_ENABLED if get_pyspark_major_version().is_some_and(|x| x < 4) => {
-            Some("false")
-        }
-        _ => None,
-    }
-}
-
-fn get_pyspark_major_version() -> Option<u64> {
-    static PYSPARK_MAJOR_VERSION: OnceLock<Option<u64>> = OnceLock::new();
-
-    *PYSPARK_MAJOR_VERSION.get_or_init(|| {
-        get_pyspark_version()
-            .ok()
-            .and_then(|version| version.split('.').next()?.parse().ok())
-    })
 }
 
 pub(crate) fn get_pyspark_version() -> SparkResult<String> {
@@ -223,6 +210,9 @@ pub(crate) fn get_pyspark_version() -> SparkResult<String> {
     .map_err(|e: pyo3::PyErr| SparkError::invalid(format!("failed to get PySpark version: {e}")))
 }
 
+// We must use `get_option` when extracting values from `SparkRuntimeConfig`
+// since not all configuration keys are supported in all versions of Spark.
+
 impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;
 
@@ -230,14 +220,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         let mut output = PlanConfig::new()?;
 
         if let Some(value) = config
-            .get(SPARK_SQL_SESSION_TIME_ZONE)?
+            .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
             .map(|x| x.to_string())
         {
             output.session_timezone = Arc::from(value);
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)?
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -245,17 +235,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_SOURCES_DEFAULT)?
+            .get_option(SparkConfigKey::SPARK_SQL_SOURCES_DEFAULT)
             .map(|x| x.to_string())
         {
             output.default_table_file_format = value;
         }
 
-        if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_WAREHOUSE_DIR) {
             output.default_warehouse_directory = value.to_string();
         }
 
-        if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_TIMESTAMP_TYPE) {
             let value = value.to_uppercase().trim().to_string();
             if value == "TIMESTAMP_NTZ" {
                 output.default_timestamp_type = DefaultTimestampType::TimestampNtz;
@@ -269,7 +259,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_ANSI_ENABLED)?
+            .get_option(SparkConfigKey::SPARK_SQL_ANSI_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -277,7 +267,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS)?
+            .get_option(SparkConfigKey::SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -285,7 +275,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION)?
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -293,7 +283,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_CROSS_JOIN_ENABLED)?
+            .get_option(SparkConfigKey::SPARK_SQL_CROSS_JOIN_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -301,7 +291,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_CASE_SENSITIVE)?
+            .get_option(SparkConfigKey::SPARK_SQL_CASE_SENSITIVE)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -309,7 +299,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_PIVOT_MAX_VALUES)?
+            .get_option(SparkConfigKey::SPARK_SQL_PIVOT_MAX_VALUES)
             .map(|x| x.trim().parse::<usize>())
             .transpose()?
         {
@@ -317,7 +307,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)?
+            .get_option(SparkConfigKey::SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -337,14 +327,14 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         let mut output = PySparkUdfConfig::default();
 
         if let Some(value) = config
-            .get(SPARK_SQL_SESSION_TIME_ZONE)?
+            .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
             .map(|x| x.to_string())
         {
             output.session_timezone = value;
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)?
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -352,7 +342,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)?
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -360,7 +350,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)
             .map(|x| x.parse::<i128>())
             .transpose()?
         {
@@ -372,7 +362,17 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED)?
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.arrow_use_large_var_types = value;
+        }
+
+        if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
+            )
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -380,7 +380,9 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED)?
+            .get_option(
+                SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED,
+            )
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -388,7 +390,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED)?
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {
@@ -396,7 +398,17 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
-            .get(SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES)?
+            .get_option(
+                SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_PREFER_INT_EXTENSION_DTYPE,
+            )
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_prefer_int_extension_dtype = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
         {

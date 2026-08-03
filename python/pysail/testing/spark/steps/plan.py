@@ -36,7 +36,7 @@ def normalize_plan_text(plan_text: str) -> str:
 
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
-        r"(^|[\s\[\(=,:{\"])"
+        r"(^|[\s\[\(=,:{\"]|[A-Za-z][A-Za-z0-9+.\-]+://)"
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
@@ -74,6 +74,20 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Preserve checkpoint partition layout while removing generated identifiers.
+    checkpoint_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    text = re.sub(
+        rf"(__checkpoint_testing__/){checkpoint_uuid}/{checkpoint_uuid}",
+        r"\1<session>/<relation>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"(__checkpoint_testing__/<session>/<relation>/part-\d{{5}}-){checkpoint_uuid}(\.parquet)",
+        r"\1<uuid>\2",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -135,6 +149,13 @@ def normalize_plan_text(plan_text: str) -> str:
         end = block.rfind("]")
         if start == -1 or end == -1 or end <= start:
             return block
+
+        # Checkpoint scans retain the input's physical partition layout. For iterative queries,
+        # repartitioning can leave different partitions empty across runs, so individual checkpoint
+        # files are execution details rather than stable plan properties.
+        if "__checkpoint_testing__/" in block:
+            return block[:start] + "<checkpoint files>" + block[end + 1 :]
+
         groups_list = block[start : end + 1]
 
         # Parse top-level groups inside the outer list.

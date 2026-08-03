@@ -5,9 +5,12 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
-use sail_common_datafusion::session::job::JobService;
+use sail_common_datafusion::session::job::{
+    JobRunnerHistory, JobRunnerHistoryReporter, JobService,
+};
 use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
 use sail_common_datafusion::system::predicate::PredicateExt;
@@ -23,6 +26,26 @@ use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
+
+struct SessionJobRunnerHistoryReporter {
+    session_id: String,
+    session_manager: sail_server::actor::ActorHandle<SessionManagerActor>,
+}
+
+#[tonic::async_trait]
+impl JobRunnerHistoryReporter for SessionJobRunnerHistoryReporter {
+    async fn report(self: Box<Self>, history: JobRunnerHistory) {
+        let _ = self
+            .session_manager
+            .send(SessionManagerEvent::SetSessionHistory {
+                session_id: self.session_id,
+                history: SessionHistory {
+                    job_runner: history,
+                },
+            })
+            .await;
+    }
+}
 
 impl SessionManagerActor {
     pub(super) fn handle_get_driver(
@@ -42,7 +65,7 @@ impl SessionManagerActor {
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
         let context = if let Some(session) = self.sessions.get(&session_id) {
-            if let ServerSessionState::Running { context } = &session.state {
+            if let ServerSessionState::Running { context, .. } = &session.state {
                 Ok(context.clone())
             } else {
                 Err(SessionError::invalid(format!(
@@ -50,6 +73,10 @@ impl SessionManagerActor {
                 )))
             }
         } else {
+            // TODO: The session ID is used in various storage paths, so it is assumed to be unique
+            //   across all session managers, and it should contain only valid characters for a
+            //   path segment. Right now the session ID is generated as a UUID by the Spark client,
+            //   so this is true in practice, but we may still want some validation here.
             let session_id = session_id.clone();
             info!("creating session {session_id}");
             let span = Span::root(
@@ -66,8 +93,13 @@ impl SessionManagerActor {
                 }
             };
             let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
+                session_id: session_id.clone(),
                 driver_id,
-                driver_server_port: self.gateway.as_ref().map(|x| x.port()),
+                driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
+                history_reporter: Box::new(SessionJobRunnerHistoryReporter {
+                    session_id: session_id.clone(),
+                    session_manager: ctx.handle().clone(),
+                }),
             });
             match runner {
                 Ok(runner) => {
@@ -76,6 +108,13 @@ impl SessionManagerActor {
                     if let Some(driver) = &driver
                         && let Err(e) = self.drivers.insert(driver_id, driver.clone())
                     {
+                        let session = ServerSession {
+                            user_id,
+                            created_at: Utc::now(),
+                            deleted_at: None,
+                            state: ServerSessionState::Failed,
+                        };
+                        self.sessions.insert(session_id, session);
                         let driver = driver.clone();
                         ctx.spawn(async move {
                             if let Err(e) = driver.shutdown().await {
@@ -107,8 +146,8 @@ impl SessionManagerActor {
                                 deleted_at: None,
                                 state: ServerSessionState::Running {
                                     context: context.clone(),
+                                    driver_id: registered_driver_id,
                                 },
-                                driver_id: registered_driver_id,
                             };
                             self.sessions.insert(session_id, session);
                             Ok(context)
@@ -123,6 +162,13 @@ impl SessionManagerActor {
                                     }
                                 });
                             }
+                            let session = ServerSession {
+                                user_id,
+                                created_at: Utc::now(),
+                                deleted_at: None,
+                                state: ServerSessionState::Failed,
+                            };
+                            self.sessions.insert(session_id, session);
                             Err(e.into())
                         }
                     }
@@ -155,14 +201,16 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         if let Some(session) = session
-            && let ServerSessionState::Running { context } = &mut session.state
+            && let ServerSessionState::Running { context, driver_id } = &mut session.state
             && let Ok(tracker) = context.extension::<ActivityTracker>()
             && tracker.active_at().is_ok_and(|x| x <= instant)
         {
             info!("removing idle session {session_id}");
             Self::delete_session(ctx, session_id, context);
             session.deleted_at = Some(Utc::now());
-            session.state = ServerSessionState::Deleting;
+            session.state = ServerSessionState::Deleting {
+                driver_id: *driver_id,
+            };
         }
         ActorAction::Continue
     }
@@ -175,11 +223,13 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         let output = if let Some(session) = session {
-            if let ServerSessionState::Running { context } = &mut session.state {
+            if let ServerSessionState::Running { context, driver_id } = &mut session.state {
                 info!("removing session {session_id}");
                 Self::delete_session(ctx, session_id, context);
                 session.deleted_at = Some(Utc::now());
-                session.state = ServerSessionState::Deleting;
+                session.state = ServerSessionState::Deleting {
+                    driver_id: *driver_id,
+                };
                 Ok(())
             } else {
                 Err(SessionError::invalid(format!(
@@ -205,15 +255,20 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        if let Some(driver_id) = session.driver_id.take() {
-            self.drivers.remove(driver_id);
-        }
-        if matches!(session.state, ServerSessionState::Deleting) {
-            session.state = ServerSessionState::Deleted {
-                history: Arc::new(history),
-            };
-        } else {
-            warn!("session is not being deleted: {session_id}");
+        match &mut session.state {
+            ServerSessionState::Running { driver_id, .. }
+            | ServerSessionState::Deleting { driver_id } => {
+                if let Some(driver_id) = driver_id.take() {
+                    self.drivers.remove(driver_id);
+                }
+                session.deleted_at.get_or_insert_with(Utc::now);
+                session.state = ServerSessionState::Deleted {
+                    history: Arc::new(history),
+                };
+            }
+            ServerSessionState::Deleted { .. } | ServerSessionState::Failed => {
+                warn!("session is not being deleted: {session_id}");
+            }
         }
         ActorAction::Continue
     }
@@ -227,7 +282,12 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        if let Some(driver_id) = session.driver_id.take()
+        let driver_id = match &session.state {
+            ServerSessionState::Running { driver_id, .. }
+            | ServerSessionState::Deleting { driver_id } => *driver_id,
+            ServerSessionState::Deleted { .. } | ServerSessionState::Failed => None,
+        };
+        if let Some(driver_id) = driver_id
             && let Some(driver) = self.drivers.remove(driver_id)
         {
             ctx.spawn(async move {
@@ -399,18 +459,18 @@ impl SessionManagerActor {
             warn!("job service not found for session {session_id}");
             return;
         };
-        let handle = ctx.handle().clone();
-        let (tx, rx) = oneshot::channel();
+        let checkpoint_registry = context.extension::<RemoteCheckpointRegistry>().ok();
+        let runtime_env = context.runtime_env();
         ctx.spawn(async move {
-            service.runner().stop(tx).await;
-            let message = match rx.await {
-                Ok(x) => SessionManagerEvent::SetSessionHistory {
-                    session_id,
-                    history: SessionHistory { job_runner: x },
-                },
-                Err(_) => SessionManagerEvent::SetSessionFailure { session_id },
-            };
-            let _ = handle.send(message).await;
+            // Stop tasks before deleting the namespace so late attempts cannot recreate objects.
+            service.runner().stop().await;
+            if let Some(checkpoint_registry) = checkpoint_registry
+                && let Err(error) = checkpoint_registry
+                    .cleanup_session(runtime_env.as_ref())
+                    .await
+            {
+                warn!("failed to clean checkpoints for session {session_id}: {error}");
+            }
         });
     }
 }

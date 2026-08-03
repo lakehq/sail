@@ -342,36 +342,35 @@ data:
                   AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8], aggr=[count(Int64(1))]
                     RepartitionExec: partitioning=Hash([#8@0], 4), input_partitions=4
                       AggregateExec: mode=Partial, gby=[#8@0 as #8], aggr=[count(Int64(1))]
-                        FilterExec: CAST(#87@1 AS Decimal128(11, 7)) > Some(12),2,1 * #155@2, projection=[#8@0]
-                          HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#94@2, #145@1)], projection=[#8@0, #87@1, #155@3]
-                            CoalescePartitionsExec
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#82@0, #33@1)], projection=[#8@3, #87@1, #94@2]
-                                ProjectionExec: expr=[_0@0 as #82, _5@1 as #87, _12@2 as #94]
-                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#31@1, CAST(d.#54 AS Float64)@1)], projection=[#8@0, #33@2]
-                                  CoalescePartitionsExec
-                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(c.#13 AS Float64)@2, #34@2)], projection=[#8@0, #31@3, #33@4]
-                                      CoalescePartitionsExec
-                                        ProjectionExec: expr=[#8@0 as #8, #13@1 as #13, CAST(#13@1 AS Float64) as CAST(c.#13 AS Float64)]
-                                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#17@1, #0@0)], projection=[#8@3, #13@0]
-                                              ProjectionExec: expr=[_0@0 as #13, _4@1 as #17]
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                              ProjectionExec: expr=[_0@0 as #0, _8@1 as #8]
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                        ProjectionExec: expr=[_0@0 as #31, _2@1 as #33, _3@2 as #34]
-                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                  ProjectionExec: expr=[_0@0 as #54, CAST(_0@0 AS Float64) as CAST(d.#54 AS Float64)]
-                                    FilterExec: _3@1 = scalar_subquery(<pending>), projection=[_0@0]
-                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#94@2, #145@1)], filter=CAST(#87@0 AS Decimal128(11, 7)) > Some(12),2,1 * #155@1, projection=[#8@0]
+                          CoalescePartitionsExec
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#82@0, #33@1)], projection=[#8@3, #87@1, #94@2]
+                              ProjectionExec: expr=[_0@0 as #82, _5@1 as #87, _12@2 as #94]
+                                DataSourceExec: partitions=1, partition_sizes=[1]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#31@1, CAST(d.#54 AS Float64)@1)], projection=[#8@0, #33@2]
+                                CoalescePartitionsExec
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(c.#13 AS Float64)@2, #34@2)], projection=[#8@0, #31@3, #33@4]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[#8@0 as #8, #13@1 as #13, CAST(#13@1 AS Float64) as CAST(c.#13 AS Float64)]
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#17@1, #0@0)], projection=[#8@3, #13@0]
+                                            ProjectionExec: expr=[_0@0 as #13, _4@1 as #17]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                            ProjectionExec: expr=[_0@0 as #0, _8@1 as #8]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                      ProjectionExec: expr=[_0@0 as #31, _2@1 as #33, _3@2 as #34]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                            ProjectionExec: expr=[avg(j.#138)@1 as #155, #145@0 as #145]
-                              AggregateExec: mode=FinalPartitioned, gby=[#145@0 as #145], aggr=[avg(j.#138)]
-                                RepartitionExec: partitioning=Hash([#145@0], 4), input_partitions=1
-                                  AggregateExec: mode=Partial, gby=[#145@1 as #145], aggr=[avg(j.#138)]
-                                    ProjectionExec: expr=[_5@0 as #138, _12@1 as #145]
+                                ProjectionExec: expr=[_0@0 as #54, CAST(_0@0 AS Float64) as CAST(d.#54 AS Float64)]
+                                  FilterExec: _3@1 = scalar_subquery(<pending>), projection=[_0@0]
+                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
+                          ProjectionExec: expr=[avg(j.#138)@1 as #155, #145@0 as #145]
+                            AggregateExec: mode=FinalPartitioned, gby=[#145@0 as #145], aggr=[avg(j.#138)]
+                              RepartitionExec: partitioning=Hash([#145@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#145@1 as #145], aggr=[avg(j.#138)]
+                                  ProjectionExec: expr=[_5@0 as #138, _12@1 as #145]
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
         AggregateExec: mode=FinalPartitioned, gby=[#132@0 as #132], aggr=[]
           RepartitionExec: partitioning=Hash([#132@0], 4), input_partitions=4
             AggregateExec: mode=Partial, gby=[#132@0 as #132], aggr=[]

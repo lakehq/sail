@@ -108,7 +108,7 @@ where
     ))
 }
 
-fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
+pub fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
     let src_type = src.data_type();
     if src_type == target_type {
         return Ok(src.clone());
