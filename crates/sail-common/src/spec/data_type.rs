@@ -41,6 +41,12 @@ pub struct SparkUdtMetadata {
 /// internal to Sail and should not be exposed as Spark column metadata.
 pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "SAIL::spark::interval";
 
+/// Returns whether the Arrow field metadata key is internal to Sail, and must therefore not be
+/// exposed as Spark column metadata.
+pub fn is_sail_internal_metadata_key(key: &str) -> bool {
+    key == SAIL_SPARK_UDT_METADATA_KEY || key == SAIL_SPARK_INTERVAL_METADATA_KEY
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkIntervalMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]

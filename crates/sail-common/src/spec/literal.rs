@@ -302,7 +302,11 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
                 start_field,
                 end_field,
             }),
-            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTime { value: None }),
+            spec::IntervalUnit::DayTime => Ok(Literal::DurationMicrosecond {
+                microseconds: None,
+                start_field,
+                end_field,
+            }),
             spec::IntervalUnit::MonthDayNano => Ok(Literal::IntervalMonthDayNano { value: None }),
         },
         spec::DataType::Binary => Ok(Literal::Binary { value: None }),

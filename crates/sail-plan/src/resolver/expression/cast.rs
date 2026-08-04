@@ -65,6 +65,21 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+        // Spark truncates the value toward zero to the end field of the target interval type, so
+        // casting to a narrower qualifier drops the finer components rather than keeping them.
+        let day_time_truncation_micros = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => match end_field.or(*start_field) {
+                Some(spec::IntervalFieldType::Day) => Some(24 * 60 * 60 * 1_000_000i64),
+                Some(spec::IntervalFieldType::Hour) => Some(60 * 60 * 1_000_000i64),
+                Some(spec::IntervalFieldType::Minute) => Some(60 * 1_000_000i64),
+                _ => None,
+            },
+            _ => None,
+        };
         // The interval fields are part of the Spark type but not of the Arrow type, so they are
         // carried in the field metadata of the projected column.
         let interval_metadata = match &cast_to_type {
@@ -114,6 +129,7 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
+        let from_is_day_time_interval = matches!(expr_type, DataType::Duration(_));
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
@@ -142,7 +158,7 @@ impl PlanResolver<'_> {
                     (Some(field), DataType::Duration(_)) => day_time_field_to_microseconds(field),
                     _ => time_unit_to_multiplier(&time_unit),
                 };
-                cast(expr.mul(lit(multiplier)), cast_to_type)
+                cast(expr.mul(lit(multiplier)), cast_to_type.clone())
             }
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
@@ -219,6 +235,16 @@ impl PlanResolver<'_> {
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
+        };
+        // A cast between two day-time interval types is an identity cast in Arrow, since the
+        // qualifier is not part of the Arrow type. Truncate explicitly so that the value agrees
+        // with the narrower type that is reported to the client.
+        let expr = match day_time_truncation_micros {
+            Some(unit) if from_is_day_time_interval => {
+                let micros = cast(expr, DataType::Int64);
+                cast(micros.clone() - (micros % lit(unit)), cast_to_type)
+            }
+            _ => expr,
         };
         Ok(NamedExpr::new(name, expr).with_metadata(interval_metadata))
     }

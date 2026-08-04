@@ -38,8 +38,9 @@ pub(super) fn interval_fields(
     match (start_field, end_field) {
         (Some(start), Some(end)) => (Some(start), Some(end)),
         (Some(start), None) => (Some(start), Some(start)),
-        (None, Some(end)) => (Some(default_start), Some(end)),
-        (None, None) => (Some(default_start), Some(default_end)),
+        // Spark ignores a trailing field that comes without a leading one, and falls back to the
+        // default range, so a type that declares only an end field is not a narrower type.
+        (None, _) => (Some(default_start), Some(default_end)),
     }
 }
 
