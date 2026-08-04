@@ -57,6 +57,9 @@ rust_decimal = { workspace = true }
 murmur3 = { workspace = true }
 educe = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
 
