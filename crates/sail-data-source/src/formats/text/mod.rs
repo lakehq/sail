@@ -3,7 +3,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
 use crate::options::r#gen::{TextReadOptions, TextWriteOptions};
 
@@ -36,7 +36,7 @@ impl Default for TableTextOptions {
     }
 }
 
-pub type TextTableFormat = ListingTableFormat<TextFormatFactory>;
+pub type TextDataSource = ListingDataSource<TextFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct TextFormatFactory;

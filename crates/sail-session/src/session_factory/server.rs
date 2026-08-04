@@ -21,7 +21,7 @@ use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_table_format_registry;
+use crate::formats::create_source_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
@@ -109,7 +109,7 @@ impl ServerSessionFactory {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(create_source_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
@@ -139,7 +139,7 @@ impl ServerSessionFactory {
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
         // We do not add default features to the session state,
-        // since we manage table formats and functions ourselves.
+        // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
