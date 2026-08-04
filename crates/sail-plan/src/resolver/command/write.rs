@@ -28,8 +28,7 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
-    find_path_in_options,
+    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, SourceRegistry, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -333,13 +332,13 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_write_info(&write_format, &sink_info)?;
-                    let table_format_merge_schema = (info.format.eq_ignore_ascii_case("delta")
+                    let lake_source_merge_schema = (info.format.eq_ignore_ascii_case("delta")
                         || info.format.eq_ignore_ascii_case("iceberg"))
                         && Self::has_truthy_option(
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
-                    if !table_format_merge_schema {
+                    if !lake_source_merge_schema {
                         input = self
                             .rewrite_write_input(input, column_match, info, state)
                             .await?;
@@ -525,9 +524,9 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         sink_info.input = input;
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<SourceRegistry>()?;
         let plan = registry
-            .get(&write_format)?
+            .get_data_source(&write_format)?
             .create_writer(&self.ctx.state(), sink_info)
             .await?;
         Ok(LogicalPlan::Extension(Extension {
@@ -627,17 +626,17 @@ impl PlanResolver<'_> {
                     Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
-                // Discover the schema from the table format so that write operations
+                // Discover the schema from the data source so that write operations
                 // (INSERT INTO) can validate the input schema correctly.
                 if columns.is_empty() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                    let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
+                            "failed to access source registry for table `{table:?}`: {e}",
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let data_source = registry.get_data_source(&format).map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                            "failed to resolve data source `{format}` for table `{table:?}`: {e}",
                         ))
                     })?;
                     let info = SourceInfo {
@@ -653,29 +652,44 @@ impl PlanResolver<'_> {
                         }],
                         read_case_sensitive: self.config.case_sensitive,
                     };
-                    let metadata = table_format
-                        .infer_metadata(&self.ctx.state(), info)
-                        .await
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
-                            ))
-                        })?;
-                    columns = Self::table_columns_from_format_schema(metadata.schema.as_ref());
-                    if !metadata.properties.is_empty() {
-                        let mut merged_properties = metadata.properties;
-                        merged_properties.extend(properties);
-                        properties = merged_properties;
+                    if let Some(lake_source) = registry
+                        .get_lake_source_if_supported(&format)
+                        .map_err(PlanError::from)?
+                    {
+                        let metadata = lake_source
+                            .infer_metadata(&self.ctx.state(), info)
+                            .await
+                            .map_err(|e| {
+                                PlanError::invalid(format!(
+                                    "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
+                                ))
+                            })?;
+                        columns = Self::table_columns_from_format_schema(metadata.schema.as_ref());
+                        if !metadata.properties.is_empty() {
+                            let mut merged_properties = metadata.properties;
+                            merged_properties.extend(properties);
+                            properties = merged_properties;
+                        }
+                    } else {
+                        let schema = data_source
+                            .infer_schema(&self.ctx.state(), info)
+                            .await
+                            .map_err(|e| {
+                                PlanError::invalid(format!(
+                                    "failed to infer schema for table `{table:?}` from data source `{format}`: {e}",
+                                ))
+                            })?;
+                        columns = Self::table_columns_from_format_schema(schema.as_ref());
                     }
                 } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                    let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
+                            "failed to access lake source registry for table `{table:?}`: {e}",
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let lake_source = registry.get_lake_source(&format).map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                            "failed to resolve lake source `{format}` for table `{table:?}`: {e}",
                         ))
                     })?;
                     let info = SourceInfo {
@@ -691,7 +705,7 @@ impl PlanResolver<'_> {
                         }],
                         read_case_sensitive: self.config.case_sensitive,
                     };
-                    match table_format.infer_metadata(&self.ctx.state(), info).await {
+                    match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
                             if !metadata.properties.is_empty() {
@@ -1790,7 +1804,7 @@ impl TableInfo {
         }
         if !format.is_empty() && !format.eq_ignore_ascii_case(&self.format) {
             return Err(PlanError::invalid(format!(
-                "the format '{}' does not match the table format '{}'",
+                "the format '{}' does not match the table data source format '{}'",
                 format, self.format
             )));
         }
