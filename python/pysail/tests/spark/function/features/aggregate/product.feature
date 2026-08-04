@@ -1,4 +1,3 @@
-@product
 Feature: product returns the multiplicative product of all non-null input values
 
   Rule: product multiplies non-null values

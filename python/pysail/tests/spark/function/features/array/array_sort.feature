@@ -1,4 +1,3 @@
-@array_sort
 Feature: array_sort higher-order function
 
   Rule: No-comparator form — natural ascending order, NULLs last

@@ -36,7 +36,7 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "spark_null: output-schema/nullability scenarios; run the whole suite with -m spark_null",
+        "function(group): categorize a function BDD scenario",
     )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.files")
@@ -159,7 +159,20 @@ DOCTEST_MARKERS = [
 ]
 
 
+FUNCTION_TAG_PATTERN = re.compile(r"function\((.*)\)")
+FUNCTION_TAG_VALUES = ["nullability", "columnargs", "lambda", "sketch"]
+SPARK_TAG_PATTERN = re.compile(r"spark-(.*)")
+
+
 def pytest_bdd_apply_tag(tag: str, function):
+    if (m := FUNCTION_TAG_PATTERN.fullmatch(tag)) is not None:
+        group = m.group(1)
+        if group not in FUNCTION_TAG_VALUES:
+            msg = f"invalid function tag: {tag}"
+            raise ValueError(msg)
+        pytest.mark.function(group=group)(function)
+        return True
+
     if tag == "sail-only":
         pytest.mark.skipif(is_jvm_spark(), reason="Sail-only feature not supported by JVM Spark")(function)
         return True
@@ -169,13 +182,16 @@ def pytest_bdd_apply_tag(tag: str, function):
         pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)(function)
         return True
 
-    if tag.startswith("spark-"):
-        match = re.fullmatch(r"spark-(\d+(?:\.\d+)*)", tag)
-        if match is None:
+    if (m := SPARK_TAG_PATTERN.fullmatch(tag)) is not None:
+        try:
+            s = m.group(1)
+            version = tuple(int(part) for part in s.split("."))
+            if not version:
+                msg = "empty version"
+                raise ValueError(msg)  # noqa: TRY301
+        except ValueError as e:
             msg = f"invalid Spark version tag: {tag}"
-            raise ValueError(msg)
-        s = match.group(1)
-        version = tuple(int(part) for part in s.split("."))
+            raise ValueError(msg) from e
         pytest.mark.skipif(pyspark_version() < version, reason=f"Requires Spark {s}+")(function)
         return True
 

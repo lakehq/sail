@@ -1,4 +1,3 @@
-@bround
 Feature: bround comprehensive tests
   # bround = banker's rounding (round-half-to-even). The scenarios below use
   # explicit CAST to DOUBLE/FLOAT/INT/BIGINT so they exercise the vectorized
@@ -334,7 +333,7 @@ Feature: bround comprehensive tests
 
   Rule: bround — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: bround with the argument as a literal
       When query
         """
@@ -344,23 +343,20 @@ Feature: bround comprehensive tests
         | result |
         | 20     |
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '25'].
-    @column_args @sail-bug
-    Scenario: bround takes argument 2 from a column holding two different values
+    # Spark requires a foldable argument here; Sail accepts a column and returns
+    # a value per row instead of raising.
+    @function(columnargs) @sail-bug
+    Scenario Outline: Bround: <case>
       When query
         """
-        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, 0) AS t(i, c) ORDER BY i
+        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, <v2>) AS t(i, c) ORDER BY i
         """
       Then query error NON_FOLDABLE_INPUT
 
-    # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['20', '20'].
-    @column_args @sail-bug
-    Scenario: bround takes argument 2 from a column
-      When query
-        """
-        SELECT bround(25, c) AS result FROM VALUES (1, -1), (2, -1) AS t(i, c) ORDER BY i
-        """
-      Then query error NON_FOLDABLE_INPUT
+      Examples:
+        | case                                                               | v2 |
+        | bround takes argument 2 from a column holding two different values | 0  |
+        | bround takes argument 2 from a column                              | -1 |
 
   Rule: bround with a foldable scale expression
 
@@ -466,7 +462,7 @@ Feature: bround comprehensive tests
         | r                   |
         | 0.123456789012345678 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

@@ -1,7 +1,6 @@
-@try_mod
 Feature: try_mod output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_mod yields the schema Spark declares

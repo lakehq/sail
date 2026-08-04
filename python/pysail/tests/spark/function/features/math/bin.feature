@@ -1,4 +1,3 @@
-@bin
 Feature: bin converts integral values to binary strings
 
   Rule: String arguments follow Spark cast semantics
@@ -196,7 +195,7 @@ Feature: bin converts integral values to binary strings
         | bin Infinity saturates to LONG_MAX under ANSI off            | CAST('Infinity' AS DOUBLE) | 111111111111111111111111111111111111111111111111111111111111111 |
         | bin out-of-range DOUBLE saturates to LONG_MAX under ANSI off | CAST(1e30 AS DOUBLE)       | 111111111111111111111111111111111111111111111111111111111111111 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

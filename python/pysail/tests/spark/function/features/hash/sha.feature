@@ -1,7 +1,6 @@
-@sha
 Feature: sha output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to sha yields the schema Spark declares

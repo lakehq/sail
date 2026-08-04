@@ -1,4 +1,3 @@
-@trunc
 Feature: trunc with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: trunc with an argument coming from a column
 
   Rule: trunc — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: trunc with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: trunc with an argument coming from a column
         | 2009-02-01 |
 
     # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Trunc: <case>
       When query
         """
@@ -33,7 +32,7 @@ Feature: trunc with an argument coming from a column
         | trunc takes argument 2 from a column holding two different values | '2009-02-12' | 'MM'   | 'week' | 2009-02-01 | 2009-02-09 |
         | trunc takes argument 2 from a column                              | '2019-08-04' | 'week' | 'week' | 2019-07-29 | 2019-07-29 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

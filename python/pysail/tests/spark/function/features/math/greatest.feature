@@ -1,7 +1,6 @@
-@greatest
 Feature: greatest output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

@@ -1,4 +1,3 @@
-@min_by
 Feature: min_by function
 
   Rule: min_by with all NULLs in ordering column

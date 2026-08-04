@@ -1,7 +1,6 @@
-@regexp_instr
 Feature: regexp_instr output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

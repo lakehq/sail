@@ -1,7 +1,6 @@
-@atanh
 Feature: atanh output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to atanh yields the schema Spark declares

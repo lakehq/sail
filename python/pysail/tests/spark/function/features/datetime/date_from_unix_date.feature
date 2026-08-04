@@ -1,7 +1,6 @@
-@date_from_unix_date
 Feature: date_from_unix_date output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to date_from_unix_date yields the schema Spark declares

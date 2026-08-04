@@ -1,7 +1,6 @@
-@array_append
 Feature: array_append output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

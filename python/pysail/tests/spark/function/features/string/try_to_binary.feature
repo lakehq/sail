@@ -1,4 +1,3 @@
-@try_to_binary
 Feature: try_to_binary with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: try_to_binary with an argument coming from a column
 
   Rule: try_to_binary — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: try_to_binary with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: try_to_binary with an argument coming from a column
         | 616263 |
 
     # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_to_binary takes argument 1 from a column holding two different values
       When query
         """
@@ -31,7 +30,7 @@ Feature: try_to_binary with an argument coming from a column
   Rule: try_to_binary — the argument must be foldable
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_to_binary takes argument 2 from a column holding two different values
       When query
         """
@@ -40,7 +39,7 @@ Feature: try_to_binary with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_to_binary takes argument 2 from a column containing NULL
       When query
         """
@@ -49,7 +48,7 @@ Feature: try_to_binary with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_to_binary takes argument 2 from a column
       When query
         """
@@ -57,7 +56,7 @@ Feature: try_to_binary with an argument coming from a column
         """
       Then query error NON_FOLDABLE_INPUT
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_to_binary yields the schema Spark declares

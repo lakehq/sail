@@ -1,7 +1,6 @@
-@acos
 Feature: acos output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario Outline: acos output schema matches Spark (nullable double)

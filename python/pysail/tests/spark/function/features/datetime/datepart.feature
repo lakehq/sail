@@ -1,7 +1,6 @@
-@datepart
 Feature: datepart output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to datepart yields the schema Spark declares

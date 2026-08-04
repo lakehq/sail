@@ -1,4 +1,3 @@
-@concat_ws_simplify
 Feature: concat_ws() — simplify hook (null folding and null-arg pruning)
 
   Rule: A null separator literal folds the whole call to null

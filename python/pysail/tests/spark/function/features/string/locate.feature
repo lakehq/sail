@@ -1,7 +1,6 @@
-@locate
 Feature: locate output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to locate yields the schema Spark declares

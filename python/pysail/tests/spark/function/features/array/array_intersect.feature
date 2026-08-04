@@ -1,4 +1,3 @@
-@array_intersect
 Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Source-of-truth examples
@@ -168,7 +167,7 @@ Feature: array_intersect() returns common array elements without duplicates
         | non-array inputs           | 1, array(1)          |
         | incompatible element types | array(1), array('1') |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: non-null array literals yield a non-nullable array

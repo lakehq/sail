@@ -1,4 +1,3 @@
-@array_coercion
 Feature: array() type coercion with mixed element types
 
   Spark's non-ANSI semantics coerce mixed string/numeric arrays to string,

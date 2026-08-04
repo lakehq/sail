@@ -1,5 +1,4 @@
 @spark-4
-@schema_of_variant
 Feature: schema_of_variant
 
   Rule: Primitive types
@@ -156,7 +155,7 @@ Feature: schema_of_variant
         | schema_of_variant nested null array                    | '[[null]]'                 | ARRAY<ARRAY<VOID>>         |
         | schema_of_variant array with objects and null merges   | '[{"a":1}, null, {"a":2}]' | ARRAY<OBJECT<a: BIGINT>>   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

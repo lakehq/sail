@@ -1,4 +1,3 @@
-@ceil @floor
 Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: ceil basic

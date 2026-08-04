@@ -1,4 +1,3 @@
-@from_xml
 Feature: from_xml parses an XML string into a struct value
 
   Rule: Primitive types
@@ -356,7 +355,7 @@ Feature: from_xml parses an XML string into a struct value
         | DECIMAL bad value returns NULL | '<p><a>bad</a></p>'             | 'a DECIMAL(10,2)'        | NULL         |
         | DECIMAL in array               | '<p><a>1.10</a><a>2.20</a></p>' | 'a ARRAY<DECIMAL(10,2)>' | [1.10, 2.20] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null xml literal yields a struct

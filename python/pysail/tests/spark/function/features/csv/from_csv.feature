@@ -1,4 +1,3 @@
-@csv @from_csv
 Feature: from_csv column display name matches Spark
 
   Spark renders `from_csv` as a UnaryExpression: only the input column
@@ -80,7 +79,7 @@ Feature: from_csv column display name matches Spark
         | first_value |
         | last_value  |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

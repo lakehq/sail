@@ -1,7 +1,6 @@
-@bit_get
 Feature: bit_get output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to bit_get yields the schema Spark declares

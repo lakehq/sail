@@ -1,4 +1,3 @@
-@csv @to_csv
 Feature: to_csv converts a struct value to a CSV string
 
   Rule: Basic serialization
@@ -190,7 +189,7 @@ Feature: to_csv converts a struct value to a CSV string
         | Floating-point special values use Spark display strings       | 'nan', CAST('NaN' AS DOUBLE), 'pos', CAST('Infinity' AS DOUBLE), 'neg', CAST('-Infinity' AS DOUBLE) | NaN,Infinity,-Infinity |
         | Binary values use Spark hex pretty strings                    | 'b', CAST('abc' AS BINARY)                                                                          | [61 62 63]             |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null struct literal is nullable (to_csv is inherently nullable in Spark)

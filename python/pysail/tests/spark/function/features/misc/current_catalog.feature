@@ -1,7 +1,6 @@
-@current_catalog
 Feature: current_catalog output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to current_catalog yields the schema Spark declares
