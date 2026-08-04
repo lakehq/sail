@@ -226,8 +226,7 @@ fn validate_parquet_field(path: &str, requested: &Field, physical: &Field) -> Re
         }
         (physical_type, requested_type) => plan_err!(
             "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
-             Parquet column `{path}`. Expected Spark type {requested_type}, actual Parquet type \
-             {physical_type}."
+             Parquet column `{path}`. Expected {requested_type}, actual Parquet type {physical_type}."
         ),
     }
 }
