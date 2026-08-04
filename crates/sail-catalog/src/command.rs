@@ -6,7 +6,7 @@ use sail_common_datafusion::datasource::{SourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
     LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
-    LakeSourceCreateTableResult,
+    MetadataChange, MetadataChangeResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -342,6 +342,7 @@ impl CatalogCommand {
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 };
+                let replace = options.mode.is_replace();
                 let status = manager.create_table(&table, options).await?;
                 if !existed_before {
                     prepare_created_table_storage_metadata(
@@ -350,6 +351,7 @@ impl CatalogCommand {
                         &table,
                         &status,
                         &create_plan,
+                        replace,
                     )
                     .await?;
                 }
@@ -501,7 +503,14 @@ impl CatalogCommand {
                         .await?
                         .execution;
                     lake_source
-                        .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
+                        .apply_metadata_change(
+                            runtime,
+                            MetadataChange::Alter {
+                                path: location,
+                                operation: storage_operation,
+                                lakehouse_table: Some(lakehouse_table),
+                            },
+                        )
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -801,6 +810,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
     table: &[String],
     status: &sail_common_datafusion::catalog::TableStatus,
     create_plan: &LakehouseCreatePlan,
+    replace: bool,
 ) -> CatalogResult<()> {
     let LakehouseCreateMaterialization::AfterCatalogLakeSource { mode, .. } =
         &create_plan.materialization
@@ -850,7 +860,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         comment.clone(),
         partition_by.clone(),
         properties.clone(),
-        false,
+        replace,
         lakehouse_table,
     )
     .await
@@ -868,7 +878,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-) -> CatalogResult<LakeSourceCreateTableResult> {
+) -> CatalogResult<MetadataChangeResult> {
     let registry = ctx.extension::<SourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
             "missing SourceRegistry for CREATE TABLE on format '{format}': {e}"
@@ -879,30 +889,32 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
             "unknown lake source '{format}' for CREATE TABLE: {e}"
         ))
     })?;
+    let info = LakeSourceCreateTableInfo {
+        path: location,
+        columns: columns
+            .iter()
+            .map(|column| LakeSourceCreateTableColumn {
+                name: column.name().to_string(),
+                data_type: column.data_type().clone(),
+                nullable: column.nullable(),
+                comment: column.comment().cloned(),
+                default: column.default().cloned(),
+                generated_always_as: column.generated_always_as().cloned(),
+                identity: column.identity().cloned(),
+            })
+            .collect(),
+        comment,
+        partition_by,
+        properties,
+        lakehouse_table,
+    };
+    let change = if replace {
+        MetadataChange::Replace(info)
+    } else {
+        MetadataChange::Create(info)
+    };
     lake_source
-        .create_table_metadata(
-            ctx.runtime_env(),
-            LakeSourceCreateTableInfo {
-                path: location,
-                columns: columns
-                    .iter()
-                    .map(|column| LakeSourceCreateTableColumn {
-                        name: column.name().to_string(),
-                        data_type: column.data_type().clone(),
-                        nullable: column.nullable(),
-                        comment: column.comment().cloned(),
-                        default: column.default().cloned(),
-                        generated_always_as: column.generated_always_as().cloned(),
-                        identity: column.identity().cloned(),
-                    })
-                    .collect(),
-                comment,
-                partition_by,
-                properties,
-                replace,
-                lakehouse_table,
-            },
-        )
+        .apply_metadata_change(ctx.runtime_env(), change)
         .await
         .map_err(CatalogError::DataFusionError)
 }
@@ -1330,14 +1342,12 @@ mod tests {
 
     #[async_trait]
     impl LakeSource for TestLakeSource {
-        async fn alter_table(
+        async fn apply_metadata_change(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-            _path: &str,
-            _operation: LakeSourceAlterTableOperation,
-            _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-        ) -> datafusion_common::Result<()> {
-            Ok(())
+            _change: MetadataChange,
+        ) -> datafusion_common::Result<MetadataChangeResult> {
+            Ok(MetadataChangeResult::default())
         }
     }
 

@@ -30,8 +30,7 @@ pub struct LakeSourceCreateTableColumn {
     pub identity: Option<crate::catalog::CatalogTableColumnIdentity>,
 }
 
-/// Information needed by a lake source to initialize storage metadata for a
-/// plain catalog `CREATE TABLE`.
+/// Information needed by a lake source to define table storage metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeSourceCreateTableInfo {
     pub path: String,
@@ -39,7 +38,6 @@ pub struct LakeSourceCreateTableInfo {
     pub comment: Option<String>,
     pub partition_by: Vec<CatalogPartitionField>,
     pub properties: Vec<(String, String)>,
-    pub replace: bool,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
@@ -51,9 +49,30 @@ impl LakeSourceCreateTableInfo {
     }
 }
 
-/// Storage metadata created by a lake source before catalog registration.
+/// A row-level operation that requires lake-source-specific logical planning.
+#[derive(Debug, Clone)]
+pub enum RowLevelOperation {
+    Delete(Box<DeleteInfo>),
+    // Update(Box<UpdateInfo>),
+    Merge(Box<MergeInfo>),
+}
+
+/// A storage metadata change applied by a lake source.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetadataChange {
+    Create(LakeSourceCreateTableInfo),
+    Replace(LakeSourceCreateTableInfo),
+    Alter {
+        path: String,
+        operation: LakeSourceAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    },
+    // Drop(LakeSourceDropTableInfo),
+}
+
+/// Catalog-visible metadata produced by a lake source change.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct LakeSourceCreateTableResult {
+pub struct MetadataChangeResult {
     pub properties: Vec<(String, String)>,
 }
 
@@ -84,7 +103,7 @@ pub enum LakeSourceAlterTableOperation {
     AddCheckConstraint { name: String, expression: String },
 }
 
-/// A lakehouse data source with table metadata, DML, and DDL semantics.
+/// A lakehouse data source with metadata and row-level operation semantics.
 #[async_trait]
 pub trait LakeSource: DataSource {
     /// Infers table metadata for planning without requiring callers to construct a read source.
@@ -99,121 +118,63 @@ pub trait LakeSource: DataSource {
         })
     }
 
-    /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
-    /// catalog object is registered. Lake sources that do not need storage metadata
-    /// at DDL time can keep the default no-op.
-    async fn create_table_metadata(
+    /// Creates a logical plan for a row-level operation.
+    async fn plan_row_level_operation(
         &self,
-        runtime_env: Arc<RuntimeEnv>,
-        info: LakeSourceCreateTableInfo,
-    ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
-        Ok(LakeSourceCreateTableResult::default())
-    }
-
-    /// Creates a logical plan for DELETE.
-    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "DELETE is not yet implemented for lake source '{}'",
-            self.name()
-        )
-    }
-
-    /// Creates a logical plan for MERGE.
-    async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "MERGE is not yet implemented for lake source '{}'",
-            self.name()
-        )
-    }
-
-    /// Alters storage metadata for an existing lake source.
-    async fn alter_table(
-        &self,
-        runtime_env: Arc<RuntimeEnv>,
-        path: &str,
-        operation: LakeSourceAlterTableOperation,
-        lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        let _ = lakehouse_table;
+        ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let _ = ctx;
         match operation {
-            LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
+            RowLevelOperation::Delete(_) => not_impl_err!(
+                "DELETE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+            RowLevelOperation::Merge(_) => not_impl_err!(
+                "MERGE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+        }
+    }
+
+    /// Applies a storage metadata change.
+    ///
+    /// `Create` and `Replace` run before catalog registration. Lake sources that
+    /// do not need storage metadata at definition time can keep the default no-op.
+    async fn apply_metadata_change(
+        &self,
+        runtime_env: Arc<RuntimeEnv>,
+        change: MetadataChange,
+    ) -> Result<MetadataChangeResult> {
+        match change {
+            MetadataChange::Create(_) | MetadataChange::Replace(_) => {
+                Ok(MetadataChangeResult::default())
             }
-            LakeSourceAlterTableOperation::AlterColumnType {
-                column_path,
-                data_type,
+            MetadataChange::Alter {
+                path,
+                operation,
+                lakehouse_table,
             } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
-                    .await
-            }
-            LakeSourceAlterTableOperation::AlterColumnDefault {
-                column_path,
-                default,
-            } => {
-                self.alter_table_column_default(runtime_env, path, column_path, default)
-                    .await
-            }
-            LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+                let _ = (runtime_env, path, lakehouse_table);
+                let operation = match operation {
+                    LakeSourceAlterTableOperation::SetTableProperties { .. } => {
+                        "table properties alteration"
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnType { .. } => {
+                        "column type alteration"
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnDefault { .. } => {
+                        "column default alteration"
+                    }
+                    LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+                        "CHECK constraint alteration"
+                    }
+                };
                 not_impl_err!(
-                    "CHECK constraint alteration not supported for lake source '{}'",
+                    "{operation} not supported for lake source '{}'",
                     self.name()
                 )
             }
         }
-    }
-
-    /// Alters table properties (SET/UNSET TBLPROPERTIES).
-    ///
-    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
-    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
-    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
-    /// key is a no-op. The implementation is responsible for committing these changes to the
-    /// underlying table storage (e.g., writing a new Delta log entry).
-    async fn alter_table_properties(
-        &self,
-        runtime_env: Arc<RuntimeEnv>,
-        path: &str,
-        changes: Vec<(String, Option<String>)>,
-        if_exists: bool,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, changes, if_exists);
-        not_impl_err!(
-            "Table properties alteration not supported for lake source '{}'",
-            self.name()
-        )
-    }
-
-    /// Alters the type of a table column.
-    async fn alter_table_column_type(
-        &self,
-        runtime_env: Arc<RuntimeEnv>,
-        path: &str,
-        column_path: Vec<String>,
-        data_type: DataType,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, data_type);
-        not_impl_err!(
-            "Column type alteration not supported for lake source '{}'",
-            self.name()
-        )
-    }
-
-    /// Alters the default expression of a table column.
-    async fn alter_table_column_default(
-        &self,
-        runtime_env: Arc<RuntimeEnv>,
-        path: &str,
-        column_path: Vec<String>,
-        default: Option<String>,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, default);
-        not_impl_err!(
-            "Column default alteration not supported for lake source '{}'",
-            self.name()
-        )
     }
 }

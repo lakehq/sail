@@ -36,7 +36,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
-    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata,
+    LakeSourceCreateTableInfo, LakeSourceMetadata, MetadataChange, MetadataChangeResult,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -142,18 +142,40 @@ impl LakeSource for IcebergLakeSource {
         })
     }
 
-    async fn create_table_metadata(
+    async fn apply_metadata_change(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        info: LakeSourceCreateTableInfo,
-    ) -> Result<LakeSourceCreateTableResult> {
+        change: MetadataChange,
+    ) -> Result<MetadataChangeResult> {
+        let (info, replace) = match change {
+            MetadataChange::Create(info) => (info, false),
+            MetadataChange::Replace(info) => (info, true),
+            MetadataChange::Alter {
+                path,
+                operation,
+                lakehouse_table,
+            } => {
+                reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
+                match operation {
+                    LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                        self.alter_table_properties(runtime_env, &path, changes, if_exists)
+                            .await?;
+                    }
+                    operation => {
+                        return not_impl_err!(
+                            "unsupported Iceberg ALTER TABLE operation: {operation:?}"
+                        );
+                    }
+                }
+                return Ok(MetadataChangeResult::default());
+            }
+        };
         let LakeSourceCreateTableInfo {
             path,
             columns,
             comment: _,
             partition_by,
             properties,
-            replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
@@ -168,7 +190,7 @@ impl LakeSource for IcebergLakeSource {
         let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
             Ok(metadata_file) if columns.is_empty() && !replace => {
                 let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
-                return Ok(LakeSourceCreateTableResult {
+                return Ok(MetadataChangeResult {
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),
@@ -250,30 +272,13 @@ impl LakeSource for IcebergLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .to_string();
 
-        Ok(LakeSourceCreateTableResult {
+        Ok(MetadataChangeResult {
             properties: vec![(
                 sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                     .to_string(),
                 metadata_location,
             )],
         })
-    }
-
-    async fn alter_table(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        operation: LakeSourceAlterTableOperation,
-        lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
-        match operation {
-            LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
-            }
-            op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
-        }
     }
 }
 

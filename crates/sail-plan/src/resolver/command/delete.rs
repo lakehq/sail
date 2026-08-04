@@ -9,6 +9,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::{DeleteInfo, OptionLayer, SourceInfo, SourceRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -77,7 +78,10 @@ impl PlanResolver<'_> {
         let registry = self.ctx.extension::<SourceRegistry>()?;
         registry
             .get_lake_source(&info.format)?
-            .create_deleter(&self.ctx.state(), delete_info)
+            .plan_row_level_operation(
+                &self.ctx.state(),
+                RowLevelOperation::Delete(Box::new(delete_info)),
+            )
             .await
             .map_err(PlanError::from)
     }

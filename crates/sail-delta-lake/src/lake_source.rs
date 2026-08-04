@@ -25,12 +25,13 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeleteInfo, MergeInfo, OptionLayer,
-    PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode,
+    SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
-    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata,
+    LakeSourceCreateTableInfo, LakeSourceMetadata, MetadataChange, MetadataChangeResult,
+    RowLevelOperation,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -178,18 +179,53 @@ impl LakeSource for DeltaLakeSource {
         Ok(LakeSourceMetadata { schema, properties })
     }
 
-    async fn create_table_metadata(
+    async fn apply_metadata_change(
         &self,
         runtime_env: Arc<RuntimeEnv>,
-        info: LakeSourceCreateTableInfo,
-    ) -> Result<LakeSourceCreateTableResult> {
+        change: MetadataChange,
+    ) -> Result<MetadataChangeResult> {
+        let (info, replace) = match change {
+            MetadataChange::Create(info) => (info, false),
+            MetadataChange::Replace(info) => (info, true),
+            MetadataChange::Alter {
+                path,
+                operation,
+                lakehouse_table,
+            } => {
+                reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+                match operation {
+                    LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                        self.alter_table_properties(runtime_env, &path, changes, if_exists)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnType {
+                        column_path,
+                        data_type,
+                    } => {
+                        self.alter_table_column_type(runtime_env, &path, column_path, data_type)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnDefault {
+                        column_path,
+                        default,
+                    } => {
+                        self.alter_table_column_default(runtime_env, &path, column_path, default)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
+                        self.add_check_constraint(runtime_env, &path, &name, &expression)
+                            .await?;
+                    }
+                }
+                return Ok(MetadataChangeResult::default());
+            }
+        };
         let LakeSourceCreateTableInfo {
             path,
             columns,
             comment,
             partition_by,
             properties,
-            replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
@@ -272,7 +308,7 @@ impl LakeSource for DeltaLakeSource {
                         );
                     }
                 }
-                return Ok(LakeSourceCreateTableResult::default());
+                return Ok(MetadataChangeResult::default());
             }
         }
 
@@ -425,11 +461,21 @@ impl LakeSource for DeltaLakeSource {
             .with_actions(actions)
             .build(replace_snapshot, log_store, operation)
             .await
-            .map(|_| LakeSourceCreateTableResult::default())
+            .map(|_| MetadataChangeResult::default())
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+    async fn plan_row_level_operation(
+        &self,
+        _ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let info = match operation {
+            RowLevelOperation::Delete(info) => *info,
+            RowLevelOperation::Merge(info) => {
+                return crate::logical::merge::expand_merge_node(*info);
+            }
+        };
         let DeleteInfo {
             table_name,
             path,
@@ -456,44 +502,6 @@ impl LakeSource for DeltaLakeSource {
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
         }))
-    }
-
-    async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
-        crate::logical::merge::expand_merge_node(info)
-    }
-
-    async fn alter_table(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        operation: LakeSourceAlterTableOperation,
-        lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
-        match operation {
-            LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
-            }
-            LakeSourceAlterTableOperation::AlterColumnType {
-                column_path,
-                data_type,
-            } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
-                    .await
-            }
-            LakeSourceAlterTableOperation::AlterColumnDefault {
-                column_path,
-                default,
-            } => {
-                self.alter_table_column_default(runtime_env, path, column_path, default)
-                    .await
-            }
-            LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
-                self.add_check_constraint(runtime_env, path, &name, &expression)
-                    .await
-            }
-        }
     }
 }
 

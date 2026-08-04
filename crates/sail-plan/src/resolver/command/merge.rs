@@ -9,6 +9,7 @@ use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, SourceRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
@@ -154,17 +155,17 @@ impl PlanResolver<'_> {
         };
 
         let registry = self.ctx.extension::<SourceRegistry>()?;
-        let format = registry.get_lake_source(&target_format)?;
+        let lake_source = registry.get_lake_source(&target_format)?;
         let session_state = self.ctx.state();
-        Ok(format
-            .create_merger(
+        Ok(lake_source
+            .plan_row_level_operation(
                 &session_state,
-                MergeInfo {
+                RowLevelOperation::Merge(Box::new(MergeInfo {
                     target: Arc::new(target_plan),
                     source: Arc::new(source_plan),
                     options,
                     input_schema: merge_schema,
-                },
+                })),
             )
             .await?)
     }
