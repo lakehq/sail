@@ -33,6 +33,9 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_to_arrow};
+use crate::lake_source::{
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+};
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
@@ -46,9 +49,6 @@ use crate::spec::partition::{
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::table::metadata_loader::metadata_location_to_object_path_string;
-use crate::table_format::{
-    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
-};
 use crate::utils::get_object_store_from_context;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr,

@@ -13,11 +13,11 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::spec::catalog::TableUpdate;
-use crate::spec::{TableMetadata, TableRequirement};
-use crate::table_format::{
+use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
+use crate::spec::catalog::TableUpdate;
+use crate::spec::{TableMetadata, TableRequirement};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum CatalogCommitOutcome {

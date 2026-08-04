@@ -37,6 +37,7 @@ use crate::catalog_support::commit::{
     IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
 use crate::io::StoreContext;
+use crate::lake_source::metadata_location_from_properties;
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
     bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
@@ -54,7 +55,6 @@ use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
-use crate::table_format::metadata_location_from_properties;
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
