@@ -1,4 +1,3 @@
-@csv
 Feature: CSV expression functions handle Spark's CSV options
 
   Spark builds `CSVOptions` eagerly, so every option is parsed as soon as the options map is read,

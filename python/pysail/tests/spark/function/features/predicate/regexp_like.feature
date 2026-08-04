@@ -1,7 +1,6 @@
-@regexp_like
 Feature: regexp_like output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to regexp_like yields the schema Spark declares

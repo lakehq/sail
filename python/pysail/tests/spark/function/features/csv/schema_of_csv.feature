@@ -1,4 +1,3 @@
-@csv @schema_of_csv
 Feature: schema_of_csv infers a CSV schema from a literal row
 
     Scenario Outline: schema_of_csv infers <case>
@@ -25,7 +24,7 @@ Feature: schema_of_csv infers a CSV schema from a literal row
         | schema                        |
         | STRUCT<_c0: INT, _c1: STRING> |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

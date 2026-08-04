@@ -1,5 +1,4 @@
 # Moved from features/datetime_literal.feature by the datetime/ layout reorganisation.
-@datetime_literal
 Feature: Datetime literal syntax from Spark SQL documentation
 
   This feature tests datetime literal syntax as documented in Spark 4.1.2:

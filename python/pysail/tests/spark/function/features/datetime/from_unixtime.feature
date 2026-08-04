@@ -1,4 +1,3 @@
-@from_unixtime
 Feature: from_unixtime with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: from_unixtime with an argument coming from a column
 
   Rule: from_unixtime — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: from_unixtime with the argument as a literal
       When query
         """
@@ -16,7 +15,7 @@ Feature: from_unixtime with an argument coming from a column
         | result              |
         | 1970-01-01 00:00:00 |
 
-    @column_args
+    @function(columnargs)
     Scenario: from_unixtime takes argument 2 from a column containing NULL
       When query
         """
@@ -27,7 +26,7 @@ Feature: from_unixtime with an argument coming from a column
         | 1970-01-01 00:00:00 |
         | NULL                |
 
-    @column_args
+    @function(columnargs)
     Scenario: from_unixtime takes argument 2 from a column holding two different values
       When query
         """
@@ -38,7 +37,7 @@ Feature: from_unixtime with an argument coming from a column
         | 1970   |
         | 01     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null bigint literal yields a string

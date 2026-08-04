@@ -1,4 +1,4 @@
-@datasketches
+@function(sketch)
 Feature: Theta sketch functions
 
   Rule: theta_sketch_agg builds compact theta sketches

@@ -1,4 +1,3 @@
-@to_timestamp_ntz
 Feature: to_timestamp_ntz
 
   Rule: Result values (migrated from test_to_timestamp_ntz.txt doctests)

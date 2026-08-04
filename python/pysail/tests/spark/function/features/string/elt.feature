@@ -1,7 +1,6 @@
-@elt
 Feature: elt output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to elt yields the schema Spark declares

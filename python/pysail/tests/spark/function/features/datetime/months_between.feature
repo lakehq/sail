@@ -1,7 +1,6 @@
-@months_between
 Feature: months_between output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to months_between yields the schema Spark declares

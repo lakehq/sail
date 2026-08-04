@@ -1,5 +1,4 @@
-@lambda_hof
-@exists
+@function(lambda)
 Feature: exists higher-order function
 
   Rule: Basic boolean predicate evaluation
@@ -290,7 +289,7 @@ Feature: exists higher-order function
         | on   | true  |
         | off  | false |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

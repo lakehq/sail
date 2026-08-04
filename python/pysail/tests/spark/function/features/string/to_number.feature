@@ -1,4 +1,3 @@
-@to_number
 Feature: to_number comprehensive tests
 
   Rule: Argument count validation
@@ -350,7 +349,7 @@ Feature: to_number comprehensive tests
         """
       Then query error .*
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

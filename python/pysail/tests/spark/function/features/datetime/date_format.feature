@@ -1,4 +1,3 @@
-@date_format
 Feature: date_format with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: date_format with an argument coming from a column
 
   Rule: date_format — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: date_format with the argument as a literal
       When query
         """
@@ -16,7 +15,7 @@ Feature: date_format with an argument coming from a column
         | result |
         | 2016   |
 
-    @column_args
+    @function(columnargs)
     Scenario: date_format takes argument 2 from a column containing NULL
       When query
         """
@@ -27,7 +26,7 @@ Feature: date_format with an argument coming from a column
         | 2016   |
         | NULL   |
 
-    @column_args
+    @function(columnargs)
     Scenario: date_format takes argument 2 from a column holding two different values
       When query
         """
@@ -38,7 +37,7 @@ Feature: date_format with an argument coming from a column
         | 2026   |
         | 02     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

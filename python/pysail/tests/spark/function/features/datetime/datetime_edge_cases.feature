@@ -1,5 +1,4 @@
 # Moved from features/datetime_edge_cases.feature by the datetime/ layout reorganisation.
-@datetime_edge_cases
 Feature: datetime edge cases
 
   Rule: 2-digit year expansion boundaries

@@ -1,4 +1,3 @@
-@concat_simplify
 Feature: concat() — simplify hook (single-argument identity)
 
   Rule: String, array, and binary inputs — identity, no coercion needed
