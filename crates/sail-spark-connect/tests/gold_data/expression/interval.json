@@ -5075,33 +5075,7 @@
     {
       "input": "-interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": [
-              "-"
-            ],
-            "arguments": [
-              {
-                "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 3,
-                      "days": 4,
-                      "nanoseconds": 22001000000
-                    }
-                  }
-                }
-              }
-            ],
-            "namedArguments": [],
-            "isDistinct": false,
-            "isUserDefinedFunction": false,
-            "isInternal": null,
-            "ignoreNulls": null,
-            "filter": null,
-            "orderBy": null
-          }
-        }
+        "failure": "invalid argument: Cannot mix year-month and day-time fields in an interval"
       }
     },
     {
@@ -7610,17 +7584,7 @@
     {
       "input": "interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "success": {
-          "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 3,
-                "days": 4,
-                "nanoseconds": 22001000000
-              }
-            }
-          }
-        }
+        "failure": "invalid argument: Cannot mix year-month and day-time fields in an interval"
       }
     },
     {
