@@ -134,8 +134,7 @@ def test_bround_of_non_null_decimal_is_nullable(spark):
     assert _nullable(out, "result") is True  # Sail and Spark agree
 
 
-@sail_bug
 def test_round_of_non_null_decimal_stays_nullable(spark):
-    # Spark keeps round(decimal) nullable (overflow); Sail says non-nullable.
+    # Spark keeps round(decimal) nullable (overflow); Sail now matches.
     out = _decimal_frame(spark).select(F.round("nn", 1).alias("result"))
     assert _nullable(out, "result") is True
