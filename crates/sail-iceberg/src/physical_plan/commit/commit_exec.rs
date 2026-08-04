@@ -64,6 +64,7 @@ pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    expected_snapshot_id: Option<Option<i64>>,
     cache: Arc<PlanProperties>,
 }
 
@@ -88,8 +89,14 @@ impl IcebergCommitExec {
             input,
             table_url,
             lakehouse_table,
+            expected_snapshot_id: None,
             cache,
         }
+    }
+
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
+        self.expected_snapshot_id = expected_snapshot_id;
+        self
     }
 
     pub fn table_url(&self) -> &Url {
@@ -102,6 +109,26 @@ impl IcebergCommitExec {
 
     pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
         self.lakehouse_table.as_ref()
+    }
+
+    pub fn expected_snapshot_id(&self) -> Option<Option<i64>> {
+        self.expected_snapshot_id
+    }
+
+    fn add_expected_snapshot_requirement(
+        requirements: &mut Vec<TableRequirement>,
+        expected_snapshot_id: Option<Option<i64>>,
+    ) {
+        let Some(snapshot_id) = expected_snapshot_id else {
+            return;
+        };
+        let requirement = TableRequirement::RefSnapshotIdMatch {
+            r#ref: MAIN_BRANCH.to_string(),
+            snapshot_id,
+        };
+        if !requirements.contains(&requirement) {
+            requirements.push(requirement);
+        }
     }
 
     fn apply_schema_update(table_meta: &mut TableMetadata, new_schema: IcebergSchema) {
@@ -394,11 +421,14 @@ impl ExecutionPlan for IcebergCommitExec {
         if children.len() != 1 {
             return internal_err!("IcebergCommitExec requires exactly one child");
         }
-        Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
-            self.table_url.clone(),
-            self.lakehouse_table.clone(),
-        )))
+        Ok(Arc::new(
+            Self::new(
+                Arc::clone(&children[0]),
+                self.table_url.clone(),
+                self.lakehouse_table.clone(),
+            )
+            .with_expected_snapshot_id(self.expected_snapshot_id),
+        ))
     }
 
     fn execute(
@@ -421,6 +451,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
         let table_url = self.table_url.clone();
         let lakehouse_table = self.lakehouse_table.clone();
+        let expected_snapshot_id = self.expected_snapshot_id;
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -455,7 +486,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
-            let commit_info = IcebergCommitInfo {
+            let mut commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
                 data_files: added_data_files,
@@ -469,6 +500,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
+            Self::add_expected_snapshot_requirement(
+                &mut commit_info.requirements,
+                expected_snapshot_id,
+            );
 
             let catalog_table = commit_info
                 .lakehouse_table
@@ -1115,4 +1150,110 @@ fn commit_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
     ))
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::spec::FormatVersion;
+
+    fn table_metadata_at_snapshot(snapshot_id: Option<i64>) -> TableMetadata {
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: "file:///tmp/table".to_string(),
+            last_sequence_number: 2,
+            last_updated_ms: 0,
+            last_column_id: 0,
+            schemas: vec![],
+            current_schema_id: 0,
+            partition_specs: vec![],
+            default_spec_id: 0,
+            last_partition_id: 0,
+            properties: HashMap::new(),
+            current_snapshot_id: snapshot_id,
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        }
+    }
+
+    #[test]
+    fn replacing_commit_child_preserves_snapshot_requirement() {
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let child: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let commit = Arc::new(
+            IcebergCommitExec::new(
+                Arc::clone(&child),
+                Url::parse("file:///tmp/table").expect("valid table URL"),
+                None,
+            )
+            .with_expected_snapshot_id(Some(Some(41))),
+        );
+
+        let rewritten = commit
+            .with_new_children(vec![child])
+            .expect("one replacement child is valid");
+        let rewritten = rewritten
+            .downcast_ref::<IcebergCommitExec>()
+            .expect("rewritten plan remains an Iceberg commit");
+
+        assert_eq!(rewritten.expected_snapshot_id(), Some(Some(41)));
+    }
+
+    #[test]
+    fn planned_snapshot_requirement_rejects_advanced_table() {
+        let mut requirements = vec![];
+        IcebergCommitExec::add_expected_snapshot_requirement(&mut requirements, Some(Some(1)));
+
+        let error = IcebergCommitExec::validate_requirements(
+            Some(&table_metadata_at_snapshot(Some(2))),
+            &requirements,
+        )
+        .expect_err("planned snapshot 1 must conflict with current snapshot 2");
+
+        assert!(error.to_string().contains("expected snapshot Some(1)"));
+        assert!(error.to_string().contains("found Some(2)"));
+    }
+
+    #[test]
+    fn empty_target_snapshot_requirement_is_not_flattened_away() {
+        let mut requirements = vec![];
+        IcebergCommitExec::add_expected_snapshot_requirement(&mut requirements, Some(None));
+
+        assert!(
+            IcebergCommitExec::validate_requirements(
+                Some(&table_metadata_at_snapshot(None)),
+                &requirements,
+            )
+            .is_ok()
+        );
+        assert!(
+            IcebergCommitExec::validate_requirements(
+                Some(&table_metadata_at_snapshot(Some(2))),
+                &requirements,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn unvalidated_commit_adds_no_snapshot_requirement() {
+        let mut requirements = vec![];
+        IcebergCommitExec::add_expected_snapshot_requirement(&mut requirements, None);
+
+        assert!(requirements.is_empty());
+    }
 }
