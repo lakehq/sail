@@ -1,6 +1,6 @@
-@interval_type_fields
 Feature: Leading and trailing fields of the interval types
 
+  @function(nullability)
   Rule: A year-month interval only spans the fields that it is declared with
 
     Scenario Outline: Year-month interval: <case>
@@ -20,6 +20,7 @@ Feature: Leading and trailing fields of the interval types
         | year only     | INTERVAL '10' YEAR             | year          |
         | month only    | INTERVAL '8' MONTH             | month         |
 
+  @function(nullability)
   Rule: A day-time interval only spans the fields that it is declared with
 
     Scenario Outline: Day-time interval: <case>
@@ -46,6 +47,7 @@ Feature: Leading and trailing fields of the interval types
         | hour to second | INTERVAL '2:3:4' HOUR TO SECOND  | hour to second |
         | minute to second | INTERVAL '3:4' MINUTE TO SECOND | minute to second |
 
+  @function(nullability)
   Rule: A multi-unit interval with a single unit only spans that unit
 
     Scenario Outline: Multi-unit interval: <case>
@@ -67,6 +69,7 @@ Feature: Leading and trailing fields of the interval types
         | hours        | INTERVAL 4 HOURS  | hour   |
         | seconds      | INTERVAL 6 SECONDS | second |
 
+  @function(nullability)
   Rule: A week folds into the day field and sub-second units fold into the second field
 
     Scenario Outline: Coarser field for <case>
@@ -88,6 +91,7 @@ Feature: Leading and trailing fields of the interval types
         | microsecond   | INTERVAL '-7' MICROSECOND | second |
         | microseconds  | INTERVAL 5 MICROSECONDS | second |
 
+  @function(nullability)
   Rule: A multi-unit interval spans from its coarsest to its finest unit
 
     Scenario Outline: Multi-unit span: <case>
@@ -122,6 +126,7 @@ Feature: Leading and trailing fields of the interval types
          |-- result: interval day to hour (nullable = false)
         """
 
+  @function(nullability)
   Rule: A cast to an interval type only spans the fields that it is declared with
 
     Scenario Outline: Cast of NULL to an interval type: <case>
@@ -199,6 +204,7 @@ Feature: Leading and trailing fields of the interval types
         | negative to year | -10-8 | YEAR  | INTERVAL '-10' YEAR |
         | to month         | 10-8  | MONTH | INTERVAL '128' MONTH |
 
+  @function(nullability)
   Rule: A multi-unit interval takes its family from the units written, not from its value
 
     Scenario Outline: Zero-valued year-month multi-unit interval: <case>
@@ -251,6 +257,7 @@ Feature: Leading and trailing fields of the interval types
         | year with day   | INTERVAL 1 YEAR 2 DAYS    |
         | month with hour | INTERVAL 1 MONTH 3 HOURS  |
 
+  @function(nullability)
   Rule: The interval qualifier survives the expressions that produce interval values
 
     @sail-bug
