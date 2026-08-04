@@ -51,6 +51,8 @@ def spark_connect_server(envs: Mapping[str, str] | None = None) -> Iterator[_Ser
     if remote := os.environ.get("SPARK_REMOTE"):
         if envs is not None:
             pytest.skip("the server from `SPARK_REMOTE` may not be compatible with the custom environment variables")
+        # Creating a server, without starting it, initializes the global state that config warnings rely on.
+        _ = SparkConnectServer("127.0.0.1", 0)
         yield _ServerHandle(remote=remote)
         return
 
