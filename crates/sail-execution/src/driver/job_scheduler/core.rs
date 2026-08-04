@@ -70,6 +70,7 @@ impl JobScheduler {
         state: TaskState,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     ) {
         let Some(attempt) = self
             .jobs
@@ -88,6 +89,9 @@ impl JobScheduler {
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
+        }
+        if metrics_json.is_some() {
+            attempt.metrics_json = metrics_json;
         }
     }
 
@@ -309,6 +313,7 @@ impl JobScheduler {
                         state: TaskState::Created,
                         messages: vec![],
                         cause: None,
+                        metrics_json: None,
                         job_output_fetched: false,
                         created_at: Utc::now(),
                         stopped_at: None,

@@ -1,11 +1,17 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::{ExecutionPlan, execute_stream};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, execute_stream};
 use datafusion::prelude::SessionContext;
-use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory, JobRunnerHistoryReporter};
+use futures::StreamExt;
+use sail_common_datafusion::session::job::{
+    JobRunner, JobRunnerHistory, JobRunnerHistoryReporter, JobSnapshot, StageSnapshot, TaskSnapshot,
+};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::ActorSystem;
 use sail_telemetry::telemetry::global_metrics;
@@ -31,7 +37,15 @@ fn explain_job_graph(plan: Arc<dyn ExecutionPlan>, use_blocking_shuffle: bool) -
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
     stopped: AtomicBool,
-    history_reporter: std::sync::Mutex<Option<Box<dyn JobRunnerHistoryReporter>>>,
+    history_reporter: Mutex<Option<Box<dyn JobRunnerHistoryReporter>>>,
+    state: Arc<Mutex<LocalJobRunnerState>>,
+}
+
+#[derive(Default)]
+struct LocalJobRunnerState {
+    jobs: Vec<JobSnapshot>,
+    stages: Vec<StageSnapshot>,
+    tasks: Vec<TaskSnapshot>,
 }
 
 impl LocalJobRunner {
@@ -39,7 +53,97 @@ impl LocalJobRunner {
         Self {
             next_job_id: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
-            history_reporter: std::sync::Mutex::new(Some(history_reporter)),
+            history_reporter: Mutex::new(Some(history_reporter)),
+            state: Arc::new(Mutex::new(LocalJobRunnerState::default())),
+        }
+    }
+
+    fn start_job(
+        state: &Arc<Mutex<LocalJobRunnerState>>,
+        job_id: u64,
+        plan: Arc<dyn ExecutionPlan>,
+    ) {
+        let now = Utc::now();
+        let physical_plan = DisplayableExecutionPlan::new(plan.as_ref())
+            .indent(true)
+            .to_string();
+        let partitions = plan.output_partitioning().partition_count() as u64;
+        if let Ok(mut state) = state.lock() {
+            state.jobs.push(JobSnapshot {
+                job_id,
+                status: "RUNNING".to_string(),
+                created_at: now,
+                stopped_at: None,
+            });
+            state.stages.push(StageSnapshot {
+                job_id,
+                stage: 0,
+                partitions,
+                inputs: vec![],
+                group: "local".to_string(),
+                mode: "local".to_string(),
+                distribution: plan.output_partitioning().to_string(),
+                placement: "driver".to_string(),
+                physical_plan,
+                metrics_json: String::new(),
+                status: "RUNNING".to_string(),
+                created_at: now,
+                stopped_at: None,
+            });
+            state.tasks.push(TaskSnapshot {
+                job_id,
+                stage: 0,
+                partition: 0,
+                attempt: 0,
+                status: "RUNNING".to_string(),
+                metrics_json: String::new(),
+                created_at: now,
+                stopped_at: None,
+            });
+        }
+    }
+
+    fn finish_job(
+        state: &Arc<Mutex<LocalJobRunnerState>>,
+        job_id: u64,
+        status: &'static str,
+        metrics_json: Option<String>,
+    ) {
+        let now = Utc::now();
+        let metrics_json = metrics_json.unwrap_or_default();
+        if let Ok(mut state) = state.lock() {
+            if let Some(job) = state.jobs.iter_mut().find(|x| x.job_id == job_id) {
+                job.status = status.to_string();
+                job.stopped_at = Some(now);
+            }
+            if let Some(stage) = state.stages.iter_mut().find(|x| x.job_id == job_id) {
+                stage.status = status.to_string();
+                stage.metrics_json = metrics_json.clone();
+                stage.stopped_at = Some(now);
+            }
+            if let Some(task) = state.tasks.iter_mut().find(|x| x.job_id == job_id) {
+                task.status = status.to_string();
+                task.metrics_json = metrics_json;
+                task.stopped_at = Some(now);
+            }
+        }
+    }
+
+    fn history(&self) -> JobRunnerHistory {
+        if let Ok(state) = self.state.lock() {
+            JobRunnerHistory {
+                jobs: state.jobs.clone(),
+                stages: state.stages.clone(),
+                tasks: state.tasks.clone(),
+                workers: vec![],
+            }
+        } else {
+            JobRunnerHistory {
+                jobs: vec![],
+                stages: vec![],
+                tasks: vec![],
+                workers: vec![],
+            }
         }
     }
 }
@@ -47,7 +151,7 @@ impl LocalJobRunner {
 #[tonic::async_trait]
 impl StateObservable<JobRunnerObserver> for LocalJobRunner {
     async fn observe(&self, observer: JobRunnerObserver) {
-        observer.nothing()
+        self.history().observe(observer).await
     }
 }
 
@@ -74,7 +178,40 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        Self::start_job(&self.state, job_id, plan.clone());
+        let stream = execute_stream(plan.clone(), ctx.task_ctx())?;
+        let schema = stream.schema();
+        let state = self.state.clone();
+        let output = futures::stream::unfold(
+            (stream, state, plan, false),
+            move |(mut stream, state, plan, finished)| async move {
+                if finished {
+                    return None;
+                }
+                match stream.next().await {
+                    Some(Ok(batch)) => Some((Ok(batch), (stream, state, plan, false))),
+                    Some(Err(error)) => {
+                        Self::finish_job(
+                            &state,
+                            job_id,
+                            "FAILED",
+                            crate::metrics::plan_metrics_json(plan.clone()),
+                        );
+                        Some((Err(error), (stream, state, plan, true)))
+                    }
+                    None => {
+                        Self::finish_job(
+                            &state,
+                            job_id,
+                            "SUCCEEDED",
+                            crate::metrics::plan_metrics_json(plan),
+                        );
+                        None
+                    }
+                }
+            },
+        );
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
     }
 
     async fn stop(&self) {
@@ -85,14 +222,7 @@ impl JobRunner for LocalJobRunner {
             .ok()
             .and_then(|mut history_reporter| history_reporter.take());
         if let Some(history_reporter) = history_reporter {
-            history_reporter
-                .report(JobRunnerHistory {
-                    jobs: vec![],
-                    stages: vec![],
-                    tasks: vec![],
-                    workers: vec![],
-                })
-                .await;
+            history_reporter.report(self.history()).await;
         }
     }
 }

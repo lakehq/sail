@@ -2557,6 +2557,21 @@
       "defaultValue": "67108864"
     },
     {
+      "key": "spark.sql.session.localRelationBatchOfChunksSizeBytes",
+      "doc": "Limit on how much memory the client can use when uploading a local relation to the server.",
+      "defaultValue": "1073741824"
+    },
+    {
+      "key": "spark.sql.session.localRelationChunkSizeBytes",
+      "doc": "The chunk size in bytes when splitting ChunkedCachedLocalRelation.data into batches.",
+      "defaultValue": "16777216"
+    },
+    {
+      "key": "spark.sql.session.localRelationChunkSizeRows",
+      "doc": "The chunk size in number of rows when splitting ChunkedCachedLocalRelation.data into batches.",
+      "defaultValue": "10000"
+    },
+    {
       "key": "spark.sql.session.timeZone",
       "doc": "The ID of session local timezone in the format of either region-based zone IDs or zone offsets. Region IDs must have the form 'area/city', such as 'America/Los_Angeles'. Zone offsets must be in the format '(+|-)HH', '(+|-)HH:mm' or '(+|-)HH:mm:ss', e.g '-08', '+01:00' or '-13:33:33'. Also 'UTC' and 'Z' are supported as aliases of '+00:00'. Other short names are not recommended to use because they can be ambiguous.",
       "defaultValue": null

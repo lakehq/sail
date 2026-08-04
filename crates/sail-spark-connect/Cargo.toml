@@ -17,6 +17,7 @@ sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-execution = { path = "../sail-execution" }
 sail-session = { path = "../sail-session" }
+sail-web-ui = { path = "../sail-web-ui" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

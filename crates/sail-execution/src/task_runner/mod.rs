@@ -22,6 +22,7 @@ pub trait TaskRunnerMessage {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     ) -> Self;
 }
 
@@ -31,12 +32,14 @@ impl TaskRunnerMessage for DriverEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     ) -> Self {
         DriverEvent::UpdateTask {
             key,
             status,
             message,
             cause,
+            metrics_json,
             sequence: None,
         }
     }
@@ -48,12 +51,14 @@ impl TaskRunnerMessage for WorkerEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     ) -> Self {
         WorkerEvent::ReportTaskStatus {
             key,
             status,
             message,
             cause,
+            metrics_json,
         }
     }
 }

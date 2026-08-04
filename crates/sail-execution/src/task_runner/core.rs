@@ -53,6 +53,7 @@ impl TaskRunner {
                     TaskStatus::Failed,
                     Some(format!("failed to execute plan: {e}")),
                     Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                    None,
                 );
                 ctx.send(event);
                 return;
@@ -61,7 +62,7 @@ impl TaskRunner {
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         self.signals.insert(key.clone(), tx);
-        let monitor = TaskMonitor::new(handle, key, stream, rx);
+        let monitor = TaskMonitor::new(handle, key, stream.0, stream.1, rx);
         ctx.spawn(monitor.run());
     }
 
@@ -78,7 +79,7 @@ impl TaskRunner {
         key: &TaskKey,
         definition: TaskDefinition,
         context: Arc<TaskContext>,
-    ) -> ExecutionResult<SendableRecordBatchStream>
+    ) -> ExecutionResult<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
@@ -107,7 +108,7 @@ impl TaskRunner {
         };
         let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(key.partition, context)?;
-        Ok(stream)
+        Ok((stream, plan))
     }
 
     fn rewrite_file_scans(

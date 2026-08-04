@@ -69,6 +69,7 @@ impl std::error::Error for ServerError {}
 /// the telemetry and shuts down the telemetry when the server stops.
 pub(super) fn with_spark_connect_server<S, W, F>(
     address: (IpAddr, u16),
+    ui_address: Option<SocketAddr>,
     signal: S,
     workload: W,
 ) -> Result<(), Box<dyn std::error::Error>>
@@ -92,7 +93,7 @@ where
         let server_address = listener.local_addr()?;
         let server_task = async move {
             info!("Starting the Spark Connect server on {server_address}...");
-            match serve(listener, signal, config, handle).await {
+            match serve(listener, signal, config, handle, ui_address).await {
                 Ok(()) => {
                     info!("The Spark Connect server has stopped.");
                     Ok(())
@@ -120,6 +121,11 @@ where
     })
 }
 
-pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    with_spark_connect_server((ip, port), shutdown(), |_| async { Ok(()) })
+pub fn run_spark_connect_server(
+    ip: IpAddr,
+    port: u16,
+    ui_port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ui_address = ui_port.map(|port| SocketAddr::new(ip, port));
+    with_spark_connect_server((ip, port), ui_address, shutdown(), |_| async { Ok(()) })
 }

@@ -8147,6 +8147,7 @@ dependencies = [
  "sail-server",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-web-ui",
  "serde",
  "serde_json",
  "syn 2.0.119",
@@ -8231,6 +8232,20 @@ dependencies = [
  "tokio",
  "tonic",
  "tower",
+]
+
+[[package]]
+name = "sail-web-ui"
+version = "0.6.6"
+dependencies = [
+ "axum",
+ "datafusion-common",
+ "log",
+ "sail-common-datafusion",
+ "sail-session",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

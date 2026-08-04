@@ -57,6 +57,7 @@ pub enum DriverEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
         /// The sequence number from the worker,
         /// or [None] if it is a forced update within the driver.
         sequence: Option<u64>,
@@ -220,6 +221,7 @@ impl SpanAssociation for DriverEvent {
                 status,
                 message,
                 cause,
+                metrics_json: _,
                 sequence: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));

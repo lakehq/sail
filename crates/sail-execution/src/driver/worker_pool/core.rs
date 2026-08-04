@@ -281,6 +281,7 @@ impl WorkerPool {
                 status: TaskStatus::Failed,
                 message: Some(message),
                 cause: Some(cause),
+                metrics_json: None,
                 sequence: None,
             });
             return;
@@ -296,6 +297,7 @@ impl WorkerPool {
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: Some(cause),
+                    metrics_json: None,
                     sequence: None,
                 });
                 return;
@@ -315,6 +317,7 @@ impl WorkerPool {
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: Some(cause),
+                    metrics_json: None,
                     sequence: None,
                 });
                 return;
@@ -333,6 +336,7 @@ impl WorkerPool {
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
                         cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                        metrics_json: None,
                         sequence: None,
                     })
                     .await;

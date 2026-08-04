@@ -128,6 +128,7 @@ impl WorkerActor {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
     ) -> ActorAction {
         let sequence = self.sequence;
         self.sequence = match self.sequence.checked_add(1) {
@@ -147,9 +148,10 @@ impl WorkerActor {
                     let key = key.clone();
                     let message = message.clone();
                     let cause = cause.clone();
+                    let metrics_json = metrics_json.clone();
                     async move {
                         client
-                            .report_task_status(key, status, message, cause, sequence)
+                            .report_task_status(key, status, message, cause, metrics_json, sequence)
                             .await
                     }
                 })

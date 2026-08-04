@@ -135,6 +135,7 @@ impl DriverActor {
                     TaskState::Failed,
                     Some(message.clone()),
                     Some(CommonErrorCause::Execution(message.clone())),
+                    None,
                 );
             }
 
@@ -181,6 +182,7 @@ impl DriverActor {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        metrics_json: Option<String>,
         sequence: Option<u64>,
     ) -> ActorAction {
         if let Some(sequence) = sequence {
@@ -197,13 +199,23 @@ impl DriverActor {
         }
         match status {
             TaskStatus::Running => {
-                self.job_scheduler
-                    .update_task(&key, TaskState::Running, message, cause);
+                self.job_scheduler.update_task(
+                    &key,
+                    TaskState::Running,
+                    message,
+                    cause,
+                    metrics_json,
+                );
                 self.refresh_job(ctx, key.job_id);
             }
             TaskStatus::Succeeded => {
-                self.job_scheduler
-                    .update_task(&key, TaskState::Succeeded, message, cause);
+                self.job_scheduler.update_task(
+                    &key,
+                    TaskState::Succeeded,
+                    message,
+                    cause,
+                    metrics_json,
+                );
                 self.task_assigner.unassign_task(&key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
@@ -212,8 +224,13 @@ impl DriverActor {
             TaskStatus::Failed => {
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
-                self.job_scheduler
-                    .update_task(&key, TaskState::Failed, message, cause);
+                self.job_scheduler.update_task(
+                    &key,
+                    TaskState::Failed,
+                    message,
+                    cause,
+                    metrics_json,
+                );
                 self.task_assigner.unassign_task(&key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
@@ -222,8 +239,13 @@ impl DriverActor {
             TaskStatus::Canceled => {
                 // The task attempt state should already be "canceled" but we update it
                 // for the message and cause.
-                self.job_scheduler
-                    .update_task(&key, TaskState::Canceled, message, cause);
+                self.job_scheduler.update_task(
+                    &key,
+                    TaskState::Canceled,
+                    message,
+                    cause,
+                    metrics_json,
+                );
                 // Task cancellation must have been initiated by the driver itself,
                 // so it is a no-op to handle canceled tasks here.
             }
@@ -269,6 +291,7 @@ impl DriverActor {
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: Some(cause),
+                    metrics_json: None,
                     sequence: None,
                 })
             }
@@ -546,13 +569,14 @@ impl DriverActor {
                             status: TaskStatus::Failed,
                             message: Some(e.to_string()),
                             cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            metrics_json: None,
                             sequence: None,
                         });
                         continue;
                     }
                 };
                 self.job_scheduler
-                    .update_task(&entry.key, TaskState::Scheduled, None, None);
+                    .update_task(&entry.key, TaskState::Scheduled, None, None, None);
                 match assignment.assignment {
                     TaskAssignment::Driver => self
                         .task_runner
