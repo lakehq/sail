@@ -1376,17 +1376,34 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 lakehouse_table_json,
+                validate_read_snapshot,
+                expected_snapshot_id,
+                removed_data_file_paths,
+                operation_override_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                let operation_override = if operation_override_json.is_empty() {
+                    None
+                } else {
+                    Some(self.try_decode_json(
+                        &operation_override_json,
+                        "Iceberg commit operation override",
+                    )?)
+                };
 
-                Ok(Arc::new(IcebergCommitExec::new(
-                    input,
-                    table_url,
-                    lakehouse_table,
-                )))
+                Ok(Arc::new(
+                    IcebergCommitExec::new(input, table_url, lakehouse_table)
+                        .with_expected_snapshot_id(
+                            validate_read_snapshot.then_some(expected_snapshot_id),
+                        )
+                        .with_optional_rewrite_data_files(
+                            removed_data_file_paths,
+                            operation_override,
+                        ),
+                ))
             }
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
@@ -2230,11 +2247,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = try_encode_physical_plan(self, iceberg_commit_exec.input().clone())?;
+            let expected_snapshot_id = iceberg_commit_exec.expected_snapshot_id();
+            let operation_override_json = iceberg_commit_exec
+                .operation_override()
+                .map(|operation| {
+                    self.try_encode_json(operation, "Iceberg commit operation override")
+                })
+                .transpose()?
+                .unwrap_or_default();
             NodeKind::IcebergCommit(r#gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(iceberg_commit_exec.lakehouse_table())?,
+                validate_read_snapshot: expected_snapshot_id.is_some(),
+                expected_snapshot_id: expected_snapshot_id.flatten(),
+                removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                operation_override_json,
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -4633,6 +4662,64 @@ mod tests {
     use datafusion::physical_expr::HigherOrderFunctionExpr;
 
     use super::*;
+
+    fn round_trip_iceberg_commit(
+        expected_snapshot_id: Option<Option<i64>>,
+        removed_data_file_paths: Vec<String>,
+        operation_override: Option<sail_iceberg::spec::Operation>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let plan = IcebergCommitExec::new(
+            input,
+            Url::parse("file:///tmp/iceberg-table")
+                .map_err(|error| plan_datafusion_err!("{error}"))?,
+            None,
+        )
+        .with_expected_snapshot_id(expected_snapshot_id);
+        let plan = match operation_override {
+            Some(operation) => plan.with_rewrite_data_files(removed_data_file_paths, operation),
+            None => plan,
+        };
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)
+    }
+
+    #[test]
+    fn iceberg_commit_snapshot_requirement_round_trip_preserves_tristate() -> Result<()> {
+        for expected_snapshot_id in [Some(Some(41)), Some(None), None] {
+            let decoded = round_trip_iceberg_commit(expected_snapshot_id, vec![], None)?;
+            let decoded = decoded
+                .downcast_ref::<IcebergCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+            assert_eq!(decoded.expected_snapshot_id(), expected_snapshot_id);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn iceberg_commit_rewrite_round_trip_preserves_paths_and_operation() -> Result<()> {
+        let decoded = round_trip_iceberg_commit(
+            Some(Some(41)),
+            vec!["data/affected.parquet".to_string()],
+            Some(sail_iceberg::spec::Operation::Delete),
+        )?;
+        let decoded = decoded
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+
+        assert_eq!(
+            decoded.removed_data_file_paths(),
+            &["data/affected.parquet".to_string()]
+        );
+        assert_eq!(
+            decoded.operation_override(),
+            Some(&sail_iceberg::spec::Operation::Delete)
+        );
+        Ok(())
+    }
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
         let codec = RemoteExecutionCodec;

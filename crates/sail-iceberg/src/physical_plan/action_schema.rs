@@ -9,7 +9,8 @@ use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use serde::{Deserialize, Serialize};
 
-use crate::spec::types::values::{Literal, PrimitiveLiteral};
+use crate::spec::types::PrimitiveType;
+use crate::spec::types::values::{Datum, Literal, PrimitiveLiteral};
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, Operation, PartitionSpec, Schema as IcebergSchema,
     TableRequirement,
@@ -84,8 +85,107 @@ pub struct AddFileAction {
     pub column_sizes: BTreeMap<i32, u64>,
     pub value_counts: BTreeMap<i32, u64>,
     pub null_value_counts: BTreeMap<i32, u64>,
+    pub nan_value_counts: BTreeMap<i32, u64>,
+    pub lower_bounds_json: String,
+    pub upper_bounds_json: String,
     pub split_offsets: Vec<i64>,
     pub partition_spec_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BoundAction {
+    field_id: i32,
+    primitive_type: PrimitiveType,
+    value: BoundValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value")]
+enum BoundValue {
+    Boolean(bool),
+    Int(i32),
+    Long(i64),
+    FloatBits(u32),
+    DoubleBits(u64),
+    Int128(String),
+    UInt128(String),
+    String(String),
+    Binary(Vec<u8>),
+}
+
+impl From<&PrimitiveLiteral> for BoundValue {
+    fn from(value: &PrimitiveLiteral) -> Self {
+        match value {
+            PrimitiveLiteral::Boolean(value) => Self::Boolean(*value),
+            PrimitiveLiteral::Int(value) => Self::Int(*value),
+            PrimitiveLiteral::Long(value) => Self::Long(*value),
+            PrimitiveLiteral::Float(value) => Self::FloatBits(value.to_bits()),
+            PrimitiveLiteral::Double(value) => Self::DoubleBits(value.to_bits()),
+            PrimitiveLiteral::Int128(value) => Self::Int128(value.to_string()),
+            PrimitiveLiteral::UInt128(value) => Self::UInt128(value.to_string()),
+            PrimitiveLiteral::String(value) => Self::String(value.clone()),
+            PrimitiveLiteral::Binary(value) => Self::Binary(value.clone()),
+        }
+    }
+}
+
+impl TryFrom<BoundValue> for PrimitiveLiteral {
+    type Error = DataFusionError;
+
+    fn try_from(value: BoundValue) -> Result<Self> {
+        match value {
+            BoundValue::Boolean(value) => Ok(Self::Boolean(value)),
+            BoundValue::Int(value) => Ok(Self::Int(value)),
+            BoundValue::Long(value) => Ok(Self::Long(value)),
+            BoundValue::FloatBits(value) => Ok(Self::Float(ordered_float::OrderedFloat(
+                f32::from_bits(value),
+            ))),
+            BoundValue::DoubleBits(value) => Ok(Self::Double(ordered_float::OrderedFloat(
+                f64::from_bits(value),
+            ))),
+            BoundValue::Int128(value) => value.parse::<i128>().map(Self::Int128).map_err(|error| {
+                DataFusionError::Plan(format!("failed to parse i128 bound literal: {error}"))
+            }),
+            BoundValue::UInt128(value) => {
+                value.parse::<u128>().map(Self::UInt128).map_err(|error| {
+                    DataFusionError::Plan(format!("failed to parse u128 bound literal: {error}"))
+                })
+            }
+            BoundValue::String(value) => Ok(Self::String(value)),
+            BoundValue::Binary(value) => Ok(Self::Binary(value)),
+        }
+    }
+}
+
+fn encode_bounds(bounds: &std::collections::HashMap<i32, Datum>) -> Result<String> {
+    let mut actions = bounds
+        .iter()
+        .map(|(field_id, datum)| BoundAction {
+            field_id: *field_id,
+            primitive_type: datum.r#type.clone(),
+            value: BoundValue::from(&datum.literal),
+        })
+        .collect::<Vec<_>>();
+    actions.sort_by_key(|action| action.field_id);
+    serde_json::to_string(&actions).map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+fn decode_bounds(value: &str) -> Result<std::collections::HashMap<i32, Datum>> {
+    let actions = serde_json::from_str::<Vec<BoundAction>>(value)
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    actions
+        .into_iter()
+        .map(|action| {
+            let literal = PrimitiveLiteral::try_from(action.value)?;
+            if !action.primitive_type.compatible(&literal) {
+                return Err(DataFusionError::Plan(format!(
+                    "bound literal is not compatible with Iceberg type {} for field {}",
+                    action.primitive_type, action.field_id
+                )));
+            }
+            Ok((action.field_id, Datum::new(action.primitive_type, literal)))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +272,12 @@ fn iceberg_action_tracing_options()
             opts.overwrite(
                 "action.add.null_value_counts",
                 Field::new("null_value_counts", map_type_i32_u64(), false),
+            )
+        })
+        .and_then(|opts| {
+            opts.overwrite(
+                "action.add.nan_value_counts",
+                Field::new("nan_value_counts", map_type_i32_u64(), false),
             )
         })
         .and_then(|opts| {
@@ -272,6 +378,8 @@ impl TryFrom<DataFile> for AddFileAction {
     type Error = DataFusionError;
 
     fn try_from(df: DataFile) -> Result<Self> {
+        let lower_bounds_json = encode_bounds(&df.lower_bounds)?;
+        let upper_bounds_json = encode_bounds(&df.upper_bounds)?;
         let partition = df
             .partition
             .into_iter()
@@ -294,6 +402,9 @@ impl TryFrom<DataFile> for AddFileAction {
             column_sizes: df.column_sizes.into_iter().collect(),
             value_counts: df.value_counts.into_iter().collect(),
             null_value_counts: df.null_value_counts.into_iter().collect(),
+            nan_value_counts: df.nan_value_counts.into_iter().collect(),
+            lower_bounds_json,
+            upper_bounds_json,
             split_offsets: df.split_offsets,
             partition_spec_id: df.partition_spec_id,
         })
@@ -334,6 +445,8 @@ impl TryFrom<AddFileAction> for DataFile {
                 Some(pv) => Ok(Some(Literal::Primitive(pv.try_into()?))),
             })
             .collect::<Result<Vec<_>>>()?;
+        let lower_bounds = decode_bounds(&a.lower_bounds_json)?;
+        let upper_bounds = decode_bounds(&a.upper_bounds_json)?;
 
         Ok(DataFile {
             content,
@@ -345,9 +458,9 @@ impl TryFrom<AddFileAction> for DataFile {
             column_sizes: a.column_sizes.into_iter().collect(),
             value_counts: a.value_counts.into_iter().collect(),
             null_value_counts: a.null_value_counts.into_iter().collect(),
-            nan_value_counts: Default::default(),
-            lower_bounds: Default::default(),
-            upper_bounds: Default::default(),
+            nan_value_counts: a.nan_value_counts.into_iter().collect(),
+            lower_bounds,
+            upper_bounds,
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: a.split_offsets,
@@ -506,9 +619,39 @@ mod tests {
             column_sizes: HashMap::from([(1, 10u64)]),
             value_counts: HashMap::from([(1, 10u64)]),
             null_value_counts: HashMap::new(),
-            nan_value_counts: HashMap::new(),
-            lower_bounds: HashMap::new(),
-            upper_bounds: HashMap::new(),
+            nan_value_counts: HashMap::from([(1, 0)]),
+            lower_bounds: HashMap::from([
+                (
+                    1,
+                    crate::spec::Datum::new(
+                        crate::spec::types::PrimitiveType::Int,
+                        PrimitiveLiteral::Int(1),
+                    ),
+                ),
+                (
+                    2,
+                    crate::spec::Datum::new(
+                        crate::spec::types::PrimitiveType::Double,
+                        PrimitiveLiteral::Double(ordered_float::OrderedFloat(f64::NEG_INFINITY)),
+                    ),
+                ),
+            ]),
+            upper_bounds: HashMap::from([
+                (
+                    1,
+                    crate::spec::Datum::new(
+                        crate::spec::types::PrimitiveType::Int,
+                        PrimitiveLiteral::Int(3),
+                    ),
+                ),
+                (
+                    2,
+                    crate::spec::Datum::new(
+                        crate::spec::types::PrimitiveType::Double,
+                        PrimitiveLiteral::Double(ordered_float::OrderedFloat(f64::INFINITY)),
+                    ),
+                ),
+            ]),
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: vec![0],
@@ -544,6 +687,9 @@ mod tests {
         assert_eq!(adds.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
         assert_eq!(adds[0].record_count, df.record_count);
+        assert_eq!(adds[0].nan_value_counts, df.nan_value_counts);
+        assert_eq!(adds[0].lower_bounds, df.lower_bounds);
+        assert_eq!(adds[0].upper_bounds, df.upper_bounds);
         assert!(meta.is_some());
         Ok(())
     }

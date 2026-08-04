@@ -15,6 +15,7 @@ pub mod append;
 pub mod bootstrap;
 pub mod helpers;
 pub mod overwrite;
+pub mod rewrite;
 pub mod snapshot;
 pub mod write;
 
@@ -22,6 +23,7 @@ pub use action::*;
 pub use append::*;
 pub use bootstrap::*;
 pub use overwrite::*;
+pub use rewrite::*;
 pub use snapshot::*;
 
 use crate::spec::Snapshot;

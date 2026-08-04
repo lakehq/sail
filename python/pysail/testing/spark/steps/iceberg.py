@@ -637,6 +637,34 @@ def check_iceberg_metadata_contains(variables, datatable):
         assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
 
 
+@given("remember current iceberg data manifest paths")
+def remember_current_iceberg_data_manifest_paths(variables):
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest inspection"
+
+    metadata = _find_latest_metadata(Path(location.path))
+    manifest_list = _current_manifest_list(metadata)
+    variables["remembered_iceberg_data_manifest_paths"] = {
+        manifest["manifest-path"] for manifest in manifest_list["manifests"] if manifest.get("content") == "data"
+    }
+
+
+@then(parsers.parse("iceberg current data manifests reuse {count:d} remembered paths"))
+def check_iceberg_data_manifest_reuse(variables, count: int):
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest inspection"
+    remembered = variables.get("remembered_iceberg_data_manifest_paths")
+    assert remembered is not None, "expected remembered Iceberg data manifest paths"
+
+    metadata = _find_latest_metadata(Path(location.path))
+    manifest_list = _current_manifest_list(metadata)
+    current = {
+        manifest["manifest-path"] for manifest in manifest_list["manifests"] if manifest.get("content") == "data"
+    }
+    reused = current & remembered
+    assert len(reused) == count, f"expected {count} reused data manifests, found {len(reused)}: {reused!r}"
+
+
 @then("iceberg current manifest list matches snapshot")
 def check_iceberg_current_manifest_list_matches_snapshot(variables, snapshot: SnapshotAssertion):
     location = variables.get("location")

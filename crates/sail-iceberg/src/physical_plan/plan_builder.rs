@@ -26,6 +26,7 @@ use url::Url;
 
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
+use crate::spec::Operation;
 use crate::utils::partition_transform::format_partition_expr;
 
 pub struct IcebergTableConfig {
@@ -41,6 +42,9 @@ pub struct IcebergPlanBuilder<'a> {
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
     logical_input_schema: Option<SchemaRef>,
+    expected_snapshot_id: Option<Option<i64>>,
+    removed_data_file_paths: Vec<String>,
+    operation_override: Option<Operation>,
     #[expect(unused)]
     session: &'a dyn Session,
 }
@@ -60,8 +64,26 @@ impl<'a> IcebergPlanBuilder<'a> {
             sink_mode,
             sort_order,
             logical_input_schema,
+            expected_snapshot_id: None,
+            removed_data_file_paths: vec![],
+            operation_override: None,
             session,
         }
+    }
+
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
+        self.expected_snapshot_id = expected_snapshot_id;
+        self
+    }
+
+    pub fn with_rewrite_data_files(
+        mut self,
+        removed_data_file_paths: Vec<String>,
+        operation: Operation,
+    ) -> Self {
+        self.removed_data_file_paths = removed_data_file_paths;
+        self.operation_override = Some(operation);
+        self
     }
 
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -157,6 +179,11 @@ impl<'a> IcebergPlanBuilder<'a> {
                 input,
                 self.table_config.table_url.clone(),
                 self.table_config.options.lakehouse_table.clone(),
+            )
+            .with_expected_snapshot_id(self.expected_snapshot_id)
+            .with_optional_rewrite_data_files(
+                self.removed_data_file_paths.clone(),
+                self.operation_override.clone(),
             ),
         ))
     }

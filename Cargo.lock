@@ -7853,10 +7853,12 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
+ "tokio",
  "url",
  "uuid",
 ]
