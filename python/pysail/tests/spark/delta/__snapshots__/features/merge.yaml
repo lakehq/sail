@@ -130,6 +130,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
   
+    logical_plan after expand_view_types_at_output:
+    SAME TEXT AS ABOVE
+  
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
