@@ -1,7 +1,6 @@
-@luhn_check
 Feature: luhn_check output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to luhn_check yields the schema Spark declares

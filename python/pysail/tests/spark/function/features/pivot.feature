@@ -1,4 +1,3 @@
-@pivot
 Feature: PIVOT rotates rows into columns
 
   Pivot groups by the remaining (or explicitly grouped) columns and produces one

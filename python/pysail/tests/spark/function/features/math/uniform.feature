@@ -1,4 +1,3 @@
-@uniform
 Feature: uniform() generates random numbers within a range
 
   # IMPLEMENTATION NOTE:

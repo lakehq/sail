@@ -1,7 +1,6 @@
-@character_length
 Feature: character_length output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to character_length yields the schema Spark declares

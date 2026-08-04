@@ -1,7 +1,6 @@
-@to_binary
 Feature: to_binary output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to to_binary yields the schema Spark declares

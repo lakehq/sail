@@ -1,4 +1,3 @@
-@conv
 Feature: conv with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: conv with an argument coming from a column
 
   Rule: conv — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: conv with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: conv takes argument 2 from a column holding two different values
       When query
         """
@@ -29,7 +28,7 @@ Feature: conv with an argument coming from a column
         | 256    |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: conv takes argument 2 from a column
       When query
         """
@@ -41,7 +40,7 @@ Feature: conv with an argument coming from a column
         | 4      |
 
     # Sail rejects the column: Sail errors: Unsupported Data Type: Spark `spark_conv` function expects (Utf8 | Utf8View | LargeUtf8 |...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: conv takes argument 3 from a column
       When query
         """
@@ -52,7 +51,7 @@ Feature: conv with an argument coming from a column
         | 4      |
         | 4      |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null string literal is nullable (conv is inherently nullable in Spark)

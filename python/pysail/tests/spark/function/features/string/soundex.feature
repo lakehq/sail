@@ -1,4 +1,3 @@
-@soundex
 Feature: soundex() returns the Soundex code of a string
 
   Rule: Basic usage
@@ -103,7 +102,7 @@ Feature: soundex() returns the Soundex code of a string
         | soundex on column values    | ('Robert'), ('Rupert'), ('Smith')            | R163 | R163 | S530 |
         | soundex with null in column | ('Hello'), (CAST(NULL AS STRING)), ('World') | H400 | NULL | W643 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

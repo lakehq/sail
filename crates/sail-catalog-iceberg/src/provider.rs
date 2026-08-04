@@ -188,6 +188,28 @@ impl IcebergRestCatalogProvider {
         .await
     }
 
+    /// Retry the bootstrap configuration request once on `401 Unauthorized`.
+    /// This uses [`Self::bootstrap_client`] rather than [`Self::client`]
+    /// because the resolved client itself depends on the bootstrap response.
+    /// Each attempt reloads the credential while reusing the shared HTTP
+    /// client and its connection pool.
+    async fn with_bootstrap_auth_retry<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> CatalogResult<Result<T, ApiError<E>>>
+    where
+        F: Fn(ApiClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
+    {
+        let client = self.bootstrap_client().await?;
+        let result = call(client).await;
+        if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            let client = self.bootstrap_client().await?;
+            return Ok(call(client).await);
+        }
+        Ok(result)
+    }
+
     /// Run a single outbound REST request, retrying it once if the server
     /// answers `401 Unauthorized`. Each attempt builds an [`ApiClient`] from a
     /// freshly resolved credential, so a projected service account token that
@@ -214,14 +236,16 @@ impl IcebergRestCatalogProvider {
     async fn resolved_catalog_config(&self) -> CatalogResult<&CatalogConfig<'static>> {
         self.resolved_catalog_config
             .get_or_try_init(|| async {
-                let client = self.bootstrap_client().await?;
                 let catalog_config = CatalogConfig {
                     properties: Cow::Borrowed(&self.options.properties),
                 };
                 let warehouse = catalog_config.warehouse();
-                let config = client
-                    .get_config(warehouse)
-                    .await
+                let config = self
+                    .with_bootstrap_auth_retry(|client| {
+                        let warehouse = warehouse.clone();
+                        async move { client.get_config(warehouse).await }
+                    })
+                    .await?
                     .map(|response| response.inner)
                     .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
@@ -3589,6 +3613,55 @@ mod tests {
             status,
             headers: reqwest::header::HeaderMap::new(),
         })
+    }
+
+    #[tokio::test]
+    async fn bootstrap_config_recovers_when_token_rotates_before_response() {
+        let dir = TempDir::new().unwrap();
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "token-a").unwrap();
+
+        let server = MockServer::start().await;
+        let rotate_path = token_path.clone();
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(move |_req: &Request| {
+                std::fs::write(&rotate_path, "token-b").unwrap();
+                ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": "token expired",
+                        "type": "NotAuthorizedException",
+                        "code": 401
+                    }
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let catalog = IcebergRestCatalogProvider::new(
+            String::new(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
+                properties,
+            },
+        );
+
+        let config = catalog.resolved_catalog_config().await.unwrap();
+        assert_eq!(config.warehouse().as_deref(), Some("s3://iceberg-catalog"));
+        assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "token-b");
     }
 
     #[tokio::test]

@@ -1,7 +1,6 @@
-@try_multiply
 Feature: try_multiply output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_multiply yields the schema Spark declares

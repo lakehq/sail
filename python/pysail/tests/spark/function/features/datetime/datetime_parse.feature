@@ -1,5 +1,4 @@
 # Moved from features/datetime_parse.feature by the datetime/ layout reorganisation.
-@datetime_parse
 Feature: datetime parsing with format strings
 
   Rule: Spark datetime pattern validation for parsing
