@@ -58,19 +58,18 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 43;
     CatalogCommandExecNode catalog_command = 44;
     BarrierExecNode barrier = 45;
-    RelaxedTzCastExecNode relaxed_tz_cast = 46;
-    SparkPartitionIdExecNode spark_partition_id = 47;
-    DeletionVectorWriterExecNode deletion_vector_writer = 48;
-    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
-    CoalesceExecNode coalesce = 50;
-    FileDeleteExecNode file_delete = 51;
-    NoopSinkExecNode noop_sink = 52;
-    CsvExecNode csv = 53;
-    ParquetExecNode parquet = 54;
-    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
-    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
-    IcebergMergeMetadataExecNode iceberg_merge_metadata = 57;
-    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 58;
+    SparkPartitionIdExecNode spark_partition_id = 46;
+    DeletionVectorWriterExecNode deletion_vector_writer = 47;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 48;
+    CoalesceExecNode coalesce = 49;
+    FileDeleteExecNode file_delete = 50;
+    NoopSinkExecNode noop_sink = 51;
+    CsvExecNode csv = 52;
+    ParquetExecNode parquet = 53;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 54;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
+    IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
+    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
   }
 }
 
@@ -107,10 +106,16 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_FIELD_ID = 2;
 }
 
+enum SchemaEvolutionTimezoneMode {
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+}
+
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
+  SchemaEvolutionTimezoneMode timezone_mode = 4;
 }
 
 message LambdaExprNode {
@@ -286,6 +291,7 @@ message SparkFromXmlUdf {
 
 message SparkUnixTimestampUdf {
   string session_timezone = 1;
+  bool ansi_mode = 2;
 }
 
 message SparkDateFormatUdf {
@@ -510,6 +516,7 @@ message PySparkUdfConfig {
   bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
   bool binary_as_bytes = 9;
   bool python_udf_pandas_prefer_int_extension_dtype = 10;
+  bool arrow_use_large_var_types = 11;
 }
 
 message EquivalenceProperties {
@@ -650,6 +657,8 @@ message ParquetExecNode {
   bytes options = 2;
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
+  StructFieldMatching struct_field_matching = 5;
+  SchemaEvolutionTimezoneMode timezone_mode = 6;
 }
 
 message ArrowExecNode {
@@ -890,12 +899,6 @@ message SparkPartitionIdExecNode {
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
-}
-
-message RelaxedTzCastExecNode {
-  bytes input = 1;
-  bytes schema = 2;
-  DeltaColumnMappingMode column_mapping_mode = 3;
 }
 
 message JoinOn {

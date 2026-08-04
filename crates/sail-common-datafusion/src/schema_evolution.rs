@@ -29,6 +29,13 @@ pub enum StructFieldMatching {
     FieldId,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum SchemaEvolutionTimezoneMode {
+    #[default]
+    Strict,
+    Relaxed,
+}
+
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
@@ -42,6 +49,7 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
             StructFieldMatching::Name,
+            SchemaEvolutionTimezoneMode::Strict,
         )
     }
 }
@@ -49,11 +57,22 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     matching: StructFieldMatching,
+    timezone_mode: SchemaEvolutionTimezoneMode,
 }
 
 impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     pub fn new(matching: StructFieldMatching) -> Self {
-        Self { matching }
+        Self {
+            matching,
+            timezone_mode: SchemaEvolutionTimezoneMode::Strict,
+        }
+    }
+
+    pub fn new_relaxed_timezone(matching: StructFieldMatching) -> Self {
+        Self {
+            matching,
+            timezone_mode: SchemaEvolutionTimezoneMode::Relaxed,
+        }
     }
 }
 
@@ -63,7 +82,12 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactoryWit
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-        create_schema_evolution_adapter(logical_file_schema, physical_file_schema, self.matching)
+        create_schema_evolution_adapter(
+            logical_file_schema,
+            physical_file_schema,
+            self.matching,
+            self.timezone_mode,
+        )
     }
 }
 
@@ -71,6 +95,7 @@ fn create_schema_evolution_adapter(
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     matching: StructFieldMatching,
+    timezone_mode: SchemaEvolutionTimezoneMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
         create_column_mapping(&logical_file_schema, &physical_file_schema);
@@ -81,6 +106,7 @@ fn create_schema_evolution_adapter(
         column_mapping,
         default_values,
         matching,
+        timezone_mode,
     }))
 }
 
@@ -125,6 +151,7 @@ struct SchemaEvolutionPhysicalExprAdapter {
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
     matching: StructFieldMatching,
+    timezone_mode: SchemaEvolutionTimezoneMode,
 }
 
 impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
@@ -135,6 +162,7 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             column_mapping: &self.column_mapping,
             default_values: &self.default_values,
             matching: self.matching,
+            timezone_mode: self.timezone_mode,
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
@@ -147,6 +175,7 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
     matching: StructFieldMatching,
+    timezone_mode: SchemaEvolutionTimezoneMode,
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
@@ -329,15 +358,29 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             );
         }
 
-        Ok(Transformed::yes(Arc::new(
-            SchemaEvolutionCastColumnExpr::new_with_matching(
-                column_expr,
-                Arc::new(physical_field.clone()),
-                Arc::new(logical_field.clone()),
-                None,
-                self.matching,
-            ),
-        )))
+        let input_field = Arc::new(physical_field.clone());
+        let target_field = Arc::new(logical_field.clone());
+        let cast = match self.timezone_mode {
+            SchemaEvolutionTimezoneMode::Strict => {
+                SchemaEvolutionCastColumnExpr::new_with_matching(
+                    column_expr,
+                    input_field,
+                    target_field,
+                    None,
+                    self.matching,
+                )
+            }
+            SchemaEvolutionTimezoneMode::Relaxed => {
+                SchemaEvolutionCastColumnExpr::new_relaxed_timezone(
+                    column_expr,
+                    input_field,
+                    target_field,
+                    None,
+                    self.matching,
+                )
+            }
+        };
+        Ok(Transformed::yes(Arc::new(cast)))
     }
 }
 
@@ -527,6 +570,7 @@ pub struct SchemaEvolutionCastColumnExpr {
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
     matching: StructFieldMatching,
+    timezone_mode: SchemaEvolutionTimezoneMode,
 }
 
 impl PartialEq for SchemaEvolutionCastColumnExpr {
@@ -536,6 +580,7 @@ impl PartialEq for SchemaEvolutionCastColumnExpr {
             && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
             && self.matching.eq(&other.matching)
+            && self.timezone_mode.eq(&other.timezone_mode)
     }
 }
 
@@ -546,6 +591,7 @@ impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
         self.target_field.hash(state);
         self.cast_options.hash(state);
         self.matching.hash(state);
+        self.timezone_mode.hash(state);
     }
 }
 
@@ -583,12 +629,48 @@ impl SchemaEvolutionCastColumnExpr {
         cast_options: Option<CastOptions<'static>>,
         matching: StructFieldMatching,
     ) -> Self {
+        Self::from_parts(
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+            matching,
+            SchemaEvolutionTimezoneMode::Strict,
+        )
+    }
+
+    pub fn new_relaxed_timezone(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: Arc<Field>,
+        target_field: Arc<Field>,
+        cast_options: Option<CastOptions<'static>>,
+        matching: StructFieldMatching,
+    ) -> Self {
+        Self::from_parts(
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+            matching,
+            SchemaEvolutionTimezoneMode::Relaxed,
+        )
+    }
+
+    fn from_parts(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: Arc<Field>,
+        target_field: Arc<Field>,
+        cast_options: Option<CastOptions<'static>>,
+        matching: StructFieldMatching,
+        timezone_mode: SchemaEvolutionTimezoneMode,
+    ) -> Self {
         Self {
             expr,
             input_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
             matching,
+            timezone_mode,
         }
     }
 
@@ -602,6 +684,27 @@ impl SchemaEvolutionCastColumnExpr {
 
     pub const fn matching(&self) -> StructFieldMatching {
         self.matching
+    }
+
+    pub const fn timezone_mode(&self) -> SchemaEvolutionTimezoneMode {
+        self.timezone_mode
+    }
+
+    fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        match self.timezone_mode {
+            SchemaEvolutionTimezoneMode::Strict => cast_array_with_schema_evolution(
+                array,
+                self.target_field.as_ref(),
+                &self.cast_options,
+                self.matching,
+            ),
+            SchemaEvolutionTimezoneMode::Relaxed => cast_array_with_schema_evolution_relaxed_tz(
+                array,
+                self.target_field.as_ref(),
+                &self.cast_options,
+                self.matching,
+            ),
+        }
     }
 }
 
@@ -617,22 +720,15 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         match value {
-            ColumnarValue::Array(array) => {
-                Ok(ColumnarValue::Array(cast_array_with_schema_evolution(
-                    &array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                    self.matching,
-                )?))
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(self.cast_array(&array)?)),
+            ColumnarValue::Scalar(scalar)
+                if scalar.data_type() == *self.target_field.data_type() =>
+            {
+                Ok(ColumnarValue::Scalar(scalar))
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
-                let casted = cast_array_with_schema_evolution(
-                    &as_array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                    self.matching,
-                )?;
+                let casted = self.cast_array(&as_array)?;
                 Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
                     casted.as_ref(),
                     0,
@@ -657,12 +753,13 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
         let child = children.pop().ok_or_else(|| {
             DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
-        Ok(Arc::new(Self::new_with_matching(
+        Ok(Arc::new(Self::from_parts(
             child,
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
             self.matching,
+            self.timezone_mode,
         )))
     }
 
@@ -696,6 +793,14 @@ fn cast_array_with_schema_evolution_inner(
     matching: StructFieldMatching,
     relaxed_timezone: bool,
 ) -> Result<ArrayRef> {
+    if is_variant_arrow_field(target_field) && is_variant_storage_type(source.data_type()) {
+        return cast_variant_array_with_schema_evolution(source, target_field, cast_options);
+    }
+
+    if source.data_type() == target_field.data_type() {
+        return Ok(Arc::clone(source));
+    }
+
     if relaxed_timezone
         && let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
             (source.data_type(), target_field.data_type())
@@ -705,10 +810,6 @@ fn cast_array_with_schema_evolution_inner(
         let target_without_timezone = DataType::Timestamp(*target_unit, None);
         let scaled = cast_with_options(&source, &target_without_timezone, cast_options)?;
         return cast_array_recursively(&scaled, target_field.data_type());
-    }
-
-    if is_variant_arrow_field(target_field) && is_variant_storage_type(source.data_type()) {
-        return cast_variant_array_with_schema_evolution(source, target_field, cast_options);
     }
 
     match target_field.data_type() {
@@ -1117,6 +1218,22 @@ mod tests {
 
         assert_eq!(timestamp.value(0), 1_000_000);
         assert_eq!(timestamp.data_type(), target.data_type());
+        Ok(())
+    }
+
+    #[test]
+    fn identical_schema_evolution_reuses_array() -> Result<()> {
+        let source = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        let target = Field::new("value", DataType::Int64, true);
+
+        let casted = cast_array_with_schema_evolution_relaxed_tz(
+            &source,
+            &target,
+            &DEFAULT_CAST_OPTIONS,
+            StructFieldMatching::Name,
+        )?;
+
+        assert!(Arc::ptr_eq(&source, &casted));
         Ok(())
     }
 

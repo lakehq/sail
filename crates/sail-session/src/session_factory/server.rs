@@ -119,6 +119,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(RemoteCheckpointRegistry::new(
                 self.config.execution.checkpoint.path.clone(),
+                info.session_id.clone(),
             )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,

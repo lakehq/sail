@@ -1,4 +1,3 @@
-@struct_function
 Feature: struct function
 
   Rule: Basic struct construction

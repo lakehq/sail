@@ -1,7 +1,6 @@
-@array_union
 Feature: array_union output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

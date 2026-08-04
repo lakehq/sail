@@ -5,7 +5,6 @@ use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use tokio::sync::oneshot;
 
 use crate::extension::SessionExtension;
 use crate::system::catalog::{JobRow, StageRow, TaskRow, WorkerRow};
@@ -22,12 +21,15 @@ pub trait JobRunner: StateObservable<JobRunnerObserver> + Send + Sync + 'static 
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream>;
 
-    /// Returns an execution-mode-specific plan for EXPLAIN output.
-    fn explain(&self, _plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        Ok(None)
-    }
+    /// Returns the distributed execution plan for EXPLAIN output.
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String>;
 
-    async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>);
+    async fn stop(&self);
+}
+
+#[tonic::async_trait]
+pub trait JobRunnerHistoryReporter: Send + 'static {
+    async fn report(self: Box<Self>, history: JobRunnerHistory);
 }
 
 pub struct JobRunnerHistory {

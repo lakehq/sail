@@ -1,4 +1,3 @@
-@levenshtein
 Feature: levenshtein() returns edit distance between two strings
 
   Rule: Basic usage
@@ -183,7 +182,7 @@ Feature: levenshtein() returns edit distance between two strings
         | case sensitive comparison | 'ABC'            | 'abc'            | 3      |
         | long strings              | REPEAT('a', 100) | REPEAT('b', 100) | 100    |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

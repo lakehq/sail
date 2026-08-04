@@ -1,4 +1,3 @@
-@next_day
 Feature: next_day comprehensive tests
 
   Rule: Argument count validation
@@ -242,7 +241,7 @@ Feature: next_day comprehensive tests
 
   Rule: next_day — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: next_day with the argument as a literal
       When query
         """
@@ -252,7 +251,7 @@ Feature: next_day comprehensive tests
         | result     |
         | 2015-01-20 |
 
-    @column_args
+    @function(columnargs)
     Scenario Outline: Argument from a column: <case>
       When query
         """
@@ -269,7 +268,7 @@ Feature: next_day comprehensive tests
         | next_day takes argument 2 from a column                              | '2015-01-14'      | 'TU' | 'TU' | 2015-01-20 | 2015-01-20 |
         | next_day takes argument 2 from a column holding two different values | DATE '2015-01-14' | 'TU' | 'FR' | 2015-01-20 | 2015-01-16 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null date literal yields a date

@@ -126,7 +126,9 @@ impl TaskRunner {
                 // work sharing and keeps each task on its own file group.
                 let mut builder =
                     FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                if ds.downcast_to_file_source::<ParquetSource>().is_some()
+                    && base_config.expr_adapter_factory.is_none()
+                {
                     let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
                         Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                     builder = builder.with_expr_adapter(Some(adapter_factory));

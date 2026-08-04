@@ -69,7 +69,7 @@ impl ScalarUDFImpl for SparkDateFormat {
                     None => return Ok(null_string_array(array.len())),
                 };
 
-                let format = DateTimeFormat::parse(format_str)?;
+                let format = DateTimeFormat::for_formatting(format_str)?;
 
                 let result: StringArray = match array.data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
@@ -124,7 +124,7 @@ impl ScalarUDFImpl for SparkDateFormat {
                     None => return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                 };
 
-                let format = DateTimeFormat::parse(format_str)?;
+                let format = DateTimeFormat::for_formatting(format_str)?;
 
                 let result = match scalar {
                     ScalarValue::Utf8(Some(value))
@@ -522,7 +522,7 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_formatting(pattern)?)),
     }
 }
 

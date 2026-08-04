@@ -1,7 +1,6 @@
-@try_add
 Feature: try_add output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_add yields the schema Spark declares

@@ -1,4 +1,3 @@
-@time_type
 Feature: TIME data type support
 
   Rule: TIME literal syntax

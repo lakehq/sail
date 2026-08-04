@@ -7,6 +7,7 @@ mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+    use futures::stream::TryStreamExt;
     use pyo3::Python;
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
@@ -17,7 +18,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
-    use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkSession;
     use crate::session_manager::create_spark_session_manager;
@@ -91,7 +91,7 @@ mod tests {
                         let (plan, _) =
                             resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                         let stream = service.runner().execute(&context, plan).await?;
-                        read_stream(stream).await
+                        stream.err_into().try_collect::<Vec<_>>().await
                     });
                     // TODO: validate the result against the expected output
                     // TODO: handle non-deterministic results and error messages

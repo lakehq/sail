@@ -1,5 +1,4 @@
 @spark-4
-@try_parse_json
 Feature: try_parse_json comprehensive tests
 
   Rule: Argument count validation
@@ -461,7 +460,7 @@ Feature: try_parse_json comprehensive tests
         | NULL   |
         | NULL   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: try_parse_json stays nullable because it returns NULL on invalid input

@@ -1,4 +1,3 @@
-@xpath
 Feature: xpath() extracts XML nodes with Spark-compatible semantics
 
   Rule: Node selection returns arrays of string-like values
@@ -72,7 +71,7 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
 
   Rule: xpath — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: xpath with the argument as a literal
       When query
         """
@@ -83,7 +82,7 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         | [NULL, NULL, NULL] |
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ["['b1', 'b2', 'b3']", '[None, None, None]'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath takes argument 2 from a column holding two different values
       When query
         """
@@ -92,7 +91,7 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['[None, None, None]', 'NULL'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath takes argument 2 from a column containing NULL
       When query
         """
@@ -101,7 +100,7 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['[None, None, None]', '[None, None, None]'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath takes argument 2 from a column
       When query
         """
@@ -109,7 +108,7 @@ Feature: xpath() extracts XML nodes with Spark-compatible semantics
         """
       Then query error NON_FOLDABLE_INPUT
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null xml literal yields an array

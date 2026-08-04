@@ -1,5 +1,4 @@
-@lambda_hof
-@forall
+@function(lambda)
 Feature: forall higher-order function
 
   Rule: Basic boolean predicate evaluation
@@ -297,7 +296,7 @@ Feature: forall higher-order function
         | on   | true  |
         | off  | false |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug
