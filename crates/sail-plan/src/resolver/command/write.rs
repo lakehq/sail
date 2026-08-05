@@ -1467,7 +1467,9 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn expr_contains_default_column_value(expr: &Expr) -> datafusion_common::Result<bool> {
+    pub(super) fn expr_contains_default_column_value(
+        expr: &Expr,
+    ) -> datafusion_common::Result<bool> {
         let mut found = false;
         expr.apply(|expr| {
             if Self::is_default_column_value_expr(expr) {
@@ -1480,7 +1482,7 @@ impl PlanResolver<'_> {
         Ok(found)
     }
 
-    fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
         if Self::is_default_column_value_expr(expr) {
             return true;
         }

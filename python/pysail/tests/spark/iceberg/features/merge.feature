@@ -594,3 +594,157 @@ Feature: Iceberg MERGE
         WHEN MATCHED THEN UPDATE SET value = s.value
         """
       Then query error reserved internal MERGE column
+
+  Rule: MERGE assignments honor the configured store assignment policy
+
+    Scenario Outline: Incompatible string assignments are rejected before execution
+      Given config spark.sql.storeAssignmentPolicy = <policy>
+      Given variable location for temporary directory iceberg_merge_store_assignment_policy
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_store_assignment_policy
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_store_assignment_policy (id INT, value INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_store_assignment_policy VALUES (1, 10)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_store_assignment_policy_source AS
+        SELECT 1 AS id, '20' AS value
+        """
+      When query
+        """
+        MERGE INTO iceberg_merge_store_assignment_policy AS t
+        USING iceberg_merge_store_assignment_policy_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error (?i)(legacy store assignment policy|cannot safely cast|cannot write incompatible data)
+
+      Examples:
+        | policy |
+        | ANSI   |
+        | STRICT |
+        | LEGACY |
+
+  Rule: Each MERGE clause exposes only the rows available to that clause
+
+    Background:
+      Given variable location for temporary directory iceberg_merge_clause_visibility
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_clause_visibility
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_clause_visibility (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_clause_visibility VALUES (1, 'target')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_clause_visibility_source AS
+        SELECT 2 AS id, 'source' AS value
+        """
+
+    Scenario: NOT MATCHED clauses cannot reference target columns
+      When query
+        """
+        MERGE INTO iceberg_merge_clause_visibility AS t
+        USING iceberg_merge_clause_visibility_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED AND t.value = 'target' THEN
+          INSERT (id, value) VALUES (s.id, t.value)
+        """
+      Then query error (?i)t.*value.*(missing|cannot resolve)
+
+    Scenario: NOT MATCHED BY SOURCE clauses cannot reference source columns
+      When query
+        """
+        MERGE INTO iceberg_merge_clause_visibility AS t
+        USING iceberg_merge_clause_visibility_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND s.value = 'source' THEN
+          UPDATE SET value = s.value
+        """
+      Then query error (?i)s.*value.*(missing|cannot resolve)
+
+  Rule: Only the final clause in each MERGE family may omit its condition
+
+    Background:
+      Given variable location for temporary directory iceberg_merge_clause_order
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_merge_clause_order
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_merge_clause_order (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_merge_clause_order VALUES (1, 'target')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW iceberg_merge_clause_order_source AS
+        SELECT * FROM VALUES (1, 'matched'), (2, 'inserted') AS src(id, value)
+        """
+
+    Scenario: A non-final unconditional MATCHED clause is rejected
+      When query
+        """
+        MERGE INTO iceberg_merge_clause_order AS t
+        USING iceberg_merge_clause_order_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN MATCHED AND s.value = 'matched' THEN DELETE
+        """
+      Then query error NON_LAST_MATCHED_CLAUSE_OMIT_CONDITION
+
+    Scenario: A non-final unconditional NOT MATCHED clause is rejected
+      When query
+        """
+        MERGE INTO iceberg_merge_clause_order AS t
+        USING iceberg_merge_clause_order_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        WHEN NOT MATCHED AND s.id = 2 THEN INSERT (id, value) VALUES (s.id, 'later')
+        """
+      Then query error NON_LAST_NOT_MATCHED_BY_TARGET_CLAUSE_OMIT_CONDITION
+
+    Scenario: A non-final unconditional NOT MATCHED BY SOURCE clause is rejected
+      When query
+        """
+        MERGE INTO iceberg_merge_clause_order AS t
+        USING iceberg_merge_clause_order_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = 'missing'
+        WHEN NOT MATCHED BY SOURCE AND t.id = 1 THEN DELETE
+        """
+      Then query error NON_LAST_NOT_MATCHED_BY_SOURCE_CLAUSE_OMIT_CONDITION
