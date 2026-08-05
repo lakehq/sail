@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-use sail_telemetry::layers::TracingServerLayer;
 use tokio::net::TcpListener;
 use tonic::body::Body;
 use tonic::codegen::Service;
@@ -11,6 +10,8 @@ use tonic::transport::server::{Router, TcpIncoming};
 use tonic_health::server::HealthReporter;
 use tower::ServiceBuilder;
 use tower::layer::util::{Identity, Stack};
+
+use crate::telemetry::TracingServerLayer;
 
 pub struct ServerBuilderOptions {
     pub nodelay: bool,

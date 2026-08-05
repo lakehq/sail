@@ -4,9 +4,10 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use fastrace::prelude::SpanContext;
 use log::{error, warn};
-use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
+
+use crate::telemetry::{SpanAssociation, SpanAttribute, SpanKind};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
 

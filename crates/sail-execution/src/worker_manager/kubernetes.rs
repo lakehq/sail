@@ -12,8 +12,8 @@ use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
 use rand::distr::Uniform;
 use sail_common::config::ClusterConfigEnv;
-use sail_server::RetryStrategy;
-use sail_telemetry::common::ContextPropagationEnv;
+use sail_common::telemetry::ContextPropagationEnv;
+use sail_common::utils::retry::RetryStrategy;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};

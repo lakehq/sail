@@ -6,6 +6,7 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
+use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{
@@ -17,7 +18,6 @@ use sail_common_datafusion::system::predicate::PredicateExt;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
-use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -29,7 +29,7 @@ use crate::session_manager::session::{ServerSession, ServerSessionState};
 
 struct SessionJobRunnerHistoryReporter {
     session_id: String,
-    session_manager: sail_server::actor::ActorHandle<SessionManagerActor>,
+    session_manager: sail_common::actor::ActorHandle<SessionManagerActor>,
 }
 
 #[tonic::async_trait]

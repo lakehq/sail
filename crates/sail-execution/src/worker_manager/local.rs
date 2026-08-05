@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use datafusion::prelude::SessionContext;
+use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::runtime::RuntimeHandle;
-use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
 
 use crate::error::ExecutionResult;

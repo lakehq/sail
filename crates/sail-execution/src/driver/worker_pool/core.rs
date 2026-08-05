@@ -7,10 +7,10 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{error, info, warn};
+use sail_common::actor::ActorContext;
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
-use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
 use crate::driver::worker_pool::state::WorkerState;

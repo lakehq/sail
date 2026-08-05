@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
-use sail_server::actor::{Actor, ActorHandle};
+use sail_common::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
 use crate::driver::DriverEvent;

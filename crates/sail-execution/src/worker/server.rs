@@ -1,6 +1,6 @@
 use log::debug;
 use prost::Message;
-use sail_server::actor::ActorHandle;
+use sail_common::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};

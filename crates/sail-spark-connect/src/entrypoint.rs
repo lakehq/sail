@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
 use sail_common::runtime::RuntimeHandle;
-use sail_server::ServerBuilder;
+use sail_common::server::ServerBuilder;
 pub use sail_session::session_manager::SessionManagerOptions;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
