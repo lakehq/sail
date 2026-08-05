@@ -1,4 +1,3 @@
-@arrays_zip
 Feature: arrays_zip comprehensive tests
 
   Rule: Basic usage
@@ -320,7 +319,7 @@ Feature: arrays_zip comprehensive tests
         | arrays_zip non-array input errors           | 1, 2                |
         | arrays_zip mixed array and non-array errors | array(1,2), 'hello' |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

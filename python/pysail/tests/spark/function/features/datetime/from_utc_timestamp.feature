@@ -1,4 +1,3 @@
-@from_utc_timestamp
 Feature: from_utc_timestamp
 
   Rule: Type coercion
@@ -44,7 +43,7 @@ Feature: from_utc_timestamp
         | '2025-03-09 17:30:00' | 2025-03-09 09:30:00 |
         | '2025-03-09 18:30:00' | 2025-03-09 11:30:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to from_utc_timestamp yields the schema Spark declares

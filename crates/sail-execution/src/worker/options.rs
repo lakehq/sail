@@ -3,7 +3,7 @@ use std::time::Duration;
 use datafusion::prelude::SessionContext;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_server::RetryStrategy;
+use sail_common::utils::retry::RetryStrategy;
 
 use crate::id::{DriverId, WorkerId};
 use crate::shuffle::ShuffleBackendKind;
@@ -12,6 +12,7 @@ use crate::worker_manager::WorkerLaunchOptions;
 #[readonly::make]
 pub struct WorkerOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_host: String,
     pub driver_port: u16,
@@ -33,6 +34,7 @@ impl WorkerOptions {
     pub fn new(config: &AppConfig, runtime: RuntimeHandle, session: SessionContext) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
+            session_id: config.cluster.session_id.clone(),
             driver_id: config.cluster.driver_id.into(),
             driver_host: config.cluster.driver_external_host.clone(),
             driver_port: if config.cluster.driver_external_port > 0 {
@@ -67,6 +69,7 @@ impl WorkerOptions {
     ) -> Self {
         WorkerOptions {
             enable_tls: options.enable_tls,
+            session_id: options.session_id,
             driver_id: options.driver_id,
             driver_host: options.driver_external_host,
             driver_port: options.driver_external_port,

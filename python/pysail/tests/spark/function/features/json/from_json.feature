@@ -1,4 +1,3 @@
-@from_json
 Feature: from_json function parses JSON strings into structured types
 
   Rule: Basic struct parsing
@@ -886,7 +885,7 @@ Feature: from_json function parses JSON strings into structured types
         | Parseable JSON number as array target returns null                      | '42', 'ARRAY<INT>'      | NULL   |
         | Parseable JSON number as map target returns null                        | '42', 'MAP<STRING,INT>' | NULL   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null json literal yields a struct

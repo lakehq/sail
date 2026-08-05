@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use datafusion_common::exec_datafusion_err;
+use sail_common::actor::ActorHandle;
 use sail_common_datafusion::system::observable::{
     Observer, SessionManagerObserver, StateObservable,
 };
-use sail_server::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 
 use crate::session_manager::{SessionManagerActor, SessionManagerEvent};

@@ -1,4 +1,3 @@
-@isin_subquery
 Feature: IN subquery support
 
   Rule: Single-column IN subquery

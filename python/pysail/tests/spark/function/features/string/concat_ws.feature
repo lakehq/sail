@@ -1,4 +1,3 @@
-@concat_ws
 Feature: concat_ws function
 
   Rule: concat_ws with scalar arguments
@@ -139,7 +138,7 @@ Feature: concat_ws function
         | result   |
         | a,b\|c,d |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null separator yields a non-nullable string

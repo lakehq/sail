@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_server::RetryStrategy;
+use sail_common::utils::retry::RetryStrategy;
+use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
 
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;
@@ -12,6 +12,7 @@ use crate::worker_manager::WorkerManager;
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
+    pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
     pub driver_external_host: String,
@@ -30,19 +31,24 @@ pub struct DriverOptions {
     pub shuffle_backend: ShuffleBackendKind,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
-    pub worker_manager: Arc<dyn WorkerManager>,
+}
+
+pub struct DriverComponents {
+    pub worker_manager: Box<dyn WorkerManager>,
+    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
 }
 
 impl DriverOptions {
     pub fn new(
         config: &AppConfig,
         runtime: RuntimeHandle,
+        session_id: String,
         driver_id: DriverId,
         driver_server_port: u16,
-        worker_manager: Arc<dyn WorkerManager>,
     ) -> Self {
         Self {
             enable_tls: config.cluster.enable_tls,
+            session_id,
             driver_id,
             driver_server_port,
             driver_external_host: config.cluster.driver_external_host.clone(),
@@ -67,7 +73,6 @@ impl DriverOptions {
             task_max_attempts: config.cluster.task_max_attempts,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
-            worker_manager,
         }
     }
 }

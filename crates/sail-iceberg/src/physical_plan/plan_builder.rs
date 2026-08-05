@@ -24,6 +24,7 @@ use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::operations::SnapshotUpdateKind;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::utils::partition_transform::format_partition_expr;
@@ -152,11 +153,19 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let snapshot_update_kind = if self.table_config.table_exists
+            && matches!(&self.sink_mode, PhysicalSinkMode::Overwrite)
+        {
+            SnapshotUpdateKind::FullOverwrite
+        } else {
+            SnapshotUpdateKind::FastAppend
+        };
         Ok(Arc::new(
             crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
                 input,
                 self.table_config.table_url.clone(),
                 self.table_config.options.lakehouse_table.clone(),
+                snapshot_update_kind,
             ),
         ))
     }

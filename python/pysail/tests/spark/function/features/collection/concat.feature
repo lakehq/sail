@@ -1,4 +1,3 @@
-@concat
 Feature: concat function
 
   Rule: Basic concatenation
@@ -300,7 +299,7 @@ Feature: concat function
         | single NULL timestamp column returns NULL                 | ts                 | CAST(NULL AS TIMESTAMP)                | ts  | NULL                       |
         | single TIMESTAMP_NTZ column coerced to string             | ts                 | TIMESTAMP_NTZ '2024-01-15 12:00:00'    | ts  | 2024-01-15 12:00:00        |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: non-null string literals yield a non-nullable string

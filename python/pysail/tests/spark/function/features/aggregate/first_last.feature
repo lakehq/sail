@@ -1,4 +1,3 @@
-@first_last
 Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
 
   # The row STORAGE order in every VALUES list below is deliberately scrambled so

@@ -6,9 +6,9 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
 use log::warn;
+use sail_common::actor::{Actor, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorContext};
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -25,13 +25,14 @@ use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessag
 impl StreamManager {
     pub fn new(options: StreamManagerOptions) -> Self {
         let remote_streams = match &options.shuffle_backend {
-            crate::shuffle::ShuffleBackendKind::Streaming => None,
+            crate::shuffle::ShuffleBackendKind::Flight => None,
             crate::shuffle::ShuffleBackendKind::Storage {
                 path,
                 max_file_size,
                 compression,
             } => Some(Arc::new(RemoteStreamManager::new(
                 path.clone(),
+                options.session_id.clone(),
                 *max_file_size,
                 *compression,
             ))),

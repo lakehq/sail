@@ -1,4 +1,3 @@
-@sequence_date
 Feature: sequence() over DATE returns expected arrays
 
     Scenario Outline: sequence over DATE: <case>

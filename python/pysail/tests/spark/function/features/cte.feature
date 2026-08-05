@@ -1,4 +1,3 @@
-@cte
 Feature: CTE (Common Table Expressions) support
 
   Rule: Basic CTE

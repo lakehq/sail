@@ -7340,7 +7340,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail-build-scripts"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "lazy_static",
  "prettyplease",
@@ -7355,7 +7355,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cache"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "datafusion",
@@ -7367,12 +7367,11 @@ dependencies = [
  "sail-common-datafusion",
  "sail-object-store",
  "thiserror 2.0.19",
- "uuid",
 ]
 
 [[package]]
 name = "sail-catalog"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7387,13 +7386,14 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
 ]
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7409,7 +7409,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-hms"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7433,7 +7433,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7448,6 +7448,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "tempfile",
  "testcontainers",
  "thiserror 2.0.19",
  "tokio",
@@ -7458,7 +7459,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -7468,7 +7469,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "object_store",
@@ -7482,7 +7483,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7496,7 +7497,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7519,7 +7520,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "clap",
  "log",
@@ -7537,17 +7538,21 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
+ "axum",
+ "fastrace",
  "figment",
  "glob",
  "half",
  "iana-time-zone",
+ "log",
  "num-traits",
  "num_enum",
+ "pin-project-lite",
  "secrecy",
  "serde",
  "serde_json",
@@ -7555,11 +7560,15 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "toml 0.8.23",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tower",
 ]
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7595,7 +7604,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-hms"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "pilota",
  "volo",
@@ -7605,7 +7614,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -7645,7 +7654,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7690,7 +7699,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow-flight",
  "chrono",
@@ -7720,7 +7729,6 @@ dependencies = [
  "sail-object-store",
  "sail-physical-plan",
  "sail-python-udf",
- "sail-server",
  "sail-telemetry",
  "serde",
  "serde_json",
@@ -7736,7 +7744,7 @@ dependencies = [
 
 [[package]]
 name = "sail-flight"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -7751,7 +7759,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-execution",
  "sail-plan",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "sail-sql-parser",
@@ -7766,7 +7773,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -7812,7 +7819,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "clap",
  "lazy_static",
@@ -7824,7 +7831,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "apache-avro",
  "arrow-schema",
@@ -7852,6 +7859,8 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
+ "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
@@ -7862,7 +7871,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7871,7 +7880,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -7887,7 +7896,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -7911,7 +7920,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
- "sail-telemetry",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -7921,7 +7929,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -7931,7 +7939,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7955,7 +7963,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -7980,6 +7988,7 @@ dependencies = [
  "parquet-variant-compute",
  "rand 0.10.2",
  "regex",
+ "regex-syntax 0.8.11",
  "ryu",
  "sail-cache",
  "sail-catalog",
@@ -8003,7 +8012,7 @@ dependencies = [
 
 [[package]]
 name = "sail-pyarrow"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -8013,7 +8022,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "fastrace",
  "log",
@@ -8028,7 +8037,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8047,24 +8056,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-server"
-version = "0.6.6"
-dependencies = [
- "axum",
- "fastrace",
- "log",
- "sail-common",
- "sail-telemetry",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tower",
-]
-
-[[package]]
 name = "sail-session"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8100,10 +8093,9 @@ dependencies = [
  "sail-physical-optimizer",
  "sail-physical-plan",
  "sail-plan",
- "sail-server",
  "sail-sql-analyzer",
- "sail-telemetry",
  "secrecy",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tonic",
@@ -8112,7 +8104,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "arrow-schema",
  "async-stream",
@@ -8141,7 +8133,6 @@ dependencies = [
  "sail-execution",
  "sail-plan",
  "sail-python-udf",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "serde",
@@ -8158,7 +8149,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "chumsky 0.12.0",
@@ -8172,7 +8163,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8181,7 +8172,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "chumsky 0.12.0",
  "either",
@@ -8198,7 +8189,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -8226,8 +8217,6 @@ dependencies = [
  "syn 2.0.119",
  "thiserror 2.0.19",
  "tokio",
- "tonic",
- "tower",
 ]
 
 [[package]]

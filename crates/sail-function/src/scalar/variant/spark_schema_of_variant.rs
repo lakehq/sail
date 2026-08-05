@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow_schema::DataType;
-use datafusion::common::{exec_datafusion_err, exec_err};
+use datafusion::common::{DataFusionError, exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -13,6 +13,7 @@ use parquet_variant_compute::VariantArray;
 
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_variant_scalar};
+use crate::schema_inference::{InferredType, TypeMerger};
 
 /// Returns the schema (type string) of a variant value using Spark type names.
 ///
@@ -115,145 +116,163 @@ impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
 
 /// Convert a Variant value to its Spark type string representation.
 pub(crate) fn variant_to_spark_type(variant: &Variant) -> String {
+    variant_type_to_spark_type(&variant_to_inferred_type(variant))
+}
+
+pub(crate) fn variant_to_inferred_type(variant: &Variant) -> InferredType {
     match variant {
-        Variant::Null => "VOID".to_string(),
-        Variant::BooleanTrue | Variant::BooleanFalse => "BOOLEAN".to_string(),
+        Variant::Null => InferredType::Null,
+        Variant::BooleanTrue | Variant::BooleanFalse => InferredType::Boolean,
         Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-            "BIGINT".to_string()
+            InferredType::Long
         }
-        Variant::Float(_) => "FLOAT".to_string(),
-        Variant::Double(_) => "DOUBLE".to_string(),
-        Variant::Decimal4(d) => decimal_type_string(d.integer() as i128, d.scale()),
-        Variant::Decimal8(d) => decimal_type_string(d.integer() as i128, d.scale()),
-        Variant::Decimal16(d) => decimal_type_string(d.integer(), d.scale()),
-        Variant::String(_) | Variant::ShortString(_) => "STRING".to_string(),
-        Variant::Binary(_) => "BINARY".to_string(),
-        Variant::Date(_) => "DATE".to_string(),
-        Variant::TimestampMicros(_) | Variant::TimestampNanos(_) => "TIMESTAMP".to_string(),
+        Variant::Float(_) => InferredType::Float,
+        Variant::Double(_) => InferredType::Double,
+        Variant::Decimal4(d) => decimal_type(d.integer() as i128, d.scale()),
+        Variant::Decimal8(d) => decimal_type(d.integer() as i128, d.scale()),
+        Variant::Decimal16(d) => decimal_type(d.integer(), d.scale()),
+        Variant::String(_) | Variant::ShortString(_) => InferredType::String,
+        Variant::Binary(_) => InferredType::Binary,
+        Variant::Date(_) => InferredType::Date,
+        Variant::TimestampMicros(_) | Variant::TimestampNanos(_) => InferredType::Timestamp,
         Variant::TimestampNtzMicros(_) | Variant::TimestampNtzNanos(_) => {
-            "TIMESTAMP_NTZ".to_string()
+            InferredType::TimestampNtz
         }
-        Variant::Time(_) => "STRING".to_string(),
-        Variant::Uuid(_) => "STRING".to_string(),
+        Variant::Time(_) | Variant::Uuid(_) => InferredType::String,
         Variant::Object(obj) => {
-            if obj.is_empty() {
-                return "OBJECT<>".to_string();
-            }
-            // Collect fields, sorted by field name (Spark sorts alphabetically)
-            let mut fields: Vec<(String, String)> = Vec::with_capacity(obj.len());
+            let mut fields = Vec::with_capacity(obj.len());
             for (name, value) in obj.iter() {
-                fields.push((name.to_string(), variant_to_spark_type(&value)));
+                fields.push((name.to_string(), variant_to_inferred_type(&value)));
             }
             fields.sort_by(|a, b| a.0.cmp(&b.0));
-            let fields_str: Vec<String> = fields
-                .iter()
-                .map(|(name, ty)| format!("{name}: {ty}"))
-                .collect();
-            format!("OBJECT<{}>", fields_str.join(", "))
+            InferredType::Struct(fields)
         }
         Variant::List(list) => {
-            if list.is_empty() {
-                return "ARRAY<VOID>".to_string();
+            let mut element_type = InferredType::Null;
+            for element in list.iter() {
+                element_type =
+                    merge_variant_types(element_type, variant_to_inferred_type(&element));
             }
-            let element_types: Vec<String> =
-                list.iter().map(|e| variant_to_spark_type(&e)).collect();
-            let merged = merge_types(&element_types);
-            format!("ARRAY<{merged}>")
+            InferredType::Array(Box::new(element_type))
         }
     }
 }
 
-/// Merge a list of Spark type strings into a single type.
-///
-/// Rules (matching Spark behavior):
-/// - VOID is absorbed by any non-VOID type: `[VOID, BIGINT]` → `BIGINT`
-/// - OBJECT types with different fields are merged (field union): `[OBJECT<a: X>, OBJECT<b: Y>]` → `OBJECT<a: X, b: Y>`
-/// - All other mismatches → `VARIANT`
-fn merge_types(types: &[String]) -> String {
-    // Filter out VOIDs
-    let non_void: Vec<&String> = types.iter().filter(|t| t.as_str() != "VOID").collect();
-
-    if non_void.is_empty() {
-        return "VOID".to_string();
-    }
-
-    // Check if all non-void types are identical
-    if non_void.iter().all(|t| *t == non_void[0]) {
-        return non_void[0].clone();
-    }
-
-    // Try merging OBJECTs: if all non-void types are OBJECT<...>, union their fields
-    if non_void.iter().all(|t| t.starts_with("OBJECT<")) {
-        return merge_object_types(&non_void);
-    }
-
-    "VARIANT".to_string()
+pub(crate) fn merge_variant_types(left: InferredType, right: InferredType) -> InferredType {
+    left.merge_with(right, &VariantTypeMerger)
 }
 
-/// Merge multiple OBJECT<...> type strings by unioning their fields.
-fn merge_object_types(types: &[&String]) -> String {
-    let mut merged_fields: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
+struct VariantTypeMerger;
 
-    for ty in types {
-        // Strip "OBJECT<" prefix and ">" suffix
-        let inner = ty
-            .strip_prefix("OBJECT<")
-            .and_then(|s| s.strip_suffix('>'))
-            .unwrap_or("");
-
-        if inner.is_empty() {
-            continue;
-        }
-
-        // Parse fields: "a: BIGINT, b: STRING" → [("a", "BIGINT"), ("b", "STRING")]
-        // Handle nested types by tracking angle bracket depth
-        for field_str in split_fields(inner) {
-            if let Some((name, field_type)) = field_str.split_once(':') {
-                let name = name.trim().to_string();
-                let field_type = field_type.trim().to_string();
-                merged_fields.entry(name).or_insert(field_type);
-            }
-        }
+impl TypeMerger for VariantTypeMerger {
+    fn merge_atomic(&self, _left: InferredType, _right: InferredType) -> InferredType {
+        InferredType::Variant
     }
-
-    if merged_fields.is_empty() {
-        return "OBJECT<>".to_string();
-    }
-
-    let fields_str: Vec<String> = merged_fields
-        .iter()
-        .map(|(name, ty)| format!("{name}: {ty}"))
-        .collect();
-    format!("OBJECT<{}>", fields_str.join(", "))
 }
 
-/// Split a comma-separated field list respecting nested angle brackets.
-/// e.g. "a: OBJECT<x: BIGINT>, b: ARRAY<STRING>" → ["a: OBJECT<x: BIGINT>", "b: ARRAY<STRING>"]
-fn split_fields(s: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut depth = 0;
+pub(crate) fn variant_type_to_spark_type(inferred: &InferredType) -> String {
+    match inferred {
+        InferredType::Null => "VOID".to_string(),
+        InferredType::Boolean => "BOOLEAN".to_string(),
+        InferredType::Long => "BIGINT".to_string(),
+        InferredType::Float => "FLOAT".to_string(),
+        InferredType::Decimal(precision, scale) => format!("DECIMAL({precision},{scale})"),
+        InferredType::Double => "DOUBLE".to_string(),
+        InferredType::String => "STRING".to_string(),
+        InferredType::Binary => "BINARY".to_string(),
+        InferredType::Date => "DATE".to_string(),
+        InferredType::Timestamp => "TIMESTAMP".to_string(),
+        InferredType::TimestampNtz => "TIMESTAMP_NTZ".to_string(),
+        InferredType::Array(element) => {
+            format!("ARRAY<{}>", variant_type_to_spark_type(element))
+        }
+        InferredType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, ty)| format!("{name}: {}", variant_type_to_spark_type(ty)))
+                .collect::<Vec<_>>();
+            format!("OBJECT<{}>", fields.join(", "))
+        }
+        InferredType::Variant => "VARIANT".to_string(),
+    }
+}
+
+pub(crate) fn variant_type_from_spark_type(s: &str) -> Result<InferredType> {
+    match s {
+        "VOID" => return Ok(InferredType::Null),
+        "BOOLEAN" => return Ok(InferredType::Boolean),
+        "BIGINT" => return Ok(InferredType::Long),
+        "FLOAT" => return Ok(InferredType::Float),
+        "DOUBLE" => return Ok(InferredType::Double),
+        "STRING" => return Ok(InferredType::String),
+        "BINARY" => return Ok(InferredType::Binary),
+        "DATE" => return Ok(InferredType::Date),
+        "TIMESTAMP" => return Ok(InferredType::Timestamp),
+        "TIMESTAMP_NTZ" => return Ok(InferredType::TimestampNtz),
+        "VARIANT" => return Ok(InferredType::Variant),
+        _ => {}
+    }
+    if let Some(inner) = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(')')) {
+        let (precision, scale) = inner.split_once(',').ok_or_else(|| {
+            DataFusionError::Execution(format!("invalid inferred decimal type '{s}'"))
+        })?;
+        let precision = precision.parse::<u8>().map_err(|_| {
+            DataFusionError::Execution(format!("invalid inferred decimal precision '{precision}'"))
+        })?;
+        let scale = scale.parse::<u8>().map_err(|_| {
+            DataFusionError::Execution(format!("invalid inferred decimal scale '{scale}'"))
+        })?;
+        return Ok(InferredType::Decimal(precision, scale));
+    }
+    if let Some(inner) = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix('>')) {
+        return Ok(InferredType::Array(Box::new(variant_type_from_spark_type(
+            inner,
+        )?)));
+    }
+    if let Some(inner) = s.strip_prefix("OBJECT<").and_then(|s| s.strip_suffix('>')) {
+        let mut fields = Vec::new();
+        for field in split_top_level(inner) {
+            let (name, ty) = field.split_once(": ").ok_or_else(|| {
+                DataFusionError::Execution(format!("invalid inferred object field '{field}'"))
+            })?;
+            fields.push((
+                name.trim().to_string(),
+                variant_type_from_spark_type(ty.trim())?,
+            ));
+        }
+        return Ok(InferredType::Struct(fields));
+    }
+    Err(DataFusionError::Execution(format!(
+        "invalid inferred variant type '{s}'"
+    )))
+}
+
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut fields = Vec::new();
+    let mut angle_depth = 0usize;
+    let mut paren_depth = 0usize;
     let mut start = 0;
     for (i, ch) in s.char_indices() {
         match ch {
-            '<' => depth += 1,
-            '>' => depth -= 1,
-            ',' if depth == 0 => {
-                result.push(s[start..i].trim());
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            ',' if angle_depth == 0 && paren_depth == 0 => {
+                fields.push(s[start..i].trim());
                 start = i + 1;
             }
             _ => {}
         }
     }
-    let last = s[start..].trim();
-    if !last.is_empty() {
-        result.push(last);
+    if start < s.len() {
+        fields.push(s[start..].trim());
     }
-    result
+    fields
 }
 
 /// Compute the decimal precision from the integer value and scale.
-fn decimal_type_string(integer: i128, scale: u8) -> String {
+fn decimal_type(integer: i128, scale: u8) -> InferredType {
     let abs = integer.unsigned_abs();
     let int_digits = if abs == 0 {
         1u8
@@ -268,5 +287,5 @@ fn decimal_type_string(integer: i128, scale: u8) -> String {
         d
     };
     let precision = int_digits.max(scale);
-    format!("DECIMAL({precision},{scale})")
+    InferredType::Decimal(precision, scale)
 }

@@ -1,4 +1,3 @@
-@grouping_id
 Feature: grouping_id returns Spark-compatible grouping-set bit masks
 
   Rule: grouping_id over grouping analytics

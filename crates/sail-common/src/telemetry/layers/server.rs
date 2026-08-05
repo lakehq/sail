@@ -6,7 +6,7 @@ use fastrace::future::{FutureExt, InSpan};
 use tonic::codegen::http::Request;
 use tower::{Layer, Service};
 
-use crate::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
+use super::super::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
 
 #[derive(Clone)]
 pub struct TracingServerLayer;

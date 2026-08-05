@@ -1,7 +1,6 @@
-@map_values
 Feature: map_values output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

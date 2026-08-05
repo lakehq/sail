@@ -346,6 +346,14 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.arrow_use_large_var_types = value;
+        }
+
+        if let Some(value) = config
             .get_option(
                 SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
             )

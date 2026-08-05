@@ -1,7 +1,6 @@
-@array_max
 Feature: array_max output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to array_max yields the schema Spark declares

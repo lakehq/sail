@@ -7,10 +7,12 @@ rank: 5
 
 The OneLake catalog provider in Sail allows you to connect to [Microsoft Fabric OneLake](https://learn.microsoft.com/en-us/fabric/onelake/onelake-overview).
 
-OneLake catalog can be configured using the following options:
+## Options
 
-- `type` (required): The string `onelake`.
-- `name` (required): The name of the catalog.
+OneLake catalog can be configured using the following options.
+
+- `type` (required): The catalog provider. Set this option to `onelake`.
+- `name` (required): The catalog name.
 - `url` (required): The OneLake item location.
 - `api` (optional): The OneLake catalog API. Use `delta` for the Unity Catalog endpoint or `iceberg` for the Iceberg REST catalog endpoint. The default is `iceberg`.
 - `bearer_token` (optional): The bearer token for authentication.
@@ -72,23 +74,36 @@ Azure account keys and SAS tokens are not supported for OneLake catalog authenti
 
 ## Examples
 
+This example uses the OneLake Unity Catalog endpoint.
+
 ```bash
-# Unity Catalog endpoint
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse", api="delta"}]'
+```
 
-# Iceberg REST catalog endpoint
+This example uses the OneLake Iceberg REST catalog endpoint.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse", api="iceberg"}]'
+```
 
-# Bearer token authentication
+This example supplies a bearer token directly.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse", bearer_token="..."}]'
+```
 
-# OAuth authentication with a tenant ID
+This example authenticates with a service principal and tenant ID.
+
+```bash
 export AZURE_TENANT_ID="..."
 export AZURE_CLIENT_ID="..."
 export AZURE_CLIENT_SECRET="..."
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse"}]'
+```
 
-# Azure CLI authentication via environment variables
+This example uses Azure CLI authentication.
+
+```bash
 export AZURE_USE_AZURE_CLI=true
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse"}]'
 ```

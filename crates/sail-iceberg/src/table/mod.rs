@@ -129,10 +129,13 @@ impl Table {
 
     /// Create a Transaction anchored at the current snapshot, if one exists.
     pub fn new_transaction(&self) -> Option<Transaction> {
-        self.metadata
-            .current_snapshot()
-            .cloned()
-            .map(|snapshot| Transaction::new(self.table_url.to_string(), snapshot))
+        self.metadata.current_snapshot().cloned().map(|snapshot| {
+            Transaction::new(
+                self.table_url.to_string(),
+                snapshot,
+                self.metadata.last_sequence_number,
+            )
+        })
     }
 
     fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {

@@ -3,7 +3,7 @@ use std::mem;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use log::info;
-use sail_server::actor::{Actor, ActorAction, ActorContext};
+use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
