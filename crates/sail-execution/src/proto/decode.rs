@@ -18,6 +18,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -148,6 +150,12 @@ pub(super) fn try_decode_higher_order_udf(
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
             }
+        }
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new()))
+        }
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
         }
     })
 }

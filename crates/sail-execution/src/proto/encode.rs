@@ -16,6 +16,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -119,6 +121,10 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
             swapped: sort.is_swapped(),
         })
+    } else if udf_inner.is::<SparkMapZipWith>() {
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {})
+    } else if udf_inner.is::<SparkArrayZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };

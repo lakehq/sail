@@ -13,6 +13,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -51,6 +53,12 @@ static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = La
     ))
 });
 
+static SPARK_MAP_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new())));
+
+static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
+
 static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new())));
 
@@ -60,7 +68,15 @@ static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
-        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
+        "aggregate"
+            | "reduce"
+            | "filter"
+            | "transform"
+            | "exists"
+            | "forall"
+            | "array_sort"
+            | "map_zip_with"
+            | "zip_with"
     )
 }
 
@@ -79,6 +95,8 @@ pub(crate) fn get_lambda_parameters(
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
         "array_sort" => &SPARK_ARRAY_SORT_UDF,
+        "map_zip_with" => &SPARK_MAP_ZIP_WITH_UDF,
+        "zip_with" => &SPARK_ARRAY_ZIP_WITH_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -127,33 +145,36 @@ fn array_lambda_with_index(
     udf_index_first: &LazyLock<Arc<HigherOrderUDF>>,
 ) -> PlanResult<expr::Expr> {
     let (array, lambda) = input.arguments.two()?;
-    let (func, lambda) = match lambda {
-        expr::Expr::Lambda(lambda) if lambda.params.len() > 2 => {
-            return Err(PlanError::AnalysisError(format!(
-                "`{name}` expects a lambda function with 1 or 2 parameters, got {}",
-                lambda.params.len()
-            )));
-        }
-        expr::Expr::Lambda(lambda)
-            if lambda.params.len() == 2
-                && !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
-                && lambda_body_uses_param(&lambda.body, &lambda.params[1])? =>
-        {
-            let Lambda { params, body } = lambda;
-            let (_element, index) = params.two()?;
-            (
-                Arc::clone(udf_index_first),
-                expr::Expr::Lambda(Lambda {
-                    params: vec![index],
-                    body,
-                }),
-            )
-        }
-        lambda => (Arc::clone(udf), lambda),
+    let expr::Expr::Lambda(lambda) = lambda else {
+        return Err(PlanError::AnalysisError(format!(
+            "`{name}` expects a lambda function as its second argument"
+        )));
+    };
+    if lambda.params.len() > 2 {
+        return Err(PlanError::AnalysisError(format!(
+            "`{name}` expects a lambda function with 1 or 2 parameters, got {}",
+            lambda.params.len()
+        )));
+    }
+    let (func, lambda) = if lambda.params.len() == 2
+        && !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
+        && lambda_body_uses_param(&lambda.body, &lambda.params[1])?
+    {
+        let Lambda { params, body } = lambda;
+        let (_element, index) = params.two()?;
+        (
+            Arc::clone(udf_index_first),
+            Lambda {
+                params: vec![index],
+                body,
+            },
+        )
+    } else {
+        (Arc::clone(udf), lambda)
     };
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         func,
-        vec![array, lambda],
+        vec![array, expr::Expr::Lambda(lambda)],
     )))
 }
 
@@ -202,16 +223,16 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 /// Direct expr matching is unreliable for aliased or otherwise-wrapped lambdas,
 /// so anything that is not a bare `Expr::Lambda` falls back to the lenient path
 /// (no arity check here) until expr matching is improved more broadly.
-fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResult<()> {
-    if let expr::Expr::Lambda(lambda) = expr
-        && lambda.params.len() != arity
-    {
-        // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
-        // wording, naming no function (`aggregate`/`reduce` share this builder).
-        return Err(PlanError::AnalysisError(format!(
-            "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
-            lambda.params.len()
-        )));
+fn expect_lambda_arity(role: &str, expression: &expr::Expr, arity: usize) -> PlanResult<()> {
+    if let expr::Expr::Lambda(lambda) = expression {
+        if lambda.params.len() != arity {
+            // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
+            // wording, naming no function (`aggregate`/`reduce` share this builder).
+            return Err(PlanError::AnalysisError(format!(
+                "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
+                lambda.params.len()
+            )));
+        }
     }
     Ok(())
 }
@@ -236,9 +257,9 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             (array, zero, merge, finish)
         }
         4 => args.four()?,
-        n => {
+        count => {
             return Err(PlanError::AnalysisError(format!(
-                "`aggregate` expects 3 or 4 arguments, got {n}"
+                "`aggregate` expects 3 or 4 arguments, got {count}"
             )));
         }
     };
@@ -251,7 +272,7 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 && lambda_body_uses_param(&lambda.body, &lambda.params[1])? =>
         {
             let Lambda { params, body } = lambda;
-            let (_acc, element) = params.two()?;
+            let (_accumulator, element) = params.two()?;
             (
                 Arc::clone(&SPARK_ARRAY_AGGREGATE_ELEMENT_FIRST_UDF),
                 expr::Expr::Lambda(Lambda {
@@ -265,6 +286,44 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         func,
         vec![array, zero, merge, finish],
+    )))
+}
+
+fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right, lambda) = input.arguments.three()?;
+    let expr::Expr::Lambda(lambda) = lambda else {
+        return Err(PlanError::AnalysisError(
+            "`map_zip_with` expects a lambda function as its third argument".to_string(),
+        ));
+    };
+    if lambda.params.len() != 3 {
+        return Err(PlanError::AnalysisError(format!(
+            "`map_zip_with` expects a lambda function with 3 parameters, got {}",
+            lambda.params.len()
+        )));
+    }
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_MAP_ZIP_WITH_UDF),
+        vec![left, right, expr::Expr::Lambda(lambda)],
+    )))
+}
+
+fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right, lambda) = input.arguments.three()?;
+    let expr::Expr::Lambda(lambda) = lambda else {
+        return Err(PlanError::AnalysisError(
+            "`zip_with` expects a lambda function as its third argument".to_string(),
+        ));
+    };
+    if lambda.params.len() != 2 {
+        return Err(PlanError::AnalysisError(format!(
+            "`zip_with` expects a lambda function with 2 parameters, got {}",
+            lambda.params.len()
+        )));
+    }
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF),
+        vec![left, right, expr::Expr::Lambda(lambda)],
     )))
 }
 
@@ -304,7 +363,7 @@ fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr
 /// rewritten to `r -> f(r)` over the `SPARK_ARRAY_SORT_SWAPPED_UDF` instance,
 /// which feeds the lambda the columns in `[right, left]` order. This mirrors the
 /// index-first rewrite in [`array_lambda_with_index`].
-fn array_sort(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
     let (array, rest) = input.arguments.at_least_one()?;
 
     if rest.is_empty() {
@@ -352,11 +411,11 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
         ("map_filter", F::unknown("map_filter")),
-        ("map_zip_with", F::unknown("map_zip_with")),
+        ("map_zip_with", F::custom(map_zip_with)),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
         ("transform_keys", F::unknown("transform_keys")),
         ("transform_values", F::unknown("transform_values")),
-        ("zip_with", F::unknown("zip_with")),
+        ("zip_with", F::custom(zip_with)),
     ]
 }
