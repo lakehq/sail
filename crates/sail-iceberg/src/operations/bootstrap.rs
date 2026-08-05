@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{ActionCommit, SnapshotProducer, Transaction};
+use crate::operations::{ActionCommit, PreparedSnapshotCommit, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
@@ -67,6 +67,19 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     commit_info: &IcebergCommitInfo,
     table_meta: &TableMetadata,
 ) -> Result<ActionCommit> {
+    Ok(
+        bootstrap_snapshot_prepared_commit(table_url, store_ctx, commit_info, table_meta)
+            .await?
+            .into_action_commit(),
+    )
+}
+
+pub(crate) async fn bootstrap_snapshot_prepared_commit(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    commit_info: &IcebergCommitInfo,
+    table_meta: &TableMetadata,
+) -> Result<PreparedSnapshotCommit> {
     let mut table_meta = table_meta.clone();
     let schema_iceberg = table_meta
         .current_schema()
@@ -119,7 +132,7 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     .with_write_path_mode(WritePathMode::Absolute);
 
     producer
-        .commit(commit_info.snapshot_update_kind)
+        .prepare(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)
 }
