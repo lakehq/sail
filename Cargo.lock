@@ -7519,6 +7519,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-celeborn"
+version = "0.7.0"
+dependencies = [
+ "log",
+ "prost",
+ "sail-common",
+ "thiserror 2.0.19",
+ "tokio",
+ "tonic",
+ "tonic-prost-build",
+ "uuid",
+]
+
+[[package]]
 name = "sail-cli"
 version = "0.7.0"
 dependencies = [
@@ -8027,6 +8041,7 @@ dependencies = [
  "fastrace",
  "log",
  "pyo3",
+ "sail-celeborn",
  "sail-cli",
  "sail-common",
  "sail-flight",

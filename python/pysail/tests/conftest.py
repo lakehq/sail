@@ -3,8 +3,18 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
 
-def pytest_configure(config):
+INTEGRATION_TEST_PATHS = [
+    Path(__file__).parent / "celeborn",
+    Path(__file__).parent / "spark" / "catalog" / "glue",
+    Path(__file__).parent / "spark" / "catalog" / "hms",
+    Path(__file__).parent / "spark" / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "spark" / "catalog" / "unity",
+]
+
+
+def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest.
 
     We include the tests in the installed package so that the user can test the installation
@@ -35,11 +45,15 @@ def pytest_configure(config):
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
+    config.addinivalue_line(
+        "markers",
+        "integration: mark test as requiring external services and deselected by default",
+    )
 
     configure_sail_environment()
 
 
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     # Add BDD feature file paths as an extra keyword to support test selection based on feature files.
     package_root = Path(__file__).resolve().parents[1]
     for item in items:
@@ -49,6 +63,18 @@ def pytest_collection_modifyitems(items):
         if filename:
             path = Path(filename).resolve().relative_to(package_root)
             item.extra_keyword_matches.add(path.as_posix())
+
+    for item in items:
+        item_path = Path(str(item.fspath)).resolve()
+        if any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS):
+            item.add_marker(pytest.mark.integration)
+
+    if not config.getoption("markexpr"):
+        deselected = [item for item in items if item.get_closest_marker("integration")]
+        if deselected:
+            remaining = [item for item in items if item not in deselected]
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining
 
 
 def configure_sail_environment():
