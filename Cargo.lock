@@ -7543,12 +7543,16 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
+ "axum",
+ "fastrace",
  "figment",
  "glob",
  "half",
  "iana-time-zone",
+ "log",
  "num-traits",
  "num_enum",
+ "pin-project-lite",
  "secrecy",
  "serde",
  "serde_json",
@@ -7556,6 +7560,10 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "toml 0.8.23",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tower",
 ]
 
 [[package]]
@@ -7721,7 +7729,6 @@ dependencies = [
  "sail-object-store",
  "sail-physical-plan",
  "sail-python-udf",
- "sail-server",
  "sail-telemetry",
  "serde",
  "serde_json",
@@ -7752,7 +7759,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-execution",
  "sail-plan",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "sail-sql-parser",
@@ -7912,7 +7918,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
- "sail-telemetry",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -8049,22 +8054,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-server"
-version = "0.7.0"
-dependencies = [
- "axum",
- "fastrace",
- "log",
- "sail-common",
- "sail-telemetry",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tower",
-]
-
-[[package]]
 name = "sail-session"
 version = "0.7.0"
 dependencies = [
@@ -8102,9 +8091,7 @@ dependencies = [
  "sail-physical-optimizer",
  "sail-physical-plan",
  "sail-plan",
- "sail-server",
  "sail-sql-analyzer",
- "sail-telemetry",
  "secrecy",
  "tempfile",
  "thiserror 2.0.19",
@@ -8144,7 +8131,6 @@ dependencies = [
  "sail-execution",
  "sail-plan",
  "sail-python-udf",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "serde",
@@ -8229,8 +8215,6 @@ dependencies = [
  "syn 2.0.119",
  "thiserror 2.0.19",
  "tokio",
- "tonic",
- "tower",
 ]
 
 [[package]]

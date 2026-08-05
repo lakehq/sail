@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
+use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
-use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};

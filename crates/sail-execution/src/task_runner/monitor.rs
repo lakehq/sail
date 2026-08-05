@@ -1,8 +1,8 @@
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
+use sail_common::actor::{Actor, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;

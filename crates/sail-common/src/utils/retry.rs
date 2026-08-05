@@ -3,10 +3,9 @@ use std::time::Duration;
 
 use fastrace::Span;
 use log::warn;
-use sail_common::config;
-use sail_telemetry::common::SpanAttribute;
-use sail_telemetry::futures::TracingFutureExt;
-use sail_telemetry::recorder::record_error;
+
+use crate::config;
+use crate::telemetry::{SpanAttribute, TracingFutureExt, record_error};
 
 #[derive(Debug, Clone)]
 pub enum RetryStrategy {

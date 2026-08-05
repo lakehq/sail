@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sail_common::actor::ActorSystem;
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverGateway;
-use sail_server::actor::ActorSystem;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
 

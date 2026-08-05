@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use log::{info, warn};
+use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
-use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;

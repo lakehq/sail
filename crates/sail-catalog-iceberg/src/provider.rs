@@ -28,7 +28,7 @@ use sail_catalog::provider::{
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
-use sail_common::http::SAIL_USER_AGENT;
+use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,

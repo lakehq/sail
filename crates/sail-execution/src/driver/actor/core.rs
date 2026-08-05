@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use log::{error, info};
-use sail_server::actor::{Actor, ActorAction, ActorContext};
+use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};

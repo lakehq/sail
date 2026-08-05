@@ -1,14 +1,13 @@
 use std::task::{Context, Poll};
 
-use datafusion::object_store::HeaderValue;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::{FutureExt, InSpan};
 use tonic::codegen::Service;
-use tonic::codegen::http::Request;
+use tonic::codegen::http::{HeaderValue, Request};
 use tower::Layer;
 
-use crate::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
+use super::super::common::{ContextPropagationHeader, SpanAttribute, SpanKind};
 
 #[derive(Clone)]
 pub struct TracingClientLayer;

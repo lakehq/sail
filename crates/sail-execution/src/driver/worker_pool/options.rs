@@ -1,7 +1,7 @@
 //! A dedicated module for worker pool options to ensure readonly access.
 use std::time::Duration;
 
-use sail_server::RetryStrategy;
+use sail_common::utils::retry::RetryStrategy;
 
 use crate::driver::DriverOptions;
 use crate::id::DriverId;

@@ -2,6 +2,7 @@ use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 
 use datafusion::common::{Result, internal_err};
+use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistoryReporter};
@@ -11,7 +12,6 @@ use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_server::actor::ActorSystem;
 
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
