@@ -13,17 +13,25 @@
 pub mod action_schema;
 pub mod commit;
 pub mod delete_apply_exec;
+mod delete_writer_common;
 pub mod discovery_exec;
+pub mod equality_delete_writer_exec;
 pub mod manifest_scan_exec;
+pub mod merge_metadata_exec;
+pub(crate) mod merge_row_projection;
 pub mod plan_builder;
+mod position_delete_writer;
 pub mod scan_by_data_files_exec;
+mod write_location;
 mod writer_exec;
 mod writer_options;
 
 pub use commit::commit_exec::IcebergCommitExec;
 pub use delete_apply_exec::IcebergDeleteApplyExec;
 pub use discovery_exec::IcebergDiscoveryExec;
+pub use equality_delete_writer_exec::IcebergEqualityDeleteWriterExec;
 pub use manifest_scan_exec::IcebergManifestScanExec;
+pub use merge_metadata_exec::IcebergMergeMetadataExec;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 pub use scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use writer_exec::IcebergWriterExec;

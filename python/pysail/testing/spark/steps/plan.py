@@ -69,6 +69,11 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = re.sub(
+        r"data_file=file://([^\s\),]+)",
+        lambda m: f"data_file=file://{normalize_path(m.group(1))}",
+        text,
+    )
+    text = re.sub(
         r'location: "([^"]+)"',
         lambda m: f'location: "{normalize_path(m.group(1))}"',
         text,
