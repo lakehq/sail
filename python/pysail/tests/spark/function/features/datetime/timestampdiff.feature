@@ -1,5 +1,4 @@
 # Moved from features/timestampdiff.feature by the datetime/ layout reorganisation.
-@timestampdiff
 Feature: timestampdiff calendar units
 
   Rule: timestampdiff uses calendar-aware month, quarter, and year units

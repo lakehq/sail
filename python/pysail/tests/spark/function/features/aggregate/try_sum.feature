@@ -1,4 +1,3 @@
-@try_sum
 Feature: try_sum
 
   Rule: Result values (migrated from test_try_sum.txt doctests)

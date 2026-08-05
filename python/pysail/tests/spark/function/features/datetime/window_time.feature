@@ -1,4 +1,3 @@
-@window_time
 Feature: window_time() event-time extraction function
 
   Rule: window_time returns the window end minus one microsecond
@@ -54,7 +53,7 @@ Feature: window_time() event-time extraction function
         """
       Then query error .*window_time requires a window column.*
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

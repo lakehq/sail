@@ -1,7 +1,6 @@
-@is_variant_null
 Feature: is_variant_null output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

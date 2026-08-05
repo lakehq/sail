@@ -1,4 +1,3 @@
-@flatten
 Feature: flatten() flattens nested arrays
 
   Rule: Basic flattening
@@ -45,7 +44,7 @@ Feature: flatten() flattens nested arrays
         | result |
         | NULL   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

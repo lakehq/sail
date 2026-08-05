@@ -1,7 +1,6 @@
-@try_url_decode
 Feature: try_url_decode output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_url_decode yields the schema Spark declares

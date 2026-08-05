@@ -1,7 +1,6 @@
-@url_encode
 Feature: url_encode output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to url_encode yields the schema Spark declares

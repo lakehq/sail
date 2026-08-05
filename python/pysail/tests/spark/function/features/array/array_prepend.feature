@@ -1,7 +1,6 @@
-@array_prepend
 Feature: array_prepend output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

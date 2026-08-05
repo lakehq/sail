@@ -1,7 +1,6 @@
-@str_to_map
 Feature: str_to_map output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

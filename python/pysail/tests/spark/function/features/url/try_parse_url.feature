@@ -1,4 +1,3 @@
-@try_parse_url
 Feature: try_parse_url migration tests
   Tests exposing differences between Sail and DataFusion fork implementations.
   Fork inherits parse_url limitations: fewer string type combinations (3 vs 27).
@@ -91,7 +90,7 @@ Feature: try_parse_url migration tests
         | try_parse_url extracts REF (fragment) | https://spark.apache.org/path#section1       | REF       | section1                        |
         | try_parse_url extracts FILE           | https://spark.apache.org/path?query=1        | FILE      | /path?query=1                   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_parse_url yields the schema Spark declares

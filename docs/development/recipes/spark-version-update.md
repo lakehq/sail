@@ -5,6 +5,10 @@ rank: 35
 
 # Updating Spark Version
 
+::: info
+This guide is for the project maintainers.
+:::
+
 This page outlines the work required to support a new Spark version in the codebase.
 Each Spark release may introduce features or incompatibilities with our scripts, so updating the codebase may require manual changes.
 

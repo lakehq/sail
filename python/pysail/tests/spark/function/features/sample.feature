@@ -1,4 +1,3 @@
-@sample
 Feature: DataFrame sample operations
 
   Rule: Sample without replacement

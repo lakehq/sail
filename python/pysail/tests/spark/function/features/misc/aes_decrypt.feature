@@ -1,4 +1,3 @@
-@aes_decrypt
 Feature: aes_decrypt with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: aes_decrypt with an argument coming from a column
 
   Rule: aes_decrypt — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: aes_decrypt with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: aes_decrypt with an argument coming from a column
         | 41706163686520537061726B |
 
     # Sail rejects the column: Sail errors: Spark `aes_decrypt`: Key requires a single value, got StringArray [ "1234567890abcdef", "1...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_decrypt takes argument 2 from a column
       When query
         """
@@ -29,7 +28,7 @@ Feature: aes_decrypt with an argument coming from a column
         | 41706163686520537061726B |
 
     # Sail rejects the column: Sail errors: Spark `aes_decrypt`: Mode requires a single value, got StringArray [ "CBC", "CBC", ]
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_decrypt takes argument 3 from a column
       When query
         """
@@ -41,7 +40,7 @@ Feature: aes_decrypt with an argument coming from a column
         | 41706163686520537061726B |
 
     # Sail rejects the column: Sail errors: Spark `aes_decrypt`: AAD requires a single value, got StringArray [ "This is an AAD mixed...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_decrypt takes argument 5 from a column
       When query
         """
@@ -52,7 +51,7 @@ Feature: aes_decrypt with an argument coming from a column
         | 537061726B |
         | 537061726B |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal yields binary

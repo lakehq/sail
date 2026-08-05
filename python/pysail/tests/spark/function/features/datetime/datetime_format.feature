@@ -1,5 +1,4 @@
 # Moved from features/datetime_format.feature by the datetime/ layout reorganisation.
-@datetime_format
 Feature: datetime format strings
 
   Rule: Java datetime pattern formatting compatibility

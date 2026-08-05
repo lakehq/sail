@@ -5,65 +5,47 @@ rank: 6
 
 # Hive Metastore
 
-The Hive Metastore catalog provider in Sail allows you to connect to an external Hive Metastore service over Thrift.
+The Hive Metastore (HMS) catalog provider connects Sail to an external Hive Metastore service over Thrift. It lets Sail use the databases, tables, and views whose metadata is stored in that service.
 
-## Support Status
+Sail supports plain Thrift connections, Kerberos-protected Thrift SASL connections, and high-availability endpoint lists. It supports flat database namespaces and resolves the provider and location recorded for existing HMS tables. See [Data Sources](../sources/) for the formats Sail can read and write.
 
-Sail's HMS integration is currently aimed at metadata interoperability with Apache Hive Metastore deployments.
+Sail does not support Hive ACID operations, including transaction heartbeats, locks, and write ID allocation. It also does not support delegation-token authentication.
 
-The following areas are supported:
+## Options
 
-- Plain HMS connections over Thrift.
-- Kerberos-secured HMS connections over Thrift SASL.
-- HMS high-availability URI lists with endpoint failover.
-- Flat database namespaces.
-- Database, table, and view metadata stored in HMS.
-- Table format resolution: Sail resolves the provider and location recorded in existing HMS metadata. Support for individual formats is documented in [Data Sources](../sources/index.md).
+An HMS catalog can be configured using the following options.
 
-The following areas are not implemented yet:
-
-- Hive ACID or transactional HMS APIs such as transaction heartbeats, locks, or write ID allocation.
-- Delegation-token authentication.
-
-Hive Metastore can be configured using the following options:
-
-- `type` (required): The string `hive_metastore` or the alias `hms`.
-- `name` (required): The name of the catalog.
-- `uris` (required): A list of HMS endpoints. Each entry accepts either `host:port` or `thrift://host:port`. Entries may also include comma-separated endpoint lists.
+- `type` (required): The catalog provider. Set this option to `hive_metastore` or `hms`.
+- `name` (required): The catalog name.
+- `uris` (required): The HMS endpoints. Provide a list whose entries use either `host:port` or `thrift://host:port`. An entry can contain a comma-separated list of endpoints.
 - `thrift_transport` (optional): The Thrift transport mode. Valid values are `buffered` and `framed`. The default is `buffered`.
 - `auth` (optional): The HMS authentication mode. Valid values are `none` and `kerberos`. The default is `none`.
-- `kerberos_service_principal` (optional): Required when `auth = "kerberos"`. Use the HMS service principal in the form `service/_HOST@REALM`, for example `hive-metastore/_HOST@EXAMPLE.COM`.
-- `min_sasl_qop` (optional): Minimum Kerberos SASL QOP when `auth = "kerberos"`. Valid values are `auth`, `auth_int`, and `auth_conf`. The default is `auth`.
-- `connect_timeout_secs` (optional): Per-endpoint connect timeout in seconds. The default is `5`.
+- `kerberos_service_principal` (optional): The HMS service principal. Set this option when `auth = "kerberos"`. Use the form `service/_HOST@REALM`, such as `hive-metastore/_HOST@EXAMPLE.COM`.
+- `min_sasl_qop` (optional): The minimum Kerberos SASL quality of protection. Set this option when `auth = "kerberos"`. Valid values are `auth`, `auth_int`, and `auth_conf`. The default is `auth`.
+- `connect_timeout_secs` (optional): The connection timeout for each endpoint. Set this option in seconds. The default is `5`.
 
-See [Common Options](./index.md#common-options) for caching configuration.
+See [Common Options](./index.md#common-options) for options that configure caching.
 
-Failover behavior:
+## Endpoint Failover Behavior
 
-- Sail attempts endpoints in configured order.
-- New connections re-resolve DNS for the selected endpoint instead of pinning the initial startup address forever.
-- Retryable transport/Thrift failures rotate to the next endpoint.
-- A retried create or drop normalizes `AlreadyExists` and `NotFound` responses when the prior attempt likely succeeded but the response was lost.
-- Per-endpoint connect timeout defaults to `5s` and can be overridden with `connect_timeout_secs`.
+Sail tries endpoints in the order in which they are configured. It resolves the selected endpoint's DNS name for each new connection, so connections do not remain pinned to the address found at startup. When a retryable transport or Thrift error occurs, Sail moves to the next endpoint. If a connection fails after a create or drop request may have succeeded, Sail treats the resulting `AlreadyExists` or `NotFound` response as a successful retry.
 
 ## Kerberos Authentication
 
 ::: info
-Kerberos authentication for Hive Metastore is supported and uses the same operator model as Sail's HDFS support.
+Sail uses the same Kerberos operating model for Hive Metastore and HDFS.
 :::
 
 ### Prerequisites
 
-- A Kerberos-enabled Hive Metastore service.
-- A valid `krb5.conf` file on the Sail server host.
-- A valid Kerberos ticket cache for the Sail server process.
-- Kerberos runtime libraries on the Sail server host.
-  On Linux Sail loads `libgssapi_krb5.so.2` at runtime.
-  On macOS install Kerberos libraries, for example with `brew install krb5`.
+- The Hive Metastore service must be configured for Kerberos.
+- The Sail server host must have a valid `krb5.conf` file.
+- The Sail server process must have a valid Kerberos ticket cache.
+- The Sail server host must have Kerberos runtime libraries. On Linux, Sail loads `libgssapi_krb5.so.2` at runtime. On macOS, you can install them with `brew install krb5`.
 
 ### Starting the Sail Server
 
-Authenticate with Kerberos before starting the Sail server.
+Run `kinit` before starting the Sail server so that the server process can use its ticket cache.
 
 ```python
 import subprocess
@@ -71,9 +53,10 @@ from pysail.spark import SparkConnectServer
 
 # authenticate with Kerberos
 subprocess.run([
-    "kinit", "-kt",
+    "kinit",
+    "-kt",
     "/path/to/user.keytab",
-    "username@YOUR.REALM"
+    "username@YOUR.REALM",
 ], check=True)
 
 # start the Sail server
@@ -82,50 +65,47 @@ server.start(background=False)
 ```
 
 ::: tip
-The Sail server uses the process ticket cache created by `kinit`.
-
-If you run Sail in a distributed environment, each worker needs its own Kerberos credentials.
+In a distributed deployment, every worker needs its own Kerberos credentials.
 :::
 
-### Kerberos HMS Catalog Configuration
+### Kerberos Catalog Configuration
 
-When `auth = "kerberos"` is enabled, Sail expands `_HOST` in `kerberos_service_principal` from the hostname of the endpoint selected for that connection attempt.
+When `auth = "kerberos"`, Sail replaces `_HOST` in `kerberos_service_principal` with the hostname of the endpoint selected for that connection attempt.
 
-```bash
-export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083","thrift://hms2.internal:9083"], auth="kerberos", kerberos_service_principal="hive-metastore/_HOST@EXAMPLE.COM"}]'
-```
+Sail fails the connection when the server cannot meet `min_sasl_qop`. Once it negotiates `auth_int` or `auth_conf`, it protects every Thrift frame for that connection with the Kerberos SASL security layer.
 
-### Security Guarantees
-
-- Downgrade fail-fast: if `min_sasl_qop` cannot be satisfied by the server-advertised SASL layers, connection setup fails immediately.
-- Session-wide protection: once a wrapped QOP (`auth_int` or `auth_conf`) is negotiated, every Thrift frame for that connection is wrapped/unwrapped through the Kerberos SASL security layer.
-
-### Current Limitations
-
-- Sail uses an existing Kerberos ticket cache. It does not run `kinit` or manage keytabs internally.
-- Delegation-token authentication is not supported.
-- Transactional Hive Metastore APIs are not used yet. Sail currently targets metadata CRUD rather than Hive ACID write coordination.
+Sail uses the existing ticket cache and does not run `kinit` or manage keytabs. It does not use delegation tokens or transactional HMS APIs. The integration is intended for metadata operations rather than Hive ACID write coordination.
 
 ## Table Types
 
-Sail distinguishes between **managed** and **external** tables based on the `table_type` field stored in HMS metadata:
+HMS records whether a table is managed or external in its `table_type` metadata. For tables created by Spark, tables created without `LOCATION` appear as `MANAGED`, and tables created with `LOCATION` appear as `EXTERNAL`.
 
-- **Managed tables** (created without `LOCATION`, e.g. by Spark) report `Type: MANAGED` in `DESCRIBE EXTENDED`.
-- **External tables** (created with `LOCATION` or by Sail itself) report `Type: EXTERNAL`.
+Sail always creates tables as external by marking them as `EXTERNAL` and setting `table_type` to `EXTERNAL_TABLE`. For tables created by other engines, Sail reports the type stored in HMS.
 
-For `DROP TABLE`, Sail uses metadata-only semantics for HMS and does **not** request physical data deletion via the HMS `delete_data` flag, regardless of managed vs external type.
-
-Sail always creates its own tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`). When reading tables created by other engines (e.g. Spark), Sail reflects the type recorded in HMS.
+When Sail drops an HMS table, it removes only the metadata. It does not ask HMS to delete the table's data, regardless of the table type.
 
 ## Examples
 
+The following example configures a single unencrypted HMS endpoint.
+
 ```bash
 export SAIL_CATALOG__LIST='[{type="hive_metastore", name="sail", uris=["127.0.0.1:9083"]}]'
+```
 
+This example uses two endpoints, a framed Thrift transport, and a ten-second connection timeout.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083","hms2.internal:9083"], thrift_transport="framed", connect_timeout_secs=10}]'
+```
 
+This example connects to an HMS service with Kerberos authentication and requires integrity protection for the connection.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms.internal:9083"], auth="kerberos", kerberos_service_principal="hive-metastore/_HOST@EXAMPLE.COM", min_sasl_qop="auth_int", thrift_transport="framed"}]'
+```
 
-# Enabling caching for database and table listings
+This example enables shared caching for database and table listings.
+
+```bash
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["127.0.0.1:9083"], database_cache_type="global", database_cache_ttl_secs=3600, table_cache_type="global", table_cache_size=1000}]'
 ```

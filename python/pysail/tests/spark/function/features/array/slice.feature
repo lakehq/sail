@@ -1,4 +1,3 @@
-@slice
 Feature: slice with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: slice with an argument coming from a column
 
   Rule: slice — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: slice with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: slice with an argument coming from a column
         | [2, 3] |
 
     # Sail rejects the column: Sail errors: Invalid argument error: Non-nullable field of ListArray "item" cannot contain nulls
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: slice takes argument <n> from a column containing NULL
       When query
         """
@@ -33,7 +32,7 @@ Feature: slice with an argument coming from a column
         | 2 | c, 2 |
         | 3 | 2, c |
 
-    @column_args
+    @function(columnargs)
     Scenario: slice takes argument 2 from a column holding two different values
       When query
         """
@@ -44,7 +43,7 @@ Feature: slice with an argument coming from a column
         | [1, 2] |
         | [3, 4] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

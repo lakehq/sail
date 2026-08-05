@@ -1,7 +1,6 @@
-@typeof
 Feature: typeof output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to typeof yields the schema Spark declares
