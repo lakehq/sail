@@ -307,12 +307,11 @@ use crate::plan::r#gen::{
 use crate::plan::{StageInputExec, r#gen};
 use crate::proto::converter::RemotePhysicalProtoConverter;
 use crate::proto::decode::{
-    try_decode_field_ref, try_decode_message, try_decode_physical_expr, try_decode_physical_plan,
-    try_decode_schema,
+    try_decode_message, try_decode_physical_expr, try_decode_physical_plan, try_decode_schema,
 };
 use crate::proto::encode::{
-    physical_expr_to_proto, try_encode_field_ref, try_encode_message, try_encode_physical_expr,
-    try_encode_physical_plan, try_encode_schema,
+    physical_expr_to_proto, try_encode_message, try_encode_physical_expr, try_encode_physical_plan,
+    try_encode_schema,
 };
 
 pub struct RemoteExecutionCodec;
@@ -3463,7 +3462,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
-            other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
 
@@ -4662,6 +4660,8 @@ mod tests {
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::physical_expr::HigherOrderFunctionExpr;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 
     use super::*;
 
@@ -4840,6 +4840,24 @@ mod tests {
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
     }
 
+    fn serialize_physical_expr(
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &RemoteExecutionCodec,
+    ) -> Result<datafusion_proto::protobuf::PhysicalExprNode> {
+        let bytes = try_encode_physical_expr(codec, expr)?;
+        datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))
+    }
+
+    fn parse_physical_expr(
+        expr: &datafusion_proto::protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        schema: &SchemaRef,
+        codec: &RemoteExecutionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        try_decode_physical_expr(ctx, codec, &expr.encode_to_vec(), schema)
+    }
+
     fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
         expr.downcast_ref::<HigherOrderFunctionExpr>()
             .ok_or_else(|| plan_datafusion_err!("expression is not HigherOrderFunctionExpr"))
@@ -4924,6 +4942,14 @@ mod tests {
         Ok((wrapped, schema_ref, list))
     }
 
+    fn build_wrapped_filter() -> Result<(
+        Arc<dyn PhysicalExpr>,
+        datafusion::arrow::datatypes::SchemaRef,
+        datafusion::arrow::array::ListArray,
+    )> {
+        build_filter()
+    }
+
     #[test]
     fn test_round_trip_distributed_filter_higher_order_expr() -> Result<()> {
         use datafusion::arrow::array::RecordBatch;
@@ -4985,9 +5011,9 @@ mod tests {
         )?;
 
         let codec = RemoteExecutionCodec;
-        let bytes = codec.try_encode_plan(Arc::new(projection))?;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(projection))?;
         let ctx = TaskContext::default();
-        let decoded = codec.try_decode_plan(&bytes, &ctx)?;
+        let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
 
         let decoded_proj = decoded
             .downcast_ref::<ProjectionExec>()

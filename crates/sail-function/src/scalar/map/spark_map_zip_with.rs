@@ -19,6 +19,14 @@ use datafusion_expr::{
 };
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
+type LambdaInputs = (
+    ArrayRef,
+    ArrayRef,
+    ArrayRef,
+    OffsetBuffer<i32>,
+    Option<NullBuffer>,
+);
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMapZipWith {
     signature: HigherOrderSignature,
@@ -239,13 +247,7 @@ fn build_lambda_inputs(
     left: &MapArray,
     right: &MapArray,
     return_type: &DataType,
-) -> Result<(
-    ArrayRef,
-    ArrayRef,
-    ArrayRef,
-    OffsetBuffer<i32>,
-    Option<NullBuffer>,
-)> {
+) -> Result<LambdaInputs> {
     if left.len() != right.len() {
         return exec_err!(
             "{name} expected map arguments with the same row count, got {} and {}",
@@ -304,20 +306,14 @@ fn build_lambda_inputs(
         }
 
         for key in row_keys {
-            let left_value = left_by_key
-                .get(&key)
-                .map(|idx| ScalarValue::try_from_array(left.values(), *idx))
-                .transpose()?
-                .unwrap_or_else(|| {
-                    ScalarValue::try_new_null(&left_value_type).expect("valid null scalar")
-                });
-            let right_value = right_by_key
-                .get(&key)
-                .map(|idx| ScalarValue::try_from_array(right.values(), *idx))
-                .transpose()?
-                .unwrap_or_else(|| {
-                    ScalarValue::try_new_null(&right_value_type).expect("valid null scalar")
-                });
+            let left_value = match left_by_key.get(&key) {
+                Some(idx) => ScalarValue::try_from_array(left.values(), *idx)?,
+                None => ScalarValue::try_new_null(&left_value_type)?,
+            };
+            let right_value = match right_by_key.get(&key) {
+                Some(idx) => ScalarValue::try_from_array(right.values(), *idx)?,
+                None => ScalarValue::try_new_null(&right_value_type)?,
+            };
             key_values.push(cast_scalar(key, &key_type)?);
             left_values.push(left_value);
             right_values.push(right_value);
