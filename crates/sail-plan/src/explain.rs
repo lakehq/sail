@@ -271,15 +271,23 @@ async fn collect_plan_with(
             let optimizer_name = optimizer.name().to_string();
             match optimizer.optimize(Arc::clone(&optimized_physical_plan), config_options) {
                 Ok(new_plan) => {
+                    let previous = display_with(
+                        optimized_physical_plan.as_ref(),
+                        explain_config.show_statistics,
+                        explain_config.show_schema,
+                    );
+                    let current = display_with(
+                        new_plan.as_ref(),
+                        explain_config.show_statistics,
+                        explain_config.show_schema,
+                    );
                     optimized_physical_plan = new_plan;
-                    stringified.push(StringifiedPlan::new(
-                        PlanType::OptimizedPhysicalPlan { optimizer_name },
-                        display_with(
-                            optimized_physical_plan.as_ref(),
-                            explain_config.show_statistics,
-                            explain_config.show_schema,
-                        ),
-                    ));
+                    if current != previous || optimizer_name != "wrap_higher_order_functions" {
+                        stringified.push(StringifiedPlan::new(
+                            PlanType::OptimizedPhysicalPlan { optimizer_name },
+                            current,
+                        ));
+                    }
                 }
                 Err(DataFusionError::Context(_, err)) => {
                     stringified.push(StringifiedPlan::new(

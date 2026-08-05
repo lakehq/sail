@@ -2,9 +2,10 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion_common::ScalarValue;
 use datafusion_common::arrow::datatypes::FieldRef;
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
+use datafusion_expr::{ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -128,6 +129,48 @@ fn lambda_body_uses_param(body: &expr::Expr, param: &str) -> PlanResult<bool> {
         })
     })?;
     Ok(found)
+}
+
+fn anchor_lambda_prefix_params(lambda: Lambda, param_fields: &[FieldRef]) -> PlanResult<Lambda> {
+    let last_used = lambda
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| Ok(lambda_body_uses_param(&lambda.body, param)?.then_some(index)))
+        .collect::<PlanResult<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .max();
+    let Some(last_used) = last_used else {
+        return Ok(lambda);
+    };
+
+    let Lambda { params, body } = lambda;
+    let body = params
+        .iter()
+        .enumerate()
+        .take(last_used)
+        .try_fold(body, |body, (index, param)| -> PlanResult<Box<expr::Expr>> {
+            let field = param_fields.get(index).ok_or_else(|| {
+                PlanError::internal(format!(
+                    "missing parameter field {index} for map_zip_with lambda"
+                ))
+            })?;
+            let is_null = expr::Expr::IsNull(Box::new(expr::Expr::LambdaVariable(
+                LambdaVariable::new(
+                    param.clone(),
+                    Some(FieldRef::clone(field).renamed(param.as_str())),
+                ),
+            )));
+            let anchor = is_null.clone().or(expr::Expr::Not(Box::new(is_null)));
+            Ok(Box::new(expr::Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![(Box::new(anchor), body.clone())],
+                else_expr: Some(body),
+            })))
+        })?;
+
+    Ok(Lambda { params, body })
 }
 
 /// Builds a `(array, lambda)` higher-order function expression supporting Spark's
@@ -290,7 +333,11 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (left, right, lambda) = input.arguments.three()?;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right, lambda) = arguments.three()?;
     let expr::Expr::Lambda(lambda) = lambda else {
         return Err(PlanError::AnalysisError(
             "`map_zip_with` expects a lambda function as its third argument".to_string(),
@@ -302,6 +349,13 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             lambda.params.len()
         )));
     }
+    let fields = vec![
+        ValueOrLambda::Value(left.to_field(function_context.schema)?.1),
+        ValueOrLambda::Value(right.to_field(function_context.schema)?.1),
+        ValueOrLambda::Lambda(None),
+    ];
+    let lambda_params = get_lambda_parameters("map_zip_with", &fields)?.one()?;
+    let lambda = anchor_lambda_prefix_params(lambda, &lambda_params)?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_MAP_ZIP_WITH_UDF),
         vec![left, right, expr::Expr::Lambda(lambda)],
