@@ -19,6 +19,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use url::Url;
 
@@ -315,8 +316,8 @@ async fn load_positions(
 
 /// A fully-loaded equality-delete set for one delete file.
 struct EqualityDeleteSet {
-    /// Ordered (name, arrow type) tuples forming the equality key projection.
-    key_spec: Vec<(String, DataType)>,
+    /// Ordered fields forming the equality key projection.
+    key_spec: Vec<EqualityKeyField>,
     /// Converter used to encode rows into sortable byte representations; NULLs
     /// compare equal to NULLs (IS NOT DISTINCT FROM semantics).
     converter: RowConverter,
@@ -324,11 +325,17 @@ struct EqualityDeleteSet {
     rows: HashSet<OwnedRow>,
 }
 
-/// Resolve an Iceberg schema field name + Arrow data type for each `field_id`.
+struct EqualityKeyField {
+    field_id: i32,
+    data_column_name: String,
+    data_type: DataType,
+}
+
+/// Resolve the current data-column name and Arrow type for each equality field id.
 fn resolve_equality_key_spec(
     iceberg_schema: &IcebergSchema,
     equality_ids: &[i32],
-) -> Result<Vec<(String, DataType)>> {
+) -> Result<Vec<EqualityKeyField>> {
     let mut spec = Vec::with_capacity(equality_ids.len());
     for fid in equality_ids {
         let field = iceberg_schema.field_by_id(*fid).ok_or_else(|| {
@@ -343,7 +350,11 @@ fn resolve_equality_key_spec(
                 field.name
             ))))
         })?;
-        spec.push((field.name.clone(), arrow_type));
+        spec.push(EqualityKeyField {
+            field_id: *fid,
+            data_column_name: field.name.clone(),
+            data_type: arrow_type,
+        });
     }
     Ok(spec)
 }
@@ -368,7 +379,7 @@ async fn load_equality_sets(
         let key_spec = resolve_equality_key_spec(iceberg_schema, &r.data_file.equality_ids)?;
         let sort_fields: Vec<SortField> = key_spec
             .iter()
-            .map(|(_, dt)| SortField::new(dt.clone()))
+            .map(|field| SortField::new(field.data_type.clone()))
             .collect();
         let converter = RowConverter::new(sort_fields)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
@@ -378,7 +389,7 @@ async fn load_equality_sets(
         let batches = read_parquet_all(store.clone(), &path, size).await?;
         let mut rows_set: HashSet<OwnedRow> = HashSet::new();
         for batch in batches {
-            let cols = project_columns(&batch, &key_spec).map_err(|e| {
+            let cols = project_delete_columns_by_id(&batch, &key_spec).map_err(|e| {
                 DataFusionError::Internal(format!(
                     "equality delete file {}: {e}",
                     r.data_file.file_path
@@ -401,23 +412,70 @@ async fn load_equality_sets(
     Ok(sets)
 }
 
-fn project_columns(
+fn project_data_columns(
     batch: &RecordBatch,
-    key_spec: &[(String, DataType)],
+    key_spec: &[EqualityKeyField],
 ) -> std::result::Result<Vec<datafusion::arrow::array::ArrayRef>, String> {
     let mut out = Vec::with_capacity(key_spec.len());
-    for (name, expected_ty) in key_spec {
+    for field in key_spec {
         let col = batch
-            .column_by_name(name)
-            .ok_or_else(|| format!("missing column '{name}'"))?;
-        if col.data_type() != expected_ty {
+            .column_by_name(&field.data_column_name)
+            .ok_or_else(|| format!("missing column '{}'", field.data_column_name))?;
+        if col.data_type() != &field.data_type {
             return Err(format!(
                 "column '{name}' has type {:?}, expected {:?}",
                 col.data_type(),
-                expected_ty
+                field.data_type,
+                name = field.data_column_name,
             ));
         }
         out.push(col.clone());
+    }
+    Ok(out)
+}
+
+fn project_delete_columns_by_id(
+    batch: &RecordBatch,
+    key_spec: &[EqualityKeyField],
+) -> std::result::Result<Vec<datafusion::arrow::array::ArrayRef>, String> {
+    let schema = batch.schema();
+    let mut out = Vec::with_capacity(key_spec.len());
+    for key_field in key_spec {
+        let mut matching_columns =
+            schema
+                .fields()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    field
+                        .metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .filter(|field_id| *field_id == key_field.field_id)
+                        .map(|_| index)
+                });
+        let index = matching_columns.next().ok_or_else(|| {
+            format!(
+                "missing column with Iceberg field id {}",
+                key_field.field_id
+            )
+        })?;
+        if matching_columns.next().is_some() {
+            return Err(format!(
+                "multiple columns have Iceberg field id {}",
+                key_field.field_id
+            ));
+        }
+        let column = batch.column(index);
+        if column.data_type() != &key_field.data_type {
+            return Err(format!(
+                "column with Iceberg field id {} has type {:?}, expected {:?}",
+                key_field.field_id,
+                column.data_type(),
+                key_field.data_type
+            ));
+        }
+        out.push(column.clone());
     }
     Ok(out)
 }
@@ -469,7 +527,7 @@ fn compute_delete_mask(
 
     // Equality deletes: convert data-batch rows once per eq set and probe the set.
     for eq in eq_sets {
-        let cols = project_columns(batch, &eq.key_spec)
+        let cols = project_data_columns(batch, &eq.key_spec)
             .map_err(|e| DataFusionError::Internal(format!("equality-delete apply: {e}")))?;
         let rows = eq
             .converter
@@ -540,7 +598,11 @@ mod tests {
     fn mask_applies_equality_sets() {
         let batch = make_batch();
         // Build an eq set keyed by ("id" Int64): delete id=2 and id=4.
-        let key_spec = vec![("id".to_string(), DataType::Int64)];
+        let key_spec = vec![EqualityKeyField {
+            field_id: 1,
+            data_column_name: "id".to_string(),
+            data_type: DataType::Int64,
+        }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
         let delete_rows = converter
             .convert_columns(&[Arc::new(Int64Array::from(vec![2i64, 4])) as _])
@@ -566,7 +628,11 @@ mod tests {
         let batch = make_batch();
         let positions = vec![0u64]; // drops row 0
 
-        let key_spec = vec![("id".to_string(), DataType::Int64)];
+        let key_spec = vec![EqualityKeyField {
+            field_id: 1,
+            data_column_name: "id".to_string(),
+            data_type: DataType::Int64,
+        }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
         let delete_rows = converter
             .convert_columns(&[Arc::new(Int64Array::from(vec![4i64])) as _])
