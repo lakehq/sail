@@ -8,12 +8,6 @@ rank: 1
 Sail can serve as a drop-in replacement for the compute engine behind PySpark applications.
 The Spark client session communicates with the Sail server using the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
 
-::: tip Using Sail with LangChain?
-
-See the [LangChain integration guide](/guide/integrations/langchain) to connect LangChain tools and agents to Sail SQL.
-
-:::
-
 ## Package Installation
 
 To quickly get started, install the required packages in your Python environment. You can choose the Spark version you want.
