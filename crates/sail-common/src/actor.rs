@@ -143,6 +143,9 @@ impl ActorSystem {
 
     /// Wait for all the spawned actors to stop.
     /// The system can still be used to spawn new actors after this method is called.
+    ///
+    /// Please note that the actors must have been sent a stop message before calling this method,
+    /// otherwise this method will wait indefinitely, causing a deadlock.
     pub async fn join(&mut self) {
         while let Some(result) = self.tasks.join_next().await {
             match result {
