@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -3750,16 +3751,27 @@ impl RemoteExecutionCodec {
         };
 
         let field_name = "__sail_schema_evolution_codec_probe";
-        let logical_schema = Arc::new(Schema::new(vec![Field::new(
-            field_name,
-            DataType::Int64,
-            true,
-        )]));
-        let physical_schema = Arc::new(Schema::new(vec![Field::new(
-            field_name,
-            DataType::Int32,
-            true,
-        )]));
+        let field_id = "1";
+        // Every supported identity resolves the same field, while the type difference
+        // forces the adapter to expose its matching and timezone modes through a cast.
+        let logical_field =
+            Field::new(field_name, DataType::Int64, true).with_metadata(HashMap::from([
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName
+                        .as_ref()
+                        .to_string(),
+                    field_name.to_string(),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+                    field_id.to_string(),
+                ),
+            ]));
+        let physical_field = Field::new(field_name, DataType::Int32, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string())]),
+        );
+        let logical_schema = Arc::new(Schema::new(vec![logical_field]));
+        let physical_schema = Arc::new(Schema::new(vec![physical_field]));
         let adapter = factory.create(logical_schema, physical_schema)?;
         let rewritten = adapter.rewrite(Arc::new(Column::new(field_name, 0)))?;
         if let Some(cast) = rewritten.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
@@ -4910,6 +4922,50 @@ mod tests {
             );
         }
         assert!(RemoteExecutionCodec::try_decode_schema_evolution_timezone_mode(i32::MAX).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parquet_codec_probe_preserves_schema_evolution_modes() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+
+        for matching in [
+            StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            for timezone_mode in [
+                SchemaEvolutionTimezoneMode::Strict,
+                SchemaEvolutionTimezoneMode::Relaxed,
+            ] {
+                let adapter_factory = match timezone_mode {
+                    SchemaEvolutionTimezoneMode::Strict => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching)
+                    }
+                    SchemaEvolutionTimezoneMode::Relaxed => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
+                            matching,
+                        )
+                    }
+                };
+                let parquet_source = Arc::new(ParquetSource::new(Arc::clone(&table_schema)));
+                let file_scan = FileScanConfigBuilder::new(
+                    datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+                    parquet_source,
+                )
+                .with_expr_adapter(Some(Arc::new(adapter_factory)))
+                .build();
+
+                assert_eq!(
+                    RemoteExecutionCodec::parquet_schema_evolution_modes(&file_scan)?,
+                    (matching, timezone_mode)
+                );
+            }
+        }
         Ok(())
     }
 
