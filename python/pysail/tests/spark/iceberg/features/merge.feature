@@ -295,7 +295,7 @@ Feature: Iceberg MERGE
 
   Rule: Merge-on-read execution plans and metadata
 
-    Scenario: EXPLAIN shows one merge-on-read row-intent writer
+    Scenario: EXPLAIN hash partitions merge-on-read row intents for parallel writers
       Given variable location for temporary directory iceberg_merge_plan
       Given final statement
         """
@@ -352,6 +352,71 @@ Feature: Iceberg MERGE
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN hashes partitioned merge intents by Iceberg transforms
+      Given variable location for temporary directory iceberg_merge_partitioned_plan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS merge_partitioned_plan_table
+        """
+      Given statement template
+        """
+        CREATE TABLE merge_partitioned_plan_table (
+          id INT,
+          event_time TIMESTAMP,
+          value STRING
+        )
+        USING iceberg
+        PARTITIONED BY (days(event_time))
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO merge_partitioned_plan_table VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW merge_partitioned_plan_source AS
+        SELECT * FROM VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'updated'),
+          (2, TIMESTAMP '2024-01-02 10:00:00', 'inserted')
+        AS source(id, event_time, value)
+        """
+      When query
+        """
+        EXPLAIN MERGE INTO merge_partitioned_plan_table AS t
+        USING merge_partitioned_plan_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT (id, event_time, value) VALUES (s.id, s.event_time, s.value)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO merge_partitioned_plan_table AS t
+        USING merge_partitioned_plan_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT (id, event_time, value) VALUES (s.id, s.event_time, s.value)
+        """
+      Then iceberg current manifest list matches snapshot
+      Then iceberg current snapshot summary matches snapshot
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, value FROM merge_partitioned_plan_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | updated  |
+        | 2  | inserted |
+
     Scenario: EXPLAIN keeps merge metadata scans constant across target files
       Given variable location for temporary directory iceberg_merge_many_files_plan
       Given final statement
@@ -387,17 +452,17 @@ Feature: Iceberg MERGE
         """
         CREATE OR REPLACE TEMP VIEW merge_many_files_plan_source AS
         SELECT * FROM VALUES
-          (1, 'updated-one'),
-          (2, 'updated-two'),
-          (3, 'updated-three')
-        AS source(id, value)
+          (1),
+          (2),
+          (3)
+        AS source(id)
         """
       When query
         """
         EXPLAIN MERGE INTO merge_many_files_plan_table AS t
         USING merge_many_files_plan_source AS s
         ON t.id = s.id
-        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN MATCHED THEN DELETE
         """
       Then query plan matches snapshot
       Given statement
@@ -405,17 +470,18 @@ Feature: Iceberg MERGE
         MERGE INTO merge_many_files_plan_table AS t
         USING merge_many_files_plan_source AS s
         ON t.id = s.id
-        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN MATCHED THEN DELETE
         """
+      Then iceberg current manifest list matches snapshot
+      Then iceberg current snapshot summary matches snapshot
+      Then iceberg snapshot count is 4
       When query
         """
-        SELECT id, value FROM merge_many_files_plan_table ORDER BY id
+        SELECT COUNT(*) AS remaining FROM merge_many_files_plan_table
         """
       Then query result ordered
-        | id | value         |
-        | 1  | updated-one   |
-        | 2  | updated-two   |
-        | 3  | updated-three |
+        | remaining |
+        | 0         |
 
     Scenario: MERGE writes overwrite metadata with data and position-delete manifests
       Given variable location for temporary directory iceberg_merge_metadata
@@ -431,6 +497,7 @@ Feature: Iceberg MERGE
           flag STRING
         )
         USING iceberg
+        PARTITIONED BY (flag)
         LOCATION {{ location.uri }}
         TBLPROPERTIES (
           'format-version' = '2',

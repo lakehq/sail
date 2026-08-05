@@ -65,16 +65,15 @@ async fn plan_iceberg_merge(
 
     let merge_projection = IcebergMergeRowProjection::try_new(write_plan.schema())?;
     let data_rows_schema = merge_projection.data_schema();
-    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(write_plan));
     let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
-        writer_input,
+        write_plan,
         table_url.clone(),
         partition_columns,
         PhysicalSinkMode::Append,
         true,
         writer_options.clone(),
         Some(data_rows_schema),
-    ));
+    )?);
 
     Ok(Arc::new(
         IcebergCommitExec::new(

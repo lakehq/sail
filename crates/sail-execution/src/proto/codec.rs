@@ -251,8 +251,9 @@ use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkN
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
 };
+use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
@@ -294,8 +295,8 @@ use crate::plan::r#gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::r#gen::extended_window_udf::UdwfKind;
 use crate::plan::r#gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
-    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, LambdaExprNode,
-    LambdaVariableExprNode,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, IcebergPartitionTransformExprNode,
+    LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::plan::{StageInputExec, r#gen};
 use crate::proto::converter::RemotePhysicalProtoConverter;
@@ -1373,7 +1374,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         table_exists,
                         options,
                         logical_input_schema,
-                    )
+                    )?
                 } else {
                     IcebergWriterExec::new(
                         input,
@@ -3573,6 +3574,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
+            ExprKind::IcebergPartitionTransform(node) => {
+                if inputs.len() != 1 {
+                    return plan_err!(
+                        "IcebergPartitionTransformExpr expects exactly one input, got {}",
+                        inputs.len()
+                    );
+                }
+                let transform = node
+                    .transform
+                    .parse::<IcebergTransform>()
+                    .map_err(|error| {
+                        plan_datafusion_err!(
+                            "failed to decode Iceberg partition transform: {error}"
+                        )
+                    })?;
+                Ok(Arc::new(IcebergPartitionTransformExpr::new(
+                    Arc::clone(&inputs[0]),
+                    transform,
+                )))
+            }
             other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
@@ -3597,6 +3618,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })?;
             let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
+        } else if let Some(transform) = node.downcast_ref::<IcebergPartitionTransformExpr>() {
+            ExprKind::IcebergPartitionTransform(IcebergPartitionTransformExprNode {
+                transform: transform.transform().to_string(),
+            })
         } else {
             return plan_err!("unsupported physical expr extension: {node}");
         };
@@ -4923,6 +4948,45 @@ mod tests {
             SchemaEvolutionTimezoneMode::Relaxed
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_partition_transform_expr() -> Result<()> {
+        use datafusion::arrow::array::TimestampMicrosecondArray;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let expression = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("event_time", 0)),
+            IcebergTransform::Day,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let decoded = round_trip_expr(&expression, schema.as_ref())?;
+        let transform = decoded
+            .downcast_ref::<IcebergPartitionTransformExpr>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded expression is not an Iceberg partition transform")
+            })?;
+        assert_eq!(transform.transform(), IcebergTransform::Day);
+        let input = transform
+            .input()
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("transform input is not a column"))?;
+        assert_eq!(input.name(), "event_time");
+        assert_eq!(input.index(), 0);
+        assert_same_result(
+            &expression,
+            &decoded,
+            schema,
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(0),
+                Some(86_400_000_000),
+                None,
+            ]))],
+        )
     }
 
     #[test]
