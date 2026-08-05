@@ -4,7 +4,7 @@ mod options;
 mod session;
 
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
@@ -40,11 +40,9 @@ impl SessionManager {
     pub fn try_new(
         options: SessionManagerOptions,
         components: SessionManagerComponents,
+        system: &mut ActorSystem,
     ) -> SessionResult<Self> {
-        let system = options.system.clone();
-        let handle = system
-            .lock()?
-            .spawn::<SessionManagerActor>((options, components));
+        let handle = system.spawn::<SessionManagerActor>((options, components));
         Ok(Self { handle })
     }
 
@@ -93,13 +91,12 @@ pub async fn create_session_manager(
     runtime: RuntimeHandle,
     session_factory_fn: ServerSessionFactoryFn,
     session_timeout: Duration,
+    system: &mut ActorSystem,
 ) -> SessionResult<SessionManager> {
-    let system = Arc::new(Mutex::new(ActorSystem::new()));
     let session_factory = session_factory_fn(config.clone(), runtime.clone());
     let job_runner_factory = Box::new(ServerSessionJobRunnerFactory::new(
         config.clone(),
         runtime.clone(),
-        system.clone(),
     )) as Box<dyn SessionJobRunnerFactory>;
     let driver_gateway = if matches!(&config.mode, ExecutionMode::Local) {
         None
@@ -112,7 +109,7 @@ pub async fn create_session_manager(
                 })?,
         )
     };
-    let options = SessionManagerOptions::new(runtime, system)
+    let options = SessionManagerOptions::new(runtime)
         .with_session_timeout(session_timeout)
         .with_options(
             config
@@ -124,5 +121,5 @@ pub async fn create_session_manager(
         job_runner_factory,
         driver_gateway,
     };
-    SessionManager::try_new(options, components)
+    SessionManager::try_new(options, components, system)
 }

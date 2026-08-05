@@ -122,6 +122,7 @@ impl Actor for DriverActor {
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }
+        ctx.children_mut().join().await;
         let history = self.build_history();
         self.history_reporter.report(history).await;
         if let Some(result) = self.shutdown_notifier.take() {

@@ -102,7 +102,7 @@ impl Actor for SessionManagerActor {
         }
     }
 
-    async fn stop(mut self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
         // active task stream connections, which are owned by the drivers.
         let drivers = self.drivers.drain().collect::<Vec<_>>();
@@ -111,6 +111,7 @@ impl Actor for SessionManagerActor {
                 warn!("failed to shut down driver {driver_id}: {e}");
             }
         }
+        ctx.children_mut().join().await;
         if let Some(mut driver_gateway) = self.driver_gateway {
             driver_gateway.stop().await;
             info!("driver server has stopped");
