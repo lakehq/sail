@@ -12,23 +12,20 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
 
   Rule: Basic behavior — positive remainder regardless of dividend sign
 
-    Scenario: positive dividend
+    Scenario Outline: Basic: <case>
       When query
         """
-        SELECT pmod(10, 3) AS result
+        SELECT pmod(<args>) AS result
         """
       Then query result
-        | result |
-        | 1      |
+        | result   |
+        | <result> |
 
-    Scenario: negative dividend returns positive remainder
-      When query
-        """
-        SELECT pmod(-7, 3) AS result
-        """
-      Then query result
-        | result |
-        | 2      |
+      Examples:
+        | case                                         | args   | result |
+        | positive dividend                            | 10, 3  | 1      |
+        | negative dividend returns positive remainder | -7, 3  | 2      |
+        | exact multiple gives zero                    | -15, 5 | 0      |
 
     Scenario: negative divisor — pmod still uses |b| domain
       When query
@@ -39,52 +36,36 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         | result |
         | 1      |
 
-    Scenario: exact multiple gives zero
-      When query
-        """
-        SELECT pmod(-15, 5) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
   Rule: NULL operands propagate
 
-    Scenario: NULL dividend returns NULL
+    Scenario Outline: NULL operand: <case>
       When query
         """
-        SELECT pmod(CAST(NULL AS INT), 3) AS result
+        SELECT pmod(<args>) AS result
         """
       Then query result
         | result |
         | NULL   |
 
-    Scenario: NULL divisor returns NULL
-      When query
-        """
-        SELECT pmod(10, CAST(NULL AS INT)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                       | args                  |
+        | NULL dividend returns NULL | CAST(NULL AS INT), 3  |
+        | NULL divisor returns NULL  | 10, CAST(NULL AS INT) |
 
   Rule: Divide by zero under ANSI on errors
 
-    Scenario: pmod by 0 errors under ANSI on
+    Scenario Outline: ANSI on: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT pmod(10, 0) AS result
+        SELECT pmod(<args>) AS result
         """
       Then query error (?i)by zero
 
-    Scenario: pmod negative dividend by 0 errors under ANSI on
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT pmod(-7, 0) AS result
-        """
-      Then query error (?i)by zero
+      Examples:
+        | case                                             | args  |
+        | pmod by 0 errors under ANSI on                   | 10, 0 |
+        | pmod negative dividend by 0 errors under ANSI on | -7, 0 |
 
   Rule: Divide by zero under ANSI off returns NULL
 
@@ -120,23 +101,19 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
     # double (e.g. `1.5`), not a decimal. `pmod` now takes the same operand coercion
     # as the `%` operator, which promotes the pair to DOUBLE before the UDF sees it.
 
-    Scenario: double pmod decimal returns a double
+    Scenario Outline: Double with decimal: <case>
       When query
         """
-        SELECT pmod(CAST(5.5 AS DOUBLE), 2.0) AS result
+        SELECT pmod(<args>) AS result
         """
       Then query result
-        | result |
-        | 1.5    |
+        | result   |
+        | <result> |
 
-    Scenario: infinity double pmod decimal returns NaN not an error
-      When query
-        """
-        SELECT pmod(CAST('Infinity' AS DOUBLE), 2.0) AS result
-        """
-      Then query result
-        | result |
-        | NaN    |
+      Examples:
+        | case                                                  | args                            | result |
+        | double pmod decimal returns a double                  | CAST(5.5 AS DOUBLE), 2.0        | 1.5    |
+        | infinity double pmod decimal returns NaN not an error | CAST('Infinity' AS DOUBLE), 2.0 | NaN    |
 
   Rule: operand typing follows Spark's remainder rule, not DataFusion's coercion
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands
@@ -144,6 +121,21 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
     # coercion first — the integer column takes its type-based decimal, and a string pair
     # promotes BOTH operands to DOUBLE (leaving the peer alone let the UDF pick its own
     # common type, which is what produced decimal(30,15) below).
+
+    Scenario Outline: Literal operands: <case>
+      When query
+        """
+        SELECT typeof(pmod(<left>, <right>)) AS t,
+               pmod(<left>, <right>) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                     | left       | right                      | t      | r   |
+        | a string and a decimal promote to double | '5.5'      | CAST(2.0 AS DECIMAL(10,2)) | double | 1.5 |
+        | Infinity and a decimal is NaN            | 'Infinity' | CAST(2.0 AS DECIMAL(10,2)) | double | NaN |
 
     Scenario: pmod of a decimal and an integer column keeps the remainder type
       When query
@@ -154,25 +146,6 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
       Then query result
         | t            | r    |
         | decimal(3,2) | 1.50 |
-
-    Scenario: pmod of a string and a decimal promotes to double
-      When query
-        """
-        SELECT typeof(pmod('5.5', CAST(2.0 AS DECIMAL(10,2)))) AS t,
-               pmod('5.5', CAST(2.0 AS DECIMAL(10,2))) AS r
-        """
-      Then query result
-        | t      | r   |
-        | double | 1.5 |
-
-    Scenario: pmod of Infinity and a decimal is NaN
-      When query
-        """
-        SELECT pmod('Infinity', CAST(2.0 AS DECIMAL(10,2))) AS r
-        """
-      Then query result
-        | r   |
-        | NaN |
 
     Scenario: pmod of NULL and a string is NULL under ANSI off
       Given config spark.sql.ansi.enabled = false

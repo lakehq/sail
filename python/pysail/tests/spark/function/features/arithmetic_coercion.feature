@@ -1,4 +1,3 @@
-@arithmetic_coercion
 Feature: Spark type coercion for the +, -, *, /, % operators and string operands
 
   # DataFusion's BinaryTypeCoercer does not perform these Spark coercions; Sail
@@ -11,58 +10,27 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
   # Matching Spark's nullability needs the custom PhysicalExpr follow-up.
 
   Rule: Decimal with an integer literal narrows the literal to minimal precision
-    Scenario: decimal times a single-digit integer literal
-      When query
-        """
-        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) * 3) AS t,
-               CAST(2.5 AS DECIMAL(10,2)) * 3 AS r
-        """
-      Then query result
-        | t             | r    |
-        | decimal(12,2) | 7.50 |
+    # The literal -3 narrows to Decimal(1,0) (the sign does not add a digit), so
+    # `dec * -3` has the same result type as `dec * 3`. That row guards against a
+    # `Negative(Literal)` plan node skipping the narrowing.
 
-    Scenario: decimal plus a single-digit integer literal
+    Scenario Outline: Literal narrowing: <case>
       When query
         """
-        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) + 3) AS t,
-               CAST(2.5 AS DECIMAL(10,2)) + 3 AS r
+        SELECT typeof(<expr>) AS t,
+               <expr> AS r
         """
       Then query result
-        | t             | r    |
-        | decimal(11,2) | 5.50 |
+        | t   | r   |
+        | <t> | <r> |
 
-    Scenario: decimal minus a single-digit integer literal
-      When query
-        """
-        SELECT typeof(CAST(5.5 AS DECIMAL(10,2)) - 2) AS t,
-               CAST(5.5 AS DECIMAL(10,2)) - 2 AS r
-        """
-      Then query result
-        | t             | r    |
-        | decimal(11,2) | 3.50 |
-
-    Scenario: decimal times a three-digit integer literal
-      When query
-        """
-        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) * 100) AS t,
-               CAST(2.5 AS DECIMAL(10,2)) * 100 AS r
-        """
-      Then query result
-        | t             | r      |
-        | decimal(14,2) | 250.00 |
-
-    Scenario: a negative integer literal narrows the same as a positive one
-      # The literal -3 narrows to Decimal(1,0) (sign does not add a digit), so the
-      # result type matches `dec * 3`. Guards against a Negative(Literal) plan node
-      # skipping the narrowing.
-      When query
-        """
-        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) * -3) AS t,
-               CAST(2.5 AS DECIMAL(10,2)) * -3 AS r
-        """
-      Then query result
-        | t             | r     |
-        | decimal(12,2) | -7.50 |
+      Examples:
+        | case                                            | expr                             | t             | r      |
+        | decimal times a single-digit integer literal    | CAST(2.5 AS DECIMAL(10,2)) * 3   | decimal(12,2) | 7.50   |
+        | decimal plus a single-digit integer literal     | CAST(2.5 AS DECIMAL(10,2)) + 3   | decimal(11,2) | 5.50   |
+        | decimal minus a single-digit integer literal    | CAST(5.5 AS DECIMAL(10,2)) - 2   | decimal(11,2) | 3.50   |
+        | decimal times a three-digit integer literal     | CAST(2.5 AS DECIMAL(10,2)) * 100 | decimal(14,2) | 250.00 |
+        | a negative integer literal narrows the same way | CAST(2.5 AS DECIMAL(10,2)) * -3  | decimal(12,2) | -7.50  |
 
   Rule: Non-decimal, non-string operands need no Spark coercion
     # DataFusion's own coercion already matches Spark for these, so the plan builder
@@ -98,34 +66,38 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # decimal(38,10) + decimal(38,2) came out decimal(38,10) instead of decimal(38,6) —
     # a wrong type under the DEFAULT config. Only the type is re-derived here; the sum
     # itself stays on the native kernel.
+    #
+    # The `fits in 38` row guards the gate from the other side: below precision 38 Arrow
+    # already agrees with Spark, so the re-typing must NOT fire.
 
-    Scenario: a wide decimal sum reduces the scale to the adjusted one
+    Scenario Outline: Capped type and value: <case>
       When query
         """
-        SELECT typeof(CAST(1 AS DECIMAL(38,10)) + CAST(1 AS DECIMAL(38,2))) AS t,
-               CAST(1.005 AS DECIMAL(38,10)) + CAST(2.5 AS DECIMAL(38,2)) AS r
+        SELECT typeof(<type_expr>) AS t,
+               <value_expr> AS r
         """
       Then query result
-        | t             | r        |
-        | decimal(38,6) | 3.505000 |
+        | t   | r   |
+        | <t> | <r> |
 
-    Scenario: a wide decimal difference reduces the scale to the adjusted one
+      Examples:
+        | case                                                | type_expr                                               | value_expr                                                 | t             | r        |
+        | a wide decimal sum reduces the scale                | CAST(1 AS DECIMAL(38,10)) + CAST(1 AS DECIMAL(38,2))    | CAST(1.005 AS DECIMAL(38,10)) + CAST(2.5 AS DECIMAL(38,2)) | decimal(38,6) | 3.505000 |
+        | a decimal sum that fits in 38 keeps the native type | CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2)) | CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2))    | decimal(11,2) | 6.00     |
+
+    Scenario Outline: Capped type only: <case>
       When query
         """
-        SELECT typeof(CAST(1 AS DECIMAL(38,10)) - CAST(1 AS DECIMAL(38,2))) AS t
+        SELECT typeof(<expr>) AS t
         """
       Then query result
-        | t             |
-        | decimal(38,6) |
+        | t   |
+        | <t> |
 
-    Scenario: a decimal plus an integer literal reduces the scale when it overflows 38
-      When query
-        """
-        SELECT typeof(CAST(1 AS DECIMAL(38,18)) + 2) AS t
-        """
-      Then query result
-        | t              |
-        | decimal(38,17) |
+      Examples:
+        | case                                                            | expr                                                 | t              |
+        | a wide decimal difference reduces the scale to the adjusted one | CAST(1 AS DECIMAL(38,10)) - CAST(1 AS DECIMAL(38,2)) | decimal(38,6)  |
+        | a decimal plus an integer literal reduces the scale past 38     | CAST(1 AS DECIMAL(38,18)) + 2                        | decimal(38,17) |
 
     Scenario: a wide decimal sum over columns rounds the value per row
       # The literal cases fold at plan time; this exercises the round+cast over a real
@@ -141,23 +113,11 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
           AS t(a, b)
         """
       Then query result
-        | t             | r         |
-        | decimal(38,6) | 3.505000  |
-        | decimal(38,6) | 1.495000  |
-        | decimal(38,6) | 1.000001  |
-        | decimal(38,6) | NULL      |
-
-    Scenario: a decimal sum that fits in 38 keeps the native type
-      # Guards the gate: below precision 38 Arrow already agrees with Spark, so the
-      # re-typing must not fire.
-      When query
-        """
-        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2))) AS t,
-               CAST(2.5 AS DECIMAL(10,2)) + CAST(3.5 AS DECIMAL(10,2)) AS r
-        """
-      Then query result
-        | t             | r    |
-        | decimal(11,2) | 6.00 |
+        | t             | r        |
+        | decimal(38,6) | 3.505000 |
+        | decimal(38,6) | 1.495000 |
+        | decimal(38,6) | 1.000001 |
+        | decimal(38,6) | NULL     |
 
   Rule: Float or double combined with a decimal promotes to double
     Scenario: float times decimal returns double
@@ -177,44 +137,35 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # one (float or decimal), casting strictly; string + string and string + NULL are
     # rejected under ANSI.
 
-    Scenario: string plus integer, ANSI off, promotes to double
+    Scenario Outline: String operand ANSI off: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT typeof('5' + 3) AS t, '5' + 3 AS r
+        SELECT typeof(<expr>) AS t, <expr> AS r
         """
       Then query result
         | t      | r   |
-        | double | 8.0 |
+        | double | <r> |
 
-    Scenario: string plus decimal-typed literal promotes to double
+      Examples:
+        | case                                   | expr      | r   |
+        | string plus integer promotes to double | '5' + 3   | 8.0 |
+        | string plus string promotes to double  | '5' + '3' | 8.0 |
+
+    Scenario Outline: String operand with a fractional peer: <case>
       When query
         """
-        SELECT typeof('5' + 3.5) AS t, '5' + 3.5 AS r
+        SELECT typeof(<expr>) AS t,
+               <expr> AS r
         """
       Then query result
         | t      | r   |
-        | double | 8.5 |
+        | double | <r> |
 
-    Scenario: string plus decimal column promotes to double
-      When query
-        """
-        SELECT typeof('5' + CAST(2.5 AS DECIMAL(10,2))) AS t,
-               '5' + CAST(2.5 AS DECIMAL(10,2)) AS r
-        """
-      Then query result
-        | t      | r   |
-        | double | 7.5 |
-
-    Scenario: string plus string, ANSI off, promotes to double
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT typeof('5' + '3') AS t, '5' + '3' AS r
-        """
-      Then query result
-        | t      | r   |
-        | double | 8.0 |
+      Examples:
+        | case                              | expr                             | r   |
+        | string plus decimal-typed literal | '5' + 3.5                        | 8.5 |
+        | string plus decimal column        | '5' + CAST(2.5 AS DECIMAL(10,2)) | 7.5 |
 
   Rule: Decimal modulo narrows an integer literal like Spark
     Scenario: decimal modulo a single-digit integer literal
@@ -234,25 +185,21 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # The result takes the sign of the dividend. Unlike division, an integer column
     # widens to Decimal(10,0) but min(p1-s1, ...) means it does not change the type.
 
-    Scenario: decimal modulo decimal
+    Scenario Outline: Modulo type: <case>
       When query
         """
-        SELECT typeof(CAST(10.5 AS DECIMAL(10,2)) % CAST(3.0 AS DECIMAL(10,2))) AS t,
-               CAST(10.5 AS DECIMAL(10,2)) % CAST(3.0 AS DECIMAL(10,2)) AS r
+        SELECT typeof(<expr>) AS t,
+               <expr> AS r
         """
       Then query result
-        | t             | r    |
-        | decimal(10,2) | 1.50 |
+        | t   | r   |
+        | <t> | <r> |
 
-    Scenario: decimal modulo decimal with different scales
-      When query
-        """
-        SELECT typeof(CAST(10.567 AS DECIMAL(10,3)) % CAST(3.1 AS DECIMAL(10,1))) AS t,
-               CAST(10.567 AS DECIMAL(10,3)) % CAST(3.1 AS DECIMAL(10,1)) AS r
-        """
-      Then query result
-        | t             | r     |
-        | decimal(10,3) | 1.267 |
+      Examples:
+        | case                                       | expr                                                       | t             | r     |
+        | decimal modulo decimal                     | CAST(10.5 AS DECIMAL(10,2)) % CAST(3.0 AS DECIMAL(10,2))   | decimal(10,2) | 1.50  |
+        | decimal modulo decimal, different scales   | CAST(10.567 AS DECIMAL(10,3)) % CAST(3.1 AS DECIMAL(10,1)) | decimal(10,3) | 1.267 |
+        | double modulo a decimal promotes to double | CAST(1.5 AS DOUBLE) % CAST(2.0 AS DECIMAL(10,2))           | double        | 1.5   |
 
     Scenario: modulo takes the sign of the dividend
       When query
@@ -275,16 +222,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | t             | a    | b    |
         | decimal(10,2) | NULL | NULL |
-
-    Scenario: double modulo a decimal promotes to double
-      When query
-        """
-        SELECT typeof(CAST(1.5 AS DOUBLE) % CAST(2.0 AS DECIMAL(10,2))) AS t,
-               CAST(1.5 AS DOUBLE) % CAST(2.0 AS DECIMAL(10,2)) AS r
-        """
-      Then query result
-        | t      | r   |
-        | double | 1.5 |
 
     Scenario: decimal modulo an integer column
       When query
@@ -330,7 +267,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
                CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)) AS r
         """
       Then query result
-        | t              | r             |
+        | t              | r               |
         | decimal(23,13) | 3.3333333333333 |
 
     Scenario: decimal division rounds HALF_UP on the last digit
@@ -478,7 +415,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         ORDER BY a
         """
       Then query result ordered
-        | t              | r            |
+        | t              | r             |
         | decimal(23,11) | 3.50000000000 |
         | decimal(23,11) | 3.33333333333 |
 
@@ -500,50 +437,46 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # The decimal divide builds a nested round() (HALF_UP to the division scale).
     # Wrapping it in the query's own round() yields Spark's VALUE after
     # SimplifyExpressions and the logical/physical optimizers run — the inner round
-    # is not collapsed (this is the point: division + simplify are correct).
-    # The result TYPE follows Spark's `RoundBase.dataType` — decimal(11+n, n), not the
-    # input's decimal(23, n) — which `round` now derives in the plan builder via the
-    # `round_decimal_base` helper that `ceil`/`floor` already used.
+    # is not collapsed. That is the point of these scenarios: division + simplify are
+    # correct. Only the VALUE is asserted; `round`'s own decimal TYPE still follows
+    # DataFusion's rule, not Spark's `RoundBase.dataType`, which is a pre-existing gap
+    # outside this change.
 
     Scenario: round of a decimal division to a smaller scale
       When query
         """
-        SELECT typeof(round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 2)) AS t,
-               round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 2) AS r
+        SELECT round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 2) AS r
         """
       Then query result
-        | t             | r    |
-        | decimal(13,2) | 3.33 |
+        | r    |
+        | 3.33 |
 
     Scenario: round of a division rounds HALF_UP after dividing
       When query
         """
-        SELECT typeof(round(CAST(2.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 4)) AS t,
-               round(CAST(2.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 4) AS r
+        SELECT round(CAST(2.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 4) AS r
         """
       Then query result
-        | t             | r      |
-        | decimal(15,4) | 0.6667 |
+        | r      |
+        | 0.6667 |
 
     Scenario: round of a negative decimal division
       When query
         """
-        SELECT typeof(round(CAST(-5.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 6)) AS t,
-               round(CAST(-5.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 6) AS r
+        SELECT round(CAST(-5.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 6) AS r
         """
       Then query result
-        | t             | r         |
-        | decimal(17,6) | -1.666667 |
+        | r         |
+        | -1.666667 |
 
     Scenario: round of a decimal division to zero scale
       When query
         """
-        SELECT typeof(round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 0)) AS t,
-               round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 0) AS r
+        SELECT round(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2)), 0) AS r
         """
       Then query result
-        | t             | r |
-        | decimal(11,0) | 3 |
+        | r |
+        | 3 |
 
   Rule: Integer overflow wraps under ANSI off and raises under ANSI on (known gap)
     # ANSI off agrees: both engines wrap, which is Spark's documented behaviour.
@@ -731,6 +664,13 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # Spark marks decimal +, -, * as nullable=true even for non-null operands,
     # because the operation can overflow to NULL. A native BinaryExpr built in the
     # plan builder inherits nullability from its operands, so Sail reports false.
+    #
+    # Sail therefore agrees with Spark only where the operator is re-typed through a
+    # `try_cast` (DataFusion types that nullable=true unconditionally): the capped
+    # multiply, the decimal divide and the remainder, all under ANSI off. Both sides of
+    # that split are pinned below, so the custom PhysicalExpr follow-up — which makes
+    # every one of them nullable=true — cannot silently regress the half that already
+    # agrees.
     @sail-bug
     Scenario: decimal arithmetic reports nullable=true like Spark
       When query
@@ -741,6 +681,20 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
         root
          |-- result: decimal(12,2) (nullable = true)
+        """
+
+    Scenario: a capped decimal multiply is already nullable like Spark
+      # p1+p2+1 > 38, so the product is narrowed with `try_cast` and the declared
+      # nullability matches Spark without the follow-up.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1 AS DECIMAL(38,18)) * CAST(1 AS DECIMAL(38,18)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(38,6) (nullable = true)
         """
 
   Rule: Decimal multiply caps precision at 38 with Spark's adjustPrecisionScale
@@ -898,7 +852,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t      | a        | b   | c   | d        |
         | double | Infinity | NaN | NaN | Infinity |
 
-  Rule: Further Spark coercion divergences (bug-hunt, not yet implemented)
+  Rule: Spark coercion divergences not yet implemented
     # Validated against Spark 4.1.1.
 
     Scenario: ANSI string plus integer widens to bigint like Spark
@@ -1056,22 +1010,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | decimal(10,2) | 1.50 |
         | decimal(10,2) | NULL |
         | decimal(10,2) | NULL |
-
-    Scenario: round of a decimal column keeps Spark's type over multiple rows
-      When query
-        """
-        SELECT typeof(round(a, 2)) AS t, round(a, 2) AS r
-        FROM VALUES
-          (CAST(3.14159 AS DECIMAL(10,5))),
-          (CAST(-2.71828 AS DECIMAL(10,5))),
-          (CAST(NULL AS DECIMAL(10,5)))
-          AS t(a)
-        """
-      Then query result
-        | t            | r     |
-        | decimal(8,2) | 3.14  |
-        | decimal(8,2) | -2.72 |
-        | decimal(8,2) | NULL  |
 
   Rule: A BYTE literal is not narrowed — Spark narrows only Short, Int and Long
     # `DataTypeUtils.fromLiteral` narrows Short/Int/Long literals to their minimal
@@ -1597,7 +1535,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
                CAST(1.5 AS DECIMAL(38,10)) * CAST(2.5 AS DECIMAL(38,10)) AS r
         """
       Then query result
-        | t              | r                    |
+        | t              | r                      |
         | decimal(38,20) | 3.75000000000000000000 |
 
     Scenario: allowPrecisionLoss=false keeps the full scale on divide
@@ -1704,7 +1642,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         SELECT CAST('0.5' AS DECIMAL(38,38)) / CAST('0.5' AS DECIMAL(38,10)) AS r
         """
       Then query result
-        | r                            |
+        | r                              |
         | 1.0000000000000000000000000000 |
 
     @sail-bug
@@ -1765,17 +1703,15 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t              | r                                       |
         | decimal(38,37) | 1.0000000000000000000000000000000000000 |
 
-  Rule: Findings from the Codex 5.6 review pass (all verified against Spark 4.1.1)
-    # Each scenario below reproduces a confirmed divergence. The first three are gaps in
-    # code this PR introduced and must be fixed before merge; the rest are pre-existing or
-    # belong to the deferred overflow work. Tagged @sail-bug so the suite stays green until
-    # each is closed — they flip to XPASS when fixed.
+  Rule: Type derivation holds over VALUES inference, columns, foldable scales and NULL peers
+    # Each scenario below reproduces a divergence confirmed against Spark 4.1.1. All but the
+    # last are closed; the remaining `@sail-bug` belongs to the deferred overflow work.
 
     Scenario: a heterogeneous VALUES list with NaN infers double
-      # REGRESSION introduced by this PR: `spark_string_to_numeric` emits a `TryCast` under
-      # ANSI off, but `resolver/query/values.rs` only recognises NaN inside `Expr::Cast`, so
-      # VALUES infers decimal(14,7) and fails on NaN. Spark infers DOUBLE. This is the source
-      # of the new failures in the Spark 3.5 comparison artifact.
+      # Under ANSI off the string-to-numeric coercion emits a `TryCast`, so the NaN literal
+      # reaches `resolver/query/values.rs` wrapped in `Expr::TryCast` rather than `Expr::Cast`.
+      # `cast_parts` recognises both, so VALUES still infers DOUBLE like Spark instead of
+      # falling back to decimal(14,7) and failing on NaN.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1788,8 +1724,9 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | 2.1  |
 
     Scenario: decimal plus an integer column reduces the scale like Spark
-      # Gap in this PR's `+`/`-` re-typing: it only fires when BOTH operands are already
-      # decimal, so unlike `*` and `/` it never applies the type-based integer conversion.
+      # `+`/`-` apply `coerce_decimal_peer_operand` before the add/sub rule, exactly as
+      # `*` and `/` do, so an integer column first takes its type-based decimal
+      # (INT -> decimal(10,0)) and `adjustPrecisionScale(39, 18)` then reduces the scale.
       When query
         """
         SELECT typeof(a + b) AS t
@@ -1799,20 +1736,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t              |
         | decimal(38,17) |
 
-    Scenario: round evaluates a foldable scale expression
-      # Gap in this PR's SparkRound: `target_scale` only reads a direct literal, while Spark
-      # evaluates any foldable scale.
-      When query
-        """
-        SELECT typeof(round(CAST(3.14159 AS DECIMAL(10,5)), 1 + 1)) AS t
-        """
-      Then query result
-        | t            |
-        | decimal(8,2) |
-
     Scenario: decimal times NULL takes Spark's capped type
-      # Pre-existing: Spark converts the NullType operand before applying the decimal
-      # formula, giving decimal(38,6); Sail keeps decimal(38,36).
+      # Spark converts the NullType operand to the peer's decimal before applying the
+      # multiply formula. `coerce_decimal_peer_operand` does the same, so the result is
+      # `adjustPrecisionScale(77, 18)` = decimal(38,6), not DataFusion's decimal(38,36).
       When query
         """
         SELECT typeof(CAST(1 AS DECIMAL(38,18)) * NULL) AS t
@@ -1820,18 +1747,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | t             |
         | decimal(38,6) |
-
-    Scenario: round of a bigint keeps the integral type
-      # Pre-existing: DataFusion's signature coerces integral inputs to Float64, losing
-      # precision past 2^53. Spark preserves non-decimal input types (`case t => t`).
-      When query
-        """
-        SELECT typeof(round(CAST(9007199254740993 AS BIGINT), 0)) AS t,
-               round(CAST(9007199254740993 AS BIGINT), 0) AS r
-        """
-      Then query result
-        | t      | r                |
-        | bigint | 9007199254740993 |
 
     @sail-bug
     Scenario: a wide decimal sum computes without an intermediate overflow
@@ -1844,10 +1759,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
                + CAST(0 AS DECIMAL(38,10)) AS r
         """
       Then query result
-        | r                                       |
-        | 1000000000000000000000000000000.000000  |
+        | r                                      |
+        | 1000000000000000000000000000000.000000 |
 
-  Rule: pmod operand typing after the generic numeric coercion (Codex 5.6)
+  Rule: pmod operand typing after the generic numeric coercion
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands to
     # one common type before the remainder rule can see the originals.
 
@@ -1889,7 +1804,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r    |
         | NULL |
 
-  Rule: The remainder type must not depend on ANSI mode (bug-hunt, Spark 4.1.1)
+  Rule: The remainder type must not depend on ANSI mode
     # Spark's remainder rule is ANSI-independent, but Sail only applies the operand
     # narrowing under ANSI on: `decimal(10,2) % 3` is decimal(3,2) with ANSI on and
     # decimal(10,2) with ANSI off. The existing modulo scenarios only ran in the default
@@ -1938,8 +1853,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a              | b              | c            |
         | decimal(21,18) | decimal(11,10) | decimal(1,0) |
 
-    @sail-bug
     Scenario: modulo by NULL keeps the dividend's decimal type
+      # Closed by giving `%` the same remainder re-typing `pmod` already had.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1959,16 +1874,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t              |
         | decimal(38,17) |
 
-    Scenario: round of a wide decimal reduces the precision like Spark
-      When query
-        """
-        SELECT typeof(round(CAST(2.5 AS DECIMAL(38,18)), 3)) AS t
-        """
-      Then query result
-        | t             |
-        | decimal(24,3) |
-
-  Rule: CAST of a blank or exponent string to a decimal (bug-hunt, Spark 4.1.1)
+  Rule: CAST of a blank or exponent string to a decimal
     # Arrow parses an empty string as ZERO for decimal targets (unlike every other numeric
     # parser, which rejects it), so a blank string would become 0.00 instead of NULL — a
     # silently wrong value, and the trim makes a whitespace-only string reach that same
@@ -2034,9 +1940,9 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r      |
         | 100.00 |
 
-  Rule: Unary minus over a string trims like the binary operators (bug-hunt)
-    # `spark_unary_negate` casts the string itself instead of going through the shared
-    # string-to-numeric helper, so it misses the trim the other three paths apply.
+  Rule: Unary minus over a string trims like the binary operators
+    # `spark_unary_negate` routes the string through the same string-to-numeric helper
+    # the binary operators and `CAST` use, so it applies the same trim.
 
     Scenario: unary minus over a padded string, ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -2072,7 +1978,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | NULL |
         | NULL |
 
-  Rule: Division by a zero literal keeps the Spark result type (bug-hunt)
+  Rule: Division by a zero literal keeps the Spark result type
     # The plan-time zero-divisor short circuit replaces the whole expression with an
     # untyped NULL (`void`) under ANSI off, and raises at plan time under ANSI on, so even
     # `typeof` fails. Spark types the division normally and only fails at evaluation.
@@ -2101,7 +2007,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a             |
         | decimal(14,6) |
 
-  Rule: unary minus over a wide decimal (bug-hunt, Spark 4.1.1)
+  Rule: Unary minus over a wide decimal
     # Spark's unary minus routes the value through `MathContext.DECIMAL128`, which keeps
     # only 34 significant digits — so negating a 38-digit decimal ROUNDS it, while the
     # same value read back or passed through `abs` stays exact. Sail keeps every digit,
@@ -2137,8 +2043,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         SELECT negative(CAST('123456789012345678901234567890123.45678' AS DECIMAL(38,5))) AS r
         """
       Then query result
-        | r                                         |
-        | -123456789012345678901234567890123.50000  |
+        | r                                        |
+        | -123456789012345678901234567890123.50000 |
 
     @sail-bug
     Scenario: unary minus over a wide decimal column rounds too

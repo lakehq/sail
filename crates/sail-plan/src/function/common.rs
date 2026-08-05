@@ -34,14 +34,6 @@ fn spark_trim_chars() -> String {
     (0u8..=0x20).map(char::from).collect()
 }
 
-/// True for the string types Spark parses as numbers.
-pub fn is_string_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
 /// Casts a string to a numeric type the way Spark does, for the three places that need
 /// it: `CAST`/`TRY_CAST`, the `FLOAT(..)`/`DOUBLE(..)` constructors, and the operand
 /// coercion the arithmetic operators apply to a string operand.
@@ -91,7 +83,10 @@ pub fn spark_string_to_numeric(
                 datafusion::functions::expr_fn::btrim(vec![expr, lit(spark_trim_chars())]);
             if !matches!(
                 target,
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+                DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
             ) {
                 trimmed
             } else if null_on_failure {
@@ -158,6 +153,14 @@ fn spark_type_name(data_type: &DataType) -> String {
         DataType::Int64 => "BIGINT".to_string(),
         DataType::Float32 => "FLOAT".to_string(),
         DataType::Float64 => "DOUBLE".to_string(),
+        // Spark has no unsigned or half-float type, but Sail can surface them (e.g. from
+        // Parquet) and the caller's gate is `is_numeric()`, which admits them. Name them
+        // the way the plan formatter does rather than leaking Arrow's `Debug`.
+        DataType::UInt8 => "UNSIGNED TINYINT".to_string(),
+        DataType::UInt16 => "UNSIGNED SMALLINT".to_string(),
+        DataType::UInt32 => "UNSIGNED INT".to_string(),
+        DataType::UInt64 => "UNSIGNED BIGINT".to_string(),
+        DataType::Float16 => "HALF FLOAT".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -304,7 +307,7 @@ impl ScalarFunctionBuilder {
                 // Arrow's stricter parse.
                 let from = argument.get_type(function_context.schema);
                 match from {
-                    Ok(from) if is_string_type(&from) && data_type.is_numeric() => {
+                    Ok(from) if from.is_string() && data_type.is_numeric() => {
                         Ok(spark_string_to_numeric(
                             argument,
                             data_type.clone(),
