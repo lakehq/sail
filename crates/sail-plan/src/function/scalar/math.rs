@@ -75,9 +75,14 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) + right, DataType::Date32)
             }
+            (Ok(left_type), Ok(right_type)) => {
+                let (left, right) =
+                    coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+                left + right
+            }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
-            (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left + right,
+            (Err(_), _) | (_, Err(_)) => left + right,
         })
     }
 }
@@ -126,9 +131,14 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
             }
+            (Ok(left_type), Ok(right_type)) => {
+                let (left, right) =
+                    coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+                left - right
+            }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
-            (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left - right,
+            (Err(_), _) | (_, Err(_)) => left - right,
         })
     }
 }
@@ -176,10 +186,109 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 DataType::Duration(TimeUnit::Microsecond),
             )
         }
+        (Ok(left_type), Ok(right_type)) => {
+            let (left, right) =
+                coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+            left * right
+        }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left * right,
+        (Err(_), _) | (_, Err(_)) => left * right,
     })
+}
+
+/// Spark-specific operand coercion for `+ - *` applied at plan-construction time,
+/// so the logical plan is valid by construction (rather than relying on a later
+/// analyzer rule, which would run after `ExprSchemable::get_type` has already typed
+/// the binary op via DataFusion's `BinaryTypeCoercer`).
+///
+/// Covers the cases where DataFusion's default coercion diverges from Spark:
+///   - FLOAT/DOUBLE combined with DECIMAL: Spark promotes both to DOUBLE.
+///   - integer LITERAL combined with DECIMAL: Spark narrows the literal to its
+///     minimal-precision decimal (so `dec(10,2) * 3` => `decimal(12,2)`).
+fn coerce_spark_arithmetic_operands(
+    left: Expr,
+    right: Expr,
+    left_type: &DataType,
+    right_type: &DataType,
+) -> (Expr, Expr) {
+    // FLOAT/DOUBLE x DECIMAL -> DOUBLE.
+    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala
+    if is_float_decimal_pair(left_type, right_type) {
+        return (
+            cast(left, DataType::Float64),
+            cast(right, DataType::Float64),
+        );
+    }
+    // integer literal x DECIMAL -> narrow the literal to its minimal decimal.
+    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala
+    let left = match spark_decimal_literal_datatype(&left, right_type) {
+        Some(target) => cast(left, target),
+        None => left,
+    };
+    let right = match spark_decimal_literal_datatype(&right, left_type) {
+        Some(target) => cast(right, target),
+        None => right,
+    };
+    (left, right)
+}
+
+/// True when one operand is a floating-point type and the other a decimal (either
+/// order) — the pair Spark promotes to `DoubleType` in arithmetic.
+fn is_float_decimal_pair(a: &DataType, b: &DataType) -> bool {
+    fn is_decimal(dt: &DataType) -> bool {
+        matches!(dt, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+    }
+    (a.is_floating() && is_decimal(b)) || (is_decimal(a) && b.is_floating())
+}
+
+/// When `expr` is an integer literal and `other_type` is a decimal, returns the
+/// literal's minimal-precision decimal (`Decimal(digit_count, 0)`), matching Spark's
+/// `DecimalType.fromLiteral`. DataFusion would instead widen it to `Decimal(10, 0)`.
+fn spark_decimal_literal_datatype(expr: &Expr, other_type: &DataType) -> Option<DataType> {
+    let is_256 = match other_type {
+        DataType::Decimal128(_, _) => false,
+        DataType::Decimal256(_, _) => true,
+        _ => return None,
+    };
+    let value = match expr {
+        Expr::Literal(scalar, _) => scalar_integer_value(scalar)?,
+        _ => return None,
+    };
+    let precision = integer_digit_count(value);
+    Some(if is_256 {
+        DataType::Decimal256(precision, 0)
+    } else {
+        DataType::Decimal128(precision, 0)
+    })
+}
+
+fn scalar_integer_value(scalar: &ScalarValue) -> Option<i128> {
+    Some(match scalar {
+        ScalarValue::Int8(Some(v)) => i128::from(*v),
+        ScalarValue::Int16(Some(v)) => i128::from(*v),
+        ScalarValue::Int32(Some(v)) => i128::from(*v),
+        ScalarValue::Int64(Some(v)) => i128::from(*v),
+        ScalarValue::UInt8(Some(v)) => i128::from(*v),
+        ScalarValue::UInt16(Some(v)) => i128::from(*v),
+        ScalarValue::UInt32(Some(v)) => i128::from(*v),
+        ScalarValue::UInt64(Some(v)) => i128::from(*v),
+        _ => return None,
+    })
+}
+
+/// Number of base-10 digits in `value` (sign ignored), minimum 1.
+fn integer_digit_count(value: i128) -> u8 {
+    let mut n = value.unsigned_abs();
+    let mut digits = 0u8;
+    loop {
+        digits += 1;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    digits
 }
 
 /// Check if an expression represents a zero literal value.
@@ -733,4 +842,74 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_expr::col;
+
+    use super::*;
+
+    #[test]
+    fn integer_digit_count_counts_digits_sign_ignored() {
+        assert_eq!(integer_digit_count(0), 1);
+        assert_eq!(integer_digit_count(3), 1);
+        assert_eq!(integer_digit_count(-3), 1);
+        assert_eq!(integer_digit_count(100), 3);
+        assert_eq!(integer_digit_count(-12345), 5);
+    }
+
+    #[test]
+    fn spark_decimal_literal_datatype_narrows_only_integer_literal_vs_decimal() {
+        let dec = DataType::Decimal128(10, 2);
+        // integer literal against a decimal -> minimal decimal
+        assert_eq!(
+            spark_decimal_literal_datatype(&lit(3_i32), &dec),
+            Some(DataType::Decimal128(1, 0))
+        );
+        assert_eq!(
+            spark_decimal_literal_datatype(&lit(100_i64), &dec),
+            Some(DataType::Decimal128(3, 0))
+        );
+        // other side not a decimal -> no narrowing
+        assert_eq!(
+            spark_decimal_literal_datatype(&lit(3_i32), &DataType::Int32),
+            None
+        );
+        // not an integer literal -> no narrowing
+        assert_eq!(spark_decimal_literal_datatype(&lit(2.0_f64), &dec), None);
+        assert_eq!(spark_decimal_literal_datatype(&col("x"), &dec), None);
+    }
+
+    #[test]
+    fn is_float_decimal_pair_detects_either_order() {
+        let dec = DataType::Decimal128(10, 2);
+        assert!(is_float_decimal_pair(&DataType::Float32, &dec));
+        assert!(is_float_decimal_pair(&dec, &DataType::Float64));
+        assert!(!is_float_decimal_pair(&DataType::Int32, &dec));
+        assert!(!is_float_decimal_pair(
+            &DataType::Float32,
+            &DataType::Float64
+        ));
+    }
+
+    #[test]
+    fn coerce_narrows_integer_literal_against_decimal() {
+        // `dec(10,2) * 3` -> literal narrowed to Decimal(1,0) (=> result decimal(12,2)).
+        let dec = DataType::Decimal128(10, 2);
+        let (left, right) =
+            coerce_spark_arithmetic_operands(col("a"), lit(3_i32), &dec, &DataType::Int32);
+        assert_eq!(left.to_string(), "a");
+        assert_eq!(right.to_string(), "CAST(Int32(3) AS Decimal128(1, 0))");
+    }
+
+    #[test]
+    fn coerce_promotes_float_decimal_to_double() {
+        // `dec(10,2) * float` -> both promoted to Double.
+        let dec = DataType::Decimal128(10, 2);
+        let (left, right) =
+            coerce_spark_arithmetic_operands(col("a"), lit(2.0_f32), &dec, &DataType::Float32);
+        assert_eq!(left.to_string(), "CAST(a AS Float64)");
+        assert_eq!(right.to_string(), "CAST(Float32(2) AS Float64)");
+    }
 }
