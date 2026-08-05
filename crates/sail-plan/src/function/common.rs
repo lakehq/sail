@@ -264,11 +264,7 @@ impl AggFunctionBuilder {
 
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
-        Arc::new(move |_| {
-            Err(PlanError::todo(format!(
-                "unknown aggregate function: {name}"
-            )))
-        })
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 }
 

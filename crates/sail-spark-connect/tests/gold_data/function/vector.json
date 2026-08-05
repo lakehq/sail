@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: vector_avg"
+        "failure": "not implemented: function: vector_avg"
       }
     },
     {
@@ -259,7 +259,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: vector_sum"
+        "failure": "not implemented: function: vector_sum"
       }
     }
   ]
