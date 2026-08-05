@@ -8,7 +8,7 @@ from pysail.spark import SparkConnectServer
 @pytest.fixture(scope="module", autouse=True)
 def server():
     # The tests below need the global state to be initialized while the environment variables
-    # are still pristine, which does not happen when running against a server from `SPARK_REMOTE`.
+    # are still pristine. This fixture ensures this even when running the tests against a server from `SPARK_REMOTE`.
     _ = SparkConnectServer()
 
 
