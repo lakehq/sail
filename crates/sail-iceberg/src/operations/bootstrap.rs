@@ -30,7 +30,7 @@ use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
-use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
+use crate::spec::snapshots::{MAIN_BRANCH, SnapshotBuilder, SnapshotReference, SnapshotRetention};
 use crate::spec::{FormatVersion, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, metadata_file_extension_from_properties, metadata_file_version_from_path,
@@ -426,8 +426,8 @@ pub async fn replace_empty_table_metadata(
     let mut partition_specs = previous_metadata.partition_specs.clone();
     partition_specs.push(partition_spec.clone());
 
-    // FIXME: Preserve snapshot history, non-main refs, and historical sort/statistics
-    // metadata when replacing table metadata.
+    let mut refs = previous_metadata.refs.clone();
+    refs.remove(MAIN_BRANCH);
     let mut table_meta = TableMetadata {
         format_version,
         table_uuid: previous_metadata.table_uuid,
@@ -444,14 +444,14 @@ pub async fn replace_empty_table_metadata(
         current_snapshot_id: Some(-1),
         next_row_id,
         encryption_keys: previous_metadata.encryption_keys.clone(),
-        snapshots: vec![],
-        snapshot_log: vec![],
+        snapshots: previous_metadata.snapshots.clone(),
+        snapshot_log: previous_metadata.snapshot_log.clone(),
         metadata_log,
-        sort_orders: vec![],
-        default_sort_order_id: None,
-        refs: HashMap::new(),
-        statistics: vec![],
-        partition_statistics: vec![],
+        sort_orders: previous_metadata.sort_orders.clone(),
+        default_sort_order_id: previous_metadata.default_sort_order_id,
+        refs,
+        statistics: previous_metadata.statistics.clone(),
+        partition_statistics: previous_metadata.partition_statistics.clone(),
     };
     table_meta.ensure_required_format_fields();
 
@@ -629,4 +629,160 @@ pub async fn bootstrap_first_snapshot(
         table_metadata: table_meta,
         metadata_file,
     })
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use object_store::ObjectStore;
+
+    use super::*;
+    use crate::spec::{
+        BlobMetadata, NestedField, NullOrder, Operation, PartitionStatisticsFile, PrimitiveType,
+        SortDirection, SortField, SortOrder, StatisticsFile, Transform, Type,
+    };
+
+    #[test]
+    fn replace_preserves_historical_snapshot_metadata_without_main_reference() {
+        futures::executor::block_on(async {
+            let table_url = Url::parse("file:///tmp/replaced-table/").expect("table URL");
+            let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let original_schema = IcebergSchema::builder()
+                .with_schema_id(1)
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .expect("original schema");
+            let original_spec = PartitionSpec::builder().with_spec_id(1).build();
+            let table_properties = vec![("format-version".to_string(), "2".to_string())];
+            let bootstrap = bootstrap_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                original_schema,
+                original_spec,
+                &table_properties,
+                NewTableMetadataStyle::Hadoop,
+            )
+            .await
+            .expect("bootstrap metadata");
+
+            let mut previous = bootstrap.table_metadata;
+            let historical_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(17)
+                .with_sequence_number(4)
+                .with_timestamp_ms(123)
+                .with_manifest_list("file:///tmp/replaced-table/metadata/snap-17.avro")
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .with_schema_id(1)
+                .build()
+                .expect("historical snapshot");
+            previous.last_sequence_number = historical_snapshot.sequence_number();
+            previous.current_snapshot_id = Some(historical_snapshot.snapshot_id());
+            previous.snapshots = vec![historical_snapshot.clone()];
+            previous.snapshot_log = vec![SnapshotLog {
+                timestamp_ms: historical_snapshot.timestamp_ms,
+                snapshot_id: historical_snapshot.snapshot_id(),
+            }];
+            previous.refs.insert(
+                MAIN_BRANCH.to_string(),
+                SnapshotReference {
+                    snapshot_id: historical_snapshot.snapshot_id(),
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            );
+            previous.refs.insert(
+                "before_replace".to_string(),
+                SnapshotReference {
+                    snapshot_id: historical_snapshot.snapshot_id(),
+                    retention: SnapshotRetention::Tag {
+                        max_ref_age_ms: Some(86_400_000),
+                    },
+                },
+            );
+            previous.sort_orders = vec![SortOrder {
+                order_id: 7,
+                fields: vec![SortField {
+                    source_id: 1,
+                    source_ids: vec![],
+                    transform: Transform::Identity,
+                    direction: SortDirection::Ascending,
+                    null_order: NullOrder::Last,
+                }],
+            }];
+            previous.default_sort_order_id = Some(7);
+            previous.statistics = vec![StatisticsFile {
+                snapshot_id: historical_snapshot.snapshot_id(),
+                statistics_path: "file:///tmp/replaced-table/metadata/stats.puffin".to_string(),
+                file_size_in_bytes: 101,
+                file_footer_size_in_bytes: 11,
+                key_metadata: Some("key".to_string()),
+                blob_metadata: vec![BlobMetadata {
+                    r#type: "apache-datasketches-theta-v1".to_string(),
+                    snapshot_id: historical_snapshot.snapshot_id(),
+                    sequence_number: historical_snapshot.sequence_number(),
+                    fields: vec![1],
+                    properties: HashMap::from([("ndv".to_string(), "3".to_string())]),
+                }],
+            }];
+            previous.partition_statistics = vec![PartitionStatisticsFile {
+                snapshot_id: historical_snapshot.snapshot_id(),
+                statistics_path: "file:///tmp/replaced-table/metadata/partition-stats.parquet"
+                    .to_string(),
+                file_size_in_bytes: 202,
+            }];
+
+            let replacement_schema = IcebergSchema::builder()
+                .with_schema_id(2)
+                .with_fields([Arc::new(NestedField::required(
+                    2,
+                    "value",
+                    Type::Primitive(PrimitiveType::String),
+                ))])
+                .build()
+                .expect("replacement schema");
+            let replacement_spec = PartitionSpec::builder().with_spec_id(2).build();
+            let replacement = replace_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                replacement_schema,
+                replacement_spec,
+                &table_properties,
+                &previous,
+                &bootstrap.metadata_file,
+                NewTableMetadataStyle::Hadoop,
+            )
+            .await
+            .expect("replacement metadata")
+            .table_metadata;
+
+            assert_eq!(replacement.current_snapshot_id, Some(-1));
+            assert_eq!(replacement.last_sequence_number, 4);
+            assert_eq!(replacement.snapshots, vec![historical_snapshot]);
+            assert_eq!(replacement.snapshot_log.len(), 1);
+            assert_eq!(replacement.snapshot_log[0].snapshot_id, 17);
+            assert!(!replacement.refs.contains_key(MAIN_BRANCH));
+            assert_eq!(
+                replacement
+                    .refs
+                    .get("before_replace")
+                    .map(|reference| reference.snapshot_id),
+                Some(17)
+            );
+            assert_eq!(replacement.sort_orders, previous.sort_orders);
+            assert_eq!(replacement.default_sort_order_id, Some(7));
+            assert_eq!(replacement.statistics, previous.statistics);
+            assert_eq!(
+                replacement.partition_statistics,
+                previous.partition_statistics
+            );
+        });
+    }
 }
