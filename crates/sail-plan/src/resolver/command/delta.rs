@@ -366,10 +366,19 @@ impl PlanResolver<'_> {
                 properties.extend(items.clone());
             }
         }
-        let constraints = delta_constraints_from_schema_and_properties(
-            target_schema.fields().iter().map(|field| field.as_ref()),
-            &properties,
-        );
+
+        // MERGE target schemas use opaque field IDs internally. Constraint source text and
+        // diagnostics must use the corresponding user-facing names; resolving that source text
+        // against `target_schema` maps it back to the opaque field safely.
+        let target_field_names = Self::get_field_names(target_schema, state)?;
+        let target_fields = target_schema
+            .fields()
+            .iter()
+            .zip(target_field_names)
+            .map(|(field, name)| field.as_ref().clone().with_name(name))
+            .collect::<Vec<_>>();
+        let constraints =
+            delta_constraints_from_schema_and_properties(target_fields.iter(), &properties);
         self.resolve_delta_check_constraints(constraints, target_schema, state)
             .await
     }
