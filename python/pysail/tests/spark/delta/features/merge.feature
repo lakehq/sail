@@ -327,6 +327,70 @@ Feature: Delta Lake Merge
         | id | status | note |
         | 1  | new    | NULL |
 
+    Scenario: Explicit DEFAULT requires a default for a non-nullable target
+      Given variable location for temporary directory delta_merge_required_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_required_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_required_assignment_default (
+          id INT,
+          status STRING NOT NULL
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_required_assignment_default VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_required_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO delta_merge_required_assignment_default AS t
+        USING delta_merge_required_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET status = DEFAULT
+        """
+      Then query error (?i)(NO_DEFAULT_COLUMN_VALUE_AVAILABLE|not nullable.*no default value)
+
+    Scenario: Explicit DEFAULT cannot be wrapped in a MERGE expression
+      Given variable location for temporary directory delta_merge_complex_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_complex_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_complex_assignment_default (
+          id INT,
+          status STRING DEFAULT 'new'
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_complex_assignment_default VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_complex_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO delta_merge_complex_assignment_default AS t
+        USING delta_merge_complex_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET status = CAST(DEFAULT AS STRING)
+        """
+      Then query error (?i)(DEFAULT.*standalone|DEFAULT.*complex expression)
+
   Rule: MERGE assignments honor the configured store assignment policy
 
     Scenario Outline: Incompatible string assignments are rejected before execution

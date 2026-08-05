@@ -40,7 +40,7 @@ use crate::catalog_support::commit::{
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
-    bootstrap_new_table_with_style, bootstrap_snapshot_prepared_commit,
+    bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
@@ -55,7 +55,7 @@ use crate::spec::{
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string,
+    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
 };
 use crate::table_format::metadata_location_from_properties;
 use crate::utils::get_object_store_from_context;
@@ -63,6 +63,8 @@ use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
 
 async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[String]) {
+    let mut base_paths = Vec::new();
+    let mut prefixed_paths = Vec::new();
     for file_path in file_paths.iter().collect::<BTreeSet<_>>() {
         let (store, path) = match store_ctx.resolve(file_path) {
             Ok(resolved) => resolved,
@@ -73,10 +75,28 @@ async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[
                 continue;
             }
         };
-        match store.delete(&path).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+        if Arc::ptr_eq(store, &store_ctx.base) {
+            base_paths.push(path);
+        } else {
+            prefixed_paths.push(path);
+        }
+    }
+
+    delete_task_files(&store_ctx.base, base_paths).await;
+    delete_task_files(&store_ctx.prefixed, prefixed_paths).await;
+}
+
+async fn delete_task_files(
+    store: &Arc<dyn object_store::ObjectStore>,
+    paths: Vec<object_store::path::Path>,
+) {
+    let locations = futures::stream::iter(paths.into_iter().map(Ok));
+    let mut deletions = store.delete_stream(Box::pin(locations));
+    while let Some(result) = deletions.next().await {
+        match result {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
             Err(error) => {
-                log::warn!("Failed to remove uncommitted Iceberg task file {file_path}: {error}");
+                log::warn!("Failed to remove an uncommitted Iceberg task file: {error}");
             }
         }
     }
@@ -504,35 +524,26 @@ impl ExecutionPlan for IcebergCommitExec {
             let mut added_data_files: Vec<DataFile> = Vec::new();
             let mut added_delete_files: Vec<DataFile> = Vec::new();
             let mut commit_meta = None;
-            while let Some(batch_result) = data.next().await {
-                let batch = match batch_result {
-                    Ok(batch) => batch,
-                    Err(error) => {
-                        let paths = task_file_paths(&added_data_files, &added_delete_files);
-                        cleanup_uncommitted_task_files(&store_ctx, &paths).await;
-                        return Err(error);
+            let input_result: Result<()> = async {
+                while let Some(batch_result) = data.next().await {
+                    let batch = batch_result?;
+                    if batch.num_rows() == 0 {
+                        continue;
                     }
-                };
-                if batch.num_rows() == 0 {
-                    continue;
-                }
-                let (adds, deletes, meta) = match decode_actions_and_meta_from_batch(&batch) {
-                    Ok(decoded) => decoded,
-                    Err(error) => {
-                        let paths = task_file_paths(&added_data_files, &added_delete_files);
-                        cleanup_uncommitted_task_files(&store_ctx, &paths).await;
-                        return Err(error);
+                    let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
+                    added_data_files.extend(adds);
+                    added_delete_files.extend(deletes);
+                    if let Some(meta) = meta {
+                        Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
                     }
-                };
-                added_data_files.extend(adds);
-                added_delete_files.extend(deletes);
-                if let Some(meta) = meta
-                    && let Err(error) = Self::merge_writer_commit_meta(&mut commit_meta, meta)
-                {
-                    let paths = task_file_paths(&added_data_files, &added_delete_files);
-                    cleanup_uncommitted_task_files(&store_ctx, &paths).await;
-                    return Err(error);
                 }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = input_result {
+                let paths = task_file_paths(&added_data_files, &added_delete_files);
+                cleanup_uncommitted_task_files(&store_ctx, &paths).await;
+                return Err(error);
             }
 
             let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
@@ -774,7 +785,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 if maybe_snapshot.is_none() {
                     let mut catalog_fallback_table = catalog_metadata_update_table;
                     if let Some(catalog_table) = catalog_commit_table {
-                        let prepared_snapshot = bootstrap_snapshot_prepared_commit(
+                        let prepared_snapshot = prepare_bootstrap_snapshot(
                             &table_url,
                             &store_ctx,
                             &commit_info,
@@ -1081,62 +1092,51 @@ impl ExecutionPlan for IcebergCommitExec {
                             .unwrap_or_else(|| latest_meta.clone()),
                     });
 
-                let new_meta_json = match table_meta.to_json() {
-                    Ok(json) => json,
-                    Err(error) => {
-                        prepared_snapshot.cleanup().await;
-                        return Err(DataFusionError::External(Box::new(error)));
-                    }
-                };
-                let file_extension =
-                    match metadata_file_extension_from_properties(&table_meta.properties) {
-                        Ok(extension) => extension,
-                        Err(error) => {
-                            prepared_snapshot.cleanup().await;
-                            return Err(error);
-                        }
-                    };
                 let use_uuid_metadata_file = catalog_metadata_update_table.is_some();
-                let new_meta_rel = if use_uuid_metadata_file {
-                    format!(
-                        "metadata/{next_version:05}-{}{file_extension}",
-                        uuid::Uuid::new_v4()
-                    )
-                } else {
-                    format!("metadata/v{next_version}{file_extension}")
-                };
-                let new_metadata_location =
-                    match Self::table_metadata_location(&table_url, &new_meta_rel) {
-                        Ok(location) => location,
-                        Err(error) => {
-                            prepared_snapshot.cleanup().await;
-                            return Err(error);
-                        }
+                let encoded_metadata: Result<(String, String, Vec<u8>)> = (|| {
+                    let metadata_json = table_meta
+                        .to_json()
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    let file_extension =
+                        metadata_file_extension_from_properties(&table_meta.properties)?;
+                    let metadata_file = if use_uuid_metadata_file {
+                        format!(
+                            "metadata/{next_version:05}-{}{file_extension}",
+                            uuid::Uuid::new_v4()
+                        )
+                    } else {
+                        format!("metadata/v{next_version}{file_extension}")
                     };
-                let new_meta_bytes = match encode_metadata_file(&new_meta_rel, &new_meta_json) {
-                    Ok(bytes) => bytes,
+                    let metadata_location =
+                        Self::table_metadata_location(&table_url, &metadata_file)?;
+                    let metadata_bytes = encode_metadata_file(&metadata_file, &metadata_json)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    Ok((metadata_file, metadata_location, metadata_bytes))
+                })();
+                let (metadata_file, metadata_location, metadata_bytes) = match encoded_metadata {
+                    Ok(encoded_metadata) => encoded_metadata,
                     Err(error) => {
                         prepared_snapshot.cleanup().await;
-                        return Err(DataFusionError::External(Box::new(error)));
+                        return Err(error);
                     }
                 };
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    new_meta_rel,
+                    metadata_file,
                     table_meta.current_snapshot_id,
                     table_url
                 );
 
-                let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+                let metadata_path = object_store::path::Path::from(metadata_file.as_str());
                 let put_opts = object_store::PutOptions {
                     mode: object_store::PutMode::Create,
                     ..Default::default()
                 };
-                let payload = object_store::PutPayload::from(Bytes::from(new_meta_bytes));
+                let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes));
                 match store_ctx
                     .prefixed
-                    .put_opts(&new_meta_path, payload, put_opts)
+                    .put_opts(&metadata_path, payload, put_opts)
                     .await
                 {
                     Ok(_) => {
@@ -1145,7 +1145,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     Err(object_store::Error::AlreadyExists { .. }) => {
                         log::warn!(
                             "Metadata file {} already exists for version {}. Retrying attempt {}",
-                            new_meta_rel,
+                            metadata_file,
                             next_version,
                             attempt
                         );
@@ -1161,7 +1161,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
                 let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
-                let conflict_after_write = version_files.iter().any(|path| path != &new_meta_rel);
+                let conflict_after_write = version_files.iter().any(|path| path != &metadata_file);
                 if conflict_after_write {
                     log::warn!(
                         "Concurrent metadata writes detected for version {}: {:?}. Retrying attempt {}",
@@ -1169,14 +1169,14 @@ impl ExecutionPlan for IcebergCommitExec {
                         version_files,
                         attempt
                     );
-                    match store_ctx.prefixed.delete(&new_meta_path).await {
+                    match store_ctx.prefixed.delete(&metadata_path).await {
                         Ok(()) | Err(object_store::Error::NotFound { .. }) => {
                             task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                         }
                         Err(error) => {
                             return Err(DataFusionError::Execution(format!(
-                                "failed to remove conflicted Iceberg metadata file {new_meta_rel}; commit state is uncertain: {error}"
+                                "failed to remove conflicted Iceberg metadata file {metadata_file}; commit state is uncertain: {error}"
                             )));
                         }
                     }
@@ -1188,22 +1188,16 @@ impl ExecutionPlan for IcebergCommitExec {
                 log::trace!("Metadata written successfully");
                 drop(prepared_snapshot);
 
-                let hint = if use_uuid_metadata_file {
-                    new_meta_rel
+                let version_hint = if use_uuid_metadata_file {
+                    metadata_file
                         .rsplit('/')
                         .next()
-                        .unwrap_or(new_meta_rel.as_str())
+                        .unwrap_or(metadata_file.as_str())
                         .to_string()
                 } else {
                     next_version.to_string()
                 };
-                let hint_bytes = Bytes::from(hint.into_bytes());
-                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-                store_ctx
-                    .prefixed
-                    .put(&hint_path, object_store::PutPayload::from(hint_bytes))
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                write_version_hint(&store_ctx.prefixed, &version_hint).await;
 
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     Self::update_catalog_metadata_location(
@@ -1211,7 +1205,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_metadata_location.as_deref(),
-                        &new_metadata_location,
+                        &metadata_location,
                     )
                     .await?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
@@ -1220,7 +1214,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_recorded_metadata_location.as_deref(),
-                        &new_metadata_location,
+                        &metadata_location,
                     )
                     .await?;
                 }
@@ -1294,7 +1288,7 @@ mod tests {
 
     #[derive(Debug)]
     struct ConcurrentMetadataStore {
-        inner: Arc<object_store::memory::InMemory>,
+        memory_store: Arc<object_store::memory::InMemory>,
         concurrent_metadata: Bytes,
         conflict_injected: AtomicBool,
     }
@@ -1316,11 +1310,11 @@ mod tests {
             if location.as_ref().ends_with("metadata/v2.metadata.json")
                 && !self.conflict_injected.swap(true, Ordering::SeqCst)
             {
-                self.inner
+                self.memory_store
                     .put(location, PutPayload::from(self.concurrent_metadata.clone()))
                     .await?;
             }
-            self.inner.put_opts(location, payload, opts).await
+            self.memory_store.put_opts(location, payload, opts).await
         }
 
         async fn put_multipart_opts(
@@ -1328,7 +1322,7 @@ mod tests {
             location: &Path,
             opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart_opts(location, opts).await
+            self.memory_store.put_multipart_opts(location, opts).await
         }
 
         async fn get_opts(
@@ -1336,7 +1330,7 @@ mod tests {
             location: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
-            self.inner.get_opts(location, options).await
+            self.memory_store.get_opts(location, options).await
         }
 
         async fn get_ranges(
@@ -1344,28 +1338,28 @@ mod tests {
             location: &Path,
             ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
-            self.inner.get_ranges(location, ranges).await
+            self.memory_store.get_ranges(location, ranges).await
         }
 
         fn delete_stream(
             &self,
             locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
-            self.inner.delete_stream(locations)
+            self.memory_store.delete_stream(locations)
         }
 
         fn list(
             &self,
             prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list(prefix)
+            self.memory_store.list(prefix)
         }
 
         async fn list_with_delimiter(
             &self,
             prefix: Option<&Path>,
         ) -> object_store::Result<ListResult> {
-            self.inner.list_with_delimiter(prefix).await
+            self.memory_store.list_with_delimiter(prefix).await
         }
 
         async fn copy_opts(
@@ -1374,7 +1368,7 @@ mod tests {
             to: &Path,
             options: CopyOptions,
         ) -> object_store::Result<()> {
-            self.inner.copy_opts(from, to, options).await
+            self.memory_store.copy_opts(from, to, options).await
         }
     }
 
@@ -1627,7 +1621,7 @@ mod tests {
             let commit =
                 IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::FastAppend);
             let conflict_store = Arc::new(ConcurrentMetadataStore {
-                inner: Arc::clone(&memory),
+                memory_store: Arc::clone(&memory),
                 concurrent_metadata: metadata_bytes,
                 conflict_injected: AtomicBool::new(false),
             });

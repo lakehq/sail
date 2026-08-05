@@ -3590,6 +3590,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             "failed to decode Iceberg partition transform: {error}"
                         )
                     })?;
+                if transform == IcebergTransform::Unknown {
+                    return plan_err!(
+                        "unsupported Iceberg partition transform: {}",
+                        node.transform
+                    );
+                }
                 Ok(Arc::new(IcebergPartitionTransformExpr::new(
                     Arc::clone(&inputs[0]),
                     transform,
@@ -3620,6 +3626,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
         } else if let Some(transform) = node.downcast_ref::<IcebergPartitionTransformExpr>() {
+            if transform.transform() == IcebergTransform::Unknown {
+                return plan_err!("cannot encode unknown Iceberg partition transform");
+            }
             ExprKind::IcebergPartitionTransform(IcebergPartitionTransformExprNode {
                 transform: transform.transform().to_string(),
             })
@@ -5043,6 +5052,38 @@ mod tests {
                 None,
             ]))],
         )
+    }
+
+    #[test]
+    fn test_reject_unknown_iceberg_partition_transform_expr() -> Result<()> {
+        let node = ExtendedPhysicalExprNode {
+            expr_kind: Some(ExprKind::IcebergPartitionTransform(
+                IcebergPartitionTransformExprNode {
+                    transform: "future-transform".to_string(),
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        node.encode(&mut buf)
+            .map_err(|error| plan_datafusion_err!("failed to encode test expression: {error}"))?;
+        let input = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+
+        assert!(
+            RemoteExecutionCodec
+                .try_decode_expr(&buf, &[input])
+                .is_err()
+        );
+
+        let unknown = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("value", 0)),
+            IcebergTransform::Unknown,
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(
+            RemoteExecutionCodec
+                .try_encode_expr(&unknown, &mut Vec::new())
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

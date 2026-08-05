@@ -472,9 +472,13 @@ Feature: Iceberg MERGE
         ON t.id = s.id
         WHEN MATCHED THEN DELETE
         """
-      Then iceberg current manifest list matches snapshot
-      Then iceberg current snapshot summary matches snapshot
+      Then iceberg snapshot operation is delete
       Then iceberg snapshot count is 4
+      Then iceberg metadata contains
+        | path                                        | value |
+        | snapshots[3].summary.added-position-deletes | "3"   |
+        | snapshots[3].summary.total-position-deletes | "3"   |
+        | snapshots[3].summary.total-data-files       | "3"   |
       When query
         """
         SELECT COUNT(*) AS remaining FROM merge_many_files_plan_table

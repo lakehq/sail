@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use futures::StreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
@@ -360,11 +361,14 @@ impl PreparedSnapshotCommit {
 }
 
 async fn cleanup_created_paths(store_ctx: &StoreContext, paths: &[ObjectPath]) {
-    for path in paths.iter().rev() {
-        match store_ctx.prefixed.delete(path).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+    let paths = paths.iter().rev().cloned().collect::<Vec<_>>();
+    let locations = futures::stream::iter(paths.into_iter().map(Ok));
+    let mut deletions = store_ctx.prefixed.delete_stream(Box::pin(locations));
+    while let Some(result) = deletions.next().await {
+        match result {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
             Err(error) => {
-                log::warn!("Failed to remove uncommitted Iceberg object {path}: {error}");
+                log::warn!("Failed to remove an uncommitted Iceberg object: {error}");
             }
         }
     }
@@ -837,18 +841,18 @@ mod tests {
     use crate::spec::{DataContentType, DataFileFormat, Transform};
 
     #[derive(Debug)]
-    struct FailManifestListStore {
-        inner: Arc<object_store::memory::InMemory>,
+    struct ManifestListRejectingStore {
+        memory_store: Arc<object_store::memory::InMemory>,
     }
 
-    impl std::fmt::Display for FailManifestListStore {
+    impl std::fmt::Display for ManifestListRejectingStore {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "FailManifestListStore")
+            write!(f, "ManifestListRejectingStore")
         }
     }
 
     #[async_trait::async_trait]
-    impl ObjectStore for FailManifestListStore {
+    impl ObjectStore for ManifestListRejectingStore {
         async fn put_opts(
             &self,
             location: &Path,
@@ -861,7 +865,7 @@ mod tests {
                     source: Box::new(std::io::Error::other("injected manifest-list failure")),
                 });
             }
-            self.inner.put_opts(location, payload, opts).await
+            self.memory_store.put_opts(location, payload, opts).await
         }
 
         async fn put_multipart_opts(
@@ -869,7 +873,7 @@ mod tests {
             location: &Path,
             opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart_opts(location, opts).await
+            self.memory_store.put_multipart_opts(location, opts).await
         }
 
         async fn get_opts(
@@ -877,7 +881,7 @@ mod tests {
             location: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
-            self.inner.get_opts(location, options).await
+            self.memory_store.get_opts(location, options).await
         }
 
         async fn get_ranges(
@@ -885,28 +889,28 @@ mod tests {
             location: &Path,
             ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
-            self.inner.get_ranges(location, ranges).await
+            self.memory_store.get_ranges(location, ranges).await
         }
 
         fn delete_stream(
             &self,
             locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
-            self.inner.delete_stream(locations)
+            self.memory_store.delete_stream(locations)
         }
 
         fn list(
             &self,
             prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list(prefix)
+            self.memory_store.list(prefix)
         }
 
         async fn list_with_delimiter(
             &self,
             prefix: Option<&Path>,
         ) -> object_store::Result<ListResult> {
-            self.inner.list_with_delimiter(prefix).await
+            self.memory_store.list_with_delimiter(prefix).await
         }
 
         async fn copy_opts(
@@ -915,7 +919,7 @@ mod tests {
             to: &Path,
             options: CopyOptions,
         ) -> object_store::Result<()> {
-            self.inner.copy_opts(from, to, options).await
+            self.memory_store.copy_opts(from, to, options).await
         }
     }
 
@@ -1167,9 +1171,9 @@ mod tests {
         futures::executor::block_on(async {
             let table_url =
                 url::Url::parse("file:///tmp/iceberg-manifest-cleanup/").expect("table URL");
-            let inner = Arc::new(object_store::memory::InMemory::new());
-            let store: Arc<dyn ObjectStore> = Arc::new(FailManifestListStore {
-                inner: Arc::clone(&inner),
+            let memory_store = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = Arc::new(ManifestListRejectingStore {
+                memory_store: Arc::clone(&memory_store),
             });
             let store_ctx = StoreContext::new(store, &table_url).expect("store context");
             let schema = Schema::builder().build().expect("schema");
@@ -1207,7 +1211,7 @@ mod tests {
             .expect("manifest-list write must fail");
             assert!(error.contains("injected manifest-list failure"));
 
-            let remaining_paths = inner
+            let remaining_paths = memory_store
                 .list(None)
                 .map_ok(|metadata| metadata.location.to_string())
                 .try_collect::<Vec<_>>()
@@ -1225,8 +1229,8 @@ mod tests {
         futures::executor::block_on(async {
             let table_url =
                 url::Url::parse("file:///tmp/iceberg-prepared-cleanup/").expect("table URL");
-            let inner = Arc::new(object_store::memory::InMemory::new());
-            let store: Arc<dyn ObjectStore> = inner.clone();
+            let memory_store = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = memory_store.clone();
             let store_ctx = StoreContext::new(store, &table_url).expect("store context");
             let schema = Schema::builder().build().expect("schema");
             let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
@@ -1249,7 +1253,7 @@ mod tests {
             data_file.content = DataContentType::Data;
             data_file.referenced_data_file = None;
 
-            let prepared = SnapshotProducer::new(
+            let prepared_snapshot = SnapshotProducer::new(
                 &transaction,
                 vec![data_file],
                 Some(store_ctx),
@@ -1261,7 +1265,7 @@ mod tests {
             .await
             .expect("prepare snapshot");
             assert!(
-                inner
+                memory_store
                     .list(None)
                     .try_next()
                     .await
@@ -1269,10 +1273,10 @@ mod tests {
                     .is_some()
             );
 
-            prepared.cleanup().await;
+            prepared_snapshot.cleanup().await;
 
             assert!(
-                inner
+                memory_store
                     .list(None)
                     .try_next()
                     .await

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit};
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, JoinType, ScalarValue, TableReference};
 use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
@@ -663,27 +663,8 @@ impl PlanResolver<'_> {
             let Some(default) = ColumnFeatures::from_field(field).current_default() else {
                 continue;
             };
-            let ast_expr =
-                sail_sql_analyzer::parser::parse_expression(&default).map_err(|error| {
-                    PlanError::invalid(format!(
-                        "failed to parse default expression `{default}`: {error}"
-                    ))
-                })?;
-            let spec_expr =
-                sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|error| {
-                    PlanError::invalid(format!(
-                        "failed to analyze default expression `{default}`: {error}"
-                    ))
-                })?;
-            let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
-                spec::Expr::Literal(spec::Literal::Utf8 {
-                    value: Some(default),
-                })
-            } else {
-                spec_expr
-            };
             let resolved = self
-                .resolve_expression(spec_expr, &empty_schema, state)
+                .resolve_column_default_expression(&default, &empty_schema, state)
                 .await?;
             defaults.push((target_name.clone(), resolved));
         }
@@ -773,7 +754,7 @@ impl PlanResolver<'_> {
         if !Self::expr_contains_default_column_value(value)? {
             return Ok(None);
         }
-        if !Self::is_standalone_default_column_value_expr(value) {
+        if !Self::is_default_column_value_expr(value) {
             return Err(PlanError::invalid(
                 "DEFAULT must be a standalone MERGE assignment value",
             ));
@@ -790,6 +771,13 @@ impl PlanResolver<'_> {
         let target_field = target_schema.fields().get(target_index).ok_or_else(|| {
             PlanError::invalid("MERGE target field is missing during DEFAULT resolution")
         })?;
+        if !target_field.is_nullable()
+            || ColumnFeatures::from_field(target_field).is_not_null_constraint()
+        {
+            return Err(PlanError::AnalysisError(format!(
+                "[NO_DEFAULT_COLUMN_VALUE_AVAILABLE] Can't determine the default value for `{target_name}` since it is not nullable and it has no default value."
+            )));
+        }
         Ok(Some(lit(ScalarValue::try_from(target_field.data_type())?)))
     }
 
@@ -1169,10 +1157,8 @@ fn strict_store_assignment_compatible(write_type: &DataType, target_type: &DataT
         || (is_timestamp_type(write_type) && is_timestamp_type(target_type))
         || (is_atomic_type(write_type) && is_string_type(target_type))
         || (is_interval_type(write_type) && is_string_type(target_type))
-        || (matches!(write_type, DataType::Timestamp(_, _))
-            && matches!(target_type, DataType::Int64))
-        || (matches!(write_type, DataType::Int64)
-            && matches!(target_type, DataType::Timestamp(_, _)))
+        || (is_timestamp_ltz_type(write_type) && matches!(target_type, DataType::Int64))
+        || (matches!(write_type, DataType::Int64) && is_timestamp_ltz_type(target_type))
         || interval_family_matches(write_type, target_type)
 }
 
@@ -1214,6 +1200,13 @@ fn is_date_type(data_type: &DataType) -> bool {
 
 fn is_timestamp_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Timestamp(_, _))
+}
+
+fn is_timestamp_ltz_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_))
+    )
 }
 
 fn is_interval_type(data_type: &DataType) -> bool {
@@ -1316,17 +1309,16 @@ fn legal_numeric_precedence(write_type: &DataType, target_type: &DataType) -> bo
 }
 
 fn interval_family_matches(write_type: &DataType, target_type: &DataType) -> bool {
-    match (write_type, target_type) {
+    matches!(
+        (write_type, target_type),
         (
             DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => true,
-        (
+            DataType::Interval(IntervalUnit::YearMonth)
+        ) | (
             DataType::Interval(IntervalUnit::DayTime | IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::DayTime | IntervalUnit::MonthDayNano),
-        ) => true,
-        _ => false,
-    }
+            DataType::Interval(IntervalUnit::DayTime | IntervalUnit::MonthDayNano)
+        )
+    )
 }
 
 fn validate_merge_condition(condition: &Expr) -> PlanResult<()> {

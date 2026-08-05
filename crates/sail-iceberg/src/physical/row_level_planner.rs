@@ -77,7 +77,7 @@ async fn plan_iceberg_merge(
 
     Ok(Arc::new(
         IcebergCommitExec::new(
-            Arc::new(CoalescePartitionsExec::new(writer)),
+            writer,
             table_url,
             writer_options.lakehouse_table.clone(),
             SnapshotUpdateKind::RowDelta,
