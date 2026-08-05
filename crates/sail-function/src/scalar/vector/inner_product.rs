@@ -147,7 +147,9 @@ mod tests {
             Some(2.0),
         ])]);
 
-        let error = compute_inner_product(&left, &right).unwrap_err();
-        assert!(error.to_string().contains("matching dimensions"));
+        assert!(matches!(
+            compute_inner_product(&left, &right),
+            Err(error) if error.to_string().contains("matching dimensions")
+        ));
     }
 }
