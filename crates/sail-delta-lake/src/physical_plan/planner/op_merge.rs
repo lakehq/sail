@@ -200,11 +200,6 @@ pub async fn build_merge_plan_mor(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if merge_has_update_actions(&merge_info) {
-        return not_impl_err!(
-            "Merge-on-Read strategy for MERGE UPDATE clauses is not yet implemented for Delta Lake"
-        );
-    }
     if merge_has_delete_actions(&merge_info) && merge_info.deletion_vector_plan.is_none() {
         return internal_err!(
             "Merge-on-Read MERGE DELETE clauses require file-local row-index metadata"
@@ -239,12 +234,7 @@ pub async fn build_merge_plan_mor(
     let deletion_vector_plan = merge_info.deletion_vector_plan.clone();
     let touched_plan_opt = merge_info.touched_file_plan.clone();
 
-    let writer_input = if deletion_vector_plan.is_some() {
-        build_insert_rows_input(&expanded)?
-    } else {
-        Arc::clone(&expanded)
-    };
-    let writer_input = strip_internal_columns(writer_input)?;
+    let writer_input = strip_internal_columns(expanded)?;
     let writer_schema = writer_input.schema();
     let write_context = prepare_delta_write_context(
         ctx.table_url(),
@@ -445,27 +435,6 @@ fn build_targeted_writer_input(
     UnionExec::try_new(vec![insert_rows, touched_rows])
 }
 
-/// Build MERGE MoR writer input for source-only INSERT rows.
-fn build_insert_rows_input(expanded: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    let projected_schema = expanded.schema();
-    if projected_schema.column_with_name(PATH_COLUMN).is_none() {
-        return internal_err!(
-            "MERGE writer input is missing required column '{PATH_COLUMN}' for insert filtering"
-        );
-    }
-
-    let path_idx = projected_schema
-        .index_of(PATH_COLUMN)
-        .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
-    let insert_pred: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(IsNullExpr::new(
-        Arc::new(Column::new(PATH_COLUMN, path_idx)),
-    ));
-    Ok(Arc::new(FilterExec::try_new(
-        insert_pred,
-        Arc::clone(expanded),
-    )?))
-}
-
 /// Strip internal merge metadata columns already consumed by the physical planner.
 fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
@@ -519,22 +488,6 @@ fn build_merge_operation(info: &RowLevelWriteInfo) -> Option<DeltaOperation> {
         not_matched_predicates: to_kernel_preds(not_matched_predicates),
         not_matched_by_source_predicates: to_kernel_preds(not_matched_by_source_predicates),
     })
-}
-
-fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(OperationOverride::Merge {
-        matched_predicates,
-        not_matched_by_source_predicates,
-        ..
-    }) = info.operation_override.as_ref()
-    else {
-        return false;
-    };
-
-    matched_predicates
-        .iter()
-        .chain(not_matched_by_source_predicates)
-        .any(|p| p.action_type.eq_ignore_ascii_case("update"))
 }
 
 fn merge_has_delete_actions(info: &RowLevelWriteInfo) -> bool {
