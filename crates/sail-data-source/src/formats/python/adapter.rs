@@ -1,7 +1,7 @@
-/// TableFormat implementation for Python data sources.
+/// DataSource implementation for Python data sources.
 ///
 /// This enables Python data sources to be used with `spark.read.format("name")` syntax
-/// by integrating with the TableFormatRegistry.
+/// by integrating with the SourceRegistry.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
+    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, SourceRegistry,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -25,24 +25,24 @@ use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
 
-/// TableFormat implementation for a Python data source.
+/// DataSource implementation for a Python data source.
 ///
-/// Each registered Python datasource gets its own PythonTableFormat instance,
+/// Each registered Python datasource gets its own PythonDataSourceAdapter instance,
 /// keyed by the datasource name.
 ///
 /// For session-registered data sources, the pickled class bytes are embedded directly
-/// in the format instance. For entry-point discovered data sources, the bytes are
+/// in the adapter instance. For entry-point discovered data sources, the bytes are
 /// looked up from the global registry.
 #[derive(Debug)]
-pub struct PythonTableFormat {
+pub struct PythonDataSourceAdapter {
     /// The name of the Python datasource
     name: String,
     /// Pickled datasource class bytes (None = lookup from global registry)
     pickled_class: Option<Vec<u8>>,
 }
 
-impl PythonTableFormat {
-    /// Create a new PythonTableFormat for an entry-point discovered datasource.
+impl PythonDataSourceAdapter {
+    /// Create a new adapter for an entry-point discovered datasource.
     ///
     /// The pickled class will be looked up from the global `DATA_SOURCE_REGISTRY`.
     pub fn new(name: String) -> Self {
@@ -52,10 +52,10 @@ impl PythonTableFormat {
         }
     }
 
-    /// Create a PythonTableFormat with embedded pickled class bytes.
+    /// Create an adapter with embedded pickled class bytes.
     ///
     /// Used for session-registered data sources where the pickled bytes are stored
-    /// directly in the format instance for session isolation.
+    /// directly in the adapter instance for session isolation.
     pub fn with_pickled_class(name: String, pickled_class: Vec<u8>) -> Self {
         Self {
             name,
@@ -63,14 +63,13 @@ impl PythonTableFormat {
         }
     }
 
-    /// Register all discovered Python data sources with the TableFormatRegistry.
+    /// Register all discovered Python data sources with the SourceRegistry.
     ///
     /// This should be called during session initialization after calling
     /// `discover_data_sources()`.
-    pub fn register_all(registry: &TableFormatRegistry) -> Result<()> {
+    pub fn register_all(registry: &SourceRegistry) -> Result<()> {
         for name in DATA_SOURCE_REGISTRY.list() {
-            let format = Arc::new(Self::new(name));
-            registry.register(format)?;
+            registry.register_data_source(Arc::new(Self::new(name)))?;
         }
         Ok(())
     }
@@ -170,7 +169,7 @@ impl PythonTableFormat {
 use super::error::{import_cloudpickle, py_err};
 
 #[async_trait]
-impl TableFormat for PythonTableFormat {
+impl DataSource for PythonDataSourceAdapter {
     fn name(&self) -> &str {
         &self.name
     }
@@ -332,11 +331,11 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
-        let table_format = PythonTableFormat {
+        let adapter = PythonDataSourceAdapter {
             name: node.name.clone(),
             pickled_class: node.pickled_class.clone(),
         };
-        let datasource = table_format.create_datasource(&opaque_options)?;
+        let datasource = adapter.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();
@@ -367,8 +366,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_python_table_format_name() {
-        let format = PythonTableFormat::new("test_datasource".to_string());
-        assert_eq!(format.name(), "test_datasource");
+    fn test_python_data_source_adapter_name() {
+        let source = PythonDataSourceAdapter::new("test_datasource".to_string());
+        assert_eq!(source.name(), "test_datasource");
     }
 }

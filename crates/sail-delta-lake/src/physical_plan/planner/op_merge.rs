@@ -57,34 +57,60 @@ pub struct MergePredicateInfo {
     pub predicate: Option<String>,
 }
 
-/// Override metadata for Delta row-level operation commit logs.
+/// Delta commit metadata for a MERGE operation.
 #[derive(Debug, Clone)]
-pub enum OperationOverride {
-    Merge {
-        predicate: Option<String>,
-        merge_predicate: Option<String>,
-        matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
-    },
+pub struct MergeCommitInfo {
+    pub predicate: Option<String>,
+    pub merge_predicate: Option<String>,
+    pub matched_predicates: Vec<MergePredicateInfo>,
+    pub not_matched_predicates: Vec<MergePredicateInfo>,
+    pub not_matched_by_source_predicates: Vec<MergePredicateInfo>,
+}
+
+/// Format-level operation metadata consumed by Delta row-level planning.
+#[derive(Debug, Clone)]
+pub enum DeltaRowLevelOperation {
+    Delete { condition: Option<ExprWithSource> },
+    Update { condition: Option<ExprWithSource> },
+    Merge(MergeCommitInfo),
+}
+
+impl DeltaRowLevelOperation {
+    pub fn command(&self) -> RowLevelCommand {
+        match self {
+            Self::Delete { .. } => RowLevelCommand::Delete,
+            Self::Update { .. } => RowLevelCommand::Update,
+            Self::Merge(_) => RowLevelCommand::Merge,
+        }
+    }
+
+    pub fn condition(&self) -> Option<&ExprWithSource> {
+        match self {
+            Self::Delete { condition } | Self::Update { condition } => condition.as_ref(),
+            Self::Merge(_) => None,
+        }
+    }
+
+    fn merge(&self) -> Option<&MergeCommitInfo> {
+        match self {
+            Self::Merge(info) => Some(info),
+            Self::Delete { .. } | Self::Update { .. } => None,
+        }
+    }
 }
 
 /// Unified information for Delta row-level write operations (DELETE, UPDATE, MERGE).
 #[derive(Debug, Clone)]
 pub struct RowLevelWriteInfo {
-    pub command: RowLevelCommand,
+    pub operation: DeltaRowLevelOperation,
     pub target: RowLevelTargetInfo,
-    /// Condition for DELETE/UPDATE. `None` for MERGE.
-    pub condition: Option<ExprWithSource>,
-    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
-    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
+    /// Pre-expanded physical plan containing row actions and output values.
+    pub expanded_input: Arc<dyn ExecutionPlan>,
+    /// Physical plan that yields touched file paths for targeted rewrites.
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
     pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
-    /// Override for commit operation metadata.
-    pub operation_override: Option<OperationOverride>,
 }
 
 // TODO: MERGE schema evolution end-to-end
@@ -94,17 +120,23 @@ pub struct RowLevelWriteInfo {
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
 ///
-/// Operation/metric columns are intentionally preserved for DeltaWriterExec so it
-/// can populate MERGE operationMetrics before dropping them from Parquet output.
-/// TODO: Share this internal-column boundary with future row-level writers so
-/// each sink can consume row intent before stripping Sail metadata.
-const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
+/// Action and metric columns remain available to `DeltaWriterExec` until it has
+/// routed rows and recorded operation metrics.
+const INTERNAL_ROW_LEVEL_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded during Delta logical MERGE planning and passed down as pre-expanded plans.
 pub async fn build_merge_plan(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    build_row_level_rewrite_plan(ctx, merge_info).await
+}
+
+/// Copy-on-Write assembly for operations with pre-expanded row and touched-file plans.
+pub(crate) async fn build_row_level_rewrite_plan(
+    ctx: &PlannerContext<'_>,
+    row_level_info: RowLevelWriteInfo,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
     let snapshot_state = table
@@ -118,17 +150,15 @@ pub async fn build_merge_plan(
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
     let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
-    if merge_info.with_schema_evolution {
+    if row_level_info.with_schema_evolution {
         options.merge_schema = true;
     }
 
-    let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
-        DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
-    })?;
+    let expanded = Arc::clone(&row_level_info.expanded_input);
+    let keeps_pathless_rows = matches!(&row_level_info.operation, DeltaRowLevelOperation::Merge(_));
+    let operation = Some(build_row_level_operation(&row_level_info.operation));
 
-    let merge_operation = build_merge_operation(&merge_info);
-
-    let touched_plan_opt = merge_info.touched_file_plan.clone();
+    let touched_plan_opt = row_level_info.touched_file_plan.clone();
 
     // Targeted rewrite: if we have a touched file plan, restrict the writer input to:
     // - rows from touched files (post-merge)
@@ -136,7 +166,7 @@ pub async fn build_merge_plan(
     //
     // Untouched files remain as-is (not removed, not rewritten).
     let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
-        build_targeted_writer_input(&expanded, touched_plan)?
+        build_targeted_writer_input(&expanded, touched_plan, keeps_pathless_rows)?
     } else {
         Arc::clone(&expanded)
     };
@@ -172,7 +202,7 @@ pub async fn build_merge_plan(
         &PhysicalSinkMode::Append,
         true,
         &writer_input.schema(),
-        merge_operation.clone(),
+        operation.clone(),
     )?;
 
     assemble_commit_plan(
@@ -231,10 +261,12 @@ pub async fn build_merge_plan_mor(
         options.merge_schema = true;
     }
 
-    let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
-        DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
-    })?;
-    let merge_operation = build_merge_operation(&merge_info);
+    let expanded = Arc::clone(&merge_info.expanded_input);
+    let merge_operation = Some(build_merge_operation(
+        merge_info.operation.merge().ok_or_else(|| {
+            DataFusionError::Internal("MERGE planner received a non-MERGE operation".to_string())
+        })?,
+    ));
 
     let deletion_vector_plan = merge_info.deletion_vector_plan.clone();
     let touched_plan_opt = merge_info.touched_file_plan.clone();
@@ -305,7 +337,7 @@ pub async fn build_merge_plan_mor(
                     touched_adds,
                     ctx.table_url().clone(),
                     PATH_COLUMN,
-                    sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
+                    sail_common_datafusion::datasource::ROW_LEVEL_ROW_INDEX_COLUMN,
                     version,
                     Some(snapshot_state.physical_partition_columns()),
                     merge_operation,
@@ -368,23 +400,23 @@ fn sort_by_column_preserving_partitioning(
     ))
 }
 
-/// Build targeted writer input for Copy-on-Write MERGE.
+/// Build targeted writer input for a Copy-on-Write row-level operation.
 ///
-/// Filters the expanded plan to include only:
-/// - Insert rows (path is NULL) — new rows not in any existing file
-/// - Touched rows (inner join with touched files) — rows from files being rewritten
+/// The result contains rows from touched files and, when requested, pathless
+/// insert or metric rows.
 fn build_targeted_writer_input(
     expanded: &Arc<dyn ExecutionPlan>,
     touched_plan: &Arc<dyn ExecutionPlan>,
+    keeps_pathless_rows: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Physical plans can hold runtime state after execution. MERGE branches this subtree,
-    // so each consumer needs its own reset copy rather than sharing a multi-parent DAG.
+    // Physical plans can hold runtime state after execution. Each consumer needs
+    // its own reset copy rather than sharing a multi-parent DAG.
     let projected_for_touched = reset_plan_states(Arc::clone(expanded))?;
     let touched_plan_for_writer = reset_plan_states(Arc::clone(touched_plan))?;
     let projected_schema = expanded.schema();
     if projected_schema.column_with_name(PATH_COLUMN).is_none() {
         return internal_err!(
-            "MERGE writer input is missing required column '{PATH_COLUMN}' for targeted rewrite"
+            "row-level writer input is missing required column '{PATH_COLUMN}' for targeted rewrite"
         );
     }
     if touched_plan
@@ -392,18 +424,14 @@ fn build_targeted_writer_input(
         .column_with_name(PATH_COLUMN)
         .is_none()
     {
-        return internal_err!("MERGE touched file plan is missing required column '{PATH_COLUMN}'");
+        return internal_err!(
+            "row-level touched file plan is missing required column '{PATH_COLUMN}'"
+        );
     }
 
-    // Insert rows: path is NULL.
     let path_idx = projected_schema
         .index_of(PATH_COLUMN)
         .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
-    let insert_pred: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(IsNullExpr::new(
-        Arc::new(Column::new(PATH_COLUMN, path_idx)),
-    ));
-    let insert_rows: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(insert_pred, Arc::clone(expanded))?);
 
     // Touched rows: inner join touched_paths (small, collected) with writer input (big).
     let touched_schema = touched_plan.schema();
@@ -442,7 +470,16 @@ fn build_targeted_writer_input(
         .collect::<Vec<_>>();
     let touched_rows: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
-    UnionExec::try_new(vec![insert_rows, touched_rows])
+    if keeps_pathless_rows {
+        let insert_pred: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+            IsNullExpr::new(Arc::new(Column::new(PATH_COLUMN, path_idx))),
+        );
+        let insert_rows: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(insert_pred, Arc::clone(expanded))?);
+        UnionExec::try_new(vec![insert_rows, touched_rows])
+    } else {
+        Ok(touched_rows)
+    }
 }
 
 /// Build MERGE MoR writer input for source-only INSERT rows.
@@ -466,10 +503,10 @@ fn build_insert_rows_input(expanded: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
     )?))
 }
 
-/// Strip internal merge metadata columns already consumed by the physical planner.
+/// Strip row-level metadata columns already consumed by the physical planner.
 fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
-    let has_internal = INTERNAL_MERGE_COLUMNS
+    let has_internal = INTERNAL_ROW_LEVEL_COLUMNS
         .iter()
         .any(|col| schema.column_with_name(col).is_some());
     if has_internal {
@@ -477,7 +514,7 @@ fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Execu
             .fields()
             .iter()
             .enumerate()
-            .filter(|(_, f)| !INTERNAL_MERGE_COLUMNS.contains(&f.name().as_str()))
+            .filter(|(_, f)| !INTERNAL_ROW_LEVEL_COLUMNS.contains(&f.name().as_str()))
             .map(|(i, f)| {
                 (
                     Arc::new(Column::new(f.name(), i))
@@ -492,63 +529,60 @@ fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Execu
     }
 }
 
-/// Convert `OperationOverride` to `DeltaOperation::Merge`.
-fn build_merge_operation(info: &RowLevelWriteInfo) -> Option<DeltaOperation> {
-    let OperationOverride::Merge {
-        predicate,
-        merge_predicate,
-        matched_predicates,
-        not_matched_predicates,
-        not_matched_by_source_predicates,
-    } = info.operation_override.as_ref()?;
+fn build_row_level_operation(operation: &DeltaRowLevelOperation) -> DeltaOperation {
+    match operation {
+        DeltaRowLevelOperation::Delete { condition } => DeltaOperation::Delete {
+            predicate: condition
+                .as_ref()
+                .and_then(|condition| condition.source.clone()),
+        },
+        DeltaRowLevelOperation::Update { condition } => DeltaOperation::Update {
+            predicate: condition
+                .as_ref()
+                .and_then(|condition| condition.source.clone()),
+        },
+        DeltaRowLevelOperation::Merge(info) => build_merge_operation(info),
+    }
+}
 
-    let to_kernel_preds = |preds: &[MergePredicateInfo]| -> Vec<MergePredicate> {
-        preds
+fn build_merge_operation(info: &MergeCommitInfo) -> DeltaOperation {
+    let to_kernel_preds = |predicates: &[MergePredicateInfo]| -> Vec<MergePredicate> {
+        predicates
             .iter()
-            .map(|p| MergePredicate {
-                action_type: p.action_type.clone(),
-                predicate: p.predicate.clone(),
+            .map(|predicate| MergePredicate {
+                action_type: predicate.action_type.clone(),
+                predicate: predicate.predicate.clone(),
             })
             .collect()
     };
 
-    Some(DeltaOperation::Merge {
-        predicate: predicate.clone(),
-        merge_predicate: merge_predicate.clone(),
-        matched_predicates: to_kernel_preds(matched_predicates),
-        not_matched_predicates: to_kernel_preds(not_matched_predicates),
-        not_matched_by_source_predicates: to_kernel_preds(not_matched_by_source_predicates),
-    })
+    DeltaOperation::Merge {
+        predicate: info.predicate.clone(),
+        merge_predicate: info.merge_predicate.clone(),
+        matched_predicates: to_kernel_preds(&info.matched_predicates),
+        not_matched_predicates: to_kernel_preds(&info.not_matched_predicates),
+        not_matched_by_source_predicates: to_kernel_preds(&info.not_matched_by_source_predicates),
+    }
 }
 
 fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(OperationOverride::Merge {
-        matched_predicates,
-        not_matched_by_source_predicates,
-        ..
-    }) = info.operation_override.as_ref()
-    else {
+    let Some(info) = info.operation.merge() else {
         return false;
     };
 
-    matched_predicates
+    info.matched_predicates
         .iter()
-        .chain(not_matched_by_source_predicates)
-        .any(|p| p.action_type.eq_ignore_ascii_case("update"))
+        .chain(&info.not_matched_by_source_predicates)
+        .any(|predicate| predicate.action_type.eq_ignore_ascii_case("update"))
 }
 
 fn merge_has_delete_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(OperationOverride::Merge {
-        matched_predicates,
-        not_matched_by_source_predicates,
-        ..
-    }) = info.operation_override.as_ref()
-    else {
+    let Some(info) = info.operation.merge() else {
         return false;
     };
 
-    matched_predicates
+    info.matched_predicates
         .iter()
-        .chain(not_matched_by_source_predicates)
-        .any(|p| p.action_type.eq_ignore_ascii_case("delete"))
+        .chain(&info.not_matched_by_source_predicates)
+        .any(|predicate| predicate.action_type.eq_ignore_ascii_case("delete"))
 }

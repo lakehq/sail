@@ -363,7 +363,7 @@ Feature: Delta Lake Generated Columns
         VALUES (1, TIMESTAMP '2024-05-10 12:00:00', DATE '2099-01-01')
         """
 
-  Rule: Generated columns are recomputed during MERGE
+  Rule: Generated columns are recomputed during row-level changes
 
     Background:
       Given variable location for temporary directory gen_col_merge
@@ -376,6 +376,39 @@ Feature: Delta Lake Generated Columns
         """
         DROP TABLE IF EXISTS delta_gen_col_merge_src
         """
+
+    Scenario: UPDATE recomputes a generated column from the changed value
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES
+          (1, TIMESTAMP '2024-01-01 00:00:00'),
+          (2, TIMESTAMP '2024-02-01 00:00:00')
+        """
+      Given statement
+        """
+        UPDATE delta_gen_col_merge
+        SET event_time = TIMESTAMP '2024-10-05 12:00:00'
+        WHERE id = 1
+        """
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_merge ORDER BY id
+        """
+      Then query result ordered
+        | id | event_time          | event_date |
+        | 1  | 2024-10-05 12:00:00 | 2024-10-05 |
+        | 2  | 2024-02-01 00:00:00 | 2024-02-01 |
 
     Scenario: MERGE matched update recomputes generated column
       Given statement template

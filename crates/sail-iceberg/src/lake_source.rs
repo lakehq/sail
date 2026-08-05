@@ -31,9 +31,12 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatCreateTableResult, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    create_sort_order, find_path_in_options,
+};
+use sail_common_datafusion::lakesource::{
+    LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
+    LakeSourceCreateTableInfo, LakeSourceMetadata, MetadataChange, MetadataChangeResult,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -65,18 +68,12 @@ use crate::utils::partition_transform::{
 
 const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 
-/// Iceberg implementation of [`TableFormat`].
+/// Iceberg implementation of [`LakeSource`].
 #[derive(Debug, Default)]
-pub struct IcebergTableFormat;
-
-impl IcebergTableFormat {
-    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self))
-    }
-}
+pub struct IcebergLakeSource;
 
 #[async_trait]
-impl TableFormat for IcebergTableFormat {
+impl DataSource for IcebergLakeSource {
     fn name(&self) -> &str {
         "iceberg"
     }
@@ -96,17 +93,6 @@ impl TableFormat for IcebergTableFormat {
         info: SourceInfo,
     ) -> Result<datafusion::arrow::datatypes::SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
-    }
-
-    async fn infer_metadata(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<sail_common_datafusion::datasource::TableFormatMetadata> {
-        Ok(sail_common_datafusion::datasource::TableFormatMetadata {
-            schema: self.infer_schema(ctx, info).await?,
-            properties: vec![],
-        })
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
@@ -141,19 +127,55 @@ impl TableFormat for IcebergTableFormat {
             )),
         }))
     }
+}
 
-    async fn create_table_metadata(
+#[async_trait]
+impl LakeSource for IcebergLakeSource {
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<LakeSourceMetadata> {
+        Ok(LakeSourceMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
+    }
+
+    async fn apply_metadata_change(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        info: TableFormatCreateTableInfo,
-    ) -> Result<TableFormatCreateTableResult> {
-        let TableFormatCreateTableInfo {
+        change: MetadataChange,
+    ) -> Result<MetadataChangeResult> {
+        let (info, replace) = match change {
+            MetadataChange::Create(info) => (info, false),
+            MetadataChange::Replace(info) => (info, true),
+            MetadataChange::Alter {
+                path,
+                operation,
+                lakehouse_table,
+            } => {
+                reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
+                match operation {
+                    LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                        self.alter_table_properties(runtime_env, &path, changes, if_exists)
+                            .await?;
+                    }
+                    operation => {
+                        return not_impl_err!(
+                            "unsupported Iceberg ALTER TABLE operation: {operation:?}"
+                        );
+                    }
+                }
+                return Ok(MetadataChangeResult::default());
+            }
+        };
+        let LakeSourceCreateTableInfo {
             path,
             columns,
             comment: _,
             partition_by,
             properties,
-            replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
@@ -168,7 +190,7 @@ impl TableFormat for IcebergTableFormat {
         let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
             Ok(metadata_file) if columns.is_empty() && !replace => {
                 let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
-                return Ok(TableFormatCreateTableResult {
+                return Ok(MetadataChangeResult {
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),
@@ -250,30 +272,13 @@ impl TableFormat for IcebergTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .to_string();
 
-        Ok(TableFormatCreateTableResult {
+        Ok(MetadataChangeResult {
             properties: vec![(
                 sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                     .to_string(),
                 metadata_location,
             )],
         })
-    }
-
-    async fn alter_table(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        operation: TableFormatAlterTableOperation,
-        lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
-        match operation {
-            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
-            }
-            op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
-        }
     }
 }
 
@@ -404,7 +409,7 @@ pub(crate) async fn plan_iceberg_write(
             .collect::<Vec<_>>()
     });
 
-    let table_url = IcebergTableFormat::parse_table_url(vec![path]).await?;
+    let table_url = IcebergLakeSource::parse_table_url(vec![path]).await?;
 
     let store = ctx
         .runtime_env()
@@ -436,7 +441,7 @@ pub(crate) async fn plan_iceberg_write(
         let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
         let table =
             Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location).await?;
-        Some(IcebergTableFormat::partition_columns_from_metadata(&table)?)
+        Some(IcebergLakeSource::partition_columns_from_metadata(&table)?)
     } else {
         None
     };
@@ -495,7 +500,7 @@ pub(crate) async fn plan_iceberg_write(
     builder.build().await
 }
 
-impl IcebergTableFormat {
+impl IcebergLakeSource {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -664,7 +669,7 @@ async fn build_iceberg_provider(
     } = info;
 
     validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?;
-    let table_url = IcebergTableFormat::parse_table_url(paths).await?;
+    let table_url = IcebergLakeSource::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let iceberg_options = IcebergReadOptions::resolve(ctx, options)?;
@@ -743,7 +748,7 @@ pub(crate) async fn load_table_metadata_with_options(
     table.scan_state(&options)
 }
 
-impl IcebergTableFormat {
+impl IcebergLakeSource {
     pub async fn parse_table_url(paths: Vec<String>) -> Result<Url> {
         if paths.len() != 1 {
             return plan_err!(
@@ -808,11 +813,11 @@ fn partition_columns_from_table_metadata(
     Ok(columns)
 }
 
-fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Result<ArrowSchema> {
+fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Result<ArrowSchema> {
     let fields = columns
         .into_iter()
         .map(
-            |TableFormatCreateTableColumn {
+            |LakeSourceCreateTableColumn {
                  name,
                  data_type,
                  nullable,
@@ -1159,7 +1164,7 @@ mod tests {
 
     #[test]
     fn parse_table_url_accepts_windows_drive_paths() -> Result<()> {
-        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+        let url = futures::executor::block_on(IcebergLakeSource::parse_table_url(vec![
             r"C:\Users\runneradmin\AppData\Local\Temp\iceberg_table".to_string(),
         ]))?;
         assert_eq!(
@@ -1171,7 +1176,7 @@ mod tests {
 
     #[test]
     fn parse_table_url_preserves_windows_file_uri_drive() -> Result<()> {
-        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+        let url = futures::executor::block_on(IcebergLakeSource::parse_table_url(vec![
             "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table".to_string(),
         ]))?;
         assert_eq!(
@@ -1250,7 +1255,7 @@ mod tests {
                 pointer: MetadataPointerAuthority::IcebergRest,
                 commit: CommitAuthority::IcebergRestCommit,
             },
-            ScanAuthority::ClientTableFormat,
+            ScanAuthority::ClientLakeSource,
         );
         context.rest_session = Some(IcebergRestTableSessionRef {
             fingerprint: "rest-session".to_string(),
@@ -1279,7 +1284,7 @@ mod tests {
                 pointer: MetadataPointerAuthority::IcebergRest,
                 commit: CommitAuthority::IcebergRestCommit,
             },
-            ScanAuthority::ClientTableFormat,
+            ScanAuthority::ClientLakeSource,
         );
         context.rest_session = Some(IcebergRestTableSessionRef {
             fingerprint: "rest-session".to_string(),

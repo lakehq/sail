@@ -168,7 +168,7 @@ Feature: Delta Lake CHECK Constraints
         | protocol.minWriterVersion                              |
         | metaData.configuration['delta.constraints.positive_id'] |
 
-  Rule: MERGE respects CHECK constraints
+  Rule: Row-level operations respect CHECK constraints
 
     Background:
       Given variable location for temporary directory delta_check_constraints_merge
@@ -207,3 +207,18 @@ Feature: Delta Lake CHECK Constraints
         WHEN NOT MATCHED THEN INSERT *
         """
       Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+
+    Scenario: UPDATE rejects rows that violate CHECK constraints
+      Given statement with error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+        """
+        UPDATE delta_check_constraints_merge_test
+        SET id = 0
+        WHERE id = 1
+        """
+      When query
+        """
+        SELECT id, value FROM delta_check_constraints_merge_test ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | existing |

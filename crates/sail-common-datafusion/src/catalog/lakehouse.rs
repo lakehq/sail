@@ -73,7 +73,7 @@ pub enum CommitAuthority {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize, Default)]
 pub enum ScanAuthority {
     #[default]
-    ClientTableFormat,
+    ClientLakeSource,
     IcebergRestServerSide,
     ProviderNative,
     ReadOnlyVirtual,

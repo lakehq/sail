@@ -9,8 +9,8 @@ use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
+use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
-use crate::table_format::{IcebergWriteNode, plan_iceberg_write};
 
 pub struct IcebergPhysicalPlanner;
 

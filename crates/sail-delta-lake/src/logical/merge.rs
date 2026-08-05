@@ -7,21 +7,23 @@ use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
-    MergeNotMatchedBySourceAction,
+    MergeInfo, MergeMatchedAction, MergeNotMatchedBySourceAction, ROW_LEVEL_FILE_COLUMN,
+    ROW_LEVEL_ROW_INDEX_COLUMN, RowLevelSource,
 };
-use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge};
+use sail_logical_plan::row_level::{
+    ExpandedRowLevelOperation, RowLevelCommitInfo, RowLevelEffect, RowLevelWriteNode, expand_merge,
+};
 
 use crate::logical::table_source::DeltaTableSource;
 
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     let row_index_column = (merge_has_delete_actions(&info)
-        && merge_target_supports_deletion_vectors(info.target.as_ref())?)
-    .then_some(MERGE_ROW_INDEX_COLUMN);
-    let mut target_plan = ensure_merge_metadata_columns(
+        && row_level_target_supports_deletion_vectors(info.target.as_ref())?)
+    .then_some(ROW_LEVEL_ROW_INDEX_COLUMN);
+    let mut target_plan = ensure_row_level_metadata_columns(
         info.target.as_ref().clone(),
-        MERGE_FILE_COLUMN,
+        ROW_LEVEL_FILE_COLUMN,
         row_index_column,
     )?;
     let target_fields: Vec<String> = target_plan
@@ -31,18 +33,20 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         .map(|f| f.name().clone())
         .collect();
     trace!(
-        "rewrite target_plan schema after ensure_merge_metadata_columns: {:?}",
+        "rewrite target_plan schema after ensure_row_level_metadata_columns: {:?}",
         target_fields
     );
-    if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
+    if !target_fields.iter().any(|n| n == ROW_LEVEL_FILE_COLUMN)
         || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))
     {
         let mut exprs: Vec<Expr> = target_fields
             .iter()
             .map(|name| Expr::Column(Column::from_name(name.clone())))
             .collect();
-        if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
-            exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
+        if !target_fields.iter().any(|n| n == ROW_LEVEL_FILE_COLUMN) {
+            exprs.push(
+                Expr::Column(Column::from_name(ROW_LEVEL_FILE_COLUMN)).alias(ROW_LEVEL_FILE_COLUMN),
+            );
         }
         if let Some(row_index_column) = row_index_column
             && !target_fields.iter().any(|n| n == row_index_column)
@@ -69,10 +73,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         options: info.options,
         input_schema: info.input_schema,
     };
-    let raw_target = Arc::clone(&info.target);
-    let raw_source = Arc::clone(&info.source);
-    let raw_input_schema = info.input_schema.clone();
-    let expansion = expand_merge(info, MERGE_FILE_COLUMN, row_index_column)?;
+    let expansion = expand_merge(info, ROW_LEVEL_FILE_COLUMN, row_index_column)?;
     trace!(
         "MERGE expansion write_plan schema fields: {:?}",
         expansion
@@ -83,16 +84,22 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             .map(|f| f.name().clone())
             .collect::<Vec<_>>()
     );
-    let write_node = RowLevelWriteNode::new_merge(
-        raw_target,
-        raw_source,
-        raw_input_schema,
-        Arc::new(expansion.write_plan),
-        Arc::new(expansion.touched_files_plan),
-        expansion.deletion_vector_plan.map(Arc::new),
-        expansion.options,
+    let mut effects = vec![
+        RowLevelEffect::WriteRows(Arc::new(expansion.write_plan)),
+        RowLevelEffect::TouchFiles(Arc::new(expansion.touched_files_plan)),
+    ];
+    if let Some(plan) = expansion.deletion_vector_plan {
+        effects.push(RowLevelEffect::DeleteRows(Arc::new(plan)));
+    }
+    let target = expansion.options.target.clone();
+    let write_node = RowLevelWriteNode::new(ExpandedRowLevelOperation::try_new(
+        target,
+        effects,
+        RowLevelCommitInfo::Merge {
+            options: Box::new(expansion.options),
+        },
         expansion.output_schema,
-    );
+    )?);
 
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
@@ -111,7 +118,7 @@ fn merge_has_delete_actions(info: &MergeInfo) -> bool {
             .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
 }
 
-fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
+pub(super) fn row_level_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
     let mut supports = false;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node
@@ -125,9 +132,9 @@ fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
     Ok(supports)
 }
 
-/// Attempts to enable MERGE metadata columns on a Delta table source.
+/// Attempts to enable row-level metadata columns on a Delta table source.
 /// Returns `Some((new_source, schema))` if reconfigured, or `None` if unsupported.
-fn try_enable_merge_metadata_columns(
+fn try_enable_row_level_metadata_columns(
     source: &Arc<dyn TableSource>,
     file_col: &str,
     row_index_col: Option<&str>,
@@ -163,7 +170,7 @@ fn try_enable_merge_metadata_columns(
 
 /// Traverses a logical plan to ensure that Delta table scans expose the file path
 /// and optional file-local row-index columns, and that parent projections keep them.
-fn ensure_merge_metadata_columns(
+pub(super) fn ensure_row_level_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
     row_index_col: Option<&str>,
@@ -177,10 +184,10 @@ fn ensure_merge_metadata_columns(
             // First, configure table scans to expose the file path column.
             if let LogicalPlan::TableScan(scan) = &plan
                 && let Some((new_source, schema)) =
-                    try_enable_merge_metadata_columns(&scan.source, file_col, row_index_col)?
+                    try_enable_row_level_metadata_columns(&scan.source, file_col, row_index_col)?
                 {
                     trace!(
-                        "ensure_merge_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
+                        "ensure_row_level_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
                         scan.table_name,
                         scan.projection
                     );
@@ -206,7 +213,7 @@ fn ensure_merge_metadata_columns(
                         scan.fetch,
                     )?);
                     trace!(
-                        "ensure_merge_metadata_columns (scan) after - schema_fields: {:?}",
+                        "ensure_row_level_metadata_columns (scan) after - schema_fields: {:?}",
                         new_scan
                             .schema()
                             .fields()
@@ -237,7 +244,7 @@ fn ensure_merge_metadata_columns(
                 }
                 if changed {
                     trace!(
-                        "ensure_merge_metadata_columns (proj) add - exprs: {:?}, input_schema_fields: {:?}",
+                        "ensure_row_level_metadata_columns (proj) add - exprs: {:?}, input_schema_fields: {:?}",
                         proj.expr.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
                         input_schema
                             .fields()
@@ -249,7 +256,7 @@ fn ensure_merge_metadata_columns(
                         .project(new_exprs)?
                         .build()?;
                     trace!(
-                        "ensure_merge_metadata_columns (proj) after: {:?}",
+                        "ensure_row_level_metadata_columns (proj) after: {:?}",
                         new_proj
                             .schema()
                             .fields()
@@ -285,7 +292,7 @@ fn ensure_merge_metadata_columns(
     }
 
     trace!(
-        "ensure_merge_metadata_columns (final) schema: {:?}",
+        "ensure_row_level_metadata_columns (final) schema: {:?}",
         transformed
             .schema()
             .fields()

@@ -14,6 +14,7 @@ pub(crate) mod catalog_support;
 pub mod datasource;
 pub mod error;
 pub mod io;
+pub mod lake_source;
 pub mod logical;
 pub mod operations;
 pub mod options;
@@ -23,11 +24,11 @@ pub(crate) mod properties;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;
-pub mod table_format;
 pub mod utils;
 
 pub use datasource::type_converter::*;
 pub use datasource::*;
+pub use lake_source::*;
 pub use logical::IcebergTableSource;
 pub use operations::Transaction;
 pub use operations::action::*;
@@ -43,4 +44,3 @@ pub use physical_plan::manifest_scan_exec::{IcebergManifestScanExec, manifest_sc
 pub use physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use schema_evolution::*;
 pub use spec::*;
-pub use table_format::*;

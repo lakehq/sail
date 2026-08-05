@@ -2,11 +2,12 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::{
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatRegistry, is_lakehouse_format,
-};
+use sail_common_datafusion::datasource::{SourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::{
+    LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
+    MetadataChange, MetadataChangeResult,
+};
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
@@ -341,6 +342,7 @@ impl CatalogCommand {
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 };
+                let replace = options.mode.is_replace();
                 let status = manager.create_table(&table, options).await?;
                 if !existed_before {
                     prepare_created_table_storage_metadata(
@@ -349,6 +351,7 @@ impl CatalogCommand {
                         &table,
                         &status,
                         &create_plan,
+                        replace,
                     )
                     .await?;
                 }
@@ -465,7 +468,7 @@ impl CatalogCommand {
                     _ => (None, None),
                 };
 
-                // Persist changes to storage first (source of truth for table formats
+                // Persist changes to storage first (source of truth for lake sources
                 // such as Delta Lake). Only after storage commits successfully do we
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
@@ -479,18 +482,18 @@ impl CatalogCommand {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
                     }
-                    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                    let registry = ctx.extension::<SourceRegistry>().map_err(|e| {
                         CatalogError::External(format!(
-                            "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                            "missing SourceRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let lake_source = registry.get_lake_source(&format).map_err(|e| {
                         CatalogError::External(format!(
-                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                            "unknown lake source '{format}' for storage-backed ALTER TABLE: {e}"
                         ))
                     })?;
                     let runtime = ctx.runtime_env();
-                    let storage_operation = table_format_alter_operation(&options);
+                    let storage_operation = lake_source_alter_operation(&options);
                     let lakehouse_table = manager
                         .resolve_lakehouse_table_status(
                             &table,
@@ -499,8 +502,15 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    table_format
-                        .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
+                    lake_source
+                        .apply_metadata_change(
+                            runtime,
+                            MetadataChange::Alter {
+                                path: location,
+                                operation: storage_operation,
+                                lakehouse_table: Some(lakehouse_table),
+                            },
+                        )
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -766,7 +776,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         )
         .await?;
 
-    let LakehouseCreateMaterialization::BeforeCatalogTableFormat { context, .. } =
+    let LakehouseCreateMaterialization::BeforeCatalogLakeSource { context, .. } =
         &create_plan.materialization
     else {
         return Ok(Some((options, create_plan)));
@@ -778,7 +788,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
             options.format
         ))
     })?;
-    let metadata = materialize_table_format_create_metadata(
+    let metadata = materialize_lake_source_create_metadata(
         ctx,
         &options.format,
         location,
@@ -800,8 +810,9 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
     table: &[String],
     status: &sail_common_datafusion::catalog::TableStatus,
     create_plan: &LakehouseCreatePlan,
+    replace: bool,
 ) -> CatalogResult<()> {
-    let LakehouseCreateMaterialization::AfterCatalogTableFormat { mode, .. } =
+    let LakehouseCreateMaterialization::AfterCatalogLakeSource { mode, .. } =
         &create_plan.materialization
     else {
         return Ok(());
@@ -822,14 +833,14 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
 
     if matches!(
         *mode,
-        crate::provider::TableFormatCreateMetadataMode::PathManaged
+        crate::provider::LakeSourceCreateMetadataMode::PathManaged
     ) && *is_external
     {
         return Ok(());
     }
     let lakehouse_table = match *mode {
-        crate::provider::TableFormatCreateMetadataMode::PathManaged => None,
-        crate::provider::TableFormatCreateMetadataMode::CatalogCoordinated => Some(
+        crate::provider::LakeSourceCreateMetadataMode::PathManaged => None,
+        crate::provider::LakeSourceCreateMetadataMode::CatalogCoordinated => Some(
             manager
                 .resolve_lakehouse_table_status(
                     table,
@@ -841,7 +852,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         ),
     };
 
-    materialize_table_format_create_metadata(
+    materialize_lake_source_create_metadata(
         ctx,
         format,
         location.clone(),
@@ -849,7 +860,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         comment.clone(),
         partition_by.clone(),
         properties.clone(),
-        false,
+        replace,
         lakehouse_table,
     )
     .await
@@ -857,7 +868,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
 }
 
 #[expect(clippy::too_many_arguments)]
-async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
+async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     ctx: &C,
     format: &str,
     location: String,
@@ -867,41 +878,43 @@ async fn materialize_table_format_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-) -> CatalogResult<sail_common_datafusion::datasource::TableFormatCreateTableResult> {
-    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+) -> CatalogResult<MetadataChangeResult> {
+    let registry = ctx.extension::<SourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
-            "missing TableFormatRegistry for CREATE TABLE on format '{format}': {e}"
+            "missing SourceRegistry for CREATE TABLE on format '{format}': {e}"
         ))
     })?;
-    let table_format = registry.get(format).map_err(|e| {
+    let lake_source = registry.get_lake_source(format).map_err(|e| {
         CatalogError::External(format!(
-            "unknown table format '{format}' for CREATE TABLE: {e}"
+            "unknown lake source '{format}' for CREATE TABLE: {e}"
         ))
     })?;
-    table_format
-        .create_table_metadata(
-            ctx.runtime_env(),
-            TableFormatCreateTableInfo {
-                path: location,
-                columns: columns
-                    .iter()
-                    .map(|column| TableFormatCreateTableColumn {
-                        name: column.name().to_string(),
-                        data_type: column.data_type().clone(),
-                        nullable: column.nullable(),
-                        comment: column.comment().cloned(),
-                        default: column.default().cloned(),
-                        generated_always_as: column.generated_always_as().cloned(),
-                        identity: column.identity().cloned(),
-                    })
-                    .collect(),
-                comment,
-                partition_by,
-                properties,
-                replace,
-                lakehouse_table,
-            },
-        )
+    let info = LakeSourceCreateTableInfo {
+        path: location,
+        columns: columns
+            .iter()
+            .map(|column| LakeSourceCreateTableColumn {
+                name: column.name().to_string(),
+                data_type: column.data_type().clone(),
+                nullable: column.nullable(),
+                comment: column.comment().cloned(),
+                default: column.default().cloned(),
+                generated_always_as: column.generated_always_as().cloned(),
+                identity: column.identity().cloned(),
+            })
+            .collect(),
+        comment,
+        partition_by,
+        properties,
+        lakehouse_table,
+    };
+    let change = if replace {
+        MetadataChange::Replace(info)
+    } else {
+        MetadataChange::Create(info)
+    };
+    lake_source
+        .apply_metadata_change(ctx.runtime_env(), change)
         .await
         .map_err(CatalogError::DataFusionError)
 }
@@ -976,10 +989,10 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
     }
 }
 
-fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlterTableOperation {
+fn lake_source_alter_operation(options: &AlterTableOptions) -> LakeSourceAlterTableOperation {
     match options {
         AlterTableOptions::SetTableProperties { properties } => {
-            TableFormatAlterTableOperation::SetTableProperties {
+            LakeSourceAlterTableOperation::SetTableProperties {
                 changes: properties
                     .iter()
                     .map(|(key, value)| (key.clone(), Some(value.clone())))
@@ -988,25 +1001,25 @@ fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlter
             }
         }
         AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-            TableFormatAlterTableOperation::SetTableProperties {
+            LakeSourceAlterTableOperation::SetTableProperties {
                 changes: keys.iter().map(|key| (key.clone(), None)).collect(),
                 if_exists: *if_exists,
             }
         }
         AlterTableOptions::AlterColumnType { name, data_type } => {
-            TableFormatAlterTableOperation::AlterColumnType {
+            LakeSourceAlterTableOperation::AlterColumnType {
                 column_path: name.clone(),
                 data_type: data_type.clone(),
             }
         }
         AlterTableOptions::AlterColumnDefault { name, default } => {
-            TableFormatAlterTableOperation::AlterColumnDefault {
+            LakeSourceAlterTableOperation::AlterColumnDefault {
                 column_path: name.clone(),
                 default: default.clone(),
             }
         }
         AlterTableOptions::AddCheckConstraint { name, expression } => {
-            TableFormatAlterTableOperation::AddCheckConstraint {
+            LakeSourceAlterTableOperation::AddCheckConstraint {
                 name: name.clone(),
                 expression: expression.clone(),
             }
@@ -1089,7 +1102,8 @@ mod tests {
     use sail_common_datafusion::catalog::{
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
-    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+    use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
+    use sail_common_datafusion::lakesource::LakeSource;
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
     use serde::{Deserialize, Serialize};
 
@@ -1301,10 +1315,10 @@ mod tests {
         }
     }
 
-    struct TestTableFormat;
+    struct TestLakeSource;
 
     #[async_trait]
-    impl TableFormat for TestTableFormat {
+    impl DataSource for TestLakeSource {
         fn name(&self) -> &str {
             "delta"
         }
@@ -1324,24 +1338,25 @@ mod tests {
         ) -> datafusion_common::Result<LogicalPlan> {
             not_impl_err!("unused in test")
         }
+    }
 
-        async fn alter_table(
+    #[async_trait]
+    impl LakeSource for TestLakeSource {
+        async fn apply_metadata_change(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-            _path: &str,
-            _operation: TableFormatAlterTableOperation,
-            _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-        ) -> datafusion_common::Result<()> {
-            Ok(())
+            _change: MetadataChange,
+        ) -> datafusion_common::Result<MetadataChangeResult> {
+            Ok(MetadataChangeResult::default())
         }
     }
 
     fn test_session_context() -> SessionContext {
-        let registry = Arc::new(TableFormatRegistry::new());
-        let register_result = registry.register(Arc::new(TestTableFormat));
+        let registry = Arc::new(SourceRegistry::new());
+        let register_result = registry.register_lake_source(Arc::new(TestLakeSource));
         assert!(
             register_result.is_ok(),
-            "failed to register test table format: {register_result:?}"
+            "failed to register test lake source: {register_result:?}"
         );
         let plan_service = Arc::new(PlanService::new(
             Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),

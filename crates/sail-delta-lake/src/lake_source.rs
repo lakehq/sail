@@ -25,17 +25,19 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
-    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
+    SourceInfo, create_sort_order, find_path_in_options,
+};
+use sail_common_datafusion::lakesource::{
+    LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
+    LakeSourceCreateTableInfo, LakeSourceMetadata, MetadataChange, MetadataChangeResult,
+    RowLevelOperation,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
-use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -67,19 +69,12 @@ use crate::table::{
 use crate::transaction::CommitBuilder;
 use crate::{DeltaTableError, create_delta_source};
 
-/// Delta Lake implementation of [`TableFormat`].
+/// Delta Lake implementation of [`LakeSource`].
 #[derive(Debug)]
-pub struct DeltaTableFormat;
-
-impl DeltaTableFormat {
-    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self))?;
-        Ok(())
-    }
-}
+pub struct DeltaLakeSource;
 
 #[async_trait]
-impl TableFormat for DeltaTableFormat {
+impl DataSource for DeltaLakeSource {
     fn name(&self) -> &str {
         "delta"
     }
@@ -122,11 +117,49 @@ impl TableFormat for DeltaTableFormat {
         infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
 
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in Delta table options");
+        };
+        let SinkInfo {
+            input,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+            lakehouse_table,
+        } = info;
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for Delta format");
+        }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta format");
+        }
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(DeltaWriteNode::new(
+                Arc::new(input),
+                DeltaWriteNodeOptions {
+                    path,
+                    mode,
+                    partition_by,
+                    bucket_by,
+                    sort_order,
+                    options,
+                    lakehouse_table,
+                },
+            )),
+        }))
+    }
+}
+
+#[async_trait]
+impl LakeSource for DeltaLakeSource {
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<TableFormatMetadata> {
+    ) -> Result<LakeSourceMetadata> {
         let SourceInfo {
             paths,
             lakehouse_table,
@@ -142,21 +175,56 @@ impl TableFormat for DeltaTableFormat {
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
             infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-        Ok(TableFormatMetadata { schema, properties })
+        Ok(LakeSourceMetadata { schema, properties })
     }
 
-    async fn create_table_metadata(
+    async fn apply_metadata_change(
         &self,
         runtime_env: Arc<RuntimeEnv>,
-        info: TableFormatCreateTableInfo,
-    ) -> Result<TableFormatCreateTableResult> {
-        let TableFormatCreateTableInfo {
+        change: MetadataChange,
+    ) -> Result<MetadataChangeResult> {
+        let (info, replace) = match change {
+            MetadataChange::Create(info) => (info, false),
+            MetadataChange::Replace(info) => (info, true),
+            MetadataChange::Alter {
+                path,
+                operation,
+                lakehouse_table,
+            } => {
+                reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+                match operation {
+                    LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                        self.alter_table_properties(runtime_env, &path, changes, if_exists)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnType {
+                        column_path,
+                        data_type,
+                    } => {
+                        self.alter_table_column_type(runtime_env, &path, column_path, data_type)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AlterColumnDefault {
+                        column_path,
+                        default,
+                    } => {
+                        self.alter_table_column_default(runtime_env, &path, column_path, default)
+                            .await?;
+                    }
+                    LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
+                        self.add_check_constraint(runtime_env, &path, &name, &expression)
+                            .await?;
+                    }
+                }
+                return Ok(MetadataChangeResult::default());
+            }
+        };
+        let LakeSourceCreateTableInfo {
             path,
             columns,
             comment,
             partition_by,
             properties,
-            replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
@@ -239,7 +307,7 @@ impl TableFormat for DeltaTableFormat {
                         );
                     }
                 }
-                return Ok(TableFormatCreateTableResult::default());
+                return Ok(MetadataChangeResult::default());
             }
         }
 
@@ -392,116 +460,26 @@ impl TableFormat for DeltaTableFormat {
             .with_actions(actions)
             .build(replace_snapshot, log_store, operation)
             .await
-            .map(|_| TableFormatCreateTableResult::default())
+            .map(|_| MetadataChangeResult::default())
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
-        let Some(path) = find_path_in_options(&info.options) else {
-            return plan_err!("missing path in Delta table options");
-        };
-        let SinkInfo {
-            input,
-            mode,
-            partition_by,
-            bucket_by,
-            sort_order,
-            options,
-            lakehouse_table,
-        } = info;
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for Delta format");
-        }
-        if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for Delta format");
-        }
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(DeltaWriteNode::new(
-                Arc::new(input),
-                DeltaWriteNodeOptions {
-                    path,
-                    mode,
-                    partition_by,
-                    bucket_by,
-                    sort_order,
-                    options,
-                    lakehouse_table,
-                },
-            )),
-        }))
-    }
-
-    async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let DeleteInfo {
-            table_name,
-            path,
-            condition,
-            lakehouse_table,
-            options,
-        } = info;
-        let write_node = RowLevelWriteNode::new_delete(
-            Arc::new(LogicalPlan::EmptyRelation(
-                datafusion_expr::logical_plan::EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::new(DFSchema::empty()),
-                },
-            )),
-            Arc::new(DFSchema::empty()),
-            condition,
-            self.name().to_string(),
-            path,
-            table_name,
-            options,
-            lakehouse_table,
-        );
-
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(write_node),
-        }))
-    }
-
-    async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
-        crate::logical::merge::expand_merge_node(info)
-    }
-
-    async fn alter_table(
+    async fn plan_row_level_operation(
         &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        operation: TableFormatAlterTableOperation,
-        lakehouse_table: Option<LakehouseExecutionContext>,
-    ) -> Result<()> {
-        reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+        _ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
         match operation {
-            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
-                self.alter_table_properties(runtime_env, path, changes, if_exists)
-                    .await
-            }
-            TableFormatAlterTableOperation::AlterColumnType {
-                column_path,
-                data_type,
-            } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
-                    .await
-            }
-            TableFormatAlterTableOperation::AlterColumnDefault {
-                column_path,
-                default,
-            } => {
-                self.alter_table_column_default(runtime_env, path, column_path, default)
-                    .await
-            }
-            TableFormatAlterTableOperation::AddCheckConstraint { name, expression } => {
-                self.add_check_constraint(runtime_env, path, &name, &expression)
-                    .await
-            }
+            RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
+            RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
+            RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
         }
     }
 }
 
 fn reject_catalog_managed_delta_alter(
     lakehouse_table: Option<&LakehouseExecutionContext>,
-    operation: &TableFormatAlterTableOperation,
+    operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     let Some(context) = lakehouse_table else {
         return Ok(());
@@ -515,16 +493,16 @@ fn reject_catalog_managed_delta_alter(
     Ok(())
 }
 
-fn delta_alter_operation_name(operation: &TableFormatAlterTableOperation) -> &'static str {
+fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
-        TableFormatAlterTableOperation::SetTableProperties { .. } => {
+        LakeSourceAlterTableOperation::SetTableProperties { .. } => {
             "ALTER TABLE SET/UNSET TBLPROPERTIES"
         }
-        TableFormatAlterTableOperation::AlterColumnType { .. } => "ALTER TABLE ALTER COLUMN TYPE",
-        TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+        LakeSourceAlterTableOperation::AlterColumnType { .. } => "ALTER TABLE ALTER COLUMN TYPE",
+        LakeSourceAlterTableOperation::AlterColumnDefault { .. } => {
             "ALTER TABLE ALTER COLUMN DEFAULT"
         }
-        TableFormatAlterTableOperation::AddCheckConstraint { .. } => "ALTER TABLE ADD CONSTRAINT",
+        LakeSourceAlterTableOperation::AddCheckConstraint { .. } => "ALTER TABLE ADD CONSTRAINT",
     }
 }
 
@@ -637,7 +615,7 @@ pub(crate) async fn plan_delta_write(
         .map(|field| field.column)
         .collect::<Vec<_>>();
 
-    let table_url = DeltaTableFormat::parse_table_url(ctx, vec![path]).await?;
+    let table_url = DeltaLakeSource::parse_table_url(ctx, vec![path]).await?;
     let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
     let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
 
@@ -812,7 +790,7 @@ async fn open_delta_write_planning_table(
     }
 }
 
-impl DeltaTableFormat {
+impl DeltaLakeSource {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -1548,7 +1526,7 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
     )))
 }
 
-impl DeltaTableFormat {
+impl DeltaLakeSource {
     pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
         let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
         match (urls.pop(), urls.is_empty()) {
@@ -1558,7 +1536,7 @@ impl DeltaTableFormat {
     }
 }
 
-fn delta_create_table_arrow_schema(columns: &[TableFormatCreateTableColumn]) -> Result<SchemaRef> {
+fn delta_create_table_arrow_schema(columns: &[LakeSourceCreateTableColumn]) -> Result<SchemaRef> {
     let fields = columns
         .iter()
         .map(|column| {
@@ -1582,7 +1560,7 @@ fn delta_create_table_arrow_schema(columns: &[TableFormatCreateTableColumn]) -> 
 }
 
 fn delta_create_table_generation_expressions(
-    columns: &[TableFormatCreateTableColumn],
+    columns: &[LakeSourceCreateTableColumn],
 ) -> HashMap<String, String> {
     columns
         .iter()
@@ -1596,7 +1574,7 @@ fn delta_create_table_generation_expressions(
 }
 
 fn delta_create_table_default_expressions(
-    columns: &[TableFormatCreateTableColumn],
+    columns: &[LakeSourceCreateTableColumn],
 ) -> HashMap<String, String> {
     columns
         .iter()
@@ -1610,7 +1588,7 @@ fn delta_create_table_default_expressions(
 }
 
 fn delta_create_table_identity_columns(
-    columns: &[TableFormatCreateTableColumn],
+    columns: &[LakeSourceCreateTableColumn],
 ) -> HashMap<String, CatalogTableColumnIdentity> {
     columns
         .iter()
