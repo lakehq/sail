@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
-use sail_common_datafusion::datasource::MergeCapableSource;
+use sail_common_datafusion::datasource::RowLevelSource;
 
 use crate::DeltaResult;
 use crate::datasource::{DeltaScanConfig, df_logical_schema, get_pushdown_filters};
@@ -90,7 +90,7 @@ impl TableSource for DeltaTableSource {
     }
 }
 
-impl MergeCapableSource for DeltaTableSource {
+impl RowLevelSource for DeltaTableSource {
     fn file_column_name(&self) -> Option<&str> {
         self.config.file_column_name.as_deref()
     }

@@ -1,0 +1,83 @@
+# serializer version: 1
+---
+name: "test_explain_extended_shows_update_row_actions_before_the_delta_rewrite"
+data:
+  |-
+    == Parsed Logical Plan ==
+    RowLevelWrite: command=Update, target=delta_update_basic, format=DELTA, condition=target . id = 2
+      Projection: id AS id, CASE WHEN id = Int32(2) THEN value + Int32(5) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_row_action, Int32(0) AS __sail_row_action_origin
+        Projection: target.#0 AS id, target.#1 AS value, target.#2 AS previous_value, target.#3 AS label, target.__sail_file_path AS __sail_file_path
+          SubqueryAlias: target
+            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+              TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
+      Projection: __sail_file_path AS __sail_file_path
+        Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
+          Filter: id = Int32(2)
+            Projection: target.#0 AS id, target.#1 AS value, target.#2 AS previous_value, target.#3 AS label, target.__sail_file_path AS __sail_file_path
+              SubqueryAlias: target
+                Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+                  TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
+  
+    == Analyzed Logical Plan ==
+  
+    RowLevelWrite: command=Update, target=delta_update_basic, format=DELTA, condition=target . id = 2
+      Projection: id AS id, CASE WHEN id = Int32(2) THEN value + Int32(5) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_row_action, Int32(0) AS __sail_row_action_origin
+        Projection: target.#0 AS id, target.#1 AS value, target.#2 AS previous_value, target.#3 AS label, target.__sail_file_path AS __sail_file_path
+          SubqueryAlias: target
+            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+              TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
+      Projection: __sail_file_path AS __sail_file_path
+        Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
+          Filter: id = Int32(2)
+            Projection: target.#0 AS id, target.#1 AS value, target.#2 AS previous_value, target.#3 AS label, target.__sail_file_path AS __sail_file_path
+              SubqueryAlias: target
+                Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+                  TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
+  
+    == Optimized Logical Plan ==
+    RowLevelWrite: command=Update, target=delta_update_basic, format=DELTA, condition=target . id = 2
+      Projection: id AS id, CASE WHEN __common_expr_1 THEN value + Int32(5) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_row_action, Int32(0) AS __sail_row_action_origin
+        Projection: target.#0 = Int32(2) AS __common_expr_1, target.#0 AS id, target.#1 AS value, target.#2 AS previous_value, target.#3 AS label, target.__sail_file_path AS __sail_file_path
+          SubqueryAlias: target
+            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+              TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
+      Projection: __sail_file_path AS __sail_file_path
+        Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
+          Projection: target.__sail_file_path AS __sail_file_path
+            SubqueryAlias: target
+              Projection: delta_update_basic.__sail_file_path AS __sail_file_path
+                Filter: delta_update_basic.id = Int32(2)
+                  TableScan: delta_update_basic projection=[id, __sail_file_path], partial_filters=[delta_update_basic.id = Int32(2)]
+  
+    == Physical Plan ==
+    DeltaCommitExec(table_path=file://<tmp>/delta_update/)
+      CoalescePartitionsExec
+        UnionExec
+          DeltaWriterExec(table_path=file://<tmp>/delta_update/)
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, value@2, previous_value@3, label@4, __sail_row_action@6, __sail_row_action_origin@7]
+                CoalescePartitionsExec
+                  AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                    RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                        FilterExec: id@0 = 2, projection=[__sail_file_path@1]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delta_update/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
+                DataSourceExec: file_groups={1 group: [[<tmp>/delta_update/part-<id>.snappy.parquet]]}, projection=[id, CASE WHEN id@0 = 2 THEN value@1 + 5 ELSE value@1 END as value, previous_value, label, __sail_file_path, CASE WHEN id@0 = 2 THEN 2 ELSE 0 END as __sail_row_action, 0 as __sail_row_action_origin], file_type=parquet, predicate=DynamicFilter [ empty ]
+          DeltaRemoveActionsExec
+            CoalescePartitionsExec
+              DeltaDiscoveryExec(table_path=file://<tmp>/delta_update/)
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                          FilterExec: id@0 = 2, projection=[__sail_file_path@1]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delta_update/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
+                  DeltaLogReplayExec(table_path=file://<tmp>/delta_update/, version=1)
+                    SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@7], 4), input_partitions=4
+                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+                            DataSourceExec: file_groups={2 groups: [[<tmp>/delta_update/_delta_log/00000000000000000000.json], [<tmp>/delta_update/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json

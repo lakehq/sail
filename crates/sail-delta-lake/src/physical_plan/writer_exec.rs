@@ -49,7 +49,8 @@ use futures::stream::{StreamExt, once};
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
-    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
+    MERGE_SOURCE_METRIC_COLUMN, PhysicalSinkMode, ROW_ACTION_COLUMN, ROW_ACTION_ORIGIN_COLUMN,
+    RowAction, RowActionOrigin,
 };
 use url::Url;
 
@@ -72,7 +73,7 @@ use crate::writer::{DeltaWriter, WriterConfig};
 /// These counters are derived from Sail metadata columns only. The metadata is
 /// removed before data batches are validated against the persisted table schema.
 #[derive(Debug, Default, Clone, Copy)]
-struct MergeRowMetrics {
+struct RowLevelMetrics {
     copied: u64,
     inserted: u64,
     updated: u64,
@@ -83,14 +84,61 @@ struct MergeRowMetrics {
     not_matched_by_source_updated: u64,
     matched_deleted: u64,
     not_matched_by_source_deleted: u64,
-    saw_detailed_merge_op: bool,
+    saw_non_direct_origin: bool,
     uses_source_metric: bool,
+    uses_row_action: bool,
 }
 
 enum SourceMetricColumn<'a> {
     UInt64(&'a UInt64Array),
     Int64(&'a Int64Array),
     None,
+}
+
+enum RowActionOriginColumn<'a> {
+    Int32(&'a Int32Array),
+    Int64(&'a Int64Array),
+    None,
+}
+
+impl<'a> RowActionOriginColumn<'a> {
+    fn try_from_batch(batch: &'a RecordBatch) -> Result<Self> {
+        let Some((index, _)) = batch.schema().column_with_name(ROW_ACTION_ORIGIN_COLUMN) else {
+            return Ok(Self::None);
+        };
+        let column = batch.column(index);
+        match column.data_type() {
+            DataType::Int32 => column
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .map(Self::Int32)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "failed to downcast {ROW_ACTION_ORIGIN_COLUMN} as Int32"
+                    ))
+                }),
+            DataType::Int64 => column
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(Self::Int64)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "failed to downcast {ROW_ACTION_ORIGIN_COLUMN} as Int64"
+                    ))
+                }),
+            other => Err(DataFusionError::Plan(format!(
+                "row action origin column {ROW_ACTION_ORIGIN_COLUMN} must be Int32 or Int64, got {other:?}"
+            ))),
+        }
+    }
+
+    fn value(&self, row: usize) -> Option<i64> {
+        match self {
+            Self::Int32(values) if values.is_valid(row) => Some(i64::from(values.value(row))),
+            Self::Int64(values) if values.is_valid(row) => Some(values.value(row)),
+            Self::Int32(_) | Self::Int64(_) | Self::None => None,
+        }
+    }
 }
 
 impl<'a> SourceMetricColumn<'a> {
@@ -148,51 +196,51 @@ impl<'a> SourceMetricColumn<'a> {
     }
 }
 
-impl MergeRowMetrics {
-    fn add_operation_value(&mut self, value: i64, source_metric_count: Option<u64>) {
-        match value {
-            v if v == i64::from(RowLevelOperationType::Copy.as_i32()) => {
+impl RowLevelMetrics {
+    fn add_row_action(
+        &mut self,
+        action: i64,
+        origin: Option<i64>,
+        source_metric_count: Option<u64>,
+    ) {
+        if let Some(count) = source_metric_count {
+            self.source_metric = self.source_metric.saturating_add(count);
+            return;
+        }
+
+        let direct = i64::from(RowActionOrigin::Direct.as_i32());
+        let matched = i64::from(RowActionOrigin::Matched.as_i32());
+        let not_matched_by_source = i64::from(RowActionOrigin::NotMatchedBySource.as_i32());
+        let origin = origin.unwrap_or(direct);
+        self.saw_non_direct_origin |= origin != direct;
+
+        match action {
+            v if v == i64::from(RowAction::Copy.as_i32()) => {
                 self.copied = self.copied.saturating_add(1)
             }
-            v if v == i64::from(RowLevelOperationType::Insert.as_i32()) => {
+            v if v == i64::from(RowAction::Insert.as_i32()) => {
                 self.inserted = self.inserted.saturating_add(1)
             }
-            v if v == i64::from(RowLevelOperationType::Update.as_i32()) => {
-                self.updated = self.updated.saturating_add(1)
+            v if v == i64::from(RowAction::Update.as_i32()) => {
+                self.updated = self.updated.saturating_add(1);
+                if origin == matched {
+                    self.matched_updated = self.matched_updated.saturating_add(1);
+                } else if origin == not_matched_by_source {
+                    self.not_matched_by_source_updated =
+                        self.not_matched_by_source_updated.saturating_add(1);
+                }
             }
-            v if v == i64::from(RowLevelOperationType::Delete.as_i32()) => {
-                self.deleted = self.deleted.saturating_add(1)
+            v if v == i64::from(RowAction::Delete.as_i32()) => {
+                self.deleted = self.deleted.saturating_add(1);
+                if origin == matched {
+                    self.matched_deleted = self.matched_deleted.saturating_add(1);
+                } else if origin == not_matched_by_source {
+                    self.not_matched_by_source_deleted =
+                        self.not_matched_by_source_deleted.saturating_add(1);
+                }
             }
-            v if v == i64::from(RowLevelOperationType::Noop.as_i32()) => {
-                self.saw_detailed_merge_op = true;
+            v if v == i64::from(RowAction::Noop.as_i32()) => {
                 self.noop = self.noop.saturating_add(1)
-            }
-            v if v == i64::from(RowLevelOperationType::MatchedUpdate.as_i32()) => {
-                self.saw_detailed_merge_op = true;
-                self.updated = self.updated.saturating_add(1);
-                self.matched_updated = self.matched_updated.saturating_add(1);
-            }
-            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()) => {
-                self.saw_detailed_merge_op = true;
-                self.updated = self.updated.saturating_add(1);
-                self.not_matched_by_source_updated =
-                    self.not_matched_by_source_updated.saturating_add(1);
-            }
-            v if v == i64::from(RowLevelOperationType::MatchedDelete.as_i32()) => {
-                self.saw_detailed_merge_op = true;
-                self.deleted = self.deleted.saturating_add(1);
-                self.matched_deleted = self.matched_deleted.saturating_add(1);
-            }
-            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32()) => {
-                self.saw_detailed_merge_op = true;
-                self.deleted = self.deleted.saturating_add(1);
-                self.not_matched_by_source_deleted =
-                    self.not_matched_by_source_deleted.saturating_add(1);
-            }
-            v if v == i64::from(RowLevelOperationType::SourceMetric.as_i32()) => {
-                self.source_metric = self
-                    .source_metric
-                    .saturating_add(source_metric_count.unwrap_or(1));
             }
             _ => {}
         }
@@ -210,7 +258,7 @@ impl MergeRowMetrics {
             .saturating_add(self.matched_updated)
             .saturating_add(self.matched_deleted)
             .saturating_add(self.noop);
-        if self.saw_detailed_merge_op {
+        if self.saw_non_direct_origin {
             detailed_source_rows
         } else {
             self.inserted
@@ -226,9 +274,11 @@ impl MergeRowMetrics {
             .column_with_name(MERGE_SOURCE_METRIC_COLUMN)
             .is_some();
         let source_metric_column = SourceMetricColumn::try_from_batch(batch)?;
-        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+        let origin_column = RowActionOriginColumn::try_from_batch(batch)?;
+        let Some((index, _)) = batch.schema().column_with_name(ROW_ACTION_COLUMN) else {
             return Ok(());
         };
+        self.uses_row_action = true;
         let column = batch.column(index);
         match column.data_type() {
             DataType::Int32 => {
@@ -237,13 +287,14 @@ impl MergeRowMetrics {
                     .downcast_ref::<Int32Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                            "failed to downcast {ROW_ACTION_COLUMN} as Int32"
                         ))
                     })?;
                 for row in 0..values.len() {
                     if values.is_valid(row) {
-                        self.add_operation_value(
+                        self.add_row_action(
                             i64::from(values.value(row)),
+                            origin_column.value(row),
                             source_metric_column.value(row)?,
                         );
                     }
@@ -255,13 +306,14 @@ impl MergeRowMetrics {
                     .downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                            "failed to downcast {ROW_ACTION_COLUMN} as Int64"
                         ))
                     })?;
                 for row in 0..values.len() {
                     if values.is_valid(row) {
-                        self.add_operation_value(
+                        self.add_row_action(
                             values.value(row),
+                            origin_column.value(row),
                             source_metric_column.value(row)?,
                         );
                     }
@@ -269,7 +321,7 @@ impl MergeRowMetrics {
             }
             other => {
                 return Err(DataFusionError::Plan(format!(
-                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                    "row action column {ROW_ACTION_COLUMN} must be Int32 or Int64, got {other:?}"
                 )));
             }
         }
@@ -748,13 +800,13 @@ impl DeltaWriterExec {
             let mut total_rows = 0u64;
             let mut data = stream;
             let mut write_time_ms: u64 = 0;
-            let mut merge_row_metrics = MergeRowMetrics::default();
+            let mut row_level_metrics = RowLevelMetrics::default();
 
             while let Some(batch_result) = data.next().await {
                 let batch_start = Instant::now();
                 let batch = batch_result?;
-                merge_row_metrics.accumulate_batch(&batch)?;
-                let batch = Self::filter_metric_only_operation_rows(batch)?;
+                row_level_metrics.accumulate_batch(&batch)?;
+                let batch = Self::filter_non_written_row_actions(batch)?;
                 let batch = Self::strip_metric_columns(batch)?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
                 if rows == 0 {
@@ -826,27 +878,37 @@ impl DeltaWriterExec {
                 ..Default::default()
             };
             if matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. })) {
-                operation_metrics.num_target_rows_inserted = Some(merge_row_metrics.inserted);
-                operation_metrics.num_target_rows_updated = Some(merge_row_metrics.updated);
-                if merge_row_metrics.deleted > 0 {
-                    operation_metrics.num_target_rows_deleted = Some(merge_row_metrics.deleted);
+                operation_metrics.num_target_rows_inserted = Some(row_level_metrics.inserted);
+                operation_metrics.num_target_rows_updated = Some(row_level_metrics.updated);
+                if row_level_metrics.deleted > 0 {
+                    operation_metrics.num_target_rows_deleted = Some(row_level_metrics.deleted);
                 }
-                operation_metrics.num_target_rows_copied = Some(merge_row_metrics.copied);
+                operation_metrics.num_target_rows_copied = Some(row_level_metrics.copied);
                 operation_metrics.num_target_rows_matched_updated =
-                    Some(merge_row_metrics.matched_updated);
+                    Some(row_level_metrics.matched_updated);
                 operation_metrics.num_target_rows_not_matched_by_source_updated =
-                    Some(merge_row_metrics.not_matched_by_source_updated);
+                    Some(row_level_metrics.not_matched_by_source_updated);
                 operation_metrics.num_target_rows_matched_deleted =
-                    Some(merge_row_metrics.matched_deleted);
+                    Some(row_level_metrics.matched_deleted);
                 operation_metrics.num_target_rows_not_matched_by_source_deleted =
-                    Some(merge_row_metrics.not_matched_by_source_deleted);
-                let source_rows = merge_row_metrics.source_rows();
+                    Some(row_level_metrics.not_matched_by_source_deleted);
+                let source_rows = row_level_metrics.source_rows();
                 if source_rows > 0
-                    || merge_row_metrics.saw_detailed_merge_op
-                    || merge_row_metrics.uses_source_metric
+                    || row_level_metrics.saw_non_direct_origin
+                    || row_level_metrics.uses_source_metric
                 {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Update { .. }))
+                && row_level_metrics.uses_row_action
+            {
+                operation_metrics.num_updated_rows = Some(row_level_metrics.updated);
+                operation_metrics.num_copied_rows = Some(row_level_metrics.copied);
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Delete { .. }))
+                && row_level_metrics.uses_row_action
+            {
+                operation_metrics.num_deleted_rows = Some(row_level_metrics.deleted);
+                operation_metrics.num_copied_rows = Some(row_level_metrics.copied);
             }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
@@ -905,7 +967,9 @@ impl DeltaWriterExec {
 
 impl DeltaWriterExec {
     fn is_writer_metric_column(name: &str) -> bool {
-        name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
+        name == ROW_ACTION_COLUMN
+            || name == ROW_ACTION_ORIGIN_COLUMN
+            || name == MERGE_SOURCE_METRIC_COLUMN
     }
 
     fn strip_metric_columns(batch: RecordBatch) -> Result<RecordBatch> {
@@ -938,8 +1002,8 @@ impl DeltaWriterExec {
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
-    fn filter_metric_only_operation_rows(batch: RecordBatch) -> Result<RecordBatch> {
-        let Some(mask) = Self::metric_only_filter_mask(&batch)? else {
+    fn filter_non_written_row_actions(batch: RecordBatch) -> Result<RecordBatch> {
+        let Some(mask) = Self::written_row_filter_mask(&batch)? else {
             return Ok(batch);
         };
         filter_record_batch(&batch, &mask)
@@ -947,23 +1011,20 @@ impl DeltaWriterExec {
     }
 
     // TODO: Move row-intent filtering/counting into a shared helper once another
-    // row-level writer consumes `OPERATION_COLUMN`.
-    fn metric_only_filter_mask(batch: &RecordBatch) -> Result<Option<BooleanArray>> {
-        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+    // row-level writer consumes `ROW_ACTION_COLUMN`.
+    fn written_row_filter_mask(batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        let Some((index, _)) = batch.schema().column_with_name(ROW_ACTION_COLUMN) else {
             return Ok(None);
         };
         let column = batch.column(index);
-        let mut has_metric_only_row = false;
+        let mut has_non_written_row = false;
         let mut builder = BooleanBuilder::with_capacity(column.len());
 
-        let is_metric_only = |value| {
+        let is_not_written = |value| {
             matches!(
                 value,
-                v if v == i64::from(RowLevelOperationType::Noop.as_i32())
-                    || v == i64::from(RowLevelOperationType::Delete.as_i32())
-                    || v == i64::from(RowLevelOperationType::MatchedDelete.as_i32())
-                    || v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())
-                    || v == i64::from(RowLevelOperationType::SourceMetric.as_i32())
+                v if v == i64::from(RowAction::Noop.as_i32())
+                    || v == i64::from(RowAction::Delete.as_i32())
             )
         };
 
@@ -974,12 +1035,12 @@ impl DeltaWriterExec {
                     .downcast_ref::<Int32Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                            "failed to downcast {ROW_ACTION_COLUMN} as Int32"
                         ))
                     })?;
                 for row in 0..values.len() {
-                    let keep = values.is_null(row) || !is_metric_only(i64::from(values.value(row)));
-                    has_metric_only_row |= !keep;
+                    let keep = values.is_null(row) || !is_not_written(i64::from(values.value(row)));
+                    has_non_written_row |= !keep;
                     builder.append_value(keep);
                 }
             }
@@ -989,23 +1050,23 @@ impl DeltaWriterExec {
                     .downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                            "failed to downcast {ROW_ACTION_COLUMN} as Int64"
                         ))
                     })?;
                 for row in 0..values.len() {
-                    let keep = values.is_null(row) || !is_metric_only(values.value(row));
-                    has_metric_only_row |= !keep;
+                    let keep = values.is_null(row) || !is_not_written(values.value(row));
+                    has_non_written_row |= !keep;
                     builder.append_value(keep);
                 }
             }
             other => {
                 return Err(DataFusionError::Plan(format!(
-                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                    "row action column {ROW_ACTION_COLUMN} must be Int32 or Int64, got {other:?}"
                 )));
             }
         }
 
-        Ok(has_metric_only_row.then(|| builder.finish()))
+        Ok(has_non_written_row.then(|| builder.finish()))
     }
 
     /// Validate and adapt a batch to match the final schema

@@ -348,7 +348,7 @@ impl PlanResolver<'_> {
             .await
     }
 
-    pub(super) async fn resolve_delta_merge_check_constraints(
+    pub(super) async fn resolve_delta_row_level_check_constraints(
         &self,
         format: &str,
         options: &[OptionLayer],
@@ -372,6 +372,32 @@ impl PlanResolver<'_> {
         );
         self.resolve_delta_check_constraints(constraints, target_schema, state)
             .await
+    }
+
+    pub(super) async fn resolve_delta_update_generated_column_exprs(
+        &self,
+        target_schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<(String, Expr)>> {
+        let mut out = Vec::new();
+        for field in target_schema.fields() {
+            let Some(expr_str) = ColumnFeatures::from_field(field).generation_expression() else {
+                continue;
+            };
+            let actual_name = state
+                .get_field_info(field.name())
+                .map(|info| info.name().to_string())
+                .unwrap_or_else(|_| field.name().clone());
+            let resolved = self
+                .resolve_expression(
+                    parse_delta_generation_expr(&expr_str)?,
+                    target_schema,
+                    state,
+                )
+                .await?;
+            out.push((actual_name, resolved));
+        }
+        Ok(out)
     }
 
     pub(super) async fn resolve_delta_merge_generated_column_exprs(

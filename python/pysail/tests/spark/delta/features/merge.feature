@@ -65,6 +65,47 @@ Feature: Delta Lake Merge
         | 2  | new   | update |
         | 4  | ins   | insert |
 
+    Scenario: The first matching MERGE clause determines the row action
+      Given statement
+        """
+        MERGE INTO delta_merge_basic AS t
+        USING src_merge_basic AS s
+        ON t.id = s.id
+        WHEN MATCHED AND t.id = 3 THEN
+          DELETE
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value | flag   |
+        | 1  | old   | keep   |
+        | 2  | new   | update |
+
+    Scenario: A later MERGE clause cannot fill columns omitted by the first match
+      Given statement
+        """
+        MERGE INTO delta_merge_basic AS t
+        USING src_merge_basic AS s
+        ON t.id = s.id
+        WHEN MATCHED AND t.id = 2 THEN
+          UPDATE SET value = concat(s.value, '_first')
+        WHEN MATCHED THEN
+          UPDATE SET flag = 'second'
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value     | flag   |
+        | 1  | old       | keep   |
+        | 2  | new_first | update |
+        | 3  | old       | second |
+
   Rule: Cardinality violation is rejected when multiple source rows match one target row
     Background:
       Given variable location for temporary directory merge_cardinality

@@ -25,8 +25,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode,
-    SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
+    SourceInfo, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
@@ -38,7 +38,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
-use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -470,38 +469,11 @@ impl LakeSource for DeltaLakeSource {
         _ctx: &dyn Session,
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
-        let info = match operation {
-            RowLevelOperation::Delete(info) => *info,
-            RowLevelOperation::Merge(info) => {
-                return crate::logical::merge::expand_merge_node(*info);
-            }
-        };
-        let DeleteInfo {
-            table_name,
-            path,
-            condition,
-            lakehouse_table,
-            options,
-        } = info;
-        let write_node = RowLevelWriteNode::new_delete(
-            Arc::new(LogicalPlan::EmptyRelation(
-                datafusion_expr::logical_plan::EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::new(DFSchema::empty()),
-                },
-            )),
-            Arc::new(DFSchema::empty()),
-            condition,
-            self.name().to_string(),
-            path,
-            table_name,
-            options,
-            lakehouse_table,
-        );
-
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(write_node),
-        }))
+        match operation {
+            RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
+            RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
+            RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
+        }
     }
 }
 

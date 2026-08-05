@@ -20,24 +20,27 @@ use crate::lakesource::LakeSource;
 use crate::logical_expr::ExprWithSource;
 
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
-pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
+pub const ROW_LEVEL_FILE_COLUMN: &str = "__sail_file_path";
 
 /// File-local row index metadata column for row-level modifications that write deletion vectors.
-pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
+pub const ROW_LEVEL_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 
-/// Row-level operation type column appended to expanded row-level write output.
+/// Row action column appended to expanded row-level write output.
 ///
 /// This is internal Sail metadata. Source writers may use it to route rows,
 /// collect operation metrics, or produce low-level delete artifacts, but must
 /// remove it before persisting user data.
-/// Value is one of the [`RowLevelOperationType`] integer constants.
-pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+/// Value is one of the [`RowAction`] integer constants.
+pub const ROW_ACTION_COLUMN: &str = "__sail_row_action";
+
+/// Internal origin tag for row-level write plans.
+pub const ROW_ACTION_ORIGIN_COLUMN: &str = "__sail_row_action_origin";
 
 /// Reserved private write option name. User-visible option layers must reject this key.
 pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
-/// Internal column carrying pre-aggregated MERGE source row counts on
-/// [`RowLevelOperationType::SourceMetric`] rows.
+/// Internal column carrying pre-aggregated MERGE source row counts.
+/// A non-null value marks a metric-only [`RowAction::Noop`] row.
 pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 
 /// A layer of options that can be applied to a data source.
@@ -92,7 +95,7 @@ impl OptionLayer {
 /// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
-pub enum RowLevelOperationType {
+pub enum RowAction {
     /// Existing target row is rewritten unchanged.
     Copy = 0,
     /// Existing target row is deleted.
@@ -103,19 +106,25 @@ pub enum RowLevelOperationType {
     Insert = 3,
     /// Source row participates in metrics or checks but is not written.
     Noop = 4,
-    /// Matched target row is deleted by a MERGE clause.
-    MatchedDelete = 5,
-    /// Matched target row is updated by a MERGE clause.
-    MatchedUpdate = 6,
-    /// Target-only row is deleted by a MERGE clause.
-    NotMatchedBySourceDelete = 7,
-    /// Target-only row is updated by a MERGE clause.
-    NotMatchedBySourceUpdate = 8,
-    /// Metric-only row carrying a MERGE source row count.
-    SourceMetric = 9,
 }
 
-impl RowLevelOperationType {
+impl RowAction {
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
+/// Semantic origin of a row action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i32)]
+pub enum RowActionOrigin {
+    Direct = 0,
+    Matched = 1,
+    NotMatchedByTarget = 2,
+    NotMatchedBySource = 3,
+}
+
+impl RowActionOrigin {
     pub fn as_i32(self) -> i32 {
         self as i32
     }
@@ -126,7 +135,7 @@ impl RowLevelOperationType {
 /// - `Eager`: rewrite affected files (Copy-on-Write).
 /// - `MergeOnRead`: write delete files at write time, merge at read time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MergeStrategy {
+pub enum RowLevelStrategy {
     #[default]
     Eager,
     MergeOnRead,
@@ -138,8 +147,8 @@ pub fn is_lakehouse_format(format: &str) -> bool {
 }
 
 /// Implemented by [`TableSource`]s that can expose a per-row file path column
-/// for row-level modifications (MERGE targeted rewrite).
-pub trait MergeCapableSource: Send + Sync {
+/// for row-level modifications and targeted rewrites.
+pub trait RowLevelSource: Send + Sync {
     /// Returns the file column name if already configured.
     fn file_column_name(&self) -> Option<&str>;
 
@@ -240,15 +249,32 @@ impl SinkInfo {
 }
 
 /// Information required to create a logical DELETE plan for a lake source.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DeleteInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
+    pub target_plan: Arc<LogicalPlan>,
+    pub target: RowLevelTarget,
     pub condition: Option<ExprWithSource>,
-    pub lakehouse_table: Option<LakehouseExecutionContext>,
-    /// The layers of options for the delete operation.
-    /// A later layer can override earlier ones.
-    pub options: Vec<OptionLayer>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+}
+
+/// Information required to create a logical UPDATE plan for a lake source.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateInfo {
+    pub target_plan: Arc<LogicalPlan>,
+    pub target: RowLevelTarget,
+    pub condition: Option<ExprWithSource>,
+    pub assignments: Vec<UpdateAssignment>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub generated_column_exprs: Vec<(String, Expr)>,
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateAssignment {
+    pub column: String,
+    pub value: Expr,
 }
 
 /// Information required to create a logical MERGE plan for a lake source.
@@ -264,7 +290,7 @@ pub struct MergeInfo {
 pub struct MergeIntoOptions {
     pub target_alias: Option<String>,
     pub source_alias: Option<String>,
-    pub target: MergeTargetInfo,
+    pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
@@ -294,7 +320,7 @@ pub struct MergeIntoOptions {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-pub struct MergeTargetInfo {
+pub struct RowLevelTarget {
     pub table_name: Vec<String>,
     pub format: String,
     pub location: String,

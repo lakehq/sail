@@ -25,7 +25,7 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::stats::Statistics;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
+pub use sail_common_datafusion::datasource::ROW_LEVEL_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

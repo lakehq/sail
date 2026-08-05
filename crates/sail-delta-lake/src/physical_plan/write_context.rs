@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::column_features::SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY;
 use sail_common_datafusion::datasource::{
-    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode,
+    MERGE_SOURCE_METRIC_COLUMN, PhysicalSinkMode, ROW_ACTION_COLUMN, ROW_ACTION_ORIGIN_COLUMN,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -309,7 +309,9 @@ pub fn prepare_delta_write_context(
 }
 
 fn is_writer_metric_column(name: &str) -> bool {
-    name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
+    name == ROW_ACTION_COLUMN
+        || name == ROW_ACTION_ORIGIN_COLUMN
+        || name == MERGE_SOURCE_METRIC_COLUMN
 }
 
 fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {

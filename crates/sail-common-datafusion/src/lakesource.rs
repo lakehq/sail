@@ -8,7 +8,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo};
+use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -53,7 +53,7 @@ impl LakeSourceCreateTableInfo {
 #[derive(Debug, Clone)]
 pub enum RowLevelOperation {
     Delete(Box<DeleteInfo>),
-    // Update(Box<UpdateInfo>),
+    Update(Box<UpdateInfo>),
     Merge(Box<MergeInfo>),
 }
 
@@ -128,6 +128,10 @@ pub trait LakeSource: DataSource {
         match operation {
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+            RowLevelOperation::Update(_) => not_impl_err!(
+                "UPDATE is not yet implemented for lake source '{}'",
                 self.name()
             ),
             RowLevelOperation::Merge(_) => not_impl_err!(
