@@ -2592,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_bucket"
+        "failure": "not implemented: function: time_bucket"
       }
     },
     {
@@ -2614,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_bucket"
+        "failure": "not implemented: function: time_bucket"
       }
     },
     {
@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_bucket"
+        "failure": "not implemented: function: time_bucket"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_micros"
+        "failure": "not implemented: function: time_from_micros"
       }
     },
     {
@@ -2746,7 +2746,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_micros"
+        "failure": "not implemented: function: time_from_micros"
       }
     },
     {
@@ -2768,7 +2768,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_micros"
+        "failure": "not implemented: function: time_from_micros"
       }
     },
     {
@@ -2790,7 +2790,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_micros"
+        "failure": "not implemented: function: time_from_micros"
       }
     },
     {
@@ -2812,7 +2812,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_millis"
+        "failure": "not implemented: function: time_from_millis"
       }
     },
     {
@@ -2834,7 +2834,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_millis"
+        "failure": "not implemented: function: time_from_millis"
       }
     },
     {
@@ -2856,7 +2856,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_millis"
+        "failure": "not implemented: function: time_from_millis"
       }
     },
     {
@@ -2878,7 +2878,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_millis"
+        "failure": "not implemented: function: time_from_millis"
       }
     },
     {
@@ -2900,7 +2900,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_seconds"
+        "failure": "not implemented: function: time_from_seconds"
       }
     },
     {
@@ -2922,7 +2922,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_seconds"
+        "failure": "not implemented: function: time_from_seconds"
       }
     },
     {
@@ -2944,7 +2944,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_seconds"
+        "failure": "not implemented: function: time_from_seconds"
       }
     },
     {
@@ -2966,7 +2966,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_from_seconds"
+        "failure": "not implemented: function: time_from_seconds"
       }
     },
     {
@@ -2988,7 +2988,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_micros"
+        "failure": "not implemented: function: time_to_micros"
       }
     },
     {
@@ -3010,7 +3010,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_micros"
+        "failure": "not implemented: function: time_to_micros"
       }
     },
     {
@@ -3032,7 +3032,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_micros"
+        "failure": "not implemented: function: time_to_micros"
       }
     },
     {
@@ -3054,7 +3054,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_micros"
+        "failure": "not implemented: function: time_to_micros"
       }
     },
     {
@@ -3076,7 +3076,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_millis"
+        "failure": "not implemented: function: time_to_millis"
       }
     },
     {
@@ -3098,7 +3098,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_millis"
+        "failure": "not implemented: function: time_to_millis"
       }
     },
     {
@@ -3120,7 +3120,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_millis"
+        "failure": "not implemented: function: time_to_millis"
       }
     },
     {
@@ -3142,7 +3142,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_millis"
+        "failure": "not implemented: function: time_to_millis"
       }
     },
     {
@@ -3164,7 +3164,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_seconds"
+        "failure": "not implemented: function: time_to_seconds"
       }
     },
     {
@@ -3186,7 +3186,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_seconds"
+        "failure": "not implemented: function: time_to_seconds"
       }
     },
     {
@@ -3208,7 +3208,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_seconds"
+        "failure": "not implemented: function: time_to_seconds"
       }
     },
     {
@@ -3230,7 +3230,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_to_seconds"
+        "failure": "not implemented: function: time_to_seconds"
       }
     },
     {
