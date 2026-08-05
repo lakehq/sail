@@ -249,6 +249,7 @@ fn zip_row_numbers(offsets: &OffsetBuffer<i32>) -> Result<datafusion::arrow::arr
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{Int32Array, UInt32Array};
+    use datafusion_common::DataFusionError;
 
     use super::*;
 
@@ -261,6 +262,19 @@ mod tests {
         )
     }
 
+    fn int32_values(array: &ArrayRef) -> Result<&Int32Array> {
+        array
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| DataFusionError::Internal("expected Int32Array".to_string()))
+    }
+
+    fn null_values(nulls: Option<NullBuffer>) -> Result<Vec<bool>> {
+        nulls
+            .map(|nulls| nulls.iter().collect())
+            .ok_or_else(|| DataFusionError::Internal("expected null buffer".to_string()))
+    }
+
     #[test]
     fn pads_shorter_arrays_with_nulls() -> Result<()> {
         let left = list(vec![Some(1), Some(2), Some(3)], vec![2, 1], None);
@@ -268,13 +282,13 @@ mod tests {
         let (left_values, right_values, offsets, nulls) = build_zipped_values(&left, &right)?;
 
         assert_eq!(offsets.as_ref(), &[0, 3, 4]);
-        assert_eq!(nulls.unwrap().iter().collect::<Vec<_>>(), vec![true, true]);
+        assert_eq!(null_values(nulls)?, vec![true, true]);
         assert_eq!(
-            left_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            int32_values(&left_values)?,
             &Int32Array::from(vec![Some(1), Some(2), None, Some(3)])
         );
         assert_eq!(
-            right_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            int32_values(&right_values)?,
             &Int32Array::from(vec![Some(10), Some(20), Some(30), None])
         );
         assert_eq!(
@@ -297,7 +311,7 @@ mod tests {
         assert!(left_values.is_empty());
         assert!(right_values.is_empty());
         assert_eq!(offsets.as_ref(), &[0, 0]);
-        assert_eq!(nulls.unwrap().iter().collect::<Vec<_>>(), vec![false]);
+        assert_eq!(null_values(nulls)?, vec![false]);
         Ok(())
     }
 }

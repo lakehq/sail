@@ -4656,10 +4656,8 @@ impl RemoteExecutionCodec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
+    use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
-    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-    use datafusion::physical_expr::HigherOrderFunctionExpr;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 
@@ -4671,12 +4669,6 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
-    }
-
-    fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
-        udf.inner()
-            .downcast_ref::<T>()
-            .ok_or_else(|| plan_datafusion_err!("decoded UDF should be {name}"))
     }
 
     fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
@@ -4830,16 +4822,6 @@ mod tests {
         Ok(())
     }
 
-    fn round_trip_expr(
-        expr: &Arc<dyn PhysicalExpr>,
-        schema: &Schema,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_expr(&codec, expr)?;
-        let ctx = TaskContext::default();
-        try_decode_physical_expr(&ctx, &codec, &bytes, schema)
-    }
-
     fn serialize_physical_expr(
         expr: &Arc<dyn PhysicalExpr>,
         codec: &RemoteExecutionCodec,
@@ -4856,36 +4838,6 @@ mod tests {
         codec: &RemoteExecutionCodec,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         try_decode_physical_expr(ctx, codec, &expr.encode_to_vec(), schema)
-    }
-
-    fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
-        expr.downcast_ref::<HigherOrderFunctionExpr>()
-            .ok_or_else(|| plan_datafusion_err!("expression is not HigherOrderFunctionExpr"))
-    }
-
-    fn assert_same_result(
-        original: &Arc<dyn PhysicalExpr>,
-        decoded: &Arc<dyn PhysicalExpr>,
-        schema: SchemaRef,
-        columns: Vec<ArrayRef>,
-    ) -> Result<()> {
-        let batch = RecordBatch::try_new(schema, columns)?;
-        let rows = batch.num_rows();
-        let original = original.evaluate(&batch)?.into_array(rows)?;
-        let decoded = decoded.evaluate(&batch)?.into_array(rows)?;
-        assert_eq!(original.to_data(), decoded.to_data());
-        Ok(())
-    }
-
-    fn count_hofs(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-        let count = std::cell::Cell::new(0usize);
-        Arc::clone(expr).apply(|node| {
-            if node.is::<HigherOrderFunctionExpr>() {
-                count.set(count.get() + 1);
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        Ok(count.get())
     }
 
     /// Builds a `filter(arr, v -> v > 2)` physical expression over a

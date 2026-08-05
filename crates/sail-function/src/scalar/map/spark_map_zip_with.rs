@@ -79,9 +79,9 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             );
         }
         Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(left_key.as_ref().clone().with_nullable(false)),
-            Arc::new(left_value.as_ref().clone().with_nullable(true)),
-            Arc::new(right_value.as_ref().clone().with_nullable(true)),
+            Arc::new(Field::new("", left_key.data_type().clone(), false)),
+            Arc::new(Field::new("", left_value.data_type().clone(), true)),
+            Arc::new(Field::new("", right_value.data_type().clone(), true)),
         ]]))
     }
 
@@ -378,7 +378,7 @@ mod tests {
 
     use super::*;
 
-    fn string_i32_map(keys: Vec<&str>, values: Vec<i32>, lengths: Vec<usize>) -> MapArray {
+    fn string_i32_map(keys: Vec<&str>, values: Vec<i32>, lengths: Vec<usize>) -> Result<MapArray> {
         let fields = Fields::from(vec![
             Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
             Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, true),
@@ -390,9 +390,8 @@ mod tests {
                 Arc::new(Int32Array::from(values)),
             ],
             None,
-        )
-        .unwrap();
-        MapArray::try_new(
+        )?;
+        Ok(MapArray::try_new(
             Arc::new(Field::new(
                 SAIL_MAP_FIELD_NAME,
                 DataType::Struct(fields),
@@ -402,14 +401,13 @@ mod tests {
             entries,
             None,
             false,
-        )
-        .unwrap()
+        )?)
     }
 
     #[test]
     fn map_zip_with_builds_union_inputs() -> Result<()> {
-        let left = string_i32_map(vec!["a", "b"], vec![1, 2], vec![2]);
-        let right = string_i32_map(vec!["b", "c"], vec![3, 4], vec![2]);
+        let left = string_i32_map(vec!["a", "b"], vec![1, 2], vec![2])?;
+        let right = string_i32_map(vec!["b", "c"], vec![3, 4], vec![2])?;
         let return_type = DataType::Map(
             Arc::new(Field::new(
                 SAIL_MAP_FIELD_NAME,
@@ -426,17 +424,23 @@ mod tests {
             build_lambda_inputs("map_zip_with", &left, &right, &return_type)?;
 
         assert_eq!(offsets.as_ref(), &[0, 3]);
-        assert_eq!(nulls.unwrap().iter().collect::<Vec<_>>(), vec![true]);
+        let Some(nulls) = nulls else {
+            return exec_err!("map_zip_with inputs must retain the row null buffer");
+        };
+        let Some(keys) = keys.as_any().downcast_ref::<StringArray>() else {
+            return exec_err!("map_zip_with keys must be strings");
+        };
+        let Some(left_values) = left_values.as_any().downcast_ref::<Int32Array>() else {
+            return exec_err!("map_zip_with left values must be Int32");
+        };
+        let Some(right_values) = right_values.as_any().downcast_ref::<Int32Array>() else {
+            return exec_err!("map_zip_with right values must be Int32");
+        };
+        assert_eq!(nulls.iter().collect::<Vec<_>>(), vec![true]);
+        assert_eq!(keys, &StringArray::from(vec!["a", "b", "c"]));
+        assert_eq!(left_values, &Int32Array::from(vec![Some(1), Some(2), None]));
         assert_eq!(
-            keys.as_any().downcast_ref::<StringArray>().unwrap(),
-            &StringArray::from(vec!["a", "b", "c"])
-        );
-        assert_eq!(
-            left_values.as_any().downcast_ref::<Int32Array>().unwrap(),
-            &Int32Array::from(vec![Some(1), Some(2), None])
-        );
-        assert_eq!(
-            right_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            right_values,
             &Int32Array::from(vec![None, Some(3), Some(4)])
         );
         Ok(())
@@ -444,8 +448,8 @@ mod tests {
 
     #[test]
     fn map_zip_with_uses_first_duplicate_key() -> Result<()> {
-        let left = string_i32_map(vec!["a", "a"], vec![1, 99], vec![2]);
-        let right = string_i32_map(vec!["a", "a"], vec![2, 88], vec![2]);
+        let left = string_i32_map(vec!["a", "a"], vec![1, 99], vec![2])?;
+        let right = string_i32_map(vec!["a", "a"], vec![2, 88], vec![2])?;
         let return_type = DataType::Map(
             Arc::new(Field::new(
                 SAIL_MAP_FIELD_NAME,
@@ -461,19 +465,20 @@ mod tests {
         let (keys, left_values, right_values, offsets, _nulls) =
             build_lambda_inputs("map_zip_with", &left, &right, &return_type)?;
 
+        let Some(keys) = keys.as_any().downcast_ref::<StringArray>() else {
+            return exec_err!("map_zip_with keys must be strings");
+        };
+        let Some(left_values) = left_values.as_any().downcast_ref::<Int32Array>() else {
+            return exec_err!("map_zip_with left values must be Int32");
+        };
+        let Some(right_values) = right_values.as_any().downcast_ref::<Int32Array>() else {
+            return exec_err!("map_zip_with right values must be Int32");
+        };
+
         assert_eq!(offsets.as_ref(), &[0, 1]);
-        assert_eq!(
-            keys.as_any().downcast_ref::<StringArray>().unwrap(),
-            &StringArray::from(vec!["a"])
-        );
-        assert_eq!(
-            left_values.as_any().downcast_ref::<Int32Array>().unwrap(),
-            &Int32Array::from(vec![1])
-        );
-        assert_eq!(
-            right_values.as_any().downcast_ref::<Int32Array>().unwrap(),
-            &Int32Array::from(vec![2])
-        );
+        assert_eq!(keys, &StringArray::from(vec!["a"]));
+        assert_eq!(left_values, &Int32Array::from(vec![1]));
+        assert_eq!(right_values, &Int32Array::from(vec![2]));
         Ok(())
     }
 }
