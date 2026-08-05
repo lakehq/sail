@@ -602,7 +602,7 @@ impl ExecutionPlan for IcebergWriterExec {
                         ));
                     }
                 }
-                Some(PositionDeleteAccumulator::default())
+                Some(PositionDeleteAccumulator::try_new(table_metadata)?)
             } else {
                 None
             };
