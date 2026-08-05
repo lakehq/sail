@@ -34,6 +34,7 @@ impl WorkerPool {
         }
         // TODO: support timeout for worker manager stop
         self.worker_manager.stop().await?;
+        ctx.children_mut().join().await;
         Ok(())
     }
 
@@ -82,9 +83,11 @@ impl WorkerPool {
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
             shuffle_backend: self.options.shuffle_backend.clone(),
         };
-        let worker_manager = Arc::clone(&self.worker_manager);
+        let task = self
+            .worker_manager
+            .launch_worker(ctx.children_mut(), worker_id, options);
         ctx.spawn(async move {
-            if let Err(e) = worker_manager.launch_worker(worker_id, options).await {
+            if let Err(e) = task.await {
                 error!("failed to start worker {worker_id}: {e}");
             }
         });

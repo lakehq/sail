@@ -92,15 +92,19 @@ impl SessionManagerActor {
                     return ActorAction::Continue;
                 }
             };
-            let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
-                session_id: session_id.clone(),
-                driver_id,
-                driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
-                history_reporter: Box::new(SessionJobRunnerHistoryReporter {
+            let session_manager = ctx.handle().clone();
+            let runner = self.job_runner_factory.create(
+                ctx.children_mut(),
+                SessionJobRunnerInfo {
                     session_id: session_id.clone(),
-                    session_manager: ctx.handle().clone(),
-                }),
-            });
+                    driver_id,
+                    driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
+                    history_reporter: Box::new(SessionJobRunnerHistoryReporter {
+                        session_id: session_id.clone(),
+                        session_manager,
+                    }),
+                },
+            );
             match runner {
                 Ok(runner) => {
                     let (runner, driver) = runner.into_parts();

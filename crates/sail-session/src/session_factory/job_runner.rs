@@ -1,5 +1,4 @@
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use datafusion::common::{Result, internal_err};
 use sail_common::actor::ActorSystem;
@@ -49,30 +48,26 @@ pub struct SessionJobRunnerInfo {
 }
 
 pub trait SessionJobRunnerFactory: Send {
-    fn create(&mut self, info: SessionJobRunnerInfo) -> Result<SessionJobRunner>;
+    fn create(
+        &mut self,
+        system: &mut ActorSystem,
+        info: SessionJobRunnerInfo,
+    ) -> Result<SessionJobRunner>;
 }
 
 pub struct ServerSessionJobRunnerFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-    system: Arc<Mutex<ActorSystem>>,
 }
 
 impl ServerSessionJobRunnerFactory {
-    pub fn new(
-        config: Arc<AppConfig>,
-        runtime: RuntimeHandle,
-        system: Arc<Mutex<ActorSystem>>,
-    ) -> Self {
-        Self {
-            config,
-            runtime,
-            system,
-        }
+    pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
+        Self { config, runtime }
     }
 
     fn create_cluster_runner(
         &self,
+        system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
         worker_manager: Box<dyn sail_execution::worker_manager::WorkerManager>,
     ) -> Result<SessionJobRunner> {
@@ -90,20 +85,18 @@ impl ServerSessionJobRunnerFactory {
             worker_manager,
             history_reporter: info.history_reporter,
         };
-        let mut system = self
-            .system
-            .lock()
-            .map_err(|e| datafusion::common::internal_datafusion_err!("{e}"))?;
         Ok(SessionJobRunner::cluster(ClusterJobRunner::new(
-            system.deref_mut(),
-            options,
-            components,
+            system, options, components,
         )))
     }
 }
 
 impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
-    fn create(&mut self, info: SessionJobRunnerInfo) -> Result<SessionJobRunner> {
+    fn create(
+        &mut self,
+        system: &mut ActorSystem,
+        info: SessionJobRunnerInfo,
+    ) -> Result<SessionJobRunner> {
         match self.config.mode {
             ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
                 info.history_reporter,
@@ -113,6 +106,7 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())
                         .create(())?;
                 self.create_cluster_runner(
+                    system,
                     info,
                     Box::new(LocalWorkerManager::new(
                         self.runtime.clone(),
@@ -134,7 +128,11 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
                 };
-                self.create_cluster_runner(info, Box::new(KubernetesWorkerManager::new(options)))
+                self.create_cluster_runner(
+                    system,
+                    info,
+                    Box::new(KubernetesWorkerManager::new(options)),
+                )
             }
         }
     }
