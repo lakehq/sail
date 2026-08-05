@@ -104,7 +104,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
     if arguments.len() < 2 {
-        Ok(arguments.one()?)
+        let arg = arguments.one()?;
+        Ok(spark_unary_plus(
+            arg,
+            function_context.plan_config.ansi_mode,
+            function_context.schema,
+        ))
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (
@@ -838,9 +843,10 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         }
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        // TODO: DECIMAL / integer-column and Decimal256 operands still use DataFusion's
-        //  scale (not Spark's). Integer *literals* are already narrowed above so
-        //  DECIMAL / int-literal takes the Spark arm; Decimal256 is Sail-internal only.
+        // TODO: Decimal256 operands still use DataFusion's scale (not Spark's);
+        //  Decimal256 is Sail-internal only. Integer operands need no arm here: both
+        //  literals (narrowed) and columns (type-based decimal) are coerced to
+        //  Decimal128 above, so they take the Spark arm.
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
@@ -932,10 +938,6 @@ fn power(base: Expr, exponent: Expr) -> Expr {
 fn hypot(expr1: Expr, expr2: Expr) -> Expr {
     let sum_squared = expr1.clone() * expr1 + expr2.clone() * expr2;
     cast(expr_fn::sqrt(sum_squared), DataType::Float64)
-}
-
-fn positive(expr: Expr) -> Expr {
-    expr
 }
 
 fn rint(expr: Expr) -> Expr {
@@ -1285,6 +1287,35 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
     }
 }
 
+/// Spark's unary plus (`UnaryPositive`): a string operand coerces to DOUBLE with the
+/// same parse the binary operators, unary minus and `CAST` use — surrounding
+/// whitespace is trimmed, and an invalid string is NULL under ANSI off but raises
+/// under ANSI on (validated vs Spark 4.1.1: `+'5'` and `positive('5')` are DOUBLE in
+/// both ANSI modes). Any other operand passes through unchanged.
+fn spark_unary_plus(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr {
+    match arg.get_type(schema) {
+        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            spark_string_to_numeric(arg, DataType::Float64, !ansi_mode)
+        }
+        _ => arg,
+    }
+}
+
+/// `positive()` is Spark's `UnaryPositive` under its function name, so it shares
+/// [`spark_unary_plus`] with the one-argument `+`.
+fn spark_positive(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arg = arguments.one()?;
+    Ok(spark_unary_plus(
+        arg,
+        function_context.plan_config.ansi_mode,
+        function_context.schema,
+    ))
+}
+
 fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -1345,7 +1376,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("negative", F::custom(spark_negative)),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::custom(spark_pmod)),
-        ("positive", F::unary(positive)),
+        ("positive", F::custom(spark_positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
         ("radians", F::unary(double(expr_fn::radians))),

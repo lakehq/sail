@@ -52,7 +52,10 @@ pub fn spark_string_to_numeric(
     // Trim a literal here rather than wrapping it in `btrim`: the call would be a
     // non-foldable node, and callers rely on `FLOAT('NaN')` and friends collapsing to a
     // literal at plan time (e.g. `VALUES` infers its column type from the folded rows).
-    // It also keeps the common case free of a per-row trim.
+    // It also keeps the common case free of a per-row trim. Only `Utf8` literals are
+    // matched: every current producer (the SQL parser, Spark Connect literals, `lit`)
+    // emits `Utf8`; a `LargeUtf8`/`Utf8View` literal would still be handled correctly
+    // — just per row — by the `btrim` arm below.
     let trimmed = match expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => {
             let value_trimmed = value.trim_matches(is_spark_trim_char);
@@ -144,7 +147,10 @@ fn spark_cast_raise_on_empty(trimmed: expr::Expr, target: DataType) -> expr::Exp
 /// The Spark name of a numeric type, for error messages that quote it.
 fn spark_type_name(data_type: &DataType) -> String {
     match data_type {
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             format!("DECIMAL({precision},{scale})")
         }
         DataType::Int8 => "TINYINT".to_string(),

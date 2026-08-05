@@ -852,7 +852,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t      | a        | b   | c   | d        |
         | double | Infinity | NaN | NaN | Infinity |
 
-  Rule: Spark coercion divergences not yet implemented
+  Rule: ANSI string promotion and pmod follow the operators' coercion
     # Validated against Spark 4.1.1.
 
     Scenario: ANSI string plus integer widens to bigint like Spark
@@ -865,11 +865,12 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t      |
         | bigint |
 
-    # `pmod` is a UDF (SparkPmod) but now takes the same operand coercion as the
-    # operators, which fixes the float x decimal promotion. What is left diverging is
-    # inside the UDF itself: it derives its own result type rather than applying
-    # Spark's remainder rule (`min(p1-s1, p2-s2) + max(s1,s2)`), and its NULL
-    # handling. Follow-up: fix `SparkPmod`'s return type and NULL handling.
+    # `pmod` is a UDF (SparkPmod) but takes the same operand coercion as the
+    # operators, which fixes the float x decimal promotion; the plan builder also
+    # gives a bare NULL its peer's type and narrows the result to Spark's remainder
+    # rule (`min(p1-s1, p2-s2) + max(s1,s2)`). Follow-up: move that rule and the
+    # NULL handling into `SparkPmod` itself, whose own return type is still un-Spark
+    # and only patched over by the outer cast.
     # `div` (integer division) matches Spark and needs no coercion (always BIGINT).
 
     Scenario: pmod narrows an integer literal like the remainder rule
@@ -882,7 +883,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | decimal(3,2) |
 
     Scenario: pmod with a NULL operand returns NULL
-      # Spark returns NULL; Sail errors ("Null and Int32 are not coercible").
+      # Spark returns NULL. `SparkPmod`'s `Signature::numeric` seeds coercion from the
+      # first argument, so the plan builder gives a bare NULL its peer's type first.
       When query
         """
         SELECT pmod(NULL, 3) AS r
@@ -1691,6 +1693,21 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | modulo                                   | sum_type       |
         | 0.00000000000000000000000000000000000000 | decimal(38,37) |
 
+    @sail-bug
+    Scenario: modulo of mixed extreme scales overflows the native kernel
+      # Equal scales need no rescale (the scenario above), but a scale-0 dividend
+      # against a scale-38 divisor is rescaled by 10^38 in i128 inside Arrow's `rem`,
+      # which overflows for any non-zero dividend. Spark computes in BigDecimal and
+      # returns the value — the same native-kernel overflow family as the wide sum,
+      # deferred to the custom PhysicalExpr follow-up.
+      When query
+        """
+        SELECT CAST(7 AS DECIMAL(38,0)) % CAST(0.3 AS DECIMAL(38,38)) AS r
+        """
+      Then query result
+        | r                                        |
+        | 0.10000000000000000000000000000000000000 |
+
     Scenario: decimal(38,38) multiplied by itself caps to the adjusted scale
       When query
         """
@@ -1765,16 +1782,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
   Rule: pmod operand typing after the generic numeric coercion
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands to
     # one common type before the remainder rule can see the originals.
-
-    Scenario: pmod of a decimal and an integer column keeps the remainder type
-      When query
-        """
-        SELECT typeof(pmod(a, b)) AS t
-        FROM VALUES (CAST(1.5 AS DECIMAL(3,2)), CAST(2 AS INT)) AS t(a, b)
-        """
-      Then query result
-        | t            |
-        | decimal(3,2) |
+    # The decimal-and-integer-column and NULL-and-string cases live in
+    # `math/pmod.feature`, which also asserts the values.
 
     Scenario: pmod of a string and a decimal promotes to double
       When query
@@ -1794,21 +1803,12 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r   |
         | NaN |
 
-    Scenario: pmod of NULL and a string is NULL under ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT pmod(NULL, '3') AS r
-        """
-      Then query result
-        | r    |
-        | NULL |
-
   Rule: The remainder type must not depend on ANSI mode
-    # Spark's remainder rule is ANSI-independent, but Sail only applies the operand
-    # narrowing under ANSI on: `decimal(10,2) % 3` is decimal(3,2) with ANSI on and
-    # decimal(10,2) with ANSI off. The existing modulo scenarios only ran in the default
-    # (ANSI-on) mode, which hid this — hence the ANSI-off twins below.
+    # Spark's remainder rule is ANSI-independent, but Sail used to apply the operand
+    # narrowing only under ANSI on: `decimal(10,2) % 3` came out decimal(3,2) with
+    # ANSI on but decimal(10,2) with ANSI off (the untyped `nullif` zero widened the
+    # divisor). The pre-existing modulo scenarios only ran in the default mode, which
+    # hid this — the twins below pin both modes.
 
     Scenario: decimal modulo an integer literal, ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -1975,6 +1975,65 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | r    |
         | -5.0 |
+        | NULL |
+        | NULL |
+
+  Rule: Unary plus and positive() over a string coerce to double like unary minus
+    # Validated against Spark 4.1.1: `+'5'`, `positive('5')` and `negative('5')` are
+    # DOUBLE in both ANSI modes — `positive` and `negative` are `UnaryPositive` and
+    # `UnaryMinus` under function names. The same string-to-numeric parse as the
+    # binary operators applies: trim, NULL under ANSI off, raise under ANSI on.
+
+    Scenario Outline: Unary plus over a string: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, <expr> AS r
+        """
+      Then query result
+        | t      | r   |
+        | double | <r> |
+
+      Examples:
+        | case                             | ansi  | expr            | r    |
+        | a padded string, ANSI off        | false | +' 5 '          | 5.0  |
+        | a malformed string is NULL       | false | +'x'            | NULL |
+        | a whitespace-only string is NULL | false | +' '            | NULL |
+        | a padded string, ANSI on         | true  | +' 5 '          | 5.0  |
+        | positive() of a padded string    | false | positive(' 5 ') | 5.0  |
+        | positive() of a malformed string | false | positive('x')   | NULL |
+        | positive() padded, ANSI on       | true  | positive(' 5 ') | 5.0  |
+        | negative() of a padded string    | false | negative(' 5 ') | -5.0 |
+        | negative() of a malformed string | false | negative('x')   | NULL |
+        | negative() padded, ANSI on       | true  | negative(' 5 ') | -5.0 |
+
+    # Both raise; the pattern is the wording both engines share (Spark:
+    # CAST_INVALID_INPUT "cannot be cast", Sail: the Arrow "Cannot cast" error),
+    # like the malformed binary-operand scenario above.
+    Scenario Outline: A malformed string raises under ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot (be )?cast
+
+      Examples:
+        | case       | expr          |
+        | unary plus | +'x'          |
+        | positive() | positive('x') |
+
+    Scenario: unary plus over a string column, ANSI off
+      # The column path goes through `btrim` rather than the plan-time trim, and a
+      # value that is only whitespace is NULL rather than zero.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT +v AS r FROM VALUES (0, ' 5 '), (1, ' '), (2, 'x') AS t(i, v) ORDER BY i
+        """
+      Then query result
+        | r    |
+        | 5.0  |
         | NULL |
         | NULL |
 
