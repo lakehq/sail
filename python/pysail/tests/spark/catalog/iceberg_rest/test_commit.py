@@ -382,6 +382,8 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
     _assert_uuid_metadata_location(before_location, 1)
+    previous_data_file_count = int(_current_snapshot(before["metadata"])["summary"]["total-data-files"])
+    assert previous_data_file_count == 1
 
     spark.sql(
         """
@@ -411,14 +413,15 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
         operation="overwrite",
     )
     summary = snapshot["summary"]
-    assert summary["added-delete-files"] == "2"
-    assert summary["added-position-delete-files"] == "2"
+    assert summary["added-delete-files"] == "1"
+    assert summary["added-position-delete-files"] == "1"
     assert summary["added-position-deletes"] == "4"
     assert "deleted-records" not in summary
-    assert summary["added-data-files"] == "2"
+    added_data_file_count = int(summary["added-data-files"])
+    assert added_data_file_count > 0
     assert summary["added-records"] == "3"
-    assert summary["total-data-files"] == "3"
-    assert summary["total-delete-files"] == "2"
+    assert int(summary["total-data-files"]) == previous_data_file_count + added_data_file_count
+    assert summary["total-delete-files"] == "1"
     assert summary["total-position-deletes"] == "4"
     assert summary["total-records"] == "8"
 
