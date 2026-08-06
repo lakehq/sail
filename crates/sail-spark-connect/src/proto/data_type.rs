@@ -27,20 +27,21 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
     if let Ok(dt) = parse_data_type(schema).and_then(from_ast_data_type) {
         Ok(dt)
-    } else if let Ok(dt) =
-        parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type)
-    {
-        match dt {
-            spec::DataType::Struct { fields } if fields.is_empty() => {
-                Err(SparkError::invalid("empty data type"))
-            }
-            // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-            // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-            // to parse table schema input (`name type, ...`).
-            _ => Ok(dt),
-        }
     } else {
-        parse_spark_json_data_type(schema)?.try_into()
+        match parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type) {
+            Ok(dt) => match dt {
+                spec::DataType::Struct { fields } if fields.is_empty() => {
+                    Err(SparkError::invalid("empty data type"))
+                }
+                // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+                // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+                // to parse table schema input (`name type, ...`).
+                _ => Ok(dt),
+            },
+            Err(ddl_error) => parse_spark_json_data_type(schema)
+                .and_then(|dt| dt.try_into())
+                .map_err(|_| SparkError::ParseError(ddl_error.to_string())),
+        }
     }
 }
 

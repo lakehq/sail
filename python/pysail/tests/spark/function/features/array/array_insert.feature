@@ -1,4 +1,3 @@
-@array_insert
 Feature: array_insert with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: array_insert with an argument coming from a column
 
   Rule: array_insert — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: array_insert with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: array_insert with an argument coming from a column
         | [1, 2, 3, 4, 5] |
 
     # Sail rejects the column: Sail errors: array_insert: the index 0 is invalid. An index shall be either < 0 or > 0 (the first eleme...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: array_insert takes argument 2 from a column containing NULL
       When query
         """
@@ -28,7 +27,7 @@ Feature: array_insert with an argument coming from a column
         | [1, 2, 3, 4, 5] |
         | NULL            |
 
-    @column_args
+    @function(columnargs)
     Scenario: array_insert takes argument 2 from a column holding two different values
       When query
         """
@@ -39,7 +38,7 @@ Feature: array_insert with an argument coming from a column
         | [9, 1, 2, 3] |
         | [1, 2, 9, 3] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

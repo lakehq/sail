@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
-use sail_telemetry::layers::{TracingClientLayer, TracingClientService};
+use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;

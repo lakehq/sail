@@ -313,6 +313,7 @@ pub struct MergeIntoOptions {
     pub source_alias: Option<String>,
     pub target: MergeTargetInfo,
     pub with_schema_evolution: bool,
+    pub case_sensitive: bool,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
@@ -321,6 +322,8 @@ pub struct MergeIntoOptions {
     /// to real column names without the fragile recover-field-names heuristic.
     pub resolved_target_field_names: Vec<String>,
     pub resolved_source_field_names: Vec<String>,
+    /// User-facing source column name and its collision-free internal alias.
+    pub source_column_aliases: Vec<(String, String)>,
     pub on_condition: ExprWithSource,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
@@ -336,6 +339,8 @@ pub struct MergeIntoOptions {
     /// references target schema field IDs and is rewritten to actual column names
     /// by MERGE expansion before being applied as a post-processing projection.
     pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Resolved target column defaults used by explicit MERGE inserts.
+    pub default_column_exprs: Vec<(String, Expr)>,
     /// Delta CHECK constraint expressions for the target table.
     pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
 }

@@ -1,4 +1,3 @@
-@base64
 Feature: base64 functions encode and decode binary strings
 
   Rule: Null propagation
@@ -104,7 +103,7 @@ Feature: base64 functions encode and decode binary strings
         | [62 61 72] |
         | [66 6F 6F] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

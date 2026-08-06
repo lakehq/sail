@@ -1,5 +1,4 @@
-@lambda_hof
-@aggregate
+@function(lambda)
 Feature: aggregate higher-order function
 
   Rule: Array aggregation with lambda functions

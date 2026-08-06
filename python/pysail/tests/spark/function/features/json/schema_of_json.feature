@@ -1,4 +1,3 @@
-@schema_of_json
 Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Argument count validation
@@ -790,7 +789,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result            |
         | STRUCT<a: BIGINT> |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to schema_of_json yields the schema Spark declares

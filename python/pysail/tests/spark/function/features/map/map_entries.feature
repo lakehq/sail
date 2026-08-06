@@ -1,4 +1,3 @@
-@map_entries
 Feature: map_entries function
 
   Rule: Basic usage
@@ -14,7 +13,7 @@ Feature: map_entries function
         | result           | type                                |
         | [{1, a}, {2, b}] | array<struct<key:int,value:string>> |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

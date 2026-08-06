@@ -1,7 +1,6 @@
-@octet_length
 Feature: octet_length output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to octet_length yields the schema Spark declares

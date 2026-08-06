@@ -11,7 +11,6 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
-sail-server = { path = "../sail-server" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
@@ -20,6 +19,7 @@ sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-catalog-system = { path = "../sail-catalog-system" }
+sail-object-store = { path = "../sail-object-store" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

@@ -1,7 +1,6 @@
-@make_date
 Feature: make_date output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

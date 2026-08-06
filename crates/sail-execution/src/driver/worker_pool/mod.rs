@@ -20,10 +20,10 @@ pub struct WorkerPool {
 }
 
 impl WorkerPool {
-    pub fn new(worker_manager: Arc<dyn WorkerManager>, options: WorkerPoolOptions) -> Self {
+    pub fn new(worker_manager: Box<dyn WorkerManager>, options: WorkerPoolOptions) -> Self {
         Self {
             options,
-            worker_manager,
+            worker_manager: Arc::from(worker_manager),
             workers: IndexMap::new(),
             worker_id_generator: IdGenerator::new(),
         }

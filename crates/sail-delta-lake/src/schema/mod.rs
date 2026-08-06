@@ -35,7 +35,7 @@ pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,
 };
-pub use normalize::normalize_delta_schema;
+pub use normalize::{normalize_delta_schema, strip_column_mapping_metadata};
 pub use type_widening::{
     add_type_widening_metadata, collect_type_changes, format_type_change_path,
     is_supported_type_change_for_schema_evolution, is_supported_type_change_for_write,

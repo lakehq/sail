@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.6"
+version = "0.7.0"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2024"
 homepage = "https://lakesail.com"
@@ -46,6 +46,7 @@ serde_yaml = "0.9.34"
 serde_with = { version = "3.20.0", default-features = false, features = ["base64", "std", "macros"] }
 monostate = "1.0.2"
 regex = "1.12.3"
+regex-syntax = "0.8.11"
 glob = "0.3.3"
 chrono = { version = "0.4.44", features = ["serde"] }
 chrono-tz = "0.10.4"
@@ -150,7 +151,7 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.9"
-datafusion = { version = "54.0.0", default-features = false, features = [
+datafusion = { version = "54.1.0", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -164,18 +165,19 @@ datafusion = { version = "54.0.0", default-features = false, features = [
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { version = "54.0.0", features = ["object_store"] }
-datafusion-datasource = { version = "54.0.0" }
-datafusion-datasource-avro = { version = "54.0.0" }
-datafusion-datasource-json = { version = "54.0.0" }
-datafusion-expr = { version = "54.0.0", default-features = false }
-datafusion-expr-common = { version = "54.0.0" }
-datafusion-proto = { version = "54.0.0" }
-datafusion-functions = { version = "54.0.0" }
-datafusion-functions-nested = { version = "54.0.0", default-features = false }
-datafusion-physical-expr = { version = "54.0.0" }
-datafusion-session = { version = "54.0.0" }
-datafusion-spark = { version = "54.0.0", features = ["core"] }
+datafusion-common = { version = "54.1.0", features = ["object_store"] }
+datafusion-datasource = { version = "54.1.0" }
+datafusion-datasource-avro = { version = "54.1.0" }
+datafusion-datasource-json = { version = "54.1.0" }
+datafusion-datasource-parquet = { version = "54.1.0" }
+datafusion-expr = { version = "54.1.0", default-features = false }
+datafusion-expr-common = { version = "54.1.0" }
+datafusion-proto = { version = "54.1.0" }
+datafusion-functions = { version = "54.1.0" }
+datafusion-functions-nested = { version = "54.1.0", default-features = false }
+datafusion-physical-expr = { version = "54.1.0" }
+datafusion-session = { version = "54.1.0" }
+datafusion-spark = { version = "54.1.0", features = ["core"] }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.15.0", default-features = false }
 arrow = { version = "58.3.0", features = ["chrono-tz"] }

@@ -1,4 +1,3 @@
-@xxhash64
 Feature: xxhash64() returns 64-bit xxHash
 
   Rule: Basic usage
@@ -72,7 +71,7 @@ Feature: xxhash64() returns 64-bit xxHash
         | i                    | b                    |
         | -6698625589789238999 | -6698625589789238999 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal yields a non-nullable bigint

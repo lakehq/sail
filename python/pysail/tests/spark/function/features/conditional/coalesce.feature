@@ -1,4 +1,3 @@
-@coalesce
 Feature: coalesce returns the first non-null argument
 
   Rule: Spark-compatible coercion for mixed string and temporal arguments
@@ -59,7 +58,7 @@ Feature: coalesce returns the first non-null argument
         | result | result_type |
         | NULL   | string      |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null argument yields a non-nullable value

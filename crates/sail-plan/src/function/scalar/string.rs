@@ -11,6 +11,7 @@ use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
+use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -37,8 +38,39 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
 
+fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
+    let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
+        (pattern, replacement)
+    else {
+        return false;
+    };
+    let (Some(pattern), Some("$1")) = (
+        pattern.try_as_str().flatten(),
+        replacement.try_as_str().flatten(),
+    ) else {
+        return false;
+    };
+    if !pattern.starts_with('^') {
+        return false;
+    }
+    let Some(short_pattern) = pattern.strip_suffix(".*$") else {
+        return false;
+    };
+
+    // Absolute start anchoring makes global and single replacement equivalent.
+    regex_syntax::parse(short_pattern).is_ok_and(|pattern| {
+        let properties = pattern.properties();
+        properties.look_set_prefix().contains(Look::Start)
+            && properties.explicit_captures_len() == 1
+    })
+}
+
 fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
-    regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
+    if is_single_capture_extract(&pattern, &replacement) {
+        regex_fn::regexp_replace(string, pattern, lit("${1}"), None)
+    } else {
+        regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
+    }
 }
 
 fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

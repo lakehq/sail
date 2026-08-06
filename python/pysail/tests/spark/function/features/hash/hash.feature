@@ -1,4 +1,3 @@
-@hash
 Feature: hash() returns murmur3 hash
 
   Rule: Basic usage
@@ -29,7 +28,7 @@ Feature: hash() returns murmur3 hash
         | result |
         | 42     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

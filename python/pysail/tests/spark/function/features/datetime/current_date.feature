@@ -1,7 +1,6 @@
-@current_date
 Feature: current_date output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

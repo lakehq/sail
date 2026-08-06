@@ -20,7 +20,6 @@ pub struct ServerSession {
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub state: ServerSessionState,
-    pub driver_id: Option<DriverId>,
 }
 
 impl ServerSession {
@@ -34,7 +33,7 @@ impl ServerSession {
     {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
-        if let ServerSessionState::Running { context } = &self.state {
+        if let ServerSessionState::Running { context, .. } = &self.state {
             match context.extension::<JobService>() {
                 Ok(service) => async move {
                     service.runner().observe(observer).await;
@@ -64,9 +63,16 @@ impl ServerSession {
 }
 
 pub enum ServerSessionState {
-    Running { context: SessionContext },
-    Deleting,
-    Deleted { history: Arc<SessionHistory> },
+    Running {
+        context: SessionContext,
+        driver_id: Option<DriverId>,
+    },
+    Deleting {
+        driver_id: Option<DriverId>,
+    },
+    Deleted {
+        history: Arc<SessionHistory>,
+    },
     Failed,
 }
 
@@ -74,7 +80,7 @@ impl ServerSessionState {
     pub fn status(&self) -> &'static str {
         match self {
             ServerSessionState::Running { .. } => "RUNNING",
-            ServerSessionState::Deleting => "DELETING",
+            ServerSessionState::Deleting { .. } => "DELETING",
             ServerSessionState::Deleted { .. } => "DELETED",
             ServerSessionState::Failed => "FAILED",
         }

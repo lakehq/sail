@@ -29,6 +29,45 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Then query plan matches snapshot
 
+  Rule: EXPLAIN shows timestamp schema adaptation inside the driver file scan
+    Background:
+      Given variable location for temporary directory delta_read_driver_timestamp
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_read_driver_timestamp_path
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_read_driver_timestamp_path (
+          id INT,
+          event_time TIMESTAMP
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_driver_timestamp_path
+        VALUES (1, TIMESTAMP '2024-05-01 12:00:00')
+        """
+
+    Scenario: EXPLAIN SELECT with timestamp uses the standard driver file scan
+      When query
+        """
+        EXPLAIN SELECT * FROM delta_read_driver_timestamp_path
+        """
+      Then query plan matches snapshot
+
+    Scenario: SELECT with timestamp preserves the session-local value
+      When query
+        """
+        SELECT id, CAST(event_time AS STRING) AS event_time
+        FROM delta_read_driver_timestamp_path
+        """
+      Then query result ordered
+        | id | event_time          |
+        | 1  | 2024-05-01 12:00:00 |
+
   Rule: EXPLAIN shows metadata-as-data path when table has metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_metadata

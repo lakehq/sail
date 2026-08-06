@@ -1,7 +1,6 @@
-@try_subtract
 Feature: try_subtract output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_subtract yields the schema Spark declares

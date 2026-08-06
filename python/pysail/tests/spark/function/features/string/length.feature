@@ -1,4 +1,3 @@
-@length
 Feature: length() returns character length for strings and byte length for binary
 
   Rule: Character length for string data
@@ -265,7 +264,7 @@ Feature: length() returns character length for strings and byte length for binar
         """
       Then query error .*
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null string literal yields a non-nullable integer

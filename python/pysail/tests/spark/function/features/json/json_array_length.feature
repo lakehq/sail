@@ -1,7 +1,6 @@
-@json_array_length
 Feature: json_array_length output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to json_array_length yields the schema Spark declares

@@ -1,4 +1,3 @@
-@parse_url
 Feature: parse_url() extracts URL component
 
   Rule: Basic usage
@@ -147,7 +146,7 @@ Feature: parse_url() extracts URL component
         | parse_url null url  | CAST(NULL AS STRING), 'HOST'                |
         | parse_url null part | 'https://example.com', CAST(NULL AS STRING) |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null url literal yields a string

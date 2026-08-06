@@ -1,7 +1,6 @@
-@asinh
 Feature: asinh output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to asinh yields the schema Spark declares

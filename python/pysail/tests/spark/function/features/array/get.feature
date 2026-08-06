@@ -1,4 +1,3 @@
-@get
 Feature: get with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: get with an argument coming from a column
 
   Rule: get — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: get with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: get with an argument coming from a column
         | 1      |
 
     # Sail applies the first row's value to every row: Sail returns ['1', '1'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: get takes argument 2 from a column containing NULL
       When query
         """
@@ -28,7 +27,7 @@ Feature: get with an argument coming from a column
         | 1      |
         | NULL   |
 
-    @column_args
+    @function(columnargs)
     Scenario: get takes argument 2 from a column holding two different values
       When query
         """
@@ -39,7 +38,7 @@ Feature: get with an argument coming from a column
         | 10     |
         | 30     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

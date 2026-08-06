@@ -1,4 +1,3 @@
-@array_join_window
 Feature: array_join as window function
 
   Rule: array_join with window aggregation (expanding windows)
