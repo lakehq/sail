@@ -266,9 +266,11 @@ def iceberg_rest_container(
         .with_env("CATALOG_S3_PATH__STYLE__ACCESS", "true")
         .with_network(docker_network)
         .with_network_aliases("iceberg-rest")
+        .waiting_for(
+            LogMessageWaitStrategy("INFO org.eclipse.jetty.server.Server - Started ").with_startup_timeout(120)
+        )
     )
     container.start()
-    wait_for_logs(container, "INFO org.eclipse.jetty.server.Server - Started ", timeout=120)
     yield container
     container.stop()
 

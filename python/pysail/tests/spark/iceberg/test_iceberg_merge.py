@@ -882,3 +882,70 @@ def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spar
         assert rows == [(1, "keep")]
     finally:
         _drop_table(spark, table_name)
+
+
+@pytest.mark.parametrize("delete_granularity", [None, "partition"])
+def test_iceberg_merge_partition_delete_granularity_groups_data_files(
+    spark,
+    tmp_path,
+    delete_granularity,
+):
+    suffix = delete_granularity or "default"
+    table_name = f"iceberg_merge_partition_delete_granularity_{suffix}"
+    table_path = tmp_path / table_name
+    granularity_property = (
+        f", 'write.delete.granularity' = '{delete_granularity}'" if delete_granularity is not None else ""
+    )
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING, part STRING)
+            USING iceberg
+            PARTITIONED BY (part)
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+              {granularity_property}
+            )
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one', 'same')")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two', 'same')")  # noqa: S608
+
+        before_data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
+        before_data_paths = {entry.data_file.file_path for entry in before_data_entries}
+        assert len(before_data_paths) == 2  # noqa: PLR2004
+
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_partition_delete_granularity_source AS
+            SELECT * FROM VALUES (1), (2) AS src(id)
+            """
+        )
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_partition_delete_granularity_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN DELETE
+            """
+        ).collect()
+
+        assert spark.table(table_name).collect() == []
+        delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
+        assert len(delete_entries) == 1
+        delete_file = delete_entries[0].data_file
+        assert delete_file.content == DataFileContent.POSITION_DELETES
+        assert delete_file.partition == Record("same")
+        assert getattr(delete_file, "referenced_data_file", None) is None
+        deleted_row_paths = set(
+            pq.read_table(_local_file_path(delete_file.file_path), columns=["file_path"])
+            .column("file_path")
+            .to_pylist()
+        )
+        assert deleted_row_paths == before_data_paths
+    finally:
+        _drop_table(spark, table_name)
