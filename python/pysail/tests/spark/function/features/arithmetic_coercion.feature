@@ -1916,6 +1916,85 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r                                      |
         | 1000000000000000000000000000000.000000 |
 
+  Rule: Date and timestamp operands follow Spark's temporal arithmetic (known gaps)
+    # From the 17x17 operator type-matrix sweep against Spark JVM 4.2 (2026-08-06).
+    # Sail types DATE +/- day-time interval as DATE (dropping the time part), maps
+    # DATE - DATE to BIGINT instead of interval day, and fails at execution on
+    # DATE - TIMESTAMP ("cast Duration(Nanosecond) to Spark data type").
+
+    @sail-bug
+    Scenario Outline: Temporal arithmetic: <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, CAST(<expr> AS STRING) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                          | expr                                                   | t                      | r                                   |
+        | date plus a day-time interval is a timestamp  | DATE'2024-01-15' + INTERVAL '1 02:03:04' DAY TO SECOND | timestamp              | 2024-01-16 02:03:04                 |
+        | date minus a day-time interval keeps the time | DATE'2024-01-15' - INTERVAL '1 02:03:04' DAY TO SECOND | timestamp              | 2024-01-13 21:56:56                 |
+        | date minus a timestamp is a day-time interval | DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00'      | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
+        | date minus a date is a day interval           | DATE'2024-03-01' - DATE'2024-01-15'                    | interval day           | INTERVAL '46' DAY                   |
+        | date plus NULL is a timestamp NULL            | DATE'2024-01-15' + NULL                                | timestamp              | NULL                                |
+
+  Rule: Untyped NULL on both sides types as double (known gap)
+    # Spark resolves NULL op NULL as double for all four operators; Sail types
+    # +, - and * as bigint (division already agrees).
+
+    @sail-bug
+    Scenario: NULL against NULL is double for every operator
+      When query
+        """
+        SELECT typeof(NULL + NULL) AS a, typeof(NULL - NULL) AS b,
+               typeof(NULL * NULL) AS c, typeof(NULL / NULL) AS d
+        """
+      Then query result
+        | a      | b      | c      | d      |
+        | double | double | double | double |
+
+  Rule: Operand pairs Spark rejects at analysis (known gap — Sail over-accepts)
+    # Spark raises DATATYPE_MISMATCH at analysis for these pairs; Sail computes a
+    # value instead (true / 3 = 0.333..., TIMESTAMP / 3 = raw microseconds, DATE +
+    # BIGINT via date_add, year-month + day-time as a CalendarInterval).
+
+    @sail-bug
+    Scenario Outline: Rejected operand pair: <case>
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error <error>
+
+      Examples:
+        | case                                      | expr                                                               | error                 |
+        | a boolean divided by an integer           | true / CAST(3 AS INT)                                              | BINARY_OP_DIFF_TYPES  |
+        | a timestamp divided by an integer         | TIMESTAMP'2024-01-15 12:00:00' / CAST(3 AS INT)                    | BINARY_OP_DIFF_TYPES  |
+        | a date plus a bigint                      | DATE'2024-01-15' + CAST(3 AS BIGINT)                               | UNEXPECTED_INPUT_TYPE |
+        | a year-month plus a day-time interval     | INTERVAL '1-2' YEAR TO MONTH + INTERVAL '1 02:03:04' DAY TO SECOND | UNEXPECTED_INPUT_TYPE |
+        | an integer divided by a day-time interval | CAST(3 AS INT) / INTERVAL '1 02:03:04' DAY TO SECOND               | BINARY_OP_DIFF_TYPES  |
+
+  Rule: An interval scaled by an integer (known gap — interval arithmetic)
+    # Spark multiplies and divides year-month intervals by numerics; Sail rejects
+    # every IYM x numeric pair ("Cannot get result type for temporal operation").
+
+    @sail-bug
+    Scenario Outline: Interval scaled by an integer: <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, CAST(<expr> AS STRING) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                        | expr                                          | t                      | r                            |
+        | a year-month interval times an integer      | INTERVAL '1-2' YEAR TO MONTH * CAST(2 AS INT) | interval year to month | INTERVAL '2-4' YEAR TO MONTH |
+        | a year-month interval divided by an integer | INTERVAL '2-4' YEAR TO MONTH / CAST(2 AS INT) | interval year to month | INTERVAL '1-2' YEAR TO MONTH |
+
   Rule: pmod operand typing after the generic numeric coercion
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands to
     # one common type before the remainder rule can see the originals.
