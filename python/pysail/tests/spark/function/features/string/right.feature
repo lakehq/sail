@@ -1,7 +1,6 @@
-@right
 Feature: right output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to right yields the schema Spark declares

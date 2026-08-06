@@ -9,6 +9,7 @@ mod tests {
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use futures::stream::TryStreamExt;
     use pyo3::Python;
+    use sail_common::actor::ActorSystem;
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
@@ -61,11 +62,14 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
+        let mut system = ActorSystem::new();
         // The driver gateway is initialized before the session manager in cluster mode, so the
         // manager must be created inside an async context.
-        let manager = handle
-            .primary()
-            .block_on(create_spark_session_manager(config, handle.clone()))?;
+        let manager = handle.primary().block_on(create_spark_session_manager(
+            config,
+            handle.clone(),
+            &mut system,
+        ))?;
         let context = handle
             .primary()
             .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;

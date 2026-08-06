@@ -1,4 +1,3 @@
-@date_trunc
 Feature: DATE_TRUNC preserves timestamp type
 
   Rule: date_trunc on timestamp preserves type
@@ -89,7 +88,7 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: date_trunc — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: date_trunc with the argument as a literal
       When query
         """
@@ -100,7 +99,7 @@ Feature: DATE_TRUNC preserves timestamp type
         | 2015-03-01 00:00:00 |
 
     # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Date_trunc: <case>
       When query
         """
@@ -116,7 +115,7 @@ Feature: DATE_TRUNC preserves timestamp type
         | date_trunc takes argument 1 from a column holding two different values | 'YEAR' | 'MM'   | 2015-01-01 00:00:00 | 2015-03-01 00:00:00 |
         | date_trunc takes argument 1 from a column                              | 'YEAR' | 'YEAR' | 2015-01-01 00:00:00 | 2015-01-01 00:00:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null timestamp literal yields a timestamp

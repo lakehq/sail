@@ -51,58 +51,33 @@ pub fn annotate_new_fields_for_column_mapping(
 
 /// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
 pub fn compute_max_column_id(schema: &StructType) -> i64 {
-    fn max_in_field(field: &StructField) -> i64 {
-        let mut max_id = field
-            .metadata()
-            .get("delta.columnMapping.id")
-            .and_then(|v| match v {
-                MetadataValue::Number(n) => Some(*n),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        match field.data_type() {
-            DataType::Struct(st) => {
-                for f in st.fields() {
-                    max_id = max_id.max(max_in_field(f));
-                }
+    fn max_in_data_type(data_type: &DataType) -> i64 {
+        match data_type {
+            DataType::Struct(struct_type) => struct_type
+                .fields()
+                .map(max_in_field)
+                .max()
+                .unwrap_or_default(),
+            DataType::Array(array_type) => max_in_data_type(array_type.element_type()),
+            DataType::Map(map_type) => {
+                max_in_data_type(map_type.key_type()).max(max_in_data_type(map_type.value_type()))
             }
-            DataType::Array(at) => {
-                if let DataType::Struct(st) = at.element_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-            }
-            DataType::Map(mt) => {
-                if let DataType::Struct(st) = mt.key_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-                if let DataType::Struct(st) = mt.value_type() {
-                    for f in st.fields() {
-                        max_id = max_id.max(max_in_field(f));
-                    }
-                }
-            }
-            _ => {}
+            _ => 0,
         }
-
-        max_id
     }
 
-    let mut max_id = 0i64;
-    for f in schema.fields() {
-        max_id = max_id.max(max_in_field(f));
+    fn max_in_field(field: &StructField) -> i64 {
+        let field_id = column_mapping_id(field).unwrap_or_default();
+
+        field_id.max(max_in_data_type(field.data_type()))
     }
-    max_id
+
+    schema.fields().map(max_in_field).max().unwrap_or_default()
 }
 
 fn column_mapping_id(field: &StructField) -> Option<i64> {
     field
-        .metadata()
-        .get("delta.columnMapping.id")
+        .get_config_value(&ColumnMetadataKey::ColumnMappingId)
         .and_then(|v| match v {
             MetadataValue::Number(n) => Some(*n),
             _ => None,
@@ -111,8 +86,7 @@ fn column_mapping_id(field: &StructField) -> Option<i64> {
 
 fn column_mapping_physical_name(field: &StructField) -> Option<&str> {
     field
-        .metadata()
-        .get("delta.columnMapping.physicalName")
+        .get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName)
         .and_then(|v| match v {
             MetadataValue::String(s) => Some(s.as_str()),
             _ => None,
@@ -129,8 +103,8 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
     strip_parquet_field_id_metadata(&mut merged);
 
     for (key, value) in new.metadata() {
-        let is_column_mapping_key =
-            key == "delta.columnMapping.id" || key == "delta.columnMapping.physicalName";
+        let is_column_mapping_key = key == ColumnMetadataKey::ColumnMappingId.as_ref()
+            || key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
 
         if is_column_mapping_key {
             // Preserve existing column mapping metadata if present; otherwise add it.
@@ -152,9 +126,12 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     let mut annotated = field.clone();
     strip_parquet_field_id_metadata(&mut annotated.metadata);
     let annotated = annotated.add_metadata([
-        ("delta.columnMapping.id", MetadataValue::Number(next_id)),
         (
-            "delta.columnMapping.physicalName",
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            MetadataValue::Number(next_id),
+        ),
+        (
+            ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
             MetadataValue::String(physical_name),
         ),
     ]);

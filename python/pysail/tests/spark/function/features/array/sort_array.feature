@@ -1,7 +1,6 @@
-@sort_array
 Feature: sort_array output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

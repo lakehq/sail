@@ -1,4 +1,3 @@
-@try_to_timestamp
 Feature: try_to_timestamp
   Safe variant of to_timestamp that returns NULL on parse failure.
 

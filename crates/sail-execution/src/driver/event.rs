@@ -6,10 +6,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
-use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -100,7 +99,7 @@ pub enum DriverEvent {
         observer: JobRunnerObserver,
     },
     Shutdown {
-        history: Option<oneshot::Sender<JobRunnerHistory>>,
+        result: Option<oneshot::Sender<()>>,
     },
 }
 

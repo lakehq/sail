@@ -1,4 +1,3 @@
-@abs
 Feature: abs comprehensive tests
 
   Rule: Argument count validation
@@ -606,7 +605,7 @@ Feature: abs comprehensive tests
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
         | 5 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

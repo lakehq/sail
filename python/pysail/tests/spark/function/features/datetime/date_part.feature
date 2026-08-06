@@ -1,7 +1,6 @@
-@date_part
 Feature: date_part / extract output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

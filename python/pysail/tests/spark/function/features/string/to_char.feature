@@ -1,4 +1,3 @@
-@to_char
 Feature: to_char with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: to_char with an argument coming from a column
 
   Rule: to_char — a numeric format must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: to_char with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: to_char with an argument coming from a column
         | 454    |
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_char takes argument 2 from a column holding two different values
       When query
         """
@@ -26,7 +25,7 @@ Feature: to_char with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_char takes argument 2 from a column containing NULL
       When query
         """
@@ -35,7 +34,7 @@ Feature: to_char with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_char takes argument 2 from a column
       When query
         """
@@ -48,7 +47,7 @@ Feature: to_char with an argument coming from a column
   # numeric format; here the column is legal and each row must use its own format.
   Rule: to_char — a date format is resolved per row
 
-    @column_args
+    @function(columnargs)
     Scenario: to_char takes the date format from a column holding two different values
       When query
         """
@@ -59,7 +58,7 @@ Feature: to_char with an argument coming from a column
         | 2026   |
         | 02     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

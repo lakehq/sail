@@ -1,4 +1,3 @@
-@try_variant_get
 Feature: try_variant_get with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: try_variant_get with an argument coming from a column
 
   Rule: try_variant_get — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: try_variant_get with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: try_variant_get with an argument coming from a column
         | "hello" |
 
     # Sail rejects the column: Sail errors: Spark `try_variant_get` function: path must be a constant string
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_variant_get takes argument 2 from a column holding two different values
       When query
         """
@@ -29,7 +28,7 @@ Feature: try_variant_get with an argument coming from a column
         | NULL    |
 
     # Sail rejects the column: Sail errors: Spark `try_variant_get` function: path must be a constant string
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: try_variant_get takes argument 2 from a column
       When query
         """
@@ -40,7 +39,7 @@ Feature: try_variant_get with an argument coming from a column
         | "hello" |
         | "hello" |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_variant_get yields the schema Spark declares

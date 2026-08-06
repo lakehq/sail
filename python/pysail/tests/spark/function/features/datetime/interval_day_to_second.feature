@@ -1,4 +1,3 @@
-@interval_day_to_second
 Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Basic literals

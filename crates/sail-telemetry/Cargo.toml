@@ -22,8 +22,6 @@ opentelemetry-appender-log = { workspace = true }
 log = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
-tower = { workspace = true }
-tonic = { workspace = true }
 pin-project-lite = { workspace = true }
 num-traits = { workspace = true }
 tokio = { workspace = true }

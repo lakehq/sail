@@ -9,8 +9,8 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::stream::SelectAll;
 use futures::{Stream, StreamExt};
+use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_server::actor::ActorContext;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 

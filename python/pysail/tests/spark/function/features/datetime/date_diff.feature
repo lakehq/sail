@@ -1,7 +1,6 @@
-@date_diff
 Feature: date_diff output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

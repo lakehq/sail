@@ -1,4 +1,3 @@
-@window_collect_set
 Feature: collect_set over window functions
 
   Rule: collect_set over expanding window

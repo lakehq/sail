@@ -176,6 +176,10 @@ pub fn restore_logical_record_batch(
     target_schema: &SchemaRef,
     mode: ColumnMappingMode,
 ) -> Result<RecordBatch> {
+    if batch.schema_ref() == target_schema {
+        return Ok(batch.clone());
+    }
+
     let matching = match mode {
         ColumnMappingMode::None => StructFieldMatching::Name,
         ColumnMappingMode::Name => StructFieldMatching::PhysicalName,

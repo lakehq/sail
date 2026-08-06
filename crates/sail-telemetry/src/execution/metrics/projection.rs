@@ -2,8 +2,8 @@ use datafusion::physical_expr_common::metrics::MetricValue;
 use datafusion::physical_plan::Metric;
 use lazy_static::lazy_static;
 use regex::Regex;
+use sail_common::telemetry::KeyValue;
 
-use crate::common::KeyValue;
 use crate::execution::metrics::default::LabelExtractor;
 use crate::execution::metrics::{MetricEmitter, MetricHandled};
 use crate::metrics::{MetricAttribute, MetricRegistry};

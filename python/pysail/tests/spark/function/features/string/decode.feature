@@ -1,4 +1,3 @@
-@decode
 Feature: decode with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: decode with an argument coming from a column
 
   Rule: decode — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: decode with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: decode with an argument coming from a column
         | abc    |
 
     # Sail rejects the column: Sail errors: Unsupported args [Scalar(Binary("97,98,99")), Array(StringArray [ "utf-8", null, ])] for S...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: decode takes argument 2 from a column containing NULL
       When query
         """
@@ -29,7 +28,7 @@ Feature: decode with an argument coming from a column
         | NULL   |
 
     # Sail rejects the column: Sail errors: Unsupported args [Scalar(Binary("97,98,99")), Array(StringArray [ "utf-8", "utf-8", ])] fo...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: decode takes argument 2 from a column
       When query
         """
@@ -40,7 +39,7 @@ Feature: decode with an argument coming from a column
         | abc    |
         | abc    |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null binary literal is nullable (decode is inherently nullable in Spark)

@@ -1,7 +1,6 @@
-@array_contains
 Feature: array_contains output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

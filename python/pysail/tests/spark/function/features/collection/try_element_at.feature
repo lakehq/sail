@@ -1,7 +1,6 @@
-@try_element_at
 Feature: try_element_at output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

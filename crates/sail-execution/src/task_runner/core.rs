@@ -10,10 +10,10 @@ use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::debug;
+use sail_common::actor::{Actor, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
@@ -126,7 +126,9 @@ impl TaskRunner {
                 // work sharing and keeps each task on its own file group.
                 let mut builder =
                     FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                if ds.downcast_to_file_source::<ParquetSource>().is_some()
+                    && base_config.expr_adapter_factory.is_none()
+                {
                     let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
                         Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                     builder = builder.with_expr_adapter(Some(adapter_factory));

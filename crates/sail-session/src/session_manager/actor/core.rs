@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use log::{info, warn};
+use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
-use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;
-use crate::session_manager::options::SessionManagerOptions;
+use crate::session_manager::options::{SessionManagerComponents, SessionManagerOptions};
 
 struct SessionDriverRegistry {
     handle: ActorHandle<SessionManagerActor>,
@@ -33,36 +33,39 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
 #[tonic::async_trait]
 impl Actor for SessionManagerActor {
     type Message = SessionManagerEvent;
-    type Options = SessionManagerOptions;
+    type Options = (SessionManagerOptions, SessionManagerComponents);
 
     fn name() -> &'static str {
         "SessionManagerActor"
     }
 
-    fn new(mut options: Self::Options) -> Self {
-        let session_factory = (options.session_factory)();
-        let job_runner_factory = (options.job_runner_factory)();
-        let gateway = options.take_driver_gateway();
+    fn new(options: Self::Options) -> Self {
+        let (options, components) = options;
+        let SessionManagerComponents {
+            session_factory,
+            job_runner_factory,
+            driver_gateway,
+        } = components;
         Self {
             options,
             session_factory,
             job_runner_factory,
             sessions: IndexMap::new(),
             drivers: Default::default(),
-            gateway,
+            driver_gateway,
             driver_id_generator: IdGenerator::new(),
             shutdown_notifier: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
-        let Some(gateway) = &mut self.gateway else {
+        let Some(driver_gateway) = &mut self.driver_gateway else {
             return;
         };
-        gateway.start(Arc::new(SessionDriverRegistry {
+        driver_gateway.start(Arc::new(SessionDriverRegistry {
             handle: ctx.handle().clone(),
         }));
-        info!("driver server is ready on port {}", gateway.port());
+        info!("driver server is ready on port {}", driver_gateway.port());
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
@@ -99,7 +102,7 @@ impl Actor for SessionManagerActor {
         }
     }
 
-    async fn stop(mut self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
         // active task stream connections, which are owned by the drivers.
         let drivers = self.drivers.drain().collect::<Vec<_>>();
@@ -108,8 +111,9 @@ impl Actor for SessionManagerActor {
                 warn!("failed to shut down driver {driver_id}: {e}");
             }
         }
-        if let Some(mut gateway) = self.gateway {
-            gateway.stop().await;
+        ctx.children_mut().join().await;
+        if let Some(mut driver_gateway) = self.driver_gateway {
+            driver_gateway.stop().await;
             info!("driver server has stopped");
         }
         if let Some(result) = self.shutdown_notifier {

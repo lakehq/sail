@@ -1,4 +1,3 @@
-@set_operations
 Feature: Set operations (INTERSECT, EXCEPT)
 
   Rule: INTERSECT DISTINCT

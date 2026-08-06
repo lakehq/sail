@@ -1,4 +1,3 @@
-@try_avg
 Feature: try_avg
 
   Rule: Result values (migrated from test_try_avg.txt doctests)

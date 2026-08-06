@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sail_server::actor::ActorHandle;
+use sail_common::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 use tonic::async_trait;
@@ -38,7 +38,7 @@ impl DriverHandle {
     pub async fn shutdown(&self) -> ExecutionResult<()> {
         // A closed channel means that the driver actor has already stopped.
         // Shutdown is intentionally idempotent, so this is still a success.
-        let _ = self.send(DriverEvent::Shutdown { history: None }).await;
+        let _ = self.send(DriverEvent::Shutdown { result: None }).await;
         Ok(())
     }
 
@@ -46,7 +46,7 @@ impl DriverHandle {
     pub async fn shutdown_and_wait(&self) -> ExecutionResult<()> {
         let (tx, rx) = oneshot::channel();
         if self
-            .send(DriverEvent::Shutdown { history: Some(tx) })
+            .send(DriverEvent::Shutdown { result: Some(tx) })
             .await
             .is_ok()
         {

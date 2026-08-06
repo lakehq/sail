@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
+use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;

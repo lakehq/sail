@@ -1,4 +1,3 @@
-@to_date
 Feature: to_date with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: to_date with an argument coming from a column
 
   Rule: to_date — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: to_date with the argument as a literal
       When query
         """
@@ -16,7 +15,7 @@ Feature: to_date with an argument coming from a column
         | result     |
         | 2016-12-31 |
 
-    @column_args
+    @function(columnargs)
     Scenario: to_date takes argument 2 from a column
       When query
         """
@@ -147,7 +146,7 @@ Feature: to_date with an argument coming from a column
         | true  |
         | false |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario Outline: a typed DATE with a literal format respects ANSI <ansi> nullability

@@ -1,7 +1,6 @@
-@isnull
 Feature: isnull output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to isnull yields the schema Spark declares

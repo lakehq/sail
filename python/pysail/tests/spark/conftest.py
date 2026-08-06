@@ -6,7 +6,6 @@ import platform
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -20,23 +19,12 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 # The test will be skipped when running on JVM Spark.
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
-INTEGRATION_TEST_PATHS = [
-    Path(__file__).parent / "catalog" / "glue",
-    Path(__file__).parent / "catalog" / "hms",
-    Path(__file__).parent / "catalog" / "iceberg_rest",
-    Path(__file__).parent / "catalog" / "unity",
-]
 
-
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     # Register custom markers.
     config.addinivalue_line(
         "markers",
-        "integration: mark test as requiring external services and deselected by default",
-    )
-    config.addinivalue_line(
-        "markers",
-        "spark_null: output-schema/nullability scenarios; run the whole suite with -m spark_null",
+        "function(group): categorize a function BDD scenario",
     )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.files")
@@ -47,6 +35,8 @@ def pytest_configure(config):
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from _pytest.mark import MarkDecorator
 
 
@@ -159,7 +149,20 @@ DOCTEST_MARKERS = [
 ]
 
 
-def pytest_bdd_apply_tag(tag: str, function):
+FUNCTION_TAG_PATTERN = re.compile(r"function\((.*)\)")
+FUNCTION_TAG_VALUES = ["nullability", "columnargs", "lambda", "sketch"]
+SPARK_TAG_PATTERN = re.compile(r"spark-(.*)")
+
+
+def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | None:
+    if (m := FUNCTION_TAG_PATTERN.fullmatch(tag)) is not None:
+        group = m.group(1)
+        if group not in FUNCTION_TAG_VALUES:
+            msg = f"invalid function tag: {tag}"
+            raise ValueError(msg)
+        pytest.mark.function(group=group)(function)
+        return True
+
     if tag == "sail-only":
         pytest.mark.skipif(is_jvm_spark(), reason="Sail-only feature not supported by JVM Spark")(function)
         return True
@@ -169,25 +172,23 @@ def pytest_bdd_apply_tag(tag: str, function):
         pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)(function)
         return True
 
-    if tag.startswith("spark-"):
-        match = re.fullmatch(r"spark-(\d+(?:\.\d+)*)", tag)
-        if match is None:
+    if (m := SPARK_TAG_PATTERN.fullmatch(tag)) is not None:
+        try:
+            s = m.group(1)
+            version = tuple(int(part) for part in s.split("."))
+            if not version:
+                msg = "empty version"
+                raise ValueError(msg)  # noqa: TRY301
+        except ValueError as e:
             msg = f"invalid Spark version tag: {tag}"
-            raise ValueError(msg)
-        s = match.group(1)
-        version = tuple(int(part) for part in s.split("."))
+            raise ValueError(msg) from e
         pytest.mark.skipif(pyspark_version() < version, reason=f"Requires Spark {s}+")(function)
         return True
 
     return None
 
 
-def _is_integration_test(item: pytest.Item) -> bool:
-    item_path = Path(str(item.fspath)).resolve()
-    return any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS)
-
-
-def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if isinstance(item, DoctestItem):
             for test in DOCTEST_MARKERS:
@@ -201,14 +202,3 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
-
-    for item in items:
-        if _is_integration_test(item):
-            item.add_marker(pytest.mark.integration)
-
-    if not config.getoption("markexpr"):
-        deselected = [item for item in items if item.get_closest_marker("integration")]
-        if deselected:
-            remaining = [item for item in items if item not in deselected]
-            config.hook.pytest_deselected(items=deselected)
-            items[:] = remaining

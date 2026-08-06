@@ -58,17 +58,18 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 43;
     CatalogCommandExecNode catalog_command = 44;
     BarrierExecNode barrier = 45;
-    RelaxedTzCastExecNode relaxed_tz_cast = 46;
-    SparkPartitionIdExecNode spark_partition_id = 47;
-    DeletionVectorWriterExecNode deletion_vector_writer = 48;
-    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
-    CoalesceExecNode coalesce = 50;
-    FileDeleteExecNode file_delete = 51;
-    NoopSinkExecNode noop_sink = 52;
-    CsvExecNode csv = 53;
-    ParquetExecNode parquet = 54;
-    RemoteCheckpointWriteExecNode remote_checkpoint_write = 55;
-    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 56;
+    SparkPartitionIdExecNode spark_partition_id = 46;
+    DeletionVectorWriterExecNode deletion_vector_writer = 47;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 48;
+    CoalesceExecNode coalesce = 49;
+    FileDeleteExecNode file_delete = 50;
+    NoopSinkExecNode noop_sink = 51;
+    CsvExecNode csv = 52;
+    ParquetExecNode parquet = 53;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 54;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
+    IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
+    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
   }
 }
 
@@ -96,7 +97,12 @@ message ExtendedPhysicalExprNode {
     HigherOrderUdfExprNode higher_order_function = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
+    IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
   }
+}
+
+message IcebergPartitionTransformExprNode {
+  string transform = 1;
 }
 
 enum StructFieldMatching {
@@ -105,10 +111,16 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_FIELD_ID = 2;
 }
 
+enum SchemaEvolutionTimezoneMode {
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+}
+
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
+  SchemaEvolutionTimezoneMode timezone_mode = 4;
 }
 
 // A Spark higher-order function (e.g. `filter`). The argument expressions
@@ -524,6 +536,7 @@ message PySparkUdfConfig {
   bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
   bool binary_as_bytes = 9;
   bool python_udf_pandas_prefer_int_extension_dtype = 10;
+  bool arrow_use_large_var_types = 11;
 }
 
 message EquivalenceProperties {
@@ -664,6 +677,8 @@ message ParquetExecNode {
   bytes options = 2;
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
+  StructFieldMatching struct_field_matching = 5;
+  SchemaEvolutionTimezoneMode timezone_mode = 6;
 }
 
 message ArrowExecNode {
@@ -906,12 +921,6 @@ message CoalesceExecNode {
   uint64 output_partitions = 2;
 }
 
-message RelaxedTzCastExecNode {
-  bytes input = 1;
-  bytes schema = 2;
-  DeltaColumnMappingMode column_mapping_mode = 3;
-}
-
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
@@ -971,12 +980,25 @@ message IcebergWriterExecNode {
   string options = 6;
   bytes logical_input_schema = 7;
   string lakehouse_table_json = 8;
+  bool merge_row_intents = 9;
+}
+
+enum IcebergSnapshotUpdateKind {
+  ICEBERG_SNAPSHOT_UPDATE_KIND_UNSPECIFIED = 0;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_FAST_APPEND = 1;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
   string lakehouse_table_json = 3;
+  // Whether commit must validate the target snapshot captured while planning a row-level write.
+  bool validate_read_snapshot = 4;
+  // Absent when validation is required and the target had no current snapshot.
+  optional int64 expected_snapshot_id = 5;
+  IcebergSnapshotUpdateKind snapshot_update_kind = 6;
 }
 
 message IcebergManifestScanExecNode {
@@ -1005,6 +1027,24 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
+}
+
+message IcebergMergeMetadataExecNode {
+  bytes input = 1;
+  string data_file_path = 2;
+  optional string file_column_name = 3;
+  optional string row_index_column_name = 4;
+  optional int32 data_file_partition_spec_id = 5;
+  optional string data_file_partition_json = 6;
+}
+
+message IcebergEqualityDeleteWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string table_properties_json = 3;
+  optional string write_data_path = 4;
+  optional string write_folder_storage_path = 5;
+  string lakehouse_table_json = 6;
 }
 
 message DeltaLogReplayExecNode {

@@ -141,8 +141,60 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         assert len(insert_metadata["snapshots"]) == 1
         assert len(insert_metadata["metadata-log"]) == 1
         assert insert_metadata["metadata-log"][0]["metadata-file"].endswith("/metadata/v1.metadata.json")
+        assert insert_metadata["metadata-log"][0]["timestamp-ms"] == create_metadata["last-updated-ms"]
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
+
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
+        append_metadata = latest_iceberg_metadata(table_path)
+        assert append_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
+        assert append_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+
+        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('custom.key' = 'value')")
+        altered_metadata = latest_iceberg_metadata(table_path)
+        assert altered_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v3.metadata.json")
+        assert altered_metadata["metadata-log"][-1]["timestamp-ms"] == append_metadata["last-updated-ms"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_merge_honors_external_write_data_path(spark, tmp_path):
+    table_path = tmp_path / "iceberg_external_write_path"
+    external_data_path = tmp_path / "external_data"
+    table_name = "iceberg_external_write_path_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id BIGINT)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read',
+              'write.data.path' = '{escape_sql_string_literal(external_data_path.as_uri())}'
+            )
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1), (2)")  # noqa: S608
+        spark.sql("CREATE OR REPLACE TEMP VIEW iceberg_external_write_source AS SELECT * FROM VALUES (1), (3) AS t(id)")
+        spark.sql(
+            """
+            MERGE INTO iceberg_external_write_path_test AS target
+            USING iceberg_external_write_source AS source
+            ON target.id = source.id
+            WHEN MATCHED THEN UPDATE SET id = source.id + 10
+            WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)
+            """
+        )
+
+        rows = spark.sql(f"SELECT id FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert [row.id for row in rows] == [2, 3, 11]
+        assert not list(table_path.rglob("*.parquet"))
+        external_files = list(external_data_path.rglob("*.parquet"))
+        assert any(path.name.startswith("part-") for path in external_files)
+        assert any(path.name.startswith("delete-") for path in external_files)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -165,6 +217,8 @@ def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clear
             """
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+        insert_metadata = latest_iceberg_metadata(table_path)
+        previous_sequence_number = insert_metadata["last-sequence-number"]
 
         spark.sql(
             f"""
@@ -182,9 +236,63 @@ def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clear
 
         replacement_metadata = latest_iceberg_metadata(table_path)
         assert replacement_metadata["current-snapshot-id"] == -1
-        assert replacement_metadata["snapshots"] == []
+        assert replacement_metadata["snapshots"] == insert_metadata["snapshots"]
+        assert replacement_metadata["snapshot-log"] == insert_metadata["snapshot-log"]
+        assert "main" not in replacement_metadata.get("refs", {})
+        assert replacement_metadata["sort-orders"] == insert_metadata["sort-orders"]
+        assert replacement_metadata.get("statistics") == insert_metadata.get("statistics")
+        assert replacement_metadata.get("partition-statistics") == insert_metadata.get("partition-statistics")
         assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["id", "name"]
         assert replacement_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
+        assert replacement_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+        assert replacement_metadata["last-sequence-number"] == previous_sequence_number
+
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
+        post_replace_insert_metadata = latest_iceberg_metadata(table_path)
+        current_snapshot_id = post_replace_insert_metadata["current-snapshot-id"]
+        current_snapshot = next(
+            snapshot
+            for snapshot in post_replace_insert_metadata["snapshots"]
+            if snapshot["snapshot-id"] == current_snapshot_id
+        )
+        assert current_snapshot["sequence-number"] == previous_sequence_number + 1
+        assert post_replace_insert_metadata["last-sequence-number"] == previous_sequence_number + 1
+        assert len(post_replace_insert_metadata["snapshots"]) == len(insert_metadata["snapshots"]) + 1
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_create_or_replace_v3_table_preserves_next_row_id(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_v3_row_id"
+    table_location = table_path.as_uri()
+    table_name = "iceberg_create_or_replace_v3_row_id_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id BIGINT)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_location)}'
+            TBLPROPERTIES ('format-version' = '3')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1), (2), (3)")  # noqa: S608
+        insert_metadata = latest_iceberg_metadata(table_path)
+        assert insert_metadata["next-row-id"] == 3  # noqa: PLR2004
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name} (id BIGINT)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_location)}'
+            TBLPROPERTIES ('format-version' = '3')
+            """
+        )
+
+        replacement_metadata = latest_iceberg_metadata(table_path)
+        assert replacement_metadata["format-version"] == 3  # noqa: PLR2004
+        assert replacement_metadata["next-row-id"] == insert_metadata["next-row-id"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -206,6 +314,7 @@ def test_iceberg_io_create_or_replace_existing_table_changes_schema(spark, tmp_p
             """
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+        insert_metadata = latest_iceberg_metadata(table_path)
 
         spark.sql(
             f"""
@@ -222,7 +331,8 @@ def test_iceberg_io_create_or_replace_existing_table_changes_schema(spark, tmp_p
 
         replacement_metadata = latest_iceberg_metadata(table_path)
         assert replacement_metadata["current-snapshot-id"] == -1
-        assert replacement_metadata["snapshots"] == []
+        assert replacement_metadata["snapshots"] == insert_metadata["snapshots"]
+        assert replacement_metadata["snapshot-log"] == insert_metadata["snapshot-log"]
         assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["replacement"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -244,6 +354,7 @@ def test_iceberg_io_create_or_replace_existing_table_without_schema_creates_empt
             """
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1)")  # noqa: S608
+        insert_metadata = latest_iceberg_metadata(table_path)
 
         spark.sql(
             f"""
@@ -258,7 +369,8 @@ def test_iceberg_io_create_or_replace_existing_table_without_schema_creates_empt
 
         replacement_metadata = latest_iceberg_metadata(table_path)
         assert replacement_metadata["current-snapshot-id"] == -1
-        assert replacement_metadata["snapshots"] == []
+        assert replacement_metadata["snapshots"] == insert_metadata["snapshots"]
+        assert replacement_metadata["snapshot-log"] == insert_metadata["snapshot-log"]
         assert replacement_metadata["schemas"][-1]["fields"] == []
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
