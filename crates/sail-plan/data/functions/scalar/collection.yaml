@@ -273,8 +273,10 @@
   source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Reverse"
   signatures:
-    - "reverse(array)"
-  usage: "reverse(array) - Returns a reversed string or an array with reverse order of elements."
+    - "reverse(expr)"
+  usage: |2-
+    reverse(expr) - Returns a reversed string, a binary value with bytes in reverse order,
+        or an array with reverse order of elements.
   examples: |2-
     
         Examples:
@@ -282,10 +284,13 @@
            LQS krapS
           > SELECT reverse(array(2, 1, 4, 3));
            [3,4,1,2]
+          > SELECT hex(reverse(x'CAFE'));
+           FECA
       
   note: |2-
     
         Reverse logic for arrays is available since 2.4.0.
+        Reverse logic for binary is available since 4.2.0.
       
   since: "1.5.0"
 
@@ -432,4 +437,3 @@
     
         || for arrays is available since 2.4.0.
   since: "2.3.0"
-
