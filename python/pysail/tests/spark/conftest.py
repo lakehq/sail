@@ -6,7 +6,6 @@ import platform
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -20,20 +19,9 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 # The test will be skipped when running on JVM Spark.
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
-INTEGRATION_TEST_PATHS = [
-    Path(__file__).parent / "catalog" / "glue",
-    Path(__file__).parent / "catalog" / "hms",
-    Path(__file__).parent / "catalog" / "iceberg_rest",
-    Path(__file__).parent / "catalog" / "unity",
-]
 
-
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     # Register custom markers.
-    config.addinivalue_line(
-        "markers",
-        "integration: mark test as requiring external services and deselected by default",
-    )
     config.addinivalue_line(
         "markers",
         "function(group): categorize a function BDD scenario",
@@ -47,6 +35,8 @@ def pytest_configure(config):
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from _pytest.mark import MarkDecorator
 
 
@@ -164,7 +154,7 @@ FUNCTION_TAG_VALUES = ["nullability", "columnargs", "lambda", "sketch"]
 SPARK_TAG_PATTERN = re.compile(r"spark-(.*)")
 
 
-def pytest_bdd_apply_tag(tag: str, function):
+def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | None:
     if (m := FUNCTION_TAG_PATTERN.fullmatch(tag)) is not None:
         group = m.group(1)
         if group not in FUNCTION_TAG_VALUES:
@@ -198,12 +188,7 @@ def pytest_bdd_apply_tag(tag: str, function):
     return None
 
 
-def _is_integration_test(item: pytest.Item) -> bool:
-    item_path = Path(str(item.fspath)).resolve()
-    return any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS)
-
-
-def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if isinstance(item, DoctestItem):
             for test in DOCTEST_MARKERS:
@@ -217,14 +202,3 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
-
-    for item in items:
-        if _is_integration_test(item):
-            item.add_marker(pytest.mark.integration)
-
-    if not config.getoption("markexpr"):
-        deselected = [item for item in items if item.get_closest_marker("integration")]
-        if deselected:
-            remaining = [item for item in items if item not in deselected]
-            config.hook.pytest_deselected(items=deselected)
-            items[:] = remaining
