@@ -311,6 +311,16 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.tvf_allow_multiple_table_arguments = value;
         }
 
+        if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_ANALYZER_ALLOW_SUBQUERY_EXPRESSIONS_IN_LAMBDAS_OR_HIGHER_ORDER_FUNCTIONS,
+            )
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.allow_subquery_in_higher_order_functions = value;
+        }
+
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)

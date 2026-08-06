@@ -1,16 +1,76 @@
 use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_python_udf::get_udf_display_name;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::get_lambda_parameters;
+use crate::function::{
+    get_lambda_parameters, lambda_argument_positions, wrapped_lambda_param_count,
+};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+
+/// Returns whether an expression contains a subquery anywhere in its tree
+/// (scalar subquery, `IN (subquery)`, or `EXISTS (subquery)`).
+fn expr_contains_subquery(expr: &expr::Expr) -> PlanResult<bool> {
+    let mut found = false;
+    expr.apply(|e| {
+        Ok(match e {
+            expr::Expr::ScalarSubquery(_) | expr::Expr::InSubquery(_) | expr::Expr::Exists(_) => {
+                found = true;
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })?;
+    Ok(found)
+}
+
+/// Returns the name of the first Python UDF found anywhere in an expression's
+/// tree, if any. Spark rejects Python UDFs inside a higher-order function's
+/// lambda because its evaluators cannot drive the Python worker per element.
+fn expr_python_udf_name(expr: &expr::Expr) -> PlanResult<Option<String>> {
+    let mut found = None;
+    expr.apply(|e| {
+        Ok(match e {
+            // A resolved scalar Python UDF is a scalar function whose inner impl is
+            // a `PySparkUDF` (see `resolve_python_udf_expr`). Unlike the shadowing
+            // gate, this only rejects Python UDFs: a non-Python user function
+            // resolves to a plain `ScalarFunction` indistinguishable from a
+            // built-in here, so it cannot be detected at this point (Spark also
+            // rejects SQL UDFs in a lambda, but that would need a check earlier,
+            // before resolution).
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().downcast_ref::<PySparkUDF>().is_some() =>
+            {
+                found = Some(get_udf_display_name(function.func.name()).to_string());
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })?;
+    Ok(found)
+}
+
+/// Collects the names of every lambda variable referenced anywhere in an
+/// expression's tree.
+fn referenced_lambda_variables(expr: &expr::Expr) -> PlanResult<std::collections::HashSet<String>> {
+    let mut names = std::collections::HashSet::new();
+    expr.apply(|e| {
+        if let expr::Expr::LambdaVariable(variable) = e {
+            names.insert(variable.name.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(names)
+}
 
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {
@@ -52,10 +112,16 @@ impl PlanResolver<'_> {
         enum Slot {
             Resolved(NamedExpr),
             Lambda(spec::Expr, Vec<spec::UnresolvedNamedLambdaVariable>),
+            /// A plain expression sitting in a lambda position, to be wrapped in
+            /// a lambda that declares the parameters the function expects and
+            /// references none of them.
+            WrappedLambda(spec::Expr),
         }
 
+        let lambda_positions = lambda_argument_positions(function_name, arguments.len());
+
         let mut slots: Vec<Slot> = Vec::with_capacity(arguments.len());
-        for argument in arguments {
+        for (position, argument) in arguments.into_iter().enumerate() {
             if is_spec_lambda_argument(&argument) {
                 let Some((function, arguments)) = take_spec_lambda_argument(argument) else {
                     return Err(PlanError::internal(
@@ -63,6 +129,8 @@ impl PlanResolver<'_> {
                     ));
                 };
                 slots.push(Slot::Lambda(function, arguments));
+            } else if lambda_positions.contains(&position) {
+                slots.push(Slot::WrappedLambda(argument));
             } else {
                 slots.push(Slot::Resolved(
                     self.resolve_named_expression(argument, schema, state)
@@ -76,7 +144,7 @@ impl PlanResolver<'_> {
             .map(|slot| {
                 Ok(match slot {
                     Slot::Resolved(named) => ValueOrLambda::Value(named.expr.to_field(schema)?.1),
-                    Slot::Lambda(..) => ValueOrLambda::Lambda(None),
+                    Slot::Lambda(..) | Slot::WrappedLambda(..) => ValueOrLambda::Lambda(None),
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
@@ -102,9 +170,86 @@ impl PlanResolver<'_> {
                     )
                     .await?
                 }
+                Slot::WrappedLambda(expression) => {
+                    let param_fields = lambda_params.next().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "missing lambda parameters for a lambda argument of {function_name}"
+                        ))
+                    })?;
+                    // The body is resolved outside of a lambda scope, so nothing
+                    // in it can bind to the parameters declared below. They exist
+                    // only to satisfy the arity the function expects and to give
+                    // the evaluation batch its row count.
+                    let body = self
+                        .resolve_named_expression(expression, schema, state)
+                        .await?;
+                    // Only declare the parameters Spark's wrapping declares (a
+                    // single element parameter for the element-wise functions),
+                    // not every optional parameter the function supports. The body
+                    // references none of them, so any extra parameter (e.g.
+                    // `transform`'s index) would only force DataFusion to
+                    // materialize an unused per-element column.
+                    let param_count = wrapped_lambda_param_count(function_name, param_fields.len());
+                    // Generated placeholder parameter names. Spark's hidden lambda
+                    // parameters use expression identity and never participate in
+                    // name resolution; DataFusion resolves lambda variables by name,
+                    // so a placeholder must not match any variable the body captures
+                    // (including a backtick-spelled `#N`), or evaluation would rebind
+                    // it. `transform(array(1), `#0` -> transform(array(2), `#0`))`
+                    // is the adversarial case: the inner body captures the outer
+                    // `#0`, so the placeholder is chosen to avoid it.
+                    let captured = referenced_lambda_variables(&body.expr)?;
+                    let mut params: Vec<String> = Vec::with_capacity(param_count);
+                    while params.len() < param_count {
+                        let candidate = state.register_hidden_field_name("lambda_param");
+                        if !captured.contains(&candidate) {
+                            params.push(candidate);
+                        }
+                    }
+                    let name = format!("lambdafunction({})", body.name.clone().one()?);
+                    NamedExpr::new(
+                        vec![name],
+                        expr::Expr::Lambda(Lambda::new(params, body.expr)),
+                    )
+                }
             };
             names.push(name.one()?);
             exprs.push(expr);
+        }
+        // Spark rejects subquery expressions anywhere in a higher-order function
+        // — in a value argument as well as in a lambda body (SPARK-47509 is a
+        // correctness fix). The guard is on by default, controlled by
+        // `spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`.
+        if !self.config.allow_subquery_in_higher_order_functions {
+            for expr in &exprs {
+                // A lambda's parameters are opaque; only its body can carry a
+                // subquery. Every other argument is checked whole.
+                let scope = match expr {
+                    expr::Expr::Lambda(lambda) => &lambda.body,
+                    other => other,
+                };
+                if expr_contains_subquery(scope)? {
+                    return Err(PlanError::AnalysisError(
+                        "Subquery expressions are not supported within higher-order functions. \
+                         Please remove all subquery expressions."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        for expr in &exprs {
+            let expr::Expr::Lambda(lambda) = expr else {
+                continue;
+            };
+            // Spark rejects Python UDFs inside a higher-order function lambda
+            // (`UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`, checked in
+            // `CheckAnalysis`), because the evaluator cannot drive the Python
+            // worker per element.
+            if let Some(name) = expr_python_udf_name(&lambda.body)? {
+                return Err(PlanError::AnalysisError(format!(
+                    "Lambda function with Python UDF `{name}` in a higher order function."
+                )));
+            }
         }
         Ok((names, exprs))
     }
