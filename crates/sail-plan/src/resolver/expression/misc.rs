@@ -224,7 +224,7 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
+            if pattern.is_match(field_name) && self.match_field(info, field_name, plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
                 matching_names.push(field_name.to_string());
             }

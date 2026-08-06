@@ -13,7 +13,6 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::qualifier_matches;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -59,20 +58,22 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
             if remaining.is_empty() {
-                let in_input = schema
-                    .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier));
-                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
-                    outer_schema
-                        .iter()
-                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
-                });
-                if in_input || in_outer {
+                // The expansion of the wildcard compares the qualifier literally, so the one
+                // that the user wrote is replaced with the matching one in the schema.
+                let matched = |s: &DFSchemaRef| {
+                    s.iter().find_map(|(qualifier, _)| {
+                        self.match_wildcard_qualifier(q.as_ref(), qualifier)
+                            .then(|| qualifier.cloned())
+                    })
+                };
+                if let Some(qualifier) = matched(schema)
+                    .or_else(|| state.get_outer_query_schema().and_then(matched))
+                {
                     return Ok(NamedExpr::new(
                         vec!["*".to_string()],
                         #[expect(deprecated)]
                         expr::Expr::Wildcard {
-                            qualifier: q,
+                            qualifier,
                             options: Default::default(),
                         },
                     ));
@@ -90,8 +91,10 @@ impl PlanResolver<'_> {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(column.as_ref(), None)
+                        // A wildcard target that is not a qualifier is resolved as an attribute
+                        // reference to the struct that it expands.
+                        if self.match_attribute_qualifier(q.as_ref(), qualifier)
+                            && self.match_field(info, column.as_ref(), None)
                         {
                             Self::resolve_nested_field_wildcard(
                                 col((q.as_ref(), field)),
