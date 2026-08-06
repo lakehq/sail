@@ -423,6 +423,8 @@ Feature: Iceberg MERGE
         """
         DROP TABLE IF EXISTS merge_many_files_plan_table
         """
+      # An unpartitioned MERGE hashes random-UUID file paths, making exact file-count
+      # snapshots unstable. Partition by id to use deterministic writer distribution keys.
       Given statement template
         """
         CREATE TABLE merge_many_files_plan_table (
@@ -430,6 +432,7 @@ Feature: Iceberg MERGE
           value STRING
         )
         USING iceberg
+        PARTITIONED BY (id)
         LOCATION {{ location.uri }}
         TBLPROPERTIES (
           'format-version' = '2',
@@ -452,17 +455,17 @@ Feature: Iceberg MERGE
         """
         CREATE OR REPLACE TEMP VIEW merge_many_files_plan_source AS
         SELECT * FROM VALUES
-          (1),
-          (2),
-          (3)
-        AS source(id)
+          (1, 'updated-one'),
+          (2, 'updated-two'),
+          (3, 'updated-three')
+        AS source(id, value)
         """
       When query
         """
         EXPLAIN MERGE INTO merge_many_files_plan_table AS t
         USING merge_many_files_plan_source AS s
         ON t.id = s.id
-        WHEN MATCHED THEN DELETE
+        WHEN MATCHED THEN UPDATE SET value = s.value
         """
       Then query plan matches snapshot
       Given statement
@@ -470,22 +473,20 @@ Feature: Iceberg MERGE
         MERGE INTO merge_many_files_plan_table AS t
         USING merge_many_files_plan_source AS s
         ON t.id = s.id
-        WHEN MATCHED THEN DELETE
+        WHEN MATCHED THEN UPDATE SET value = s.value
         """
-      Then iceberg snapshot operation is delete
+      Then iceberg current manifest list matches snapshot
+      Then iceberg current snapshot summary matches snapshot
       Then iceberg snapshot count is 4
-      Then iceberg metadata contains
-        | path                                        | value |
-        | snapshots[3].summary.added-position-deletes | "3"   |
-        | snapshots[3].summary.total-position-deletes | "3"   |
-        | snapshots[3].summary.total-data-files       | "3"   |
       When query
         """
-        SELECT COUNT(*) AS remaining FROM merge_many_files_plan_table
+        SELECT id, value FROM merge_many_files_plan_table ORDER BY id
         """
       Then query result ordered
-        | remaining |
-        | 0         |
+        | id | value         |
+        | 1  | updated-one   |
+        | 2  | updated-two   |
+        | 3  | updated-three |
 
     Scenario: MERGE writes overwrite metadata with data and position-delete manifests
       Given variable location for temporary directory iceberg_merge_metadata
