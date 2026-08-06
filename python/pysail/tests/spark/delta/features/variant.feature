@@ -127,7 +127,7 @@ Feature: Delta Lake Variant support
       | protocol.minReaderVersion             | 3               |
       | protocol.minWriterVersion             | 7               |
       | protocol.readerFeatures               | ["variantType", "variantShredding-preview"] |
-      | protocol.writerFeatures               | ["variantType", "appendOnly", "invariants", "variantShredding-preview"] |
+      | protocol.writerFeatures               | ["variantType", "variantShredding-preview", "appendOnly", "invariants"] |
       | metaData.configuration['delta.enableVariantShredding'] | "true" |
       | metaData.schemaString.fields[1].type  | "variant"       |
     When query
@@ -285,7 +285,7 @@ Feature: Delta Lake Variant support
       | protocol.minReaderVersion            | 3               |
       | protocol.minWriterVersion            | 7               |
       | protocol.readerFeatures              | ["variantType", "variantShredding"] |
-      | protocol.writerFeatures              | ["variantType", "appendOnly", "invariants", "variantShredding"] |
+      | protocol.writerFeatures              | ["variantType", "variantShredding", "appendOnly", "invariants"] |
       | metaData.schemaString.fields[1].type | "variant"       |
     When query
       """
@@ -326,7 +326,7 @@ Feature: Delta Lake Variant support
       | protocol.minReaderVersion            | 3               |
       | protocol.minWriterVersion            | 7               |
       | protocol.readerFeatures              | ["variantType", "variantShredding"] |
-      | protocol.writerFeatures              | ["variantType", "appendOnly", "invariants", "variantShredding"] |
+      | protocol.writerFeatures              | ["variantType", "variantShredding", "appendOnly", "invariants"] |
       | metaData.schemaString.fields[0].type | "integer"       |
     When query
       """
