@@ -4,9 +4,10 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use fastrace::prelude::SpanContext;
 use log::{error, warn};
-use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
+
+use crate::telemetry::{SpanAssociation, SpanAttribute, SpanKind};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
 
@@ -42,6 +43,8 @@ pub struct ActorContext<T: Actor> {
     /// A set of tasks spawned by the actor when processing messages.
     /// All these tasks will be aborted when the context is dropped.
     tasks: JoinSet<()>,
+    /// Actors owned by this actor. All child actors will be aborted when the context is dropped.
+    children: ActorSystem,
 }
 
 impl<T: Actor> ActorContext<T> {
@@ -49,6 +52,7 @@ impl<T: Actor> ActorContext<T> {
         Self {
             handle: handle.clone(),
             tasks: JoinSet::new(),
+            children: ActorSystem::new(),
         }
     }
 
@@ -83,7 +87,13 @@ impl<T: Actor> ActorContext<T> {
         self.tasks.spawn(task.in_span(span))
     }
 
+    /// Return the system that owns the children of this actor.
+    pub fn children_mut(&mut self) -> &mut ActorSystem {
+        &mut self.children
+    }
+
     /// Join tasks that have completed.
+    ///
     /// Any unhandled errors will be logged here.
     pub fn reap(&mut self) {
         while let Some(result) = self.tasks.try_join_next() {
@@ -95,6 +105,7 @@ impl<T: Actor> ActorContext<T> {
                 }
             }
         }
+        self.children.reap();
     }
 }
 
@@ -132,6 +143,9 @@ impl ActorSystem {
 
     /// Wait for all the spawned actors to stop.
     /// The system can still be used to spawn new actors after this method is called.
+    ///
+    /// Please note that the actors must have been sent a stop message before calling this method,
+    /// otherwise this method will wait indefinitely, causing a deadlock.
     pub async fn join(&mut self) {
         while let Some(result) = self.tasks.join_next().await {
             match result {
@@ -141,6 +155,24 @@ impl ActorSystem {
                 }
             }
         }
+    }
+
+    /// Join actors that have already stopped.
+    ///
+    /// Any unhandled errors will be logged here.
+    pub fn reap(&mut self) {
+        while let Some(result) = self.tasks.try_join_next() {
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    error!("failed to join actor: {e}");
+                }
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.tasks.len()
     }
 }
 
@@ -229,6 +261,10 @@ impl<T: Actor> ActorRunner<T> {
         if n > 0 {
             warn!("aborting {n} task(s) for {}", T::name());
         }
+        let n = self.ctx.children.len();
+        if n > 0 {
+            warn!("aborting {n} child actor(s) for {}", T::name());
+        }
     }
 }
 
@@ -248,11 +284,19 @@ mod tests {
 
     struct TestActor;
 
+    struct ParentActor {
+        child: Option<oneshot::Sender<ActorHandle<TestActor>>>,
+    }
+
     enum TestMessage {
         Echo {
             value: String,
             reply: oneshot::Sender<String>,
         },
+        Stop,
+    }
+
+    enum ParentMessage {
         Stop,
     }
 
@@ -269,6 +313,18 @@ mod tests {
                 TestMessage::Echo { value, .. } => vec![("value".into(), value.clone().into())],
                 TestMessage::Stop => vec![],
             }
+        }
+    }
+
+    impl SpanAssociation for ParentMessage {
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                ParentMessage::Stop => "Stop".into(),
+            }
+        }
+
+        fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
+            vec![]
         }
     }
 
@@ -296,6 +352,33 @@ mod tests {
         }
     }
 
+    #[tonic::async_trait]
+    impl Actor for ParentActor {
+        type Message = ParentMessage;
+        type Options = oneshot::Sender<ActorHandle<TestActor>>;
+
+        fn name() -> &'static str {
+            "ParentActor"
+        }
+
+        fn new(child: Self::Options) -> Self {
+            Self { child: Some(child) }
+        }
+
+        async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+            let child = ctx.children_mut().spawn::<TestActor>(());
+            if let Some(sender) = self.child.take() {
+                let _ = sender.send(child);
+            }
+        }
+
+        fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+            match message {
+                ParentMessage::Stop => ActorAction::Stop,
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_actor_handle_send() {
         let mut system = ActorSystem::new();
@@ -319,5 +402,23 @@ mod tests {
         let result = handle.send(TestMessage::Stop).await;
         assert!(matches!(result, Ok(())));
         system.join().await;
+    }
+
+    #[tokio::test]
+    async fn test_child_actor_stops_with_parent() {
+        let mut system = ActorSystem::new();
+        let (tx, rx) = oneshot::channel();
+        let parent = system.spawn::<ParentActor>(tx);
+        let child = rx.await;
+        assert!(child.is_ok());
+        let Ok(child) = child else {
+            return;
+        };
+
+        assert!(parent.send(ParentMessage::Stop).await.is_ok());
+        system.join().await;
+
+        child.sender.closed().await;
+        assert!(child.sender.is_closed());
     }
 }

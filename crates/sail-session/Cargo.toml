@@ -27,9 +27,7 @@ sail-physical-optimizer = { path = "../sail-physical-optimizer" }
 sail-plan = { path = "../sail-plan" }
 sail-execution = { path = "../sail-execution" }
 sail-object-store = { path = "../sail-object-store" }
-sail-server = { path = "../sail-server" }
 sail-cache = { path = "../sail-cache" }
-sail-telemetry = { path = "../sail-telemetry" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 async-trait = { workspace = true }

@@ -24,6 +24,7 @@ pub struct ParquetFileMeta {
 }
 
 pub struct ArrowParquetWriter {
+    // FIXME: Stream Parquet output to object storage instead of retaining the full file in memory.
     writer: Option<AsyncArrowWriter<Vec<u8>>>,
 }
 

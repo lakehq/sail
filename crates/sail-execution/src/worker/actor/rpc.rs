@@ -1,7 +1,7 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
+use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_server::ServerBuilder;
-use sail_server::actor::ActorHandle;
+use sail_common::server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;

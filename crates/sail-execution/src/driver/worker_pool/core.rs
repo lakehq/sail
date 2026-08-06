@@ -7,10 +7,10 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{error, info, warn};
+use sail_common::actor::ActorContext;
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
-use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
 use crate::driver::worker_pool::state::WorkerState;
@@ -29,7 +29,6 @@ impl WorkerPool {
     pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
         for worker_id in worker_ids.into_iter() {
-            // TODO: Should we wait for the spawned tasks for stopping the workers?
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
@@ -82,9 +81,11 @@ impl WorkerPool {
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
             shuffle_backend: self.options.shuffle_backend.clone(),
         };
-        let worker_manager = Arc::clone(&self.worker_manager);
+        let task = self
+            .worker_manager
+            .launch_worker(ctx.children_mut(), worker_id, options);
         ctx.spawn(async move {
-            if let Err(e) = worker_manager.launch_worker(worker_id, options).await {
+            if let Err(e) = task.await {
                 error!("failed to start worker {worker_id}: {e}");
             }
         });

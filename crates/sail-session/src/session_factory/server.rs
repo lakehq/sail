@@ -11,6 +11,7 @@ use datafusion_expr::registry::FunctionRegistry;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
+use sail_common::actor::ActorHandle;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
@@ -18,7 +19,6 @@ use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;

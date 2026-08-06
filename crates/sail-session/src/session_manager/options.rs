@@ -1,9 +1,7 @@
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverGateway;
-use sail_server::actor::ActorSystem;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
 
@@ -11,7 +9,6 @@ use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunner
 pub struct SessionManagerOptions {
     pub session_timeout: Duration,
     pub runtime: RuntimeHandle,
-    pub system: Arc<Mutex<ActorSystem>>,
     /// The application configuration options as key-value pairs,
     /// used to populate the `system.session.options` table.
     pub options: Vec<(String, String)>,
@@ -24,11 +21,10 @@ pub struct SessionManagerComponents {
 }
 
 impl SessionManagerOptions {
-    pub fn new(runtime: RuntimeHandle, system: Arc<Mutex<ActorSystem>>) -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             session_timeout: Duration::MAX,
             runtime,
-            system,
             options: Vec::new(),
         }
     }

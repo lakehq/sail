@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
 use datafusion::prelude::SessionContext;
+use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::SessionManagerObserver;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
-use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 

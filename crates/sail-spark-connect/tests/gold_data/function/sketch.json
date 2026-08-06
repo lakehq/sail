@@ -565,7 +565,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -587,7 +587,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -609,7 +609,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -631,7 +631,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -675,7 +675,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -697,7 +697,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -719,7 +719,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -741,7 +741,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -763,7 +763,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -785,7 +785,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -807,7 +807,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -829,7 +829,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -851,7 +851,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -873,7 +873,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -895,7 +895,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -917,7 +917,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -939,7 +939,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     }
   ]

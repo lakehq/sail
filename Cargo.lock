@@ -144,7 +144,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -155,7 +155,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1610,9 +1610,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1620,9 +1620,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2892,7 +2892,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3103,9 +3103,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace"
-version = "0.7.18"
+version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74539685f6baa3c33251571272eac7939fc3b93dff97c30381d7a6267394e528"
+checksum = "dcef89a7c5b37f7c13551af01f509cbd5d32a8644c27423623639eb923cc2973"
 dependencies = [
  "fastant",
  "fastrace-macro",
@@ -3118,9 +3118,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace-futures"
-version = "0.7.18"
+version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3b6a02e77334be6072af69c93f49a07af3212de09b5cd95a9ee44be49ffb2ac"
+checksum = "9dedfda50f2cf2fe2c7fb1840f42cc2f1cc2a82786f650f2f03da4684ac09faf"
 dependencies = [
  "fastrace",
  "futures-core",
@@ -3130,13 +3130,13 @@ dependencies = [
 
 [[package]]
 name = "fastrace-macro"
-version = "0.7.18"
+version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "390d4f754b751905fa9294716c4ead717ffb5fa733a0c2417358b7779fceaeed"
+checksum = "2f1fdb97ada2fde7912c9cab29b560d550ccc467ca1f39c952ce4b05f8d152b3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3735,9 +3735,9 @@ dependencies = [
 
 [[package]]
 name = "html-escape"
-version = "0.2.14"
+version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46c1ff2d1cbf39efe5af0900ced8a069b5e61557a17544eb0c4a50239937389e"
+checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "http"
@@ -5381,7 +5381,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6673,7 +6673,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7269,9 +7269,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -7543,12 +7543,16 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
+ "axum",
+ "fastrace",
  "figment",
  "glob",
  "half",
  "iana-time-zone",
+ "log",
  "num-traits",
  "num_enum",
+ "pin-project-lite",
  "secrecy",
  "serde",
  "serde_json",
@@ -7556,6 +7560,10 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "toml 0.8.23",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tower",
 ]
 
 [[package]]
@@ -7721,7 +7729,6 @@ dependencies = [
  "sail-object-store",
  "sail-physical-plan",
  "sail-python-udf",
- "sail-server",
  "sail-telemetry",
  "serde",
  "serde_json",
@@ -7752,7 +7759,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-execution",
  "sail-plan",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "sail-sql-parser",
@@ -7853,6 +7859,8 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
+ "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
@@ -7912,7 +7920,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
- "sail-telemetry",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -8049,22 +8056,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-server"
-version = "0.7.0"
-dependencies = [
- "axum",
- "fastrace",
- "log",
- "sail-common",
- "sail-telemetry",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tower",
-]
-
-[[package]]
 name = "sail-session"
 version = "0.7.0"
 dependencies = [
@@ -8102,9 +8093,7 @@ dependencies = [
  "sail-physical-optimizer",
  "sail-physical-plan",
  "sail-plan",
- "sail-server",
  "sail-sql-analyzer",
- "sail-telemetry",
  "secrecy",
  "tempfile",
  "thiserror 2.0.19",
@@ -8144,7 +8133,6 @@ dependencies = [
  "sail-execution",
  "sail-plan",
  "sail-python-udf",
- "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "serde",
@@ -8229,8 +8217,6 @@ dependencies = [
  "syn 2.0.119",
  "thiserror 2.0.19",
  "tokio",
- "tonic",
- "tower",
 ]
 
 [[package]]
@@ -8684,7 +8670,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8764,7 +8750,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9800,9 +9786,9 @@ dependencies = [
 
 [[package]]
 name = "volo-thrift"
-version = "0.12.4"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "307c03439d0df02d6289dcddea8c1f4326cab0e6bd45b240da15b2afa711bafe"
+checksum = "394e287a642d65e992d8115720036b51f08f59749c57b9889aa47fa5b5f7cc35"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",

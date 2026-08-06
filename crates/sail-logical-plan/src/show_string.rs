@@ -9,7 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common::string::escape_meta_characters;
+use sail_common::utils::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
 

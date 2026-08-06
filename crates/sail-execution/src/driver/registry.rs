@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sail_server::actor::ActorHandle;
+use sail_common::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 use tonic::async_trait;

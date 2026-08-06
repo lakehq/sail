@@ -7,9 +7,9 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
+use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{

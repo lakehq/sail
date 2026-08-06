@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use log::{info, warn};
+use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
-use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;
@@ -102,7 +102,7 @@ impl Actor for SessionManagerActor {
         }
     }
 
-    async fn stop(mut self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
         // active task stream connections, which are owned by the drivers.
         let drivers = self.drivers.drain().collect::<Vec<_>>();
@@ -111,6 +111,7 @@ impl Actor for SessionManagerActor {
                 warn!("failed to shut down driver {driver_id}: {e}");
             }
         }
+        ctx.children_mut().join().await;
         if let Some(mut driver_gateway) = self.driver_gateway {
             driver_gateway.stop().await;
             info!("driver server has stopped");
