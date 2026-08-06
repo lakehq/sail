@@ -4840,6 +4840,17 @@ mod tests {
         try_decode_physical_expr(ctx, codec, &expr.encode_to_vec(), schema)
     }
 
+    fn round_trip_expr(
+        expr: &Arc<dyn PhysicalExpr>,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let codec = RemoteExecutionCodec;
+        let schema_ref = Arc::new(input_schema.clone());
+        let proto = serialize_physical_expr(expr, &codec)?;
+        let ctx = TaskContext::default();
+        parse_physical_expr(&proto, &ctx, &schema_ref, &codec)
+    }
+
     /// Builds a `filter(arr, v -> v > 2)` physical expression over a
     /// single `List<Int32>` column "arr", plus the input schema and a sample
     /// `[[1, 2, 3]]` list array for evaluation. Shared by the expr- and
@@ -5118,14 +5129,7 @@ mod tests {
                 .is_some()
         );
 
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
-
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        let decoded = round_trip_expr(&wrapped, schema_ref.as_ref())?;
         let decoded_hof = decoded
             .downcast_ref::<DistributedHigherOrderExpr>()
             .ok_or_else(|| plan_datafusion_err!("decoded is not a DistributedHigherOrderExpr"))?;

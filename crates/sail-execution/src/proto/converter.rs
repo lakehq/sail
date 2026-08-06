@@ -7,7 +7,6 @@ use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
-use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
@@ -16,6 +15,7 @@ use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
+use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{

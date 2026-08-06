@@ -79,9 +79,9 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             );
         }
         Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(Field::new("", left_key.data_type().clone(), false)),
-            Arc::new(Field::new("", left_value.data_type().clone(), true)),
-            Arc::new(Field::new("", right_value.data_type().clone(), true)),
+            Arc::new(Field::new("key", left_key.data_type().clone(), false)),
+            Arc::new(Field::new("value1", left_value.data_type().clone(), true)),
+            Arc::new(Field::new("value2", right_value.data_type().clone(), true)),
         ]]))
     }
 
