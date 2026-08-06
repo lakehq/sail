@@ -2,6 +2,12 @@ import sys
 import types
 
 import pyarrow as pa
+import pytest
+
+from pysail.testing.spark.utils.common import pyspark_version
+
+if pyspark_version() < (4, 1):
+    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
 
 from pysail.spark.datasource.jdbc import JdbcDataSource
 

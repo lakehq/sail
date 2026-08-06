@@ -269,7 +269,7 @@ class _PostgresJdbcWriter(DataSourceArrowWriter):
         self.table = table
 
     def write(self, iterator: Iterator[pa.RecordBatch]):
-        import adbc_driver_postgresql.dbapi as pg_dbapi
+        import adbc_driver_postgresql.dbapi as pg_dbapi  # noqa: PLC0415
 
         with pg_dbapi.connect(self.conn_str) as connection, connection.cursor() as cursor:
             for batch in iterator:
@@ -487,7 +487,7 @@ class JdbcDataSource(DataSource):
         resolved = self._resolve_options()
         return JdbcDataSourceReader(**resolved)
 
-    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: ARG002
+    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: ARG002, FBT001
         if overwrite:
             msg = "JDBC writes currently support only append mode"
             raise ValueError(msg)
