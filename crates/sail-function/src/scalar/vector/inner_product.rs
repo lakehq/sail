@@ -77,6 +77,32 @@ fn vector_inner_product_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Spark 4.2 `vectorInnerProduct` accumulates products eight at a time:
+/// `sum += a0*b0 + ... + a7*b7` then a scalar tail. Sequential f32 folds can
+/// differ when large values cancel across an eight-element boundary.
+fn dot_product_spark(left: &[f32], right: &[f32]) -> f32 {
+    debug_assert_eq!(left.len(), right.len());
+    let mut sum = 0.0f32;
+    let mut i = 0;
+    let simd_limit = (left.len() / 8) * 8;
+    while i < simd_limit {
+        sum += left[i] * right[i]
+            + left[i + 1] * right[i + 1]
+            + left[i + 2] * right[i + 2]
+            + left[i + 3] * right[i + 3]
+            + left[i + 4] * right[i + 4]
+            + left[i + 5] * right[i + 5]
+            + left[i + 6] * right[i + 6]
+            + left[i + 7] * right[i + 7];
+        i += 8;
+    }
+    while i < left.len() {
+        sum += left[i] * right[i];
+        i += 1;
+    }
+    sum
+}
+
 fn compute_inner_product<O: OffsetSizeTrait>(
     left: &GenericListArray<O>,
     right: &GenericListArray<O>,
@@ -99,13 +125,9 @@ fn compute_inner_product<O: OffsetSizeTrait>(
         if left.null_count() > 0 || right.null_count() > 0 {
             return Ok(None);
         }
-        Ok(Some(
-            left.values()
-                .iter()
-                .zip(right.values())
-                .map(|(left, right)| left * right)
-                .fold(0.0, |sum, value| sum + value),
-        ))
+        // Match Spark 4.2: accumulate products in groups of eight so floating-point
+        // cancellation across an 8-element boundary stays Spark-compatible.
+        Ok(Some(dot_product_spark(left.values(), right.values())))
     });
     let values = values.collect::<Result<Vec<Option<f32>>>>()?;
     Ok(Arc::new(Float32Array::from(values)))
@@ -151,5 +173,29 @@ mod tests {
             compute_inner_product(&left, &right),
             Err(error) if error.to_string().contains("matching dimensions")
         ));
+    }
+
+    #[test]
+    fn accumulation_matches_spark_for_large_cancellation() -> Result<()> {
+        // Left:  [1e20, 0,0,0,0,0,0,0, -1e20, 1,1,1,1,1,1,1]
+        // Right: [1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1]
+        // Spark 8-wide sum => 0.0; naive sequential fold => 7.0.
+        let left_vals = [
+            1.0e20f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0e20, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0,
+        ];
+        let right_vals = [1.0f32; 16];
+        let left = ListArray::from_iter_primitive::<Float32Type, _, _>(vec![Some(
+            left_vals.iter().copied().map(Some).collect::<Vec<_>>(),
+        )]);
+        let right = ListArray::from_iter_primitive::<Float32Type, _, _>(vec![Some(
+            right_vals.iter().copied().map(Some).collect::<Vec<_>>(),
+        )]);
+
+        let actual = compute_inner_product(&left, &right)?;
+        let actual = actual.as_primitive::<Float32Type>();
+        assert_eq!(actual.value(0), 0.0);
+        assert_eq!(dot_product_spark(&left_vals, &right_vals), 0.0);
+        Ok(())
     }
 }
