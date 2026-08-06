@@ -12,7 +12,7 @@ use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
@@ -24,6 +24,13 @@ use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
+
+fn validate_jdbc_write_mode(name: &str, mode: &SinkMode) -> Result<()> {
+    if name.eq_ignore_ascii_case("jdbc") && !matches!(mode, SinkMode::Append) {
+        return plan_err!("JDBC writes currently support only explicit append mode");
+    }
+    Ok(())
+}
 
 /// DataSource implementation for a Python data source.
 ///
@@ -221,6 +228,8 @@ impl DataSource for PythonDataSourceAdapter {
             ..
         } = info;
 
+        validate_jdbc_write_mode(&self.name, &mode)?;
+
         // Warn about unsupported partitionBy (PySpark compat: silently ignored)
         if !partition_by.is_empty() {
             log::warn!(
@@ -378,5 +387,13 @@ mod tests {
     fn test_python_data_source_adapter_name() {
         let source = PythonDataSourceAdapter::new("test_datasource".to_string());
         assert_eq!(source.name(), "test_datasource");
+    }
+
+    #[test]
+    fn test_jdbc_write_mode_accepts_only_append() {
+        assert!(validate_jdbc_write_mode("jdbc", &SinkMode::Append).is_ok());
+        assert!(validate_jdbc_write_mode("JDBC", &SinkMode::ErrorIfExists).is_err());
+        assert!(validate_jdbc_write_mode("jdbc", &SinkMode::Overwrite).is_err());
+        assert!(validate_jdbc_write_mode("other", &SinkMode::Overwrite).is_ok());
     }
 }

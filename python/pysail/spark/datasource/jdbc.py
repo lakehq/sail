@@ -1,4 +1,4 @@
-"""JDBC data source for Sail, backed by connectorX.
+"""JDBC data source for Sail, backed by connectorX and ADBC.
 
 Supports ``spark.read.format("jdbc")`` and ``spark.read.jdbc()`` with options
 consistent with the PySpark JDBC API.
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 try:
     from pyspark.sql.datasource import (
         DataSource,
+        DataSourceArrowWriter,
         DataSourceReader,
         EqualTo,
         Filter,
@@ -260,6 +261,27 @@ def _build_where(filters: list[str]) -> str:
 # ============================================================================
 
 
+class _PostgresJdbcWriter(DataSourceArrowWriter):
+    def __init__(self, conn_str: str, dbtable: str):
+        schema, _, table = dbtable.rpartition(".")
+        self.conn_str = conn_str
+        self.schema = schema or None
+        self.table = table
+
+    def write(self, iterator: Iterator[pa.RecordBatch]):
+        import adbc_driver_postgresql.dbapi as pg_dbapi
+
+        with pg_dbapi.connect(self.conn_str) as connection, connection.cursor() as cursor:
+            for batch in iterator:
+                cursor.adbc_ingest(
+                    self.table,
+                    pa.Table.from_batches([batch]),
+                    mode="append",
+                    db_schema_name=self.schema,
+                )
+            connection.commit()
+
+
 class JdbcDataSource(DataSource):
     """JDBC data source backed by connectorX.
 
@@ -318,7 +340,9 @@ class JdbcDataSource(DataSource):
 
     * Exactly one of ``dbtable`` or ``query`` is required.
 
-    Not supported: ``driver``, ``predicates`` list, write operations,
+    Writes support PostgreSQL existing-table append only.
+
+    Not supported: ``driver``, ``predicates`` list, overwrite, table creation,
     ``queryTimeout``, ``isolationLevel``, ``sessionInitStatement``, Kerberos.
     """
 
@@ -462,6 +486,23 @@ class JdbcDataSource(DataSource):
     def reader(self, schema: pa.Schema) -> JdbcDataSourceReader:  # noqa: ARG002
         resolved = self._resolve_options()
         return JdbcDataSourceReader(**resolved)
+
+    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: ARG002
+        if overwrite:
+            msg = "JDBC writes currently support only append mode"
+            raise ValueError(msg)
+
+        resolved = self._resolve_options()
+        if resolved["query"] is not None:
+            msg = "Option 'query' is not supported for JDBC writes; use 'dbtable'"
+            raise ValueError(msg)
+
+        conn_str = resolved["conn_str"]
+        if not conn_str.startswith("postgresql://"):
+            msg = "JDBC writes currently support only PostgreSQL"
+            raise ValueError(msg)
+
+        return _PostgresJdbcWriter(conn_str, resolved["dbtable"])
 
 
 # ============================================================================
