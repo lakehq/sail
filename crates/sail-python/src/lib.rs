@@ -2,6 +2,7 @@
 //!
 //! This module allows Python to interact with the Sail computation engine
 //! by binding the Rust functions and types to Python.
+mod celeborn;
 mod cli;
 mod flight;
 mod globals;
@@ -14,6 +15,7 @@ use pyo3::prelude::*;
 /// and various submodules.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    celeborn::register_module(m)?;
     flight::register_module(m)?;
     spark::register_module(m)?;
     m.add_function(wrap_pyfunction!(cli::main, m)?)?;
