@@ -65,7 +65,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.extra_keyword_matches.add(path.as_posix())
 
     for item in items:
-        item_path = Path(str(item.fspath)).resolve()
+        item_path = item.path.resolve()
         if any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS):
             item.add_marker(pytest.mark.integration)
 
