@@ -41,3 +41,21 @@ Feature: sequence output schema
          |-- result: array (nullable = true)
          |    |-- element: integer (containsNull = false)
         """
+
+  Rule: Integral type coercion
+
+    Scenario: sequence widens a literal start to a BIGINT column stop
+      When query
+        """
+        SELECT
+          n,
+          typeof(sequence(1, n)) AS result_type,
+          sequence(1, n) AS result
+        FROM VALUES (CAST(1 AS BIGINT)), (3), (12) AS t(n)
+        ORDER BY n
+        """
+      Then query result ordered
+        | n  | result_type   | result                                  |
+        | 1  | array<bigint> | [1]                                     |
+        | 3  | array<bigint> | [1, 2, 3]                               |
+        | 12 | array<bigint> | [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] |

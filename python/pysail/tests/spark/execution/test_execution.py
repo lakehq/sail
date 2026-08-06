@@ -37,6 +37,19 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+@pytest.mark.timeout(30)
+def test_sequence_with_column_bound_in_cluster_mode(spark):
+    df = spark.createDataFrame([(1,), (3,), (12,)], ["n"])
+
+    rows = df.select("n", F.expr("sequence(1, n)").alias("s")).collect()
+
+    assert {row.n: row.s for row in rows} == {
+        1: [1],
+        3: [1, 2, 3],
+        12: list(range(1, 13)),
+    }
+
+
 def test_dataframe_operations(spark):
     """Test DataFrame operations in local-cluster mode."""
     df = spark.createDataFrame([Row(a=1, b="hello"), Row(a=2, b="world"), Row(a=3, b="test")])

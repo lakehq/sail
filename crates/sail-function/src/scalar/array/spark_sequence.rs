@@ -14,6 +14,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::temporal_conversions::as_datetime_with_timezone;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -86,7 +87,7 @@ impl ScalarUDFImpl for SparkSequence {
                 arg_types.len()
             );
         }
-        arg_types
+        let arg_types = arg_types
             .iter()
             .map(|arg_type| {
                 if arg_type.is_signed_integer() {
@@ -114,7 +115,27 @@ impl ScalarUDFImpl for SparkSequence {
                     }
                 }
             })
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>>>()?;
+
+        if arg_types
+            .iter()
+            .all(|arg_type| arg_type.is_signed_integer() || arg_type.is_null())
+        {
+            let common_type =
+                arg_types
+                    .iter()
+                    .skip(1)
+                    .try_fold(arg_types[0].clone(), |acc, arg_type| {
+                        comparison_coercion(&acc, arg_type).ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `sequence` function: cannot coerce {acc} and {arg_type}"
+                            )
+                        })
+                    })?;
+            Ok(vec![common_type; arg_types.len()])
+        } else {
+            Ok(arg_types)
+        }
     }
 }
 
