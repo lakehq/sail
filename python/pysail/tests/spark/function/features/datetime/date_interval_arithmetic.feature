@@ -27,7 +27,7 @@ Feature: Date and interval arithmetic
         FROM (
           SELECT n, DATE '2026-07-30' + (n * 5) * INTERVAL 1 MINUTE AS result
           FROM VALUES (1), (2) AS t(n)
-        )
+        ) AS q
         ORDER BY n
         """
       Then query result
