@@ -4,8 +4,7 @@ use tokio::sync::oneshot;
 use crate::error::CelebornResult;
 use crate::lifecycle::actor::LifecycleManagerActor;
 use crate::lifecycle::event::LifecycleManagerEvent;
-use crate::master::SlotReservation;
-use crate::protocol::proto::PbUserIdentifier;
+use crate::master::{SlotReservation, UserIdentifier};
 
 impl LifecycleManagerActor {
     pub(super) fn handle_request_slots_begin(
@@ -25,19 +24,50 @@ impl LifecycleManagerActor {
         let application_id = self.options.application_id.clone();
         let hostname = self.options.hostname.clone();
         let user_identifier = self.user_identifier();
+        let reserve_application_id = application_id.clone();
+        let reserve_user_identifier = user_identifier.clone();
+        let endpoint_resolver = self.options.endpoint_resolver.clone();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let result = client
-                .request_slots(
-                    application_id,
-                    shuffle_id,
-                    partition_ids,
-                    hostname,
-                    should_replicate,
-                    max_workers,
-                    user_identifier,
-                )
-                .await;
+            let result = async {
+                let reservation = client
+                    .request_slots(
+                        application_id,
+                        shuffle_id,
+                        partition_ids,
+                        hostname,
+                        should_replicate,
+                        max_workers,
+                        user_identifier,
+                    )
+                    .await?;
+                for locations in reservation.worker_locations.values() {
+                    let location = locations
+                        .primary_locations
+                        .first()
+                        .or_else(|| locations.replica_locations.first())
+                        .ok_or_else(|| {
+                            crate::error::CelebornError::Protocol(
+                                "worker reservation has no partition locations".to_string(),
+                            )
+                        })?
+                        .clone();
+                    crate::worker::WorkerClient::new(
+                        crate::worker::WorkerClientOptions::new(location)
+                            .with_endpoint_resolver(endpoint_resolver.clone()),
+                    )
+                    .reserve_slots(
+                        reserve_application_id.clone(),
+                        shuffle_id,
+                        locations.primary_locations.clone(),
+                        locations.replica_locations.clone(),
+                        reserve_user_identifier.clone(),
+                    )
+                    .await?;
+                }
+                Ok(reservation)
+            }
+            .await;
             let _ = handle
                 .send(LifecycleManagerEvent::RequestSlotsEnd {
                     shuffle_id,
@@ -101,8 +131,8 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn user_identifier(&self) -> PbUserIdentifier {
-        PbUserIdentifier {
+    pub(super) fn user_identifier(&self) -> UserIdentifier {
+        UserIdentifier {
             tenant_id: self.options.tenant_id.clone(),
             name: self.options.user_name.clone(),
         }

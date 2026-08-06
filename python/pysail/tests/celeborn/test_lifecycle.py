@@ -11,16 +11,25 @@ from pysail import _native
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from pysail.tests.celeborn.conftest import MasterService, WorkerService
+
 
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 
 
 @pytest.fixture(scope="module")
 def lifecycle_manager(
-    celeborn_master: tuple[str, int],
+    celeborn_master: MasterService,
+    celeborn_worker: WorkerService,
+    endpoint_resolver: object,
 ) -> Generator[LifecycleManager, None, None]:
-    host, port = celeborn_master
-    with LifecycleManager(host, port, "sail-celeborn-integration") as manager:
+    assert celeborn_worker.rpc_port > 0
+    with LifecycleManager(
+        celeborn_master.host,
+        celeborn_master.port,
+        "sail-celeborn-integration",
+        endpoint_resolver,
+    ) as manager:
         yield manager
 
 
