@@ -66,9 +66,9 @@ impl PlanResolver<'_> {
                         .iter()
                         .any(|col| self.match_field(info, col, None))
                         .then(|| value.clone()),
-                    Strategy::EachColumn { columns } => columns
-                        .iter()
-                        .find_map(|(col, val)| self.match_field(info, col, None).then(|| val.clone())),
+                    Strategy::EachColumn { columns } => columns.iter().find_map(|(col, val)| {
+                        self.match_field(info, col, None).then(|| val.clone())
+                    }),
                 };
                 let column_expr = col((qualifier, field));
                 let expr = if let Some(value) = value {

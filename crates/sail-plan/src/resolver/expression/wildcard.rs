@@ -66,8 +66,8 @@ impl PlanResolver<'_> {
                             .then(|| qualifier.cloned())
                     })
                 };
-                if let Some(qualifier) = matched(schema)
-                    .or_else(|| state.get_outer_query_schema().and_then(matched))
+                if let Some(qualifier) =
+                    matched(schema).or_else(|| state.get_outer_query_schema().and_then(matched))
                 {
                     return Ok(NamedExpr::new(
                         vec!["*".to_string()],

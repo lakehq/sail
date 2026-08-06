@@ -125,9 +125,13 @@ impl PlanResolver<'_> {
         target: Option<&TableReference>,
         matches: impl Fn(&str, &str) -> bool,
     ) -> bool {
-        let table_matches = |table: &str| target.map(|x| x.table()).is_some_and(|x| matches(x, table));
-        let schema_matches =
-            |schema: &str| target.and_then(|x| x.schema()).is_some_and(|x| matches(x, schema));
+        let table_matches =
+            |table: &str| target.map(|x| x.table()).is_some_and(|x| matches(x, table));
+        let schema_matches = |schema: &str| {
+            target
+                .and_then(|x| x.schema())
+                .is_some_and(|x| matches(x, schema))
+        };
         let catalog_matches = |catalog: &str| {
             target
                 .and_then(|x| x.catalog())

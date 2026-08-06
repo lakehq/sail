@@ -238,11 +238,15 @@ def test_with_columns_discards_alias_already_matched_by_another_alias(spark):
     # Both names match the `id` column through the resolver, but they are not duplicates
     # because their lowercase forms differ. Only the first one replaces the column, and the
     # other one is discarded rather than appended.
+    # U+0131 is the Turkish dotless i. It is written as an escape so the source stays ASCII:
+    # spelling it literally is what the confusable-character lint objects to, and the whole
+    # point of these cases is that it looks like an ASCII i without folding to one.
+    dotless_id = "\u0131d"
     df = spark.range(1)
-    assert df.withColumns({"id": lit(1), "ıd": lit(2)}).columns == ["id"]
-    assert df.withColumns({"id": lit(1), "ıd": lit(2)}).collect() == [Row(id=1)]
-    assert df.withColumns({"ıd": lit(1), "Id": lit(2)}).columns == ["ıd"]
-    assert df.withColumns({"ıd": lit(1), "Id": lit(2)}).collect() == [Row(ıd=1)]
+    assert df.withColumns({"id": lit(1), dotless_id: lit(2)}).columns == ["id"]
+    assert df.withColumns({"id": lit(1), dotless_id: lit(2)}).collect() == [Row(id=1)]
+    assert df.withColumns({dotless_id: lit(1), "Id": lit(2)}).columns == [dotless_id]
+    assert df.withColumns({dotless_id: lit(1), "Id": lit(2)}).collect() == [Row(**{dotless_id: 1})]
 
 
 def metadata_df(spark):
@@ -271,8 +275,9 @@ def test_with_column_does_not_inherit_metadata(spark):
 def test_drop_matches_non_ascii_names(spark):
     assert spark.sql("SELECT 1 AS `Ä`").drop("ä").columns == []
     assert spark.sql("SELECT 1 AS `İ`").drop("i").columns == []
-    assert spark.sql("SELECT 1 AS `ıd`").drop("Id").columns == []
-    assert spark.sql("SELECT 1 AS `Ꭰ`").drop("ꭰ").columns == []
+    assert spark.sql("SELECT 1 AS `\u0131d`").drop("Id").columns == []
+    # U+13A0 is the Cherokee capital letter A; it folds to its lowercase form U+AB70.
+    assert spark.sql("SELECT 1 AS `\u13a0`").drop("\uab70").columns == []
     # `ﬁ` has no simple case mapping, so it does not match `FI`.
     assert spark.sql("SELECT 1 AS `ﬁ`").drop("FI").columns == ["ﬁ"]
 
@@ -284,9 +289,7 @@ def test_replace_subset_matches_name_exactly(spark):
     # The name is resolved case-insensitively, so it is not an error, but only a column whose
     # name matches exactly is replaced.
     assert df.replace("x", "y", subset=["S"]).collect() == [Row(s="x")]
-    assert spark.createDataFrame([("x",)], ["Ä"]).replace("x", "y", subset=["ä"]).collect() == [
-        Row(Ä="x")
-    ]
+    assert spark.createDataFrame([("x",)], ["Ä"]).replace("x", "y", subset=["ä"]).collect() == [Row(Ä="x")]
 
     with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
         df.replace("x", "y", subset=["nope"]).collect()
@@ -322,7 +325,7 @@ def test_attribute_reference_does_not_use_the_resolver_alone(spark):
         with pytest.raises(Exception, match=r"[\"`]i[\"`]"):
             reference().collect()
 
-    dotless = spark.sql("SELECT 1 AS `ıd`")
+    dotless = spark.sql("SELECT 1 AS `\u0131d`")
     with pytest.raises(Exception, match=r"[\"`]Id[\"`]"):
         dotless.select("Id").collect()
 
