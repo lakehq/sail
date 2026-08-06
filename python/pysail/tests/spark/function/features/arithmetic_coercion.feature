@@ -635,6 +635,25 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r    |
         | NULL |
 
+    @sail-bug
+    Scenario: a capped sum that overflows only at the native scale keeps Spark's value
+      # The window between the two overflow behaviours: the native kernel adds at the
+      # bounded scale 10, where 1.75e28 needs more than i128 holds, so Sail raises —
+      # but Spark's adjusted type decimal(38,6) represents the sum, so Spark returns it.
+      # Belongs to the same custom PhysicalExpr follow-up as the scenarios above; this
+      # subcase is pinned separately because Spark yields a VALUE here, not NULL/error.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(CAST(8750000000000000000000000000 AS DECIMAL(38,10))
+                      + CAST(8750000000000000000000000000 AS DECIMAL(38,2))) AS t,
+               CAST(8750000000000000000000000000 AS DECIMAL(38,10))
+               + CAST(8750000000000000000000000000 AS DECIMAL(38,2)) AS r
+        """
+      Then query result
+        | t             | r                                    |
+        | decimal(38,6) | 17500000000000000000000000000.000000 |
+
     Scenario: a capped decimal sum that fits is exact
       # The literal is spelled out rather than written `1e37`, which is a DOUBLE and
       # would not survive the cast exactly — that is a separate concern from the capping.
@@ -660,6 +679,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             | r    |
         | decimal(11,2) | 6.00 |
 
+  @function(nullability)
   Rule: Decimal arithmetic is nullable in Spark (known gap — needs custom PhysicalExpr)
     # Spark marks decimal +, -, * as nullable=true even for non-null operands,
     # because the operation can overflow to NULL. A native BinaryExpr built in the
@@ -696,6 +716,59 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         root
          |-- result: decimal(38,6) (nullable = true)
         """
+
+    @sail-bug
+    Scenario: a capped decimal sum is nullable like Spark
+      # The `+`/`-` retype path narrows with a plain `cast`, so the field inherits
+      # the operands' nullability and Sail reports false. Value-safe (the retype
+      # provably fits), but Spark reports true — same gap as the native path above.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1 AS DECIMAL(38,10)) + CAST(1 AS DECIMAL(38,2)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(38,6) (nullable = true)
+        """
+
+    Scenario: division, remainder and pmod are nullable under ANSI on
+      # Spark's DivModLike.nullable and Pmod.nullable are unconditionally true,
+      # not ANSI-dependent. Sail already agrees; pinned so the custom PhysicalExpr
+      # follow-up cannot regress the half that matches.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(10 AS INT) / CAST(2 AS INT) AS d,
+               CAST(10.5 AS DECIMAL(10,2)) % CAST(3 AS INT) AS m,
+               pmod(CAST(10 AS INT), CAST(3 AS INT)) AS p
+        """
+      Then query schema
+        """
+        root
+         |-- d: double (nullable = true)
+         |-- m: decimal(10,2) (nullable = true)
+         |-- p: integer (nullable = true)
+        """
+
+  Rule: try_add shares the + operator's decimal typing (known gap)
+    # Spark evaluates try_* through the same resultDecimalType as the operators
+    # (EvalMode.TRY), so try_add(decimal(38,10), decimal(38,2)) is decimal(38,6).
+    # Sail's spark_try_add UDF rejects the pair outright ("expects Int32, Int64,
+    # Date32 or Interval"), so it neither types nor computes what Spark does.
+
+    @sail-bug
+    Scenario: try_add of wide decimals takes the operator's capped type
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(try_add(CAST(1 AS DECIMAL(38,10)), CAST(1 AS DECIMAL(38,2)))) AS t,
+               try_add(CAST(1 AS DECIMAL(38,10)), CAST(1 AS DECIMAL(38,2))) AS r
+        """
+      Then query result
+        | t             | r        |
+        | decimal(38,6) | 2.000000 |
 
   Rule: Decimal multiply caps precision at 38 with Spark's adjustPrecisionScale
     # When p1+p2+1 > 38 Spark caps precision at 38 and REDUCES the scale to
@@ -1372,6 +1445,45 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r   |
         | 6.0 |
 
+  Rule: A Java-suffixed or hexadecimal float string parses like Spark (known gap)
+    # Spark's string-to-double cast is Java's `Double.parseDouble` (Cast.scala), whose
+    # grammar also accepts a trailing `f`/`F`/`d`/`D` type suffix and hexadecimal
+    # floats such as `0x1.8p1`. Arrow's parser rejects all of these, so Sail yields
+    # NULL under ANSI off where Spark parses the value.
+
+    @sail-bug
+    Scenario: a float-suffixed string operand parses like Java
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT '1.5f' + 1 AS r
+        """
+      Then query result
+        | r   |
+        | 2.5 |
+
+    @sail-bug
+    Scenario: a double-suffixed string cast to DOUBLE parses like Java
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('2d' AS DOUBLE) AS r
+        """
+      Then query result
+        | r   |
+        | 2.0 |
+
+    @sail-bug
+    Scenario: a hexadecimal float string cast to DOUBLE parses like Java
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('0x1.8p1' AS DOUBLE) AS r
+        """
+      Then query result
+        | r   |
+        | 3.0 |
+
   Rule: The string coercions hold for columns, not just literals
     # A literal is trimmed at plan time while a column goes through `btrim`, so these are
     # two distinct code paths and the literal scenarios above do not cover the second one.
@@ -1739,6 +1851,31 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | NaN  |
         | NULL |
         | 2.1  |
+
+    Scenario: TRY_CAST of 'NaN' to an integer in VALUES keeps the integer type
+      # The NaN override in `resolver/query/values.rs` must fire only for floating
+      # targets: `'NaN'` under an INT target is plain NULL in Spark, so the column
+      # stays `int` instead of being widened to float.
+      When query
+        """
+        SELECT typeof(col1) AS t, col1 AS r
+        FROM VALUES (TRY_CAST('NaN' AS INT)), (CAST(5 AS INT))
+        """
+      Then query result
+        | t   | r    |
+        | int | NULL |
+        | int | 5    |
+
+    Scenario: 'NaN' cast to a decimal in VALUES keeps the decimal type
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(col1) AS t, col1 AS r
+        FROM VALUES (CAST('NaN' AS DECIMAL(10,2)))
+        """
+      Then query result
+        | t             | r    |
+        | decimal(10,2) | NULL |
 
     Scenario: decimal plus an integer column reduces the scale like Spark
       # `+`/`-` apply `coerce_decimal_peer_operand` before the add/sub rule, exactly as
