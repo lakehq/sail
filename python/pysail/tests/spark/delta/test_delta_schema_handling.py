@@ -240,55 +240,6 @@ def test_delta_schema_timestamp_ntz_cast(spark, tmp_path, session_timezone):
     ]
 
 
-def test_delta_schema_timestamp_ntz_create_protocol(spark, tmp_path):
-    """CREATE derives timestampNtz protocol features without upgrading ordinary timestamps."""
-    ntz_path = tmp_path / "delta_timestamp_ntz_protocol"
-    timestamp_path = tmp_path / "delta_timestamp_protocol"
-    ntz_table = "delta_timestamp_ntz_protocol_table"
-    timestamp_table = "delta_timestamp_protocol_table"
-    spark.sql(f"DROP TABLE IF EXISTS {ntz_table}")
-    spark.sql(f"DROP TABLE IF EXISTS {timestamp_table}")
-
-    try:
-        spark.sql(
-            f"""
-            CREATE TABLE {ntz_table} (
-              id INT,
-              event_time TIMESTAMP_NTZ
-            )
-            USING DELTA
-            LOCATION '{escape_sql_string_literal(str(ntz_path))}'
-            """
-        )
-        spark.sql(
-            f"""
-            CREATE TABLE {timestamp_table} (
-              id INT,
-              event_time TIMESTAMP
-            )
-            USING DELTA
-            LOCATION '{escape_sql_string_literal(str(timestamp_path))}'
-            """
-        )
-
-        ntz_protocol = next(action["protocol"] for action in _delta_log_actions(ntz_path) if "protocol" in action)
-        assert ntz_protocol["minReaderVersion"] == 3  # noqa: PLR2004
-        assert ntz_protocol["minWriterVersion"] == 7  # noqa: PLR2004
-        assert ntz_protocol["readerFeatures"] == ["timestampNtz"]
-        assert ntz_protocol["writerFeatures"] == ["timestampNtz", "appendOnly", "invariants"]
-
-        timestamp_protocol = next(
-            action["protocol"] for action in _delta_log_actions(timestamp_path) if "protocol" in action
-        )
-        assert timestamp_protocol["minReaderVersion"] == 1
-        assert timestamp_protocol["minWriterVersion"] == 2  # noqa: PLR2004
-        assert timestamp_protocol.get("readerFeatures") is None
-        assert timestamp_protocol.get("writerFeatures") is None
-    finally:
-        spark.sql(f"DROP TABLE IF EXISTS {ntz_table}")
-        spark.sql(f"DROP TABLE IF EXISTS {timestamp_table}")
-
-
 @pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
 def test_delta_schema_timestamp_ntz_write_artifacts(spark, tmp_path, session_timezone):
     """TimestampNTZ partition values, stats, and Parquet metadata preserve wall-clock time."""
@@ -354,10 +305,25 @@ def test_delta_schema_timestamp_ntz_write_artifacts(spark, tmp_path, session_tim
 
 
 @pytest.mark.parametrize(
-    ("timestamp_type", "sql_type", "expected_stat"),
+    ("timestamp_type", "sql_type", "expected_stat", "expected_protocol"),
     [
-        (TimestampType(), "TIMESTAMP", "2024-07-01T23:45:12.654Z"),
-        (TimestampNTZType(), "TIMESTAMP_NTZ", "2024-07-01T23:45:12.654"),
+        (
+            TimestampType(),
+            "TIMESTAMP",
+            "2024-07-01T23:45:12.654Z",
+            {"minReaderVersion": 1, "minWriterVersion": 2},
+        ),
+        (
+            TimestampNTZType(),
+            "TIMESTAMP_NTZ",
+            "2024-07-01T23:45:12.654",
+            {
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["timestampNtz"],
+                "writerFeatures": ["timestampNtz", "appendOnly", "invariants"],
+            },
+        ),
     ],
     ids=["timestamp", "timestamp_ntz"],
 )
@@ -369,6 +335,7 @@ def test_delta_timestamp_stats_do_not_replace_or_prune_microseconds(
     timestamp_type,
     sql_type,
     expected_stat,
+    expected_protocol,
 ):
     """Millisecond JSON stats remain conservative for driver and metadata reads."""
     _ = session_timezone
@@ -398,6 +365,8 @@ def test_delta_timestamp_stats_do_not_replace_or_prune_microseconds(
             )
             """
         ).collect()
+        protocol = next(action["protocol"] for action in _delta_log_actions(delta_path) if "protocol" in action)
+        assert protocol == expected_protocol
         spark.sql(
             f"""
             INSERT INTO {table_name}

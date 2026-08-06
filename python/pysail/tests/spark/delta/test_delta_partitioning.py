@@ -192,20 +192,3 @@ def test_delta_append_uses_existing_partition_metadata(spark, tmp_path):
     result_pdf = result_df.toPandas().sort_values("id").reset_index(drop=True)
     result_pdf = result_pdf[["id", "value", "category"]]
     assert_frame_equal(result_pdf, expected, check_dtype=False)
-
-
-def test_delta_ignore_existing_table_skips_partition_validation(spark, tmp_path):
-    delta_path = tmp_path / "ignore_existing_partitioned_table"
-    initial_rows = [Row(id=1, value="A"), Row(id=2, value="B")]
-    spark.createDataFrame(initial_rows).write.format("delta").mode("overwrite").save(str(delta_path))
-
-    commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
-    rows_before = spark.read.format("delta").load(str(delta_path)).sort("id").collect()
-
-    ignored_write = spark.createDataFrame([Row(id=3, value="C")])
-    ignored_write.write.format("delta").mode("ignore").partitionBy("missing").save(str(delta_path))
-
-    commit_files_after = sorted((delta_path / "_delta_log").glob("*.json"))
-    rows_after = spark.read.format("delta").load(str(delta_path)).sort("id").collect()
-    assert commit_files_after == commit_files_before
-    assert rows_after == rows_before

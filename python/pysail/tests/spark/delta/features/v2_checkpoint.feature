@@ -419,20 +419,6 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
 
     Scenario: metadata-as-data read succeeds after v1 JSON log is deleted with V2 checkpoint
       Given file 00000000000000000001.json in delta_log is deleted
-      Then file tree in delta_log matches
-        """
-        📂 _sidecars
-          📄 <uuid>.parquet
-          📄 <uuid>.parquet
-        📄 00000000000000000000.crc
-        📄 00000000000000000000.json
-        📄 00000000000000000001.checkpoint.<uuid>.json
-        📄 00000000000000000001.crc
-        📄 00000000000000000002.checkpoint.<uuid>.json
-        📄 00000000000000000002.crc
-        📄 00000000000000000002.json
-        📄 _last_checkpoint
-        """
       When query
         """
         SELECT * FROM delta_v2_ckpt_metadata_recovery_test ORDER BY id

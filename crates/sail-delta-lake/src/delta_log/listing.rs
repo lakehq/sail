@@ -5,8 +5,9 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
-    DeltaResult, LastCheckpointHint, delta_log_prefix_path, delta_log_root_path,
-    last_checkpoint_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
+    DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint, delta_log_prefix_path,
+    delta_log_root_path, is_uuid_checkpoint_filename, last_checkpoint_path,
+    parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions,
 };
 
@@ -41,9 +42,9 @@ pub(crate) fn parse_compacted_json_versions_from_location(location: &Path) -> Op
     delta_log_top_level_filename(location).and_then(parse_compacted_json_versions)
 }
 
-pub(crate) async fn read_last_checkpoint_version_from_store(
+pub(crate) async fn read_last_checkpoint_hint_from_store(
     store: Arc<dyn ObjectStore>,
-) -> Option<i64> {
+) -> Option<LastCheckpointHint> {
     let bytes = store
         .get(&last_checkpoint_path())
         .await
@@ -51,8 +52,39 @@ pub(crate) async fn read_last_checkpoint_version_from_store(
         .bytes()
         .await
         .ok()?;
-    let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
-    Some(hint.version)
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub(crate) async fn read_last_checkpoint_version_from_store(
+    store: Arc<dyn ObjectStore>,
+) -> Option<i64> {
+    read_last_checkpoint_hint_from_store(store)
+        .await
+        .map(|hint| hint.version)
+}
+
+pub(crate) fn v2_checkpoint_path_from_hint(hint: &LastCheckpointHint) -> DeltaResult<Option<Path>> {
+    let Some(v2_checkpoint) = &hint.v2_checkpoint else {
+        return Ok(None);
+    };
+    let path = v2_checkpoint.path.trim_start_matches('/');
+    let filename = path
+        .strip_prefix(&format!("{DELTA_LOG_DIR}/"))
+        .unwrap_or(path);
+    if filename.is_empty() || filename.contains('/') || !is_uuid_checkpoint_filename(filename) {
+        return Err(DeltaError::generic(format!(
+            "_last_checkpoint contains an invalid V2 checkpoint path: {}",
+            v2_checkpoint.path
+        )));
+    }
+    let location = Path::from(format!("{DELTA_LOG_DIR}/{filename}"));
+    if parse_checkpoint_version_from_location(&location) != Some(hint.version) {
+        return Err(DeltaError::generic(format!(
+            "_last_checkpoint V2 path {} does not match checkpoint version {}",
+            v2_checkpoint.path, hint.version
+        )));
+    }
+    Ok(Some(location))
 }
 
 pub(crate) async fn list_delta_log_entries_from(
@@ -70,14 +102,22 @@ pub(crate) async fn list_delta_log_entries_from(
     {
         Ok(entries) => entries,
         Err(ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. }) => {
-            // TODO: Apply the same `location > offset` filter here if needed for the specific store implementation.
-            store.list(Some(&log_path)).try_collect::<Vec<_>>().await?
+            match store.list_with_delimiter(Some(&log_path)).await {
+                Ok(result) => result.objects,
+                Err(
+                    ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. },
+                ) => store.list(Some(&log_path)).try_collect::<Vec<_>>().await?,
+                Err(err) => return Err(err.into()),
+            }
         }
         Err(err) => return Err(err.into()),
     };
     Ok(entries
         .into_iter()
-        .filter(|meta| delta_log_top_level_filename(&meta.location).is_some())
+        .filter(|meta| {
+            meta.location.as_ref() > offset.as_ref()
+                && delta_log_top_level_filename(&meta.location).is_some()
+        })
         .collect())
 }
 

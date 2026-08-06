@@ -203,8 +203,10 @@ pub fn evolve_schema(
 }
 
 // OpenJDK 17 uses Unicode 13, so newer characters must keep identity mappings.
-static JDK_17_ASSIGNED_CHARACTER: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^\p{Age:13.0}$").ok());
+#[expect(clippy::expect_used)]
+static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
+});
 
 fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &str) -> bool {
     let mut left_chars = left.chars();
@@ -225,10 +227,9 @@ fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -
     }
     let mut left_buffer = [0; 4];
     let mut right_buffer = [0; 4];
-    if !JDK_17_ASSIGNED_CHARACTER.as_ref().is_some_and(|regex| {
-        regex.is_match(left.encode_utf8(&mut left_buffer))
-            && regex.is_match(right.encode_utf8(&mut right_buffer))
-    }) {
+    if !(JDK_17_ASSIGNED_CHARACTER.is_match(left.encode_utf8(&mut left_buffer))
+        && JDK_17_ASSIGNED_CHARACTER.is_match(right.encode_utf8(&mut right_buffer)))
+    {
         return false;
     }
 
@@ -320,7 +321,6 @@ fn enable_variant_type_feature(
 ) {
     reader_features.insert(feature.clone());
     writer_features.insert(feature);
-    enable_legacy_writer_features(writer_features);
 }
 
 fn enable_variant_type_features_for_schema(
@@ -363,7 +363,6 @@ fn enable_variant_shredding_feature(
     }
     reader_features.insert(feature.clone());
     writer_features.insert(feature);
-    enable_legacy_writer_features(writer_features);
 }
 
 fn explicit_table_features(

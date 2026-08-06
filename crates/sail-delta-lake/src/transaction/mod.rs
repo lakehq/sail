@@ -41,7 +41,7 @@ use crate::delta_log::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, Stats, TableFeature,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
     Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
     temp_commit_path,
 };
@@ -832,18 +832,20 @@ fn validate_deletion_vector_add_stats(actions: &[Action]) -> DeltaResult<()> {
             .map(|deletion_vector| (add, deletion_vector)),
         _ => None,
     }) {
-        let stats_json = add.stats.as_deref().ok_or_else(|| {
-            DeltaError::generic(format!(
-                "Add action `{}` with a deletion vector requires stats.numRecords",
-                add.path
-            ))
-        })?;
-        let stats = Stats::from_json_str(stats_json).map_err(|error| {
-            DeltaError::generic(format!(
-                "Add action `{}` with a deletion vector has invalid stats.numRecords: {error}",
-                add.path
-            ))
-        })?;
+        let stats = add
+            .get_stats()
+            .map_err(|error| {
+                DeltaError::generic(format!(
+                    "Add action `{}` with a deletion vector has invalid stats.numRecords: {error}",
+                    add.path
+                ))
+            })?
+            .ok_or_else(|| {
+                DeltaError::generic(format!(
+                    "Add action `{}` with a deletion vector requires stats.numRecords",
+                    add.path
+                ))
+            })?;
         if stats.num_records < 0 {
             return Err(DeltaError::generic(format!(
                 "Add action `{}` with a deletion vector has negative stats.numRecords: {}",
@@ -918,22 +920,27 @@ fn validate_effective_commit_target(
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
-    let existing_deletion_vectors: HashSet<_> = read_snapshot
-        .into_iter()
-        .flat_map(|snapshot| snapshot.adds())
-        .filter(|add| add.deletion_vector.is_some())
-        .map(|add| logical_file_key(&add.path, add.deletion_vector.as_ref()))
-        .collect();
-    let creates_deletion_vector = actions_as_actions.iter().any(|action| match action {
-        Action::Add(add) if add.deletion_vector.is_some() => !existing_deletion_vectors
-            .contains(&logical_file_key(&add.path, add.deletion_vector.as_ref())),
-        _ => false,
-    });
-    if creates_deletion_vector && !table_property_enabled(&metadata, "delta.enableDeletionVectors")
+    if !table_property_enabled(&metadata, "delta.enableDeletionVectors")
+        && actions_as_actions
+            .iter()
+            .any(|action| matches!(action, Action::Add(add) if add.deletion_vector.is_some()))
     {
-        return Err(DeltaError::generic(
-            "Cannot add a new deletion vector when delta.enableDeletionVectors is not true",
-        ));
+        let existing_deletion_vectors: HashSet<_> = read_snapshot
+            .into_iter()
+            .flat_map(|snapshot| snapshot.adds())
+            .filter(|add| add.deletion_vector.is_some())
+            .map(|add| logical_file_key(&add.path, add.deletion_vector.as_ref()))
+            .collect();
+        let creates_deletion_vector = actions_as_actions.iter().any(|action| match action {
+            Action::Add(add) if add.deletion_vector.is_some() => !existing_deletion_vectors
+                .contains(&logical_file_key(&add.path, add.deletion_vector.as_ref())),
+            _ => false,
+        });
+        if creates_deletion_vector {
+            return Err(DeltaError::generic(
+                "Cannot add a new deletion vector when delta.enableDeletionVectors is not true",
+            ));
+        }
     }
     validate_deletion_vector_add_stats(&actions_as_actions)?;
 

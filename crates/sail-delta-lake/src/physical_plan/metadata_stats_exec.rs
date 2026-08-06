@@ -226,7 +226,7 @@ fn widen_timestamp_max_values(stats: ArrayRef) -> ArrayRef {
         .zip(stats_struct.columns())
         .map(|(field, column)| {
             if field.name() == STATS_FIELD_MAX_VALUES {
-                widen_timestamp_leaves(Arc::clone(column))
+                widen_timestamp_max_stat(Arc::clone(column))
             } else {
                 Arc::clone(column)
             }
@@ -236,26 +236,6 @@ fn widen_timestamp_max_values(stats: ArrayRef) -> ArrayRef {
         stats_struct.fields().clone(),
         columns,
         stats_struct.nulls().cloned(),
-    ))
-}
-
-fn widen_timestamp_leaves(array: ArrayRef) -> ArrayRef {
-    if matches!(array.data_type(), DataType::Timestamp(_, _)) {
-        return widen_timestamp_max_stat(array);
-    }
-    let Some(struct_array) = array.as_any().downcast_ref::<StructArray>() else {
-        return array;
-    };
-    let columns = struct_array
-        .columns()
-        .iter()
-        .cloned()
-        .map(widen_timestamp_leaves)
-        .collect();
-    Arc::new(StructArray::new(
-        struct_array.fields().clone(),
-        columns,
-        struct_array.nulls().cloned(),
     ))
 }
 
@@ -373,7 +353,8 @@ mod tests {
     use datafusion::arrow::buffer::NullBuffer;
     use datafusion::arrow::datatypes::TimeUnit;
     use datafusion::datasource::memory::MemorySourceConfig;
-    use datafusion::physical_plan::{collect, empty::EmptyExec};
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
     use crate::datasource::PATH_COLUMN;

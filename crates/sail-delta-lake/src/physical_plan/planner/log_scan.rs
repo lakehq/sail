@@ -18,12 +18,10 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::context::PlannerContext;
-use crate::checkpoint::validate_checkpoint_sidecar_file;
 use crate::datasource::create_object_store_url;
 use crate::physical_plan::COL_LOG_VERSION;
 use crate::spec::{
-    add_struct_type, delta_log_file_path, is_json_checkpoint_filename, metadata_struct_type,
-    parse_version_prefix, protocol_struct_type, remove_struct_type, transaction_struct_type,
+    CheckpointActionRow, delta_log_file_path, is_json_checkpoint_filename, parse_version_prefix,
 };
 
 /// The canonical Delta log file schema with proper Map types for fields like `partitionValues`.
@@ -32,18 +30,15 @@ use crate::spec::{
 /// By using this fixed schema for JSON-only log reads (when no parquet checkpoint exists),
 /// we ensure consistent Map types regardless of whether a checkpoint is present.
 static DELTA_LOG_FILE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
-    fn to_arrow(st: crate::spec::StructType) -> DataType {
-        #[expect(clippy::expect_used)]
-        DataType::try_from(&crate::spec::DataType::from(st))
-            .expect("spec struct type should convert to Arrow DataType")
-    }
-    Arc::new(Schema::new(vec![
-        Field::new("add", to_arrow(add_struct_type()), true),
-        Field::new("remove", to_arrow(remove_struct_type()), true),
-        Field::new("metaData", to_arrow(metadata_struct_type()), true),
-        Field::new("protocol", to_arrow(protocol_struct_type()), true),
-        Field::new("txn", to_arrow(transaction_struct_type()), true),
-    ]))
+    #[expect(clippy::expect_used)]
+    let action_type = DataType::try_from(&crate::spec::DataType::from(
+        CheckpointActionRow::struct_type(),
+    ))
+    .expect("canonical checkpoint action schema should convert to Arrow");
+    let DataType::Struct(fields) = action_type else {
+        unreachable!("checkpoint action schema should be a struct")
+    };
+    Arc::new(Schema::new(fields))
 });
 
 fn recursively_nullable_field(field: &Field) -> Field {
@@ -282,18 +277,6 @@ pub async fn build_delta_log_datasource_scans_with_options(
         head_many(&store, table_root_path, &commit_files),
         head_many(&store, table_root_path, &sidecar_files)
     )?;
-    stream::iter(sidecar_metas.iter().cloned())
-        .map(|meta| {
-            let store = Arc::clone(&store);
-            async move {
-                validate_checkpoint_sidecar_file(store, meta)
-                    .await
-                    .map_err(|error| DataFusionError::External(Box::new(error)))
-            }
-        })
-        .buffer_unordered(16)
-        .try_collect::<Vec<_>>()
-        .await?;
     let (json_checkpoint_metas, parquet_checkpoint_metas): (Vec<_>, Vec<_>) =
         checkpoint_metas.into_iter().partition(|meta| {
             meta.location
@@ -509,6 +492,9 @@ mod tests {
         assert!(parsed_fields[0].is_nullable());
         assert!(add_fields.find("deletionVector").is_some());
         assert!(replay.field_with_name("remove").is_ok());
+        assert!(replay.field_with_name("domainMetadata").is_ok());
+        assert!(replay.field_with_name("checkpointMetadata").is_ok());
+        assert!(replay.field_with_name("sidecar").is_ok());
         Ok(())
     }
 }

@@ -211,11 +211,10 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    pub(crate) fn unsupported_reader_features(
+    fn unsupported_reader_features_for_valid_protocol(
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
-        self.validate_feature_lists(protocol)?;
         let Some(features) = self.required_reader_features(protocol)? else {
             return Ok(vec![]);
         };
@@ -225,11 +224,18 @@ impl ProtocolChecker {
             .collect::<Vec<_>>())
     }
 
-    pub(crate) fn unsupported_writer_features(
+    pub(crate) fn unsupported_reader_features(
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
         self.validate_feature_lists(protocol)?;
+        self.unsupported_reader_features_for_valid_protocol(protocol)
+    }
+
+    fn unsupported_writer_features_for_valid_protocol(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
         let Some(features) = self.required_writer_features(protocol)? else {
             return Ok(vec![]);
         };
@@ -239,8 +245,17 @@ impl ProtocolChecker {
             .collect::<Vec<_>>())
     }
 
+    pub(crate) fn unsupported_writer_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
+        self.validate_feature_lists(protocol)?;
+        self.unsupported_writer_features_for_valid_protocol(protocol)
+    }
+
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let diff = self.unsupported_reader_features(protocol)?;
+        self.validate_feature_lists(protocol)?;
+        let diff = self.unsupported_reader_features_for_valid_protocol(protocol)?;
         if !diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(diff));
         }
@@ -317,8 +332,9 @@ impl ProtocolChecker {
     }
 
     pub fn can_write_to_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        self.validate_feature_lists(protocol)?;
         // NOTE: writers must always support all required reader features
-        let mut reader_diff = self.unsupported_reader_features(protocol)?;
+        let mut reader_diff = self.unsupported_reader_features_for_valid_protocol(protocol)?;
         // catalogManaged is unsafe for data reads until catalog-ratified commits are replayed,
         // but writes can proceed through the catalog-managed commit path when the protocol also
         // declares the matching writer feature.
@@ -330,7 +346,7 @@ impl ProtocolChecker {
         if !reader_diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(reader_diff));
         }
-        let diff = self.unsupported_writer_features(protocol)?;
+        let diff = self.unsupported_writer_features_for_valid_protocol(protocol)?;
         if !diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(diff));
         }
