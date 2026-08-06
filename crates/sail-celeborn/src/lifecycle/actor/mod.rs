@@ -28,8 +28,8 @@ impl ApplicationRegistration {
 }
 
 pub struct LifecycleManagerActor {
-    pub(super) client: MasterClient,
     pub(super) options: LifecycleManagerOptions,
+    pub(super) client: MasterClient,
     pub(super) registered_shuffles: HashSet<i32>,
     pub(super) application_registration: ApplicationRegistration,
 }

@@ -16,9 +16,10 @@ impl Actor for LifecycleManagerActor {
     }
 
     fn new(options: Self::Options) -> Self {
+        let client = MasterClient::new(options.master.clone());
         Self {
-            client: MasterClient::new(options.master.clone()),
             options,
+            client,
             registered_shuffles: Default::default(),
             application_registration: ApplicationRegistration::Pending,
         }
@@ -47,7 +48,7 @@ impl Actor for LifecycleManagerActor {
                 should_replicate,
                 max_workers,
                 result,
-            } => self.handle_request_slots(
+            } => self.handle_request_slots_begin(
                 ctx,
                 shuffle_id,
                 partition_ids,
@@ -59,15 +60,15 @@ impl Actor for LifecycleManagerActor {
                 shuffle_id,
                 result,
                 reply,
-            } => self.handle_request_slots_complete(shuffle_id, result, reply),
+            } => self.handle_request_slots_end(shuffle_id, result, reply),
             LifecycleManagerEvent::UnregisterShuffleBegin { shuffle_id, result } => {
-                self.handle_unregister_shuffle(ctx, shuffle_id, result)
+                self.handle_unregister_shuffle_begin(ctx, shuffle_id, result)
             }
             LifecycleManagerEvent::UnregisterShuffleEnd {
                 shuffle_id,
                 result,
                 reply,
-            } => self.handle_unregister_shuffle_complete(shuffle_id, result, reply),
+            } => self.handle_unregister_shuffle_end(shuffle_id, result, reply),
             LifecycleManagerEvent::Stop { result } => {
                 // TODO: unregister shuffles before stopping to release slots early
                 let _ = result.send(());

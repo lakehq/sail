@@ -8,7 +8,7 @@ use crate::master::SlotReservation;
 use crate::protocol::proto::PbUserIdentifier;
 
 impl LifecycleManagerActor {
-    pub(super) fn handle_request_slots(
+    pub(super) fn handle_request_slots_begin(
         &mut self,
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
@@ -49,7 +49,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_request_slots_complete(
+    pub(super) fn handle_request_slots_end(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
@@ -62,7 +62,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_unregister_shuffle(
+    pub(super) fn handle_unregister_shuffle_begin(
         &mut self,
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
@@ -88,7 +88,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_unregister_shuffle_complete(
+    pub(super) fn handle_unregister_shuffle_end(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<()>,
