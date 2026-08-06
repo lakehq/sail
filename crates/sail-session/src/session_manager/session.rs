@@ -10,6 +10,7 @@ use futures::FutureExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObservable};
+use sail_execution::DriverId;
 use tokio::sync::oneshot;
 
 use crate::session_manager::event::SessionHistory;
@@ -32,7 +33,7 @@ impl ServerSession {
     {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
-        if let ServerSessionState::Running { context } = &self.state {
+        if let ServerSessionState::Running { context, .. } = &self.state {
             match context.extension::<JobService>() {
                 Ok(service) => async move {
                     service.runner().observe(observer).await;
@@ -62,9 +63,16 @@ impl ServerSession {
 }
 
 pub enum ServerSessionState {
-    Running { context: SessionContext },
-    Deleting,
-    Deleted { history: Arc<SessionHistory> },
+    Running {
+        context: SessionContext,
+        driver_id: Option<DriverId>,
+    },
+    Deleting {
+        driver_id: Option<DriverId>,
+    },
+    Deleted {
+        history: Arc<SessionHistory>,
+    },
     Failed,
 }
 
@@ -72,7 +80,7 @@ impl ServerSessionState {
     pub fn status(&self) -> &'static str {
         match self {
             ServerSessionState::Running { .. } => "RUNNING",
-            ServerSessionState::Deleting => "DELETING",
+            ServerSessionState::Deleting { .. } => "DELETING",
             ServerSessionState::Deleted { .. } => "DELETED",
             ServerSessionState::Failed => "FAILED",
         }

@@ -116,6 +116,18 @@
       }
     },
     {
+      "input": "SELECT * FROM (SELECT * FROM t CHANGES FROM VERSION 1 TO VERSION 5) sub",
+      "output": {
+        "failure": "invalid argument: found FROM at 39:43 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
+      }
+    },
+    {
+      "input": "SELECT * FROM (SELECT * FROM t TABLESAMPLE SYSTEM (50 PERCENT)) sub",
+      "output": {
+        "failure": "invalid argument: found SYSTEM at 43:49 expected '('"
+      }
+    },
+    {
       "input": "SELECT * FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
       "output": {
         "success": {
@@ -209,7 +221,7 @@
     },
     {
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'. SQLSTATE: 42601 (line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INTO'. SQLSTATE: 42601 (line 1, pos 36)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found INTO at 36:40 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
@@ -307,6 +319,121 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM SYSTEM_TIME '2026-01-01' TO SYSTEM_TIME '2026-02-01'",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM SYSTEM_VERSION 10 TO SYSTEM_VERSION 20",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01'",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' EXCLUSIVE TO TIMESTAMP '2026-02-01' EXCLUSIVE",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' INCLUSIVE TO TIMESTAMP '2026-02-01' INCLUSIVE",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP '2026-02-01'",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION '5765898212649545898' TO VERSION '8439568982649545102'",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 EXCLUSIVE TO VERSION 20",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 EXCLUSIVE TO VERSION 20 EXCLUSIVE",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 INCLUSIVE TO VERSION 20 INCLUSIVE",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 EXCLUSIVE",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (computeUpdates = 'true')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'DROPCARRYOVERS')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'invalid')",
+      "exception": "\n[INVALID_CDC_OPTION.INVALID_DEDUPLICATION_MODE] Invalid Change Data Capture (CDC) option. Invalid `deduplicationMode`: 'invalid'. Expected one of: none, dropCarryovers, netChanges. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'invalid')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'netChanges')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'none')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'none', computeUpdates = 'true')",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 5",
+      "output": {
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -1558,6 +1685,85 @@
       }
     },
     {
+      "input": "SELECT * FROM bernoulli TABLESAMPLE BERNOULLI (10 PERCENT) AS x",
+      "output": {
+        "failure": "invalid argument: found BERNOULLI at 36:45 expected '('"
+      }
+    },
+    {
+      "input": "SELECT * FROM bernoulli TABLESAMPLE(10 PERCENT) bernoulli",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "bernoulli"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "percent": {
+                              "value": {
+                                "literal": {
+                                  "int32": {
+                                    "value": 10
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "bernoulli",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM my_table CHANGES FROM VERSION 1",
+      "output": {
+        "failure": "invalid argument: found FROM at 31:35 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM mydb.system TABLESAMPLE SYSTEM (10 PERCENT) AS x",
+      "output": {
+        "failure": "invalid argument: found SYSTEM at 38:44 expected '('"
+      }
+    },
+    {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.\n== SQL (line 1, position 26) ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n                         ^^^^^^^^^^^^^^^^^\n",
       "output": {
@@ -1661,6 +1867,257 @@
                   "columns": [
                     "a"
                   ]
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM system TABLESAMPLE BERNOULLI (10 PERCENT) AS x",
+      "output": {
+        "failure": "invalid argument: found BERNOULLI at 33:42 expected '('"
+      }
+    },
+    {
+      "input": "SELECT * FROM system TABLESAMPLE SYSTEM (10 PERCENT) AS x",
+      "output": {
+        "failure": "invalid argument: found SYSTEM at 33:39 expected '('"
+      }
+    },
+    {
+      "input": "SELECT * FROM system TABLESAMPLE(10 PERCENT) AS x",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "system"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "percent": {
+                              "value": {
+                                "literal": {
+                                  "int32": {
+                                    "value": 10
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM system TABLESAMPLE(10 PERCENT) system",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "system"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "percent": {
+                              "value": {
+                                "literal": {
+                                  "int32": {
+                                    "value": 10
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "system",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM t CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP (SELECT MAX(ts) FROM other_table)",
+      "exception": "\n[INVALID_CDC_OPTION.INVALID_TIMESTAMP_EXPR] Invalid Change Data Capture (CDC) option. The timestamp expression for CDC queries must not contain subqueries. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM t CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP (SELECT MAX(ts) FROM other_table)",
+      "output": {
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t CHANGES FROM TIMESTAMP (SELECT MAX(ts) FROM other_table)",
+      "exception": "\n[INVALID_CDC_OPTION.INVALID_TIMESTAMP_EXPR] Invalid Change Data Capture (CDC) option. The timestamp expression for CDC queries must not contain subqueries. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM t CHANGES FROM TIMESTAMP (SELECT MAX(ts) FROM other_table)",
+      "output": {
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t CHANGES FROM TIMESTAMP col_name",
+      "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.\n== SQL (line 1, position 15) ==\nSELECT * FROM t CHANGES FROM TIMESTAMP col_name\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t bernoulli",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "bernoulli",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM t system",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "system",
+                  "columns": []
                 },
                 "planId": null
               },
@@ -2428,6 +2885,43 @@
       }
     },
     {
+      "input": "SELECT bernoulli FROM t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bernoulli"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "SELECT interval FROM VALUES ('abc') AS tbl(interval);",
       "output": {
         "success": {
@@ -2471,6 +2965,49 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "SELECT system FROM t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "system"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT t.* FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 AS t",
+      "output": {
+        "failure": "invalid argument: found FROM at 30:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -3008,8 +3545,48 @@
       }
     },
     {
+      "input": "select * from approx",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "approx"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select * from default.range(2)",
-      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`. SQLSTATE: 42000\n== SQL (line 1, position 15) ==\nselect * from default.range(2)\n              ^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -3031,6 +3608,88 @@
                       }
                     ],
                     "namedArguments": [],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from distance",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "distance"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from exact",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "exact"
+                    ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -3605,6 +4264,47 @@
       }
     },
     {
+      "input": "select * from nearest",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "nearest"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select * from range(2)",
       "output": {
         "success": {
@@ -3654,8 +4354,48 @@
       }
     },
     {
+      "input": "select * from similarity",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "similarity"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select * from spark_catalog.default.range(2)",
-      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`. SQLSTATE: 42000\n== SQL (line 1, position 15) ==\nselect * from spark_catalog.default.range(2)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -3833,6 +4573,24 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t TABLESAMPLE BERNOULLI (43 PERCENT) as x",
+      "output": {
+        "failure": "invalid argument: found BERNOULLI at 28:37 expected '('"
+      }
+    },
+    {
+      "input": "select * from t TABLESAMPLE SYSTEM (43 PERCENT) as x",
+      "output": {
+        "failure": "invalid argument: found SYSTEM at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t TabLeSaMpLe SyStEm (43 PeRcEnT) as x",
+      "output": {
+        "failure": "invalid argument: found SyStEm at 28:34 expected '('"
       }
     },
     {
@@ -4188,6 +4946,98 @@
       }
     },
     {
+      "input": "select * from t tablesample bernoulli (43 percent) as x",
+      "output": {
+        "failure": "invalid argument: found bernoulli at 28:37 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample bernoulli (43 percent) repeatable (123) as x",
+      "output": {
+        "failure": "invalid argument: found bernoulli at 28:37 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (-10 percent) as x",
+      "exception": "\nSampling fraction (-0.1) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (-10 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (0 percent) as x",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (0.1 percent) as x",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (100 percent) as x",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (100 rows)",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_SAMPLE_METHOD] The feature is not supported: TABLESAMPLE SYSTEM does not support ROWS sampling. Only PERCENT sampling is supported. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (100 rows)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (150 percent) as x",
+      "exception": "\nSampling fraction (1.5) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (150 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (300M)",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_SAMPLE_METHOD] The feature is not supported: TABLESAMPLE SYSTEM does not support BYTES sampling. Only PERCENT sampling is supported. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (300M)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (43 percent) as x",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (43 percent) repeatable (123)",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_REPEATABLE] The feature is not supported: TABLESAMPLE SYSTEM does not support the REPEATABLE clause. Use TABLESAMPLE BERNOULLI for repeatable sampling with a seed. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (43 percent) repeatable (123)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (bucket 3 out of 32 on rand())",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_SAMPLE_METHOD] The feature is not supported: TABLESAMPLE SYSTEM does not support BUCKET sampling. Only PERCENT sampling is supported. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (bucket 3 out of 32 on rand())\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (bucket 4 out of 10 on x)",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_SAMPLE_METHOD] The feature is not supported: TABLESAMPLE SYSTEM does not support BUCKET sampling. Only PERCENT sampling is supported. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (bucket 4 out of 10 on x)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
+      "input": "select * from t tablesample system (bucket 4 out of 10)",
+      "exception": "\n[UNSUPPORTED_FEATURE.TABLESAMPLE_SYSTEM_SAMPLE_METHOD] The feature is not supported: TABLESAMPLE SYSTEM does not support BUCKET sampling. Only PERCENT sampling is supported. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (bucket 4 out of 10)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found system at 28:34 expected '('"
+      }
+    },
+    {
       "input": "select * from t tablesample(100 rows)",
       "output": {
         "success": {
@@ -4269,6 +5119,67 @@
                             }
                           },
                           "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t tablesample(43 percent) repeatable (10) as x",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "percent": {
+                              "value": {
+                                "literal": {
+                                  "int32": {
+                                    "value": 43
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "seed": 10
                         },
                         "options": []
                       },
@@ -4389,6 +5300,62 @@
                             }
                           },
                           "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t tablesample(bucket 4 out of 10) repeatable (99) as x",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "bucket": {
+                              "numerator": 4,
+                              "denominator": 10
+                            }
+                          },
+                          "seed": 99
                         },
                         "options": []
                       },
@@ -5348,6 +6315,153 @@
       }
     },
     {
+      "input": "select approx from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "approx"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select approx, distance, exact, nearest, similarity from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "approx"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "distance"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "exact"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "nearest"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "similarity"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select distance from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "distance"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select distinct a, b from db.c",
       "output": {
         "success": {
@@ -5396,6 +6510,43 @@
               "columnNames": [],
               "allColumnsAsKeys": true,
               "withinWatermark": false
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select exact from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "exact"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
             },
             "planId": null
           }
@@ -5521,10 +6672,84 @@
       }
     },
     {
+      "input": "select nearest from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "nearest"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'. SQLSTATE: 42601 (line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found 'S' at 22:25 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": "select similarity from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "similarity"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     }
   ]

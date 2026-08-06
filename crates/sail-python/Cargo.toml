@@ -12,6 +12,7 @@ sail-telemetry = { path = "../sail-telemetry" }
 sail-flight = { path = "../sail-flight" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }
+sail-celeborn = { path = "../sail-celeborn" }
 
 pyo3 = { workspace = true }
 tokio = { workspace = true }

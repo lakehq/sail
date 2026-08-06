@@ -92,6 +92,10 @@ def test_binary_read_options(spark, tmp_path):
     expected_single_count = 2
     assert single_char_df.count() == expected_single_count
 
+    alternation_df = spark.read.format("binaryFile").option("pathGlobFilter", "*.{png,jpeg}").load(str(tmp_path))
+    expected_alternation_count = 3
+    assert alternation_df.count() == expected_alternation_count
+
     all_df = spark.read.format("binaryFile").load(str(tmp_path))
     expected_all_count = 7
     assert all_df.count() == expected_all_count

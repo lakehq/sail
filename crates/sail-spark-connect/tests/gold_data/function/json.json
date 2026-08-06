@@ -544,6 +544,28 @@
     },
     {
       "input": {
+        "query": "SELECT to_json(named_struct('b', 1, 'a', 2), map('sortKeys', 'true'));",
+        "result": [
+          "{\"a\":2,\"b\":1}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_json(named_struct(b, 1, a, 2))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));",
         "result": [
           "{\"time\":\"26/08/2015\"}"

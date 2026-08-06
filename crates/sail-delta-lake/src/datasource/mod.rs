@@ -45,7 +45,8 @@ pub mod schema;
 // Re-exports
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
-    PredicateProperties, collect_physical_columns, get_pushdown_filters, simplify_expr,
+    PredicateProperties, collect_physical_columns, get_pushdown_filters,
+    rewrite_predicate_for_column_mapping, simplify_expr,
 };
 pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;

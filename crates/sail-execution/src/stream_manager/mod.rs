@@ -1,8 +1,10 @@
 mod core;
 mod local;
 mod options;
+mod remote;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 pub use options::StreamManagerOptions;
@@ -16,6 +18,7 @@ use crate::worker::WorkerEvent;
 
 pub struct StreamManager {
     options: StreamManagerOptions,
+    remote_streams: Option<Arc<remote::RemoteStreamManager>>,
     local_streams: HashMap<TaskStreamKey, LocalStreamState>,
 }
 

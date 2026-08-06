@@ -1,5 +1,5 @@
 use datafusion::common::HashMap;
-use sail_server::actor::ActorContext;
+use sail_common::actor::ActorContext;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;

@@ -13,7 +13,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 10    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT k, SUM(v) AS total
       FROM VALUES (1, 2), (1, 3), (2, 10), (3, 1) AS t(k, v)
       WHERE v > (SELECT MAX(x) FROM VALUES (1), (2) AS s(x))
@@ -35,7 +35,7 @@ Feature: Scalar subqueries in distributed execution
       | 36    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT SUM(CAST(v AS BIGINT) + (
         SELECT MIN(CAST(x AS BIGINT))
         FROM VALUES (10), (20) AS s(x)
@@ -60,7 +60,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 13    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT k, SUM(CAST(v AS BIGINT) + (
         SELECT MIN(CAST(x AS BIGINT))
         FROM VALUES (10), (20) AS s(x)
@@ -88,7 +88,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 3 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT outer_t.k, outer_t.v
       FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
       WHERE outer_t.v = (
@@ -119,7 +119,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 13    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT k, SUM(shifted) AS total
       FROM (
         SELECT k, CAST(v AS BIGINT) + (
@@ -148,7 +148,7 @@ Feature: Scalar subqueries in distributed execution
       | 1 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v
       FROM VALUES (1), (2), (3) AS t(v)
       ORDER BY CASE WHEN (
@@ -173,7 +173,7 @@ Feature: Scalar subqueries in distributed execution
       | 12 | 1 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT CAST(v AS BIGINT) + (
         SELECT MIN(CAST(x AS BIGINT))
         FROM VALUES (10), (20) AS s(x)
@@ -202,7 +202,7 @@ Feature: Scalar subqueries in distributed execution
       | 3 | 13 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT l.v, r.w
       FROM VALUES (1), (2), (3) AS l(v)
       JOIN VALUES (11), (12), (13) AS r(w)
@@ -233,7 +233,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 13 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT l.v, r.w
       FROM VALUES (1), (2), (3) AS l(v)
       JOIN VALUES (11), (12), (13) AS r(w)
@@ -258,7 +258,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 7     |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT k, SUM(v) AS total
       FROM VALUES (1, 1), (1, 2), (2, 3), (2, 4) AS t(k, v)
       GROUP BY k
@@ -280,7 +280,7 @@ Feature: Scalar subqueries in distributed execution
       | 42    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT SUM(CAST(v AS BIGINT) +
         (SELECT MIN(CAST(x AS BIGINT)) FROM VALUES (10), (20) AS s(x)) +
         (SELECT MAX(CAST(y AS BIGINT)) FROM VALUES (1), (2) AS u(y))
@@ -305,7 +305,7 @@ Feature: Scalar subqueries in distributed execution
       | 3 | 3  |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, ROW_NUMBER() OVER (ORDER BY CASE WHEN (
         SELECT MIN(x) FROM VALUES (2) AS s(x)
       ) = 2 THEN v ELSE -v END) AS rn
@@ -331,7 +331,7 @@ Feature: Scalar subqueries in distributed execution
       | 4 | 2 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, COUNT(*) OVER (PARTITION BY CASE WHEN (
         SELECT MIN(x) FROM VALUES (1) AS s(x)
       ) = 1 THEN v % 2 ELSE v END) AS n
@@ -357,7 +357,7 @@ Feature: Scalar subqueries in distributed execution
       | 3 | 36    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, SUM(CAST(v AS BIGINT) + (
         SELECT MIN(CAST(x AS BIGINT))
         FROM VALUES (10), (20) AS s(x)
@@ -382,7 +382,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 1 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT k, COUNT(*) FILTER (WHERE v > (
         SELECT MIN(x) FROM VALUES (1) AS s(x)
       )) AS n
@@ -407,7 +407,7 @@ Feature: Scalar subqueries in distributed execution
       | b,a,c  |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT listagg(v, ',') WITHIN GROUP (
         ORDER BY CASE WHEN (
           SELECT MIN(x) FROM VALUES (1) AS s(x)
@@ -433,7 +433,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 13      |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, CAST(v AS BIGINT) + (
         SELECT MIN(x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
         FROM VALUES (10), (20) AS s(x)
@@ -460,7 +460,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | NULL    |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, CAST(v AS BIGINT) + (
         SELECT CAST(x AS BIGINT)
         FROM VALUES (10) AS s(x)
@@ -487,7 +487,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | NULL          |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT v, CAST(v AS BIGINT) + (
         SELECT MIN(CAST(x AS BIGINT))
         FROM VALUES (CAST(NULL AS INT)) AS s(x)
@@ -545,7 +545,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 3 | 3  |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT outer_t.k, outer_t.v, (
         SELECT MAX(inner_t.x)
         FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
@@ -573,7 +573,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 3 | NULL |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT outer_t.k, outer_t.v, (
         SELECT MAX(inner_t.x)
         FROM VALUES (1, 4), (1, 2) AS inner_t(k, x)
@@ -603,7 +603,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 3 | 4       |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT outer_t.k, outer_t.v, (
         SELECT MAX(inner_t.x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
         FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
@@ -632,7 +632,7 @@ Feature: Scalar subqueries in distributed execution
       | 2 | 4 |
     When query
       """
-      EXPLAIN
+      EXPLAIN CODEGEN
       SELECT outer_t.k, outer_t.v
       FROM VALUES (1, 2), (1, 5), (2, 1), (2, 4) AS outer_t(k, v)
       WHERE outer_t.v = (

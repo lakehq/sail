@@ -14,11 +14,10 @@ use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
-    Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput, ExecutorOutputStream, read_stream,
+    Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, ExecutorOutputStream,
     to_arrow_batch,
 };
 use crate::session::SparkSession;
@@ -26,10 +25,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult, relation,
@@ -61,12 +61,14 @@ impl Stream for ExecutePlanResponseStream {
     ) -> Poll<Option<Result<ExecutePlanResponse, Status>>> {
         self.inner.as_mut().poll_next(cx).map(|poll| {
             poll.map(|item| {
+                let item = item.map_err(Status::from)?;
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
                 response.server_side_session_id.clone_from(&self.session_id);
                 response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
+                    ExecutorBatch::Heartbeat => {}
                     ExecutorBatch::ArrowBatch(batch) => {
                         response.response_type = Some(ResponseType::ArrowBatch(batch));
                     }
@@ -108,19 +110,11 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
-enum ExecutePlanMode {
-    /// Execute the plan lazily as the client reads the response stream.
-    Lazy,
-    /// Execute the plan eagerly and return an empty response stream.
-    /// This is useful for executing command plans.
-    EagerSilent,
-}
-
 async fn handle_execute_plan(
     ctx: &SessionContext,
     plan: spec::Plan,
     metadata: ExecutorMetadata,
-    mode: ExecutePlanMode,
+    mode: ExecutorMode,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let span = Span::root("handle_execute_plan", SpanContext::random());
     let spark = ctx.extension::<SparkSession>()?;
@@ -131,31 +125,19 @@ async fn handle_execute_plan(
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
     };
-    let rx = match mode {
-        ExecutePlanMode::Lazy => {
-            let _guard = span.set_local_parent();
-            let executor = Executor::new(
-                metadata,
-                stream,
-                spark.options().execution_heartbeat_interval,
-            );
-            let rx = executor.start()?;
-            spark.add_executor(executor)?;
-            rx
-        }
-        ExecutePlanMode::EagerSilent => {
-            let _ = read_stream(stream).in_span(span).await?;
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            if metadata.reattachable {
-                tx.send(ExecutorOutput::complete()).await?;
-            }
-            ReceiverStream::new(rx)
-        }
-    };
+    let _guard = span.set_local_parent();
+    let executor = Executor::new(
+        metadata,
+        stream,
+        spark.options().execution_heartbeat_interval,
+        mode,
+    );
+    let rx = executor.start()?;
+    spark.add_executor(executor)?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        Box::pin(rx),
+        rx,
     ))
 }
 
@@ -165,7 +147,7 @@ pub(crate) async fn handle_execute_relation(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = relation.try_into()?;
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::Lazy).await
+    handle_execute_plan(ctx, plan, metadata, ExecutorMode::Query).await
 }
 
 pub(crate) async fn handle_execute_register_function(
@@ -176,7 +158,8 @@ pub(crate) async fn handle_execute_register_function(
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::RegisterFunction(
         udf.try_into()?,
     )));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 pub(crate) async fn handle_execute_write_operation(
@@ -187,7 +170,8 @@ pub(crate) async fn handle_execute_write_operation(
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
         write.try_into()?,
     )));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
@@ -196,7 +180,8 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(view.try_into()?));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
@@ -207,7 +192,8 @@ pub(crate) async fn handle_execute_write_operation_v2(
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::WriteTo(
         write.try_into()?,
     )));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 pub(crate) async fn handle_execute_merge_into_table_command(
@@ -216,7 +202,8 @@ pub(crate) async fn handle_execute_merge_into_table_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(command.try_into()?));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 /// Handles execution of a SQL command.
@@ -227,7 +214,6 @@ pub(crate) async fn handle_execute_sql_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
-    let service = ctx.extension::<JobService>()?;
     let relation = if let Some(input) = sql.input {
         input
     } else {
@@ -244,35 +230,40 @@ pub(crate) async fn handle_execute_sql_command(
         }
     };
     let plan: spec::Plan = relation.clone().try_into()?;
-    let relation = match plan {
-        spec::Plan::Query(_) => relation,
-        command @ spec::Plan::Command(_) => {
-            let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
-            let stream = service.runner().execute(ctx, plan).await?;
-            let schema = stream.schema();
-            let data = read_stream(stream).await?;
-            let data = concat_batches(&schema, data.iter())?;
-            Relation {
-                common: None,
-                rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
-                    data: Some(to_arrow_batch(&data)?.data),
-                    schema: None,
-                })),
-            }
+    match plan {
+        spec::Plan::Command(command) => {
+            let mode = ExecutorMode::command_with_completion(move |schema, data| {
+                let data = concat_batches(&schema, data.iter())?;
+                let relation = Relation {
+                    common: None,
+                    rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
+                        data: Some(to_arrow_batch(&data)?.data),
+                        schema: None,
+                    })),
+                };
+                Ok(Some(ExecutorOutput::new(ExecutorBatch::SqlCommandResult(
+                    Box::new(SqlCommandResult {
+                        relation: Some(relation),
+                    }),
+                ))))
+            });
+            handle_execute_plan(ctx, spec::Plan::Command(command), metadata, mode).await
         }
-    };
-    let result = ExecutorBatch::SqlCommandResult(Box::new(SqlCommandResult {
-        relation: Some(relation),
-    }));
-    let mut output = vec![ExecutorOutput::new(result)];
-    if metadata.reattachable {
-        output.push(ExecutorOutput::complete());
+        spec::Plan::Query(_) => {
+            let result = ExecutorBatch::SqlCommandResult(Box::new(SqlCommandResult {
+                relation: Some(relation),
+            }));
+            let mut output = vec![ExecutorOutput::new(result)];
+            if metadata.reattachable {
+                output.push(ExecutorOutput::complete());
+            }
+            Ok(ExecutePlanResponseStream::new(
+                spark.session_id().to_string(),
+                metadata.operation_id,
+                Box::pin(stream::iter(output.into_iter().map(Ok))),
+            ))
+        }
     }
-    Ok(ExecutePlanResponseStream::new(
-        spark.session_id().to_string(),
-        metadata.operation_id,
-        Box::pin(stream::iter(output)),
-    ))
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
@@ -304,7 +295,7 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
 }
 
@@ -405,7 +396,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
 }
 
@@ -488,7 +479,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
 }
 
@@ -500,7 +491,8 @@ pub(crate) async fn handle_execute_register_table_function(
     let plan = spec::Plan::Command(spec::CommandPlan::new(
         spec::CommandNode::RegisterTableFunction(udtf.try_into()?),
     ));
-    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+    let mode = ExecutorMode::command();
+    handle_execute_plan(ctx, plan, metadata, mode).await
 }
 
 pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
@@ -515,23 +507,59 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
-    let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
-    let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
-        Box::new(result),
-    ))];
-    if metadata.reattachable {
-        output.push(ExecutorOutput::complete());
+    let CheckpointCommand {
+        relation,
+        local: _,
+        eager,
+        storage_level,
+    } = checkpoint;
+    if !eager {
+        return Err(SparkError::unsupported("lazy DataFrame checkpoint"));
     }
+    if storage_level.is_some() {
+        return Err(SparkError::unsupported(
+            "checkpoint StorageLevel; Sail checkpoints are object-store backed",
+        ));
+    }
+    let relation = relation.required("checkpoint relation")?;
+    let query: spec::QueryPlan = relation.try_into()?;
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    let plan = spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::RemoteCheckpoint {
+            relation_id: relation_id.clone(),
+            input: Box::new(query),
+        },
+    ));
+    let mode = ExecutorMode::command_with_completion(move |_, _| {
+        Ok(Some(ExecutorOutput::new(
+            ExecutorBatch::CheckpointCommandResult(Box::new(CheckpointCommandResult {
+                relation: Some(CachedRemoteRelation { relation_id }),
+            })),
+        )))
+    });
+    handle_execute_plan(ctx, plan, metadata, mode).await
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    _command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = ctx.extension::<SparkSession>()?;
+    // TODO: Remove checkpoint data on a best-effort basis when the client releases the relation.
+    // Checkpoints have session lifetime so plans can safely share their immutable relation ID.
+    // The registry and object-store namespace are cleared together after the job runner stops.
+    let output = metadata
+        .reattachable
+        .then(ExecutorOutput::complete)
+        .into_iter();
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
 }
 
@@ -587,12 +615,14 @@ pub(crate) async fn handle_reattach_execute(
         )));
     }
     executor.pause_if_running().await?;
-    executor.release(response_id)?;
+    if let Some(response_id) = response_id {
+        executor.release(response_id)?;
+    }
     let rx = executor.start()?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        Box::pin(rx),
+        rx,
     ))
 }
 
@@ -602,10 +632,15 @@ pub(crate) async fn handle_release_execute(
     response_id: Option<String>,
 ) -> SparkResult<()> {
     let spark = ctx.extension::<SparkSession>()?;
-    // Some operations may not have an executor (e.g. DDL statements),
-    // so it is a no-op if the executor is not found.
-    if let Some(executor) = spark.get_executor(operation_id.as_str())? {
+    let executor = spark.get_executor(operation_id.as_str())?;
+    // TODO: clean up non-reattachable executors which the client does not release explicitly
+    let Some(executor) = executor.filter(|executor| executor.metadata.reattachable) else {
+        return Ok(());
+    };
+    if let Some(response_id) = response_id {
         executor.release(response_id)?;
+    } else if let Some(executor) = spark.remove_executor(operation_id.as_str())? {
+        executor.pause_if_running().await?;
     }
     Ok(())
 }
@@ -669,6 +704,6 @@ pub(crate) async fn handle_execute_register_datasource(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
 }

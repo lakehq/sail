@@ -1,7 +1,7 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
+use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_server::ServerBuilder;
-use sail_server::actor::ActorHandle;
+use sail_common::server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
@@ -22,7 +22,7 @@ struct WorkerTaskStreamFetcher {
 }
 
 #[async_trait]
-impl TaskStreamFetcher for WorkerTaskStreamFetcher {
+impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
     async fn fetch(
         &self,
         key: TaskStreamKey,
@@ -54,9 +54,10 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server = TaskStreamFlightServer::new(Box::new(WorkerTaskStreamFetcher {
-            handle: handle.clone(),
-        }));
+        let flight_server =
+            TaskStreamFlightServer::<TaskStreamKey>::new(Box::new(WorkerTaskStreamFetcher {
+                handle: handle.clone(),
+            }));
         let flight_service = FlightServiceServer::new(flight_server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)

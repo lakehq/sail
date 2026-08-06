@@ -147,21 +147,28 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
-        if self.databases.remove(database).is_none() {
-            if if_exists {
+        let DropDatabaseOptions { if_exists, cascade } = options;
+        match self.databases.entry(database.clone()) {
+            Entry::Occupied(entry) => {
+                if !cascade && (!entry.get().tables.is_empty() || !entry.get().views.is_empty()) {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Cannot drop non-empty database '{}', use CASCADE",
+                        quote_namespace_if_needed(database),
+                    )));
+                }
+                let _ = entry.remove_entry();
                 Ok(())
-            } else {
-                Err(CatalogError::NotFound(
-                    CatalogObject::Database,
-                    quote_namespace_if_needed(database),
-                ))
             }
-        } else {
-            Ok(())
+            Entry::Vacant(_) => {
+                if if_exists {
+                    Ok(())
+                } else {
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Database,
+                        quote_namespace_if_needed(database),
+                    ))
+                }
+            }
         }
     }
 

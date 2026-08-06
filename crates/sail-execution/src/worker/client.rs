@@ -3,7 +3,7 @@ use prost::Message;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
-use crate::stream_service::TaskStreamFlightClient;
+use crate::stream_service::{TaskStreamFlightClient, TaskStreamOwner};
 use crate::task::definition::TaskDefinition;
 use crate::worker::event::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
@@ -22,7 +22,7 @@ impl WorkerClientSet {
     pub fn new(options: ClientOptions) -> Self {
         Self {
             core: WorkerClient::new(options.clone()),
-            flight: TaskStreamFlightClient::new(options),
+            flight: TaskStreamFlightClient::new(options, TaskStreamOwner::Worker),
         }
     }
 }

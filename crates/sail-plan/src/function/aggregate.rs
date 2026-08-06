@@ -784,6 +784,9 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("histogram_numeric", F::custom(histogram_numeric)),
         ("hll_sketch_agg", F::custom(hll_sketch_agg)),
         ("hll_union_agg", F::custom(hll_union_agg)),
+        ("kll_merge_agg_bigint", F::unknown("kll_merge_agg_bigint")),
+        ("kll_merge_agg_double", F::unknown("kll_merge_agg_double")),
+        ("kll_merge_agg_float", F::unknown("kll_merge_agg_float")),
         (
             "theta_intersection_agg",
             F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
@@ -797,6 +800,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("max", F::default(min_max::max_udaf)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
+        ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
@@ -859,11 +863,37 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
         ("sum", F::custom(spark_sum)),
+        (
+            "tuple_intersection_agg_double",
+            F::unknown("tuple_intersection_agg_double"),
+        ),
+        (
+            "tuple_intersection_agg_integer",
+            F::unknown("tuple_intersection_agg_integer"),
+        ),
+        (
+            "tuple_sketch_agg_double",
+            F::unknown("tuple_sketch_agg_double"),
+        ),
+        (
+            "tuple_sketch_agg_integer",
+            F::unknown("tuple_sketch_agg_integer"),
+        ),
+        (
+            "tuple_union_agg_double",
+            F::unknown("tuple_union_agg_double"),
+        ),
+        (
+            "tuple_union_agg_integer",
+            F::unknown("tuple_union_agg_integer"),
+        ),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),
+        ("vector_avg", F::unknown("vector_avg")),
+        ("vector_sum", F::unknown("vector_sum")),
     ]
 }
 

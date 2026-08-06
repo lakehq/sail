@@ -249,6 +249,43 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_identity_partition_distinguishes_null_from_null_string(spark, tmp_path):
+    table_name = "iceberg_partition_null_identity"
+    table_path = tmp_path / table_name
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              part STRING
+            )
+            USING iceberg
+            PARTITIONED BY (part)
+            LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
+            """
+        )
+        partition_rows_insert_sql = (
+            f"INSERT INTO {table_name} VALUES "  # noqa: S608
+            "(1, NULL), "
+            "(2, 'null')"
+        )
+        spark.sql(partition_rows_insert_sql)
+
+        null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part IS NULL"  # noqa: S608
+        literal_null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part = 'null'"  # noqa: S608
+        null_rows = [row.id for row in spark.sql(null_partition_rows_sql).collect()]
+        string_rows = [row.id for row in spark.sql(literal_null_partition_rows_sql).collect()]
+        assert null_rows == [1]
+        assert string_rows == [2]
+
+        partition_files = list((table_path / "data" / "part=null").glob("*.parquet"))
+        assert len(partition_files) == 2  # noqa: PLR2004
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     schema = Schema(

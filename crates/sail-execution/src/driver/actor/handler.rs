@@ -1,18 +1,17 @@
 use std::collections::HashSet;
-use std::mem;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
+use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_common_datafusion::system::predicate::Predicates;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -28,22 +27,8 @@ use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
-    pub(super) fn handle_server_ready(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        port: u16,
-        signal: oneshot::Sender<()>,
-    ) -> ActorAction {
-        let server = mem::take(&mut self.server);
-        self.server = match server.ready(signal) {
-            Ok(x) => x,
-            Err(e) => {
-                error!("{e}");
-                return ActorAction::Stop;
-            }
-        };
-        info!("driver server is ready on port {port}");
-        self.worker_pool.set_driver_server_port(port);
+    pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
+        info!("activating driver {}", self.options.driver_id);
         for _ in 0..self.options.worker_initial_count {
             self.worker_pool.start_worker(ctx);
         }
@@ -318,12 +303,15 @@ impl DriverActor {
     pub(super) fn handle_create_remote_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.create_remote_stream(uri, key, schema));
+        let _ = result.send(
+            self.stream_manager
+                .create_remote_stream(key, schema, &context),
+        );
         ActorAction::Continue
     }
 
@@ -355,14 +343,14 @@ impl DriverActor {
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.stream_manager
-                .fetch_remote_stream(ctx, uri, &key, schema),
+                .fetch_remote_stream(ctx, &key, schema, &context),
         );
         ActorAction::Continue
     }
@@ -424,12 +412,12 @@ impl DriverActor {
     pub(super) fn handle_shutdown(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        history: Option<oneshot::Sender<JobRunnerHistory>>,
+        result: Option<oneshot::Sender<()>>,
     ) -> ActorAction {
-        if self.history.is_some() {
-            warn!("overriding existing history sender");
+        if self.shutdown_notifier.is_some() {
+            warn!("overriding existing shutdown notifier");
         }
-        self.history = history;
+        self.shutdown_notifier = result;
         ActorAction::Stop
     }
 
@@ -512,10 +500,14 @@ impl DriverActor {
                     handle.send(JobOutputItem::Error { cause }).await;
                 });
             }
-            JobAction::CleanUpJob { job_id, stage } => {
+            JobAction::CleanUpJob {
+                job_id,
+                stage,
+                context,
+            } => {
                 if self.task_assigner.untrack_remote_streams(job_id, stage) {
                     self.stream_manager
-                        .remove_remote_streams(ctx, job_id, stage);
+                        .remove_remote_streams(ctx, job_id, stage, context);
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {

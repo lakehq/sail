@@ -8,15 +8,15 @@ rank: 3
 The Unity Catalog provider in Sail allows you to connect to an external catalog that exposes
 the [Unity Catalog API](https://docs.unitycatalog.io/).
 
-Unity Catalog can be configured using the following options:
+## Options
 
-- `type` (required): The string `unity`.
-- `name` (required): The name of the catalog.
-- `uri` (optional): The base URI of the Unity Catalog API. Defaults to `http://localhost:8080/api/2.1/unity-catalog`.
-- `default_catalog` (optional): The default catalog name to use. Defaults to `unity`.
-- `token` (optional): The authentication token to use when connecting to the Unity Catalog API. Defaults to empty (no
-  authentication). Please refer
-  to [Unity Catalog Authentication and Authorization](https://docs.unitycatalog.io/server/auth/) for more information.
+Unity Catalog can be configured using the following options.
+
+- `type` (required): The catalog provider. Set this option to `unity`.
+- `name` (required): The catalog name.
+- `uri` (optional): The base URI of the Unity Catalog API. The default is `http://localhost:8080/api/2.1/unity-catalog`.
+- `default_catalog` (optional): The default catalog name. The default is `unity`.
+- `token` (optional): The authentication token for the Unity Catalog API. The default is an empty value, which disables authentication. See [Unity Catalog Authentication and Authorization](https://docs.unitycatalog.io/server/auth/) for more information.
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -28,9 +28,9 @@ The environment variables only allow configuring one Unity Catalog provider inst
 
 Sail automatically loads Unity Catalog configuration from environment variables with the following prefixes:
 
-- `DATABRICKS_*` - Databricks-specific configuration
-- `UNITY_*` - Unity Catalog configuration
-- `UC_*` - Short-form Unity Catalog configuration
+- `DATABRICKS_*`: Databricks-specific configuration.
+- `UNITY_*`: Unity Catalog configuration.
+- `UC_*`: Short-form Unity Catalog configuration.
 
 The following table lists the supported configuration keys and their corresponding environment variable names:
 
