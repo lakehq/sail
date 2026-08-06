@@ -1,5 +1,6 @@
 //! Common Celeborn wire protocol types and transport-message decoding.
 
+#[expect(clippy::enum_variant_names)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/celeborn.rs"));
 }

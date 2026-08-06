@@ -72,8 +72,7 @@ services:
       CELEBORN_LOCAL_HOSTNAME: celeborn-master
       CELEBORN_MASTER_MEMORY: 512m
       CELEBORN_NO_DAEMONIZE: "1"
-    command:
-      ["start-master.sh", "--host", "celeborn-master", "--port", "12097"]
+    command: ["start-master.sh", "--host", "celeborn-master", "--port", "12097"]
     volumes:
       - ./deployments/celeborn/celeborn-defaults.conf:/opt/celeborn/conf/celeborn-defaults.conf:ro
     ports:
