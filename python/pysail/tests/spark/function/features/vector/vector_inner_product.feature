@@ -34,13 +34,16 @@ Feature: vector_inner_product
     Scenario: empty ARRAY<FLOAT> inputs return 0.0
       When query
         """
-        SELECT vector_inner_product(array(), array()) AS result
+        SELECT vector_inner_product(
+          CAST(array() AS ARRAY<FLOAT>),
+          CAST(array() AS ARRAY<FLOAT>)
+        ) AS result
         """
       Then query result
         | result |
         | 0.0    |
 
-    Scenario: upstream 16-element case returns 816.0
+    Scenario: upstream 16-element case returns sum of squares 1496.0
       When query
         """
         SELECT vector_inner_product(
@@ -50,7 +53,7 @@ Feature: vector_inner_product
         """
       Then query result
         | result |
-        | 816.0  |
+        | 1496.0 |
 
     Scenario: accumulation matches Spark for vectors with large cancellation
       When query
