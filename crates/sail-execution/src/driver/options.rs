@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_common::utils::retry::RetryStrategy;
 use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
-use sail_server::RetryStrategy;
 
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;

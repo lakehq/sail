@@ -2,9 +2,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
+use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_server::{ServerBuilder, ServerBuilderOptions};
+use sail_common::server::{ServerBuilder, ServerBuilderOptions};
 use tokio::net::TcpListener;
 
 use crate::service::SailFlightSqlService;
@@ -19,7 +20,8 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
-    let session_manager = create_flight_session_manager(config, runtime).await?;
+    let mut system = ActorSystem::new();
+    let session_manager = create_flight_session_manager(config, runtime, &mut system).await?;
     let result = {
         let service = SailFlightSqlService::new(session_manager.clone());
         let flight_service = FlightServiceServer::new(service);
@@ -34,5 +36,6 @@ where
             .map_err(|e| std::io::Error::other(e.to_string()))
     };
     session_manager.shutdown().await?;
+    system.join().await;
     result.map_err(Into::into)
 }

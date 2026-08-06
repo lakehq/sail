@@ -4,8 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
 use log::{error, info, warn};
+use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;

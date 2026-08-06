@@ -3,7 +3,7 @@ use std::time::Duration;
 use datafusion::prelude::SessionContext;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_server::RetryStrategy;
+use sail_common::utils::retry::RetryStrategy;
 
 use crate::id::{DriverId, WorkerId};
 use crate::shuffle::ShuffleBackendKind;

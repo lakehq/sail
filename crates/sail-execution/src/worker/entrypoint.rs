@@ -1,10 +1,10 @@
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
+use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_server::actor::ActorSystem;
-use sail_telemetry::common::{ContextPropagationEnv, SpanAttribute};
+use sail_common::telemetry::{ContextPropagationEnv, SpanAttribute};
 
 use crate::error::ExecutionError;
 use crate::worker::{WorkerActor, WorkerOptions};

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sail_server::RetryStrategy;
+use sail_common::utils::retry::RetryStrategy;
 
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::Arc;
 
 use fastrace::collector::SpanContext;
+use futures::future::BoxFuture;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec, PodTemplateSpec,
 };
@@ -11,9 +13,10 @@ use kube::Api;
 use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
 use rand::distr::Uniform;
+use sail_common::actor::ActorSystem;
 use sail_common::config::ClusterConfigEnv;
-use sail_server::RetryStrategy;
-use sail_telemetry::common::ContextPropagationEnv;
+use sail_common::telemetry::ContextPropagationEnv;
+use sail_common::utils::retry::RetryStrategy;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -32,15 +35,27 @@ pub struct KubernetesWorkerManagerOptions {
     pub worker_pod_template: String,
 }
 
-pub struct KubernetesWorkerManager {
+pub struct KubernetesWorkerService {
     /// An opaque name that can be used to create names to uniquely identify Kubernetes resources.
     name: String,
     options: KubernetesWorkerManagerOptions,
     pods: OnceCell<Api<Pod>>,
 }
 
+pub struct KubernetesWorkerManager {
+    service: Arc<KubernetesWorkerService>,
+}
+
 impl KubernetesWorkerManager {
     pub fn new(options: KubernetesWorkerManagerOptions) -> Self {
+        Self {
+            service: Arc::new(KubernetesWorkerService::new(options)),
+        }
+    }
+}
+
+impl KubernetesWorkerService {
+    fn new(options: KubernetesWorkerManagerOptions) -> Self {
         Self {
             name: Self::generate_name(),
             options,
@@ -48,7 +63,7 @@ impl KubernetesWorkerManager {
         }
     }
 
-    pub fn generate_name() -> String {
+    fn generate_name() -> String {
         #[expect(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
@@ -102,7 +117,7 @@ impl KubernetesWorkerManager {
             ),
             (
                 "app.kubernetes.io/instance".to_string(),
-                format!("{}-{}", self.name, id),
+                format!("{}-{id}", self.name),
             ),
             (
                 "sail.lakesail.com/worker-manager".to_string(),
@@ -282,6 +297,22 @@ impl KubernetesWorkerManager {
 
 #[tonic::async_trait]
 impl WorkerManager for KubernetesWorkerManager {
+    fn launch_worker(
+        &self,
+        _system: &mut ActorSystem,
+        id: WorkerId,
+        options: WorkerLaunchOptions,
+    ) -> BoxFuture<'static, ExecutionResult<()>> {
+        let service = self.service.clone();
+        Box::pin(async move { service.launch_worker(id, options).await })
+    }
+
+    async fn stop(&self) -> ExecutionResult<()> {
+        self.service.stop().await
+    }
+}
+
+impl KubernetesWorkerService {
     async fn launch_worker(
         &self,
         id: WorkerId,

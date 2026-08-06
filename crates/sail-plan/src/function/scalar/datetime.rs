@@ -10,7 +10,7 @@ use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit,
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -1240,6 +1240,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
         ("session_window", F::unknown("session_window")),
+        ("time_bucket", F::unknown("time_bucket")),
+        ("time_from_micros", F::unknown("time_from_micros")),
+        ("time_from_millis", F::unknown("time_from_millis")),
+        ("time_from_seconds", F::unknown("time_from_seconds")),
+        ("time_to_micros", F::unknown("time_to_micros")),
+        ("time_to_millis", F::unknown("time_to_millis")),
+        ("time_to_seconds", F::unknown("time_to_seconds")),
         (
             "timestamp_micros",
             F::cast(DataType::Timestamp(
