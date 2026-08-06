@@ -2026,28 +2026,6 @@ mod tests {
     }
 
     #[test]
-    fn protocol_upgrade_materializes_features_implied_by_legacy_versions() {
-        let existing = Protocol::new(1, 4, None, None);
-        let desired = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::V2Checkpoint]),
-            Some(vec![TableFeature::V2Checkpoint]),
-        );
-
-        let (merged, upgraded) = merge_protocol_for_upgrade(&existing, &desired);
-
-        assert!(upgraded);
-        assert!(merged.has_writer_feature(&TableFeature::AppendOnly));
-        assert!(merged.has_writer_feature(&TableFeature::Invariants));
-        assert!(merged.has_writer_feature(&TableFeature::CheckConstraints));
-        assert!(merged.has_writer_feature(&TableFeature::ChangeDataFeed));
-        assert!(merged.has_writer_feature(&TableFeature::GeneratedColumns));
-        assert!(merged.has_reader_feature(&TableFeature::V2Checkpoint));
-        assert!(merged.has_writer_feature(&TableFeature::V2Checkpoint));
-    }
-
-    #[test]
     fn preview_type_widening_guard_preserves_explicit_stable_request() {
         let existing = Protocol::new(
             3,

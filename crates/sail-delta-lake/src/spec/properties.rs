@@ -507,28 +507,9 @@ mod tests {
 
     #[test]
     fn test_checkpoint_interval_default_is_ten() {
-        assert_eq!(TableProperties::default().checkpoint_interval().get(), 10);
-    }
-
-    #[test]
-    fn test_checkpoint_policy_defaults_to_classic_and_parses_v2() {
-        assert_eq!(
-            TableProperties::default().checkpoint_policy(),
-            CheckpointPolicy::Classic
-        );
-        assert_eq!(
-            TableProperties::from([("delta.checkpointPolicy", "v2")]).checkpoint_policy(),
-            CheckpointPolicy::V2
-        );
-        for invalid in ["V2", "Classic", " v2", "v2 "] {
-            assert!(
-                canonicalize_and_validate_table_properties([("checkpoint_policy", invalid)])
-                    .is_err()
-            );
-        }
-        assert!(
-            canonicalize_and_validate_table_properties([("checkpoint_policy", "invalid")]).is_err()
-        );
+        let properties = TableProperties::default();
+        assert_eq!(properties.checkpoint_interval().get(), 10);
+        assert_eq!(properties.checkpoint_policy(), CheckpointPolicy::Classic);
     }
 
     #[test]
@@ -541,6 +522,7 @@ mod tests {
         let props = canonicalize_and_validate_table_properties([
             ("column_mapping_mode", "name"),
             ("checkpoint_interval", "7"),
+            ("checkpoint_policy", "v2"),
             ("write_checksum_file_enabled", "false"),
             ("enable_in_commit_timestamps", "true"),
             ("enable_type_widening", "true"),
@@ -555,6 +537,11 @@ mod tests {
         assert_eq!(
             props.get("delta.checkpointInterval"),
             Some(&"7".to_string())
+        );
+        assert_eq!(props.get("delta.checkpointPolicy"), Some(&"v2".to_string()));
+        assert_eq!(
+            TableProperties::from([("delta.checkpointPolicy", "v2")]).checkpoint_policy(),
+            CheckpointPolicy::V2
         );
         assert_eq!(
             props.get("delta.writeChecksumFile.enabled"),
@@ -580,11 +567,21 @@ mod tests {
     fn test_invalid_modeled_property_is_rejected() {
         let result =
             canonicalize_and_validate_table_properties([("delta.checkpointInterval", "0")]);
-        assert!(result.is_err());
-        if let Err(err) = result {
+        assert!(
+            matches!(&result, Err(err) if err.to_string().contains(
+                "invalid value for delta.checkpointInterval"
+            )),
+            "unexpected checkpoint interval result: {result:?}"
+        );
+
+        for invalid in ["V2", "Classic", " v2", "v2 ", "invalid"] {
+            let result =
+                canonicalize_and_validate_table_properties([("checkpoint_policy", invalid)]);
             assert!(
-                err.to_string()
-                    .contains("invalid value for delta.checkpointInterval")
+                matches!(&result, Err(err) if err.to_string().contains(
+                    "invalid value for delta.checkpointPolicy"
+                )),
+                "unexpected checkpoint policy result for {invalid}: {result:?}"
             );
         }
     }

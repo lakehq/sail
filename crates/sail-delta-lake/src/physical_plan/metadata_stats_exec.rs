@@ -347,17 +347,12 @@ impl Clone for DeltaMetadataStatsExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{
-        Array, Int16Array, Int32Array, Int64Array, TimestampMicrosecondArray,
-    };
+    use datafusion::arrow::array::{Array, Int16Array, Int32Array, Int64Array};
     use datafusion::arrow::buffer::NullBuffer;
-    use datafusion::arrow::datatypes::TimeUnit;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::collect;
-    use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
-    use crate::datasource::PATH_COLUMN;
     use crate::spec::fields::{
         STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NUM_RECORDS,
     };
@@ -378,418 +373,312 @@ mod tests {
         ]))
     }
 
-    #[test]
-    fn parses_stats_json_and_preserves_missing_rows() -> Result<()> {
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new(PATH_COLUMN, DataType::Utf8, false),
-            Field::new(REPLAY_STATS_JSON_COLUMN, DataType::Utf8, true),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&input_schema),
-            vec![
-                Arc::new(StringArray::from(vec![
-                    Some("file.parquet"),
-                    Some("missing.parquet"),
-                    Some("empty.parquet"),
-                ])),
-                Arc::new(StringArray::from(vec![
-                    Some(r#"{"numRecords":3,"minValues":{"value":1},"maxValues":{"value":7}}"#),
-                    None,
-                    Some(""),
-                ])),
-            ],
-        )
-        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-
-        let exec = DeltaMetadataStatsExec::new(
-            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
-            stats_schema(),
-        );
-        let parsed = exec.parse_stats_array(&batch)?;
-        let stats = parsed
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected parsed stats struct column".to_string())
-            })?;
-        let num_records = stats
-            .column_by_name(STATS_FIELD_NUM_RECORDS)
-            .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected numRecords Int64 array".to_string())
-            })?;
-        let min_values = stats
-            .column_by_name(STATS_FIELD_MIN_VALUES)
-            .and_then(|col| col.as_any().downcast_ref::<StructArray>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected minValues struct array".to_string())
-            })?;
-        let min_value = min_values
-            .column_by_name("value")
-            .and_then(|col| col.as_any().downcast_ref::<Int32Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected minValues.value Int32 array".to_string())
-            })?;
-
-        assert_eq!(num_records.value(0), 3);
-        assert_eq!(min_value.value(0), 1);
-        assert!(!stats.is_null(0));
-        assert!(stats.is_null(1));
-        assert!(stats.is_null(2));
-        Ok(())
+    struct ExecutionCase {
+        name: &'static str,
+        batch: RecordBatch,
+        expected_stats_validity: Vec<bool>,
+        expected_num_records: Vec<Option<i64>>,
+        expected_min_values: Vec<Option<i32>>,
     }
 
-    #[test]
-    fn reuses_existing_stats_parsed_struct_without_json_parse() -> Result<()> {
-        let typed_stats = StructArray::from(vec![(
-            Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true)),
-            Arc::new(Int64Array::from(vec![Some(42)])) as Arc<_>,
-        )]);
-
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new(PATH_COLUMN, DataType::Utf8, false),
-            Field::new(
-                FIELD_NAME_STATS_PARSED,
-                typed_stats.data_type().clone(),
-                true,
-            ),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&input_schema),
-            vec![
-                Arc::new(StringArray::from(vec![Some("file.parquet")])),
-                Arc::new(typed_stats),
-            ],
-        )
-        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-
-        // The input has only numRecords and no stats_json column.
-        let exec = DeltaMetadataStatsExec::new(
-            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
-            stats_schema(),
-        );
-        let parsed = exec.parse_stats_array(&batch)?;
-        let stats = parsed
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected struct array".to_string()))?;
-        let num_records = stats
-            .column_by_name(STATS_FIELD_NUM_RECORDS)
-            .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected numRecords Int64 array".to_string())
-            })?;
-        assert_eq!(num_records.value(0), 42);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn execution_normalizes_existing_stats_parsed_without_duplication() -> Result<()> {
-        let stats_schema = stats_schema();
-        let typed_stats: ArrayRef = Arc::new(StructArray::new(
-            stats_schema.fields().clone(),
-            vec![
-                Arc::new(Int64Array::from(vec![Some(42)])),
-                new_null_array(stats_schema.field(1).data_type(), 1),
-                new_null_array(stats_schema.field(2).data_type(), 1),
-            ],
-            None,
-        ));
-        let input_schema = Arc::new(Schema::new(vec![Field::new(
-            FIELD_NAME_STATS_PARSED,
-            typed_stats.data_type().clone(),
-            true,
-        )]));
-        let batch = RecordBatch::try_new(Arc::clone(&input_schema), vec![typed_stats])
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+    async fn collect_stats_output(
+        batch: RecordBatch,
+        stats_schema: SchemaRef,
+    ) -> Result<RecordBatch> {
+        let input_schema = batch.schema();
         let input: Arc<dyn ExecutionPlan> =
             MemorySourceConfig::try_new_exec(&[vec![batch]], input_schema, None)?;
-        let exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaMetadataStatsExec::new(
-            input,
-            Arc::clone(&stats_schema),
-        ));
-
-        let output = collect(exec, Arc::new(TaskContext::default()))
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(DeltaMetadataStatsExec::new(input, stats_schema));
+        collect(exec, Arc::new(TaskContext::default()))
             .await?
             .into_iter()
             .next()
-            .ok_or_else(|| DataFusionError::Internal("expected output batch".to_string()))?;
-        let stats_parsed_columns = output
-            .schema()
-            .fields()
-            .iter()
-            .filter(|field| field.name() == FIELD_NAME_STATS_PARSED)
-            .count();
-        assert_eq!(stats_parsed_columns, 1);
-
-        let num_records = output
-            .column_by_name(FIELD_NAME_STATS_PARSED)
-            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
-            .and_then(|stats| stats.column_by_name(STATS_FIELD_NUM_RECORDS))
-            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected numRecords Int64 array".to_string())
-            })?;
-        assert_eq!(num_records.value(0), 42);
-        Ok(())
+            .ok_or_else(|| DataFusionError::Internal("expected output batch".to_string()))
     }
 
     #[tokio::test]
-    async fn execution_normalizes_sparse_existing_stats_parsed_to_target_schema() -> Result<()> {
+    async fn execution_materializes_json_and_typed_stats_without_duplication() -> Result<()> {
         let target_stats_schema = stats_schema();
-        let target_stats_type = DataType::Struct(target_stats_schema.fields().clone());
+        let json_input_schema = Arc::new(Schema::new(vec![Field::new(
+            REPLAY_STATS_JSON_COLUMN,
+            DataType::Utf8,
+            true,
+        )]));
+        let json_batch = RecordBatch::try_new(
+            json_input_schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some(r#"{"numRecords":3,"minValues":{"value":1},"maxValues":{"value":7}}"#),
+                None,
+                Some(""),
+            ])) as ArrayRef],
+        )
+        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+
         let typed_stats: ArrayRef = Arc::new(StructArray::from(vec![(
             Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true)),
             Arc::new(Int64Array::from(vec![Some(42)])) as Arc<_>,
         )]));
-        let input_schema = Arc::new(Schema::new(vec![Field::new(
+        let typed_input_schema = Arc::new(Schema::new(vec![Field::new(
             FIELD_NAME_STATS_PARSED,
             typed_stats.data_type().clone(),
             true,
         )]));
-        let batch = RecordBatch::try_new(Arc::clone(&input_schema), vec![typed_stats])
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let input: Arc<dyn ExecutionPlan> =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], input_schema, None)?;
-        let exec: Arc<dyn ExecutionPlan> =
-            Arc::new(DeltaMetadataStatsExec::new(input, target_stats_schema));
+        let typed_batch = RecordBatch::try_new(typed_input_schema, vec![typed_stats])
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
 
-        let output = collect(exec, Arc::new(TaskContext::default()))
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| DataFusionError::Internal("expected output batch".to_string()))?;
-        let output_schema = output.schema();
-        let stats_parsed_columns = output_schema
-            .fields()
-            .iter()
-            .filter(|field| field.name() == FIELD_NAME_STATS_PARSED)
-            .count();
-        assert_eq!(stats_parsed_columns, 1);
-        let stats_parsed_field = output_schema
-            .fields()
-            .iter()
-            .find(|field| field.name() == FIELD_NAME_STATS_PARSED)
-            .ok_or_else(|| DataFusionError::Internal("expected stats_parsed field".to_string()))?;
-        assert_eq!(stats_parsed_field.data_type(), &target_stats_type);
+        let cases = vec![
+            ExecutionCase {
+                name: "JSON statistics",
+                batch: json_batch,
+                expected_stats_validity: vec![true, false, false],
+                expected_num_records: vec![Some(3), None, None],
+                expected_min_values: vec![Some(1), None, None],
+            },
+            ExecutionCase {
+                name: "sparse typed statistics",
+                batch: typed_batch,
+                expected_stats_validity: vec![true],
+                expected_num_records: vec![Some(42)],
+                expected_min_values: vec![None],
+            },
+        ];
 
-        let stats = output
-            .column_by_name(FIELD_NAME_STATS_PARSED)
-            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected stats_parsed struct".to_string()))?;
-        let num_records = stats
-            .column_by_name(STATS_FIELD_NUM_RECORDS)
-            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected numRecords Int64 array".to_string())
-            })?;
-        let min_values = stats
-            .column_by_name(STATS_FIELD_MIN_VALUES)
-            .ok_or_else(|| DataFusionError::Internal("expected minValues field".to_string()))?;
-        let max_values = stats
-            .column_by_name(STATS_FIELD_MAX_VALUES)
-            .ok_or_else(|| DataFusionError::Internal("expected maxValues field".to_string()))?;
+        for case in cases {
+            let output = collect_stats_output(case.batch, Arc::clone(&target_stats_schema)).await?;
+            let output_schema = output.schema();
+            assert_eq!(
+                output_schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() == FIELD_NAME_STATS_PARSED)
+                    .count(),
+                1,
+                "{}",
+                case.name
+            );
+            let stats_field = output_schema
+                .fields()
+                .iter()
+                .find(|field| field.name() == FIELD_NAME_STATS_PARSED)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "{} output is missing stats_parsed",
+                        case.name
+                    ))
+                })?;
+            assert_eq!(
+                stats_field.data_type(),
+                &DataType::Struct(target_stats_schema.fields().clone()),
+                "{}",
+                case.name
+            );
 
-        assert_eq!(num_records.value(0), 42);
-        assert!(min_values.is_null(0));
-        assert!(max_values.is_null(0));
+            let stats = output
+                .column_by_name(FIELD_NAME_STATS_PARSED)
+                .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "{} output stats should be a struct",
+                        case.name
+                    ))
+                })?;
+            assert_eq!(
+                (0..stats.len())
+                    .map(|index| stats.is_valid(index))
+                    .collect::<Vec<_>>(),
+                case.expected_stats_validity,
+                "{}",
+                case.name
+            );
+
+            let num_records = stats
+                .column_by_name(STATS_FIELD_NUM_RECORDS)
+                .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!("{} numRecords should be Int64", case.name))
+                })?;
+            assert_eq!(
+                num_records.iter().collect::<Vec<_>>(),
+                case.expected_num_records,
+                "{}",
+                case.name
+            );
+
+            let min_values = stats
+                .column_by_name(STATS_FIELD_MIN_VALUES)
+                .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+                .and_then(|values| values.column_by_name("value"))
+                .and_then(|column| column.as_any().downcast_ref::<Int32Array>())
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "{} minValues.value should be Int32",
+                        case.name
+                    ))
+                })?;
+            assert_eq!(
+                min_values.iter().collect::<Vec<_>>(),
+                case.expected_min_values,
+                "{}",
+                case.name
+            );
+        }
         Ok(())
     }
 
-    #[tokio::test]
-    async fn execution_widens_nested_integer_stats_to_target_schema() -> Result<()> {
+    enum NormalizationExpectation {
+        WidenedNestedInteger,
+        Rejected(&'static str),
+    }
+
+    struct NormalizationCase {
+        name: &'static str,
+        source: StructArray,
+        target_fields: Fields,
+        expectation: NormalizationExpectation,
+    }
+
+    #[test]
+    fn normalizes_metadata_stats_to_target_schema() -> Result<()> {
         let source_leaf_fields: Fields =
             vec![Arc::new(Field::new("a", DataType::Int16, true))].into();
         let source_min_values: ArrayRef = Arc::new(StructArray::new(
-            source_leaf_fields.clone(),
-            vec![Arc::new(Int16Array::from(vec![Some(1), Some(2)]))],
-            Some(NullBuffer::from(vec![true, false])),
-        ));
-        let source_max_values: ArrayRef = Arc::new(StructArray::new(
             source_leaf_fields,
             vec![Arc::new(Int16Array::from(vec![Some(1), Some(2)]))],
             Some(NullBuffer::from(vec![true, false])),
         ));
-        let source_stats_fields = vec![
-            Arc::new(Field::new(
+        let source_stats = StructArray::new(
+            vec![Arc::new(Field::new(
                 STATS_FIELD_MIN_VALUES,
                 source_min_values.data_type().clone(),
+                true,
+            ))]
+            .into(),
+            vec![source_min_values],
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let target_leaf_fields: Fields =
+            vec![Arc::new(Field::new("a", DataType::Int32, true))].into();
+        let widened_target_fields: Fields = vec![
+            Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true)),
+            Arc::new(Field::new(
+                STATS_FIELD_MIN_VALUES,
+                DataType::Struct(target_leaf_fields.clone()),
                 true,
             )),
             Arc::new(Field::new(
                 STATS_FIELD_MAX_VALUES,
-                source_max_values.data_type().clone(),
+                DataType::Struct(target_leaf_fields),
                 true,
             )),
         ]
         .into();
-        let source_stats: ArrayRef = Arc::new(StructArray::new(
-            source_stats_fields,
-            vec![source_min_values, source_max_values],
-            Some(NullBuffer::from(vec![true, false])),
-        ));
-        let input_schema = Arc::new(Schema::new(vec![Field::new(
-            FIELD_NAME_STATS_PARSED,
-            source_stats.data_type().clone(),
-            true,
-        )]));
-        let batch = RecordBatch::try_new(Arc::clone(&input_schema), vec![source_stats])
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let input: Arc<dyn ExecutionPlan> =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], input_schema, None)?;
 
-        let target_leaf_fields: Fields =
-            vec![Arc::new(Field::new("a", DataType::Int32, true))].into();
-        let target_stats_schema = Arc::new(Schema::new(vec![
-            Field::new(
-                STATS_FIELD_MIN_VALUES,
-                DataType::Struct(target_leaf_fields.clone()),
-                true,
-            ),
-            Field::new(
-                STATS_FIELD_MAX_VALUES,
-                DataType::Struct(target_leaf_fields),
-                true,
-            ),
-        ]));
-        let exec: Arc<dyn ExecutionPlan> =
-            Arc::new(DeltaMetadataStatsExec::new(input, target_stats_schema));
-
-        let output = collect(exec, Arc::new(TaskContext::default()))
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| DataFusionError::Internal("expected output batch".to_string()))?;
-        let stats_parsed_columns = output
-            .schema()
-            .fields()
-            .iter()
-            .filter(|field| field.name() == FIELD_NAME_STATS_PARSED)
-            .count();
-        assert_eq!(stats_parsed_columns, 1);
-
-        let stats = output
-            .column_by_name(FIELD_NAME_STATS_PARSED)
-            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected stats_parsed struct".to_string()))?;
-        let min_values = stats
-            .column_by_name(STATS_FIELD_MIN_VALUES)
-            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected minValues struct".to_string()))?;
-        let max_values = stats
-            .column_by_name(STATS_FIELD_MAX_VALUES)
-            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected maxValues struct".to_string()))?;
-        let min_a = min_values
-            .column_by_name("a")
-            .and_then(|column| column.as_any().downcast_ref::<Int32Array>())
-            .ok_or_else(|| DataFusionError::Internal("expected minValues.a Int32".to_string()))?;
-        let max_a = max_values
-            .column_by_name("a")
-            .and_then(|column| column.as_any().downcast_ref::<Int32Array>())
-            .ok_or_else(|| DataFusionError::Internal("expected maxValues.a Int32".to_string()))?;
-
-        assert_eq!(min_a.value(0), 1);
-        assert_eq!(max_a.value(0), 1);
-        assert!(stats.is_valid(0));
-        assert!(stats.is_null(1));
-        assert!(min_values.is_valid(0));
-        assert!(min_values.is_null(1));
-        assert!(max_values.is_valid(0));
-        assert!(max_values.is_null(1));
-        Ok(())
-    }
-
-    #[test]
-    fn normalization_rejects_stats_type_narrowing() -> Result<()> {
-        let source = StructArray::from(vec![(
+        let narrowing_source = StructArray::from(vec![(
             Arc::new(Field::new("a", DataType::Int32, true)),
             Arc::new(Int32Array::from(vec![Some(32_768)])) as Arc<_>,
         )]);
-        let target_fields: Fields = vec![Arc::new(Field::new("a", DataType::Int16, true))].into();
+        let narrowing_target_fields: Fields =
+            vec![Arc::new(Field::new("a", DataType::Int16, true))].into();
 
-        let Err(error) = normalize_metadata_stats_struct(&source, &target_fields, "stats_parsed")
-        else {
-            return Err(DataFusionError::Internal(
-                "integer stats narrowing must be rejected".to_string(),
-            ));
-        };
-        assert!(error.to_string().contains("incompatible type Int32"));
-        Ok(())
-    }
+        let cases = vec![
+            NormalizationCase {
+                name: "nested widening and missing nullable fields",
+                source: source_stats,
+                target_fields: widened_target_fields,
+                expectation: NormalizationExpectation::WidenedNestedInteger,
+            },
+            NormalizationCase {
+                name: "integer narrowing",
+                source: narrowing_source,
+                target_fields: narrowing_target_fields,
+                expectation: NormalizationExpectation::Rejected("incompatible type Int32"),
+            },
+        ];
 
-    #[test]
-    fn widens_timestamp_maxima_in_existing_parsed_stats() -> Result<()> {
-        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let min_values = StructArray::from(vec![(
-            Arc::new(Field::new("event_time", timestamp_type.clone(), true)),
-            Arc::new(TimestampMicrosecondArray::from(vec![
-                Some(10_654_000),
-                None,
-                Some(i64::MAX),
-            ])) as Arc<_>,
-        )]);
-        let max_values = StructArray::from(vec![(
-            Arc::new(Field::new("event_time", timestamp_type, true)),
-            Arc::new(TimestampMicrosecondArray::from(vec![
-                Some(10_654_000),
-                None,
-                Some(i64::MAX),
-            ])) as Arc<_>,
-        )]);
-        let typed_stats = StructArray::from(vec![
-            (
-                Arc::new(Field::new(
-                    STATS_FIELD_MIN_VALUES,
-                    min_values.data_type().clone(),
-                    true,
-                )),
-                Arc::new(min_values) as Arc<_>,
-            ),
-            (
-                Arc::new(Field::new(
-                    STATS_FIELD_MAX_VALUES,
-                    max_values.data_type().clone(),
-                    true,
-                )),
-                Arc::new(max_values) as Arc<_>,
-            ),
-        ]);
-        let timestamp_stats_schema = Arc::new(Schema::new(typed_stats.fields().clone()));
-        let input_schema = Arc::new(Schema::new(vec![Field::new(
-            FIELD_NAME_STATS_PARSED,
-            typed_stats.data_type().clone(),
-            true,
-        )]));
-        let batch = RecordBatch::try_new(Arc::clone(&input_schema), vec![Arc::new(typed_stats)])
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let exec = DeltaMetadataStatsExec::new(
-            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
-            timestamp_stats_schema,
-        );
+        for case in cases {
+            let normalized = normalize_metadata_stats_struct(
+                &case.source,
+                &case.target_fields,
+                FIELD_NAME_STATS_PARSED,
+            );
+            match case.expectation {
+                NormalizationExpectation::WidenedNestedInteger => {
+                    let normalized = normalized?;
+                    let stats = normalized
+                        .as_any()
+                        .downcast_ref::<StructArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "{} should produce a struct",
+                                case.name
+                            ))
+                        })?;
+                    assert_eq!(stats.fields(), &case.target_fields, "{}", case.name);
+                    assert!(stats.is_valid(0), "{}", case.name);
+                    assert!(stats.is_null(1), "{}", case.name);
 
-        let parsed = exec.parse_stats_array(&batch)?;
-        let stats = parsed
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected stats struct".to_string()))?;
-        let min = stats
-            .column_by_name(STATS_FIELD_MIN_VALUES)
-            .and_then(|values| values.as_any().downcast_ref::<StructArray>())
-            .and_then(|values| values.column_by_name("event_time"))
-            .and_then(|values| values.as_any().downcast_ref::<TimestampMicrosecondArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected timestamp min".to_string()))?;
-        let max = stats
-            .column_by_name(STATS_FIELD_MAX_VALUES)
-            .and_then(|values| values.as_any().downcast_ref::<StructArray>())
-            .and_then(|values| values.column_by_name("event_time"))
-            .and_then(|values| values.as_any().downcast_ref::<TimestampMicrosecondArray>())
-            .ok_or_else(|| DataFusionError::Internal("expected timestamp max".to_string()))?;
+                    let num_records = stats
+                        .column_by_name(STATS_FIELD_NUM_RECORDS)
+                        .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "{} numRecords should be Int64",
+                                case.name
+                            ))
+                        })?;
+                    assert!(num_records.is_null(0), "{}", case.name);
+                    assert!(num_records.is_null(1), "{}", case.name);
 
-        assert_eq!(min.value(0), 10_654_000);
-        assert_eq!(max.value(0), 10_655_000);
-        assert!(max.is_null(1));
-        assert_eq!(max.value(2), i64::MAX);
+                    let min_values = stats
+                        .column_by_name(STATS_FIELD_MIN_VALUES)
+                        .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "{} minValues should be a struct",
+                                case.name
+                            ))
+                        })?;
+                    let min_a = min_values
+                        .column_by_name("a")
+                        .and_then(|column| column.as_any().downcast_ref::<Int32Array>())
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "{} minValues.a should be widened to Int32",
+                                case.name
+                            ))
+                        })?;
+                    assert_eq!(min_a.value(0), 1, "{}", case.name);
+                    assert!(min_values.is_valid(0), "{}", case.name);
+                    assert!(min_values.is_null(1), "{}", case.name);
+
+                    let max_values = stats
+                        .column_by_name(STATS_FIELD_MAX_VALUES)
+                        .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "{} maxValues should be a struct",
+                                case.name
+                            ))
+                        })?;
+                    assert!(max_values.is_null(0), "{}", case.name);
+                    assert!(max_values.is_null(1), "{}", case.name);
+                }
+                NormalizationExpectation::Rejected(message) => {
+                    let Err(error) = normalized else {
+                        return Err(DataFusionError::Internal(format!(
+                            "{} should be rejected",
+                            case.name
+                        )));
+                    };
+                    assert!(
+                        error.to_string().contains(message),
+                        "{} returned {error}",
+                        case.name
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

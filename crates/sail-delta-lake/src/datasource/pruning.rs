@@ -751,61 +751,6 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_json_max_values_are_widened_but_min_values_are_not() -> Result<()> {
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "timestamp_col",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                true,
-            ),
-            Field::new(
-                "timestamp_ntz_col",
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-        ]));
-        let adds = vec![add_with_stats(
-            r#"{
-                "numRecords":1,
-                "minValues":{
-                    "timestamp_col":"2024-07-01T23:45:12.654Z",
-                    "timestamp_ntz_col":"2024-07-01T23:45:12.654"
-                },
-                "maxValues":{
-                    "timestamp_col":"2024-07-01T23:45:12.654Z",
-                    "timestamp_ntz_col":"2024-07-01T23:45:12.654"
-                }
-            }"#,
-        )];
-        let referenced_columns =
-            HashSet::from(["timestamp_col".to_string(), "timestamp_ntz_col".to_string()]);
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
-        let expected_min = chrono::DateTime::parse_from_rfc3339("2024-07-01T23:45:12.654Z")
-            .map_err(|error| DataFusionError::External(Box::new(error)))?
-            .timestamp_micros();
-
-        for column in ["timestamp_col", "timestamp_ntz_col"] {
-            let min_values = stats
-                .min_values(&Column::from_name(column))
-                .ok_or_else(|| DataFusionError::Internal("timestamp min missing".to_string()))?;
-            let max_values = stats
-                .max_values(&Column::from_name(column))
-                .ok_or_else(|| DataFusionError::Internal("timestamp max missing".to_string()))?;
-            let min_values = min_values
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .ok_or_else(|| DataFusionError::Internal("timestamp min type".to_string()))?;
-            let max_values = max_values
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .ok_or_else(|| DataFusionError::Internal("timestamp max type".to_string()))?;
-            assert_eq!(min_values.value(0), expected_min);
-            assert_eq!(max_values.value(0), expected_min + 1_000);
-        }
-        Ok(())
-    }
-
-    #[test]
     fn nested_timestamp_json_stats_are_materialized_and_widened() -> Result<()> {
         let payload_fields = vec![
             Arc::new(Field::new(
@@ -888,6 +833,35 @@ mod tests {
                 }}"#,
             );
             let add = add_with_stats(&stats_json);
+            let stats = AddStatsPruningStatistics::try_new(
+                Arc::clone(&table_schema),
+                vec![add.clone()],
+                HashSet::from(["event_time".to_string()]),
+            )?;
+            let timestamp_bound = |values: Option<ArrayRef>, bound: &str| -> Result<i64> {
+                let values = values.ok_or_else(|| {
+                    DataFusionError::Internal(format!("timestamp {bound} missing"))
+                })?;
+                let values = values
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .ok_or_else(|| DataFusionError::Internal(format!("timestamp {bound} type")))?;
+                Ok(values.value(0))
+            };
+            assert_eq!(
+                timestamp_bound(
+                    stats.min_values(&Column::from_name("event_time")),
+                    "minimum"
+                )?,
+                expected_max
+            );
+            assert_eq!(
+                timestamp_bound(
+                    stats.max_values(&Column::from_name("event_time")),
+                    "maximum"
+                )?,
+                expected_max + 1_000
+            );
             let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
                 Arc::new(PhysicalColumn::new("event_time", 0)),
                 Operator::Gt,
@@ -1064,18 +1038,6 @@ mod tests {
         assert!(timestamp("missing_time")?.is_null(0));
         assert_eq!(timestamp("latest_time")?.value(0), i64::MAX);
         assert_eq!(record_count.value(0), 7);
-        Ok(())
-    }
-
-    #[test]
-    fn timestamp_max_widening_saturates_on_overflow() -> Result<()> {
-        let array = Arc::new(TimestampMicrosecondArray::from(vec![Some(i64::MAX)])) as ArrayRef;
-        let widened = super::widen_timestamp_max_stat(array);
-        let widened = widened
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .ok_or_else(|| DataFusionError::Internal("timestamp array".to_string()))?;
-        assert_eq!(widened.value(0), i64::MAX);
         Ok(())
     }
 }

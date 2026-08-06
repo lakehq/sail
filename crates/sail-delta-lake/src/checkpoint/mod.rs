@@ -2079,6 +2079,7 @@ mod tests {
         let sidecar_filename = "00000000000000000002.checkpoint.0000000001.0000000001.bbf4d2d5-b626-41f8-854f-63b5e397ad82.parquet";
         let sidecar_batch = encode_rows_for_test(&vec![CheckpointActionRow {
             add: Some(add.clone()),
+            protocol: Some(Protocol::new(1, 2, None, None)),
             ..Default::default()
         }])?;
         put_parquet_batch(
@@ -2116,6 +2117,21 @@ mod tests {
 
         let meta = store.head(&checkpoint_path).await?;
         let rows = read_checkpoint_rows_from_checkpoint_file(store, meta).await?;
+        {
+            let add_paths = rows
+                .iter()
+                .filter_map(|row| row.add.as_ref().map(|add| add.path.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(add_paths, vec!["part-000.parquet"]);
+            let protocols = rows
+                .iter()
+                .filter_map(|row| row.protocol.as_ref())
+                .collect::<Vec<_>>();
+            assert_eq!(protocols.len(), 1);
+            assert_eq!(protocols[0].min_reader_version(), 3);
+            assert_eq!(protocols[0].min_writer_version(), 7);
+        }
+
         let mut state = ReconciledCheckpointState::default();
         for row in rows {
             state.apply_checkpoint_row(row)?;
@@ -2288,7 +2304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_checkpoint_requires_exactly_one_checkpoint_metadata() -> DeltaResult<()> {
+    async fn v2_checkpoint_manifest_validation() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let checkpoint_prefix = "_delta_log/00000000000000000002.checkpoint";
         let invalid_cases = [
@@ -2339,15 +2355,10 @@ mod tests {
                 "unexpected error: {error}"
             );
         }
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn v2_checkpoint_manifest_validation_allows_other_actions() -> DeltaResult<()> {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let path = Path::from(
-            "_delta_log/00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc044.json",
-        );
+        let path = Path::from(format!(
+            "{checkpoint_prefix}.c13805b3-8c9f-45f0-b1e4-a16b695fc044.json"
+        ));
         let metadata = test_metadata([("delta.checkpointPolicy", "v2")])?;
         put_actions(
             &store,
@@ -2389,74 +2400,6 @@ mod tests {
                 .count(),
             6
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn v2_checkpoint_ignores_non_file_action_in_sidecar() -> DeltaResult<()> {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let sidecar_filename = "sidecar-with-extra-protocol.parquet";
-        let sidecar_batch = encode_rows_for_test(&vec![CheckpointActionRow {
-            add: Some(Add {
-                path: "part-000.parquet".to_string(),
-                data_change: true,
-                ..Default::default()
-            }),
-            protocol: Some(Protocol::new(1, 2, None, None)),
-            ..Default::default()
-        }])?;
-        put_parquet_batch(
-            store.clone(),
-            sidecar_file_path(sidecar_filename),
-            sidecar_batch,
-        )
-        .await?;
-
-        let checkpoint_path = Path::from(
-            "_delta_log/00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc045.json",
-        );
-        put_actions(
-            &store,
-            checkpoint_path.clone(),
-            &[
-                Action::CheckpointMetadata(CheckpointMetadata {
-                    version: 2,
-                    tags: None,
-                }),
-                Action::Sidecar(Sidecar {
-                    path: sidecar_filename.to_string(),
-                    size_in_bytes: 1,
-                    modification_time: 2,
-                    tags: None,
-                }),
-                Action::Protocol(Protocol::new(
-                    3,
-                    7,
-                    Some(vec![TableFeature::V2Checkpoint]),
-                    Some(vec![TableFeature::V2Checkpoint]),
-                )),
-                Action::Metadata(test_metadata([("delta.checkpointPolicy", "v2")])?),
-            ],
-        )
-        .await?;
-
-        let rows = read_checkpoint_rows_from_checkpoint_file(
-            store.clone(),
-            store.head(&checkpoint_path).await?,
-        )
-        .await?;
-        let add_paths = rows
-            .iter()
-            .filter_map(|row| row.add.as_ref().map(|add| add.path.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(add_paths, vec!["part-000.parquet"]);
-        let protocols = rows
-            .iter()
-            .filter_map(|row| row.protocol.as_ref())
-            .collect::<Vec<_>>();
-        assert_eq!(protocols.len(), 1);
-        assert_eq!(protocols[0].min_reader_version(), 3);
-        assert_eq!(protocols[0].min_writer_version(), 7);
         Ok(())
     }
 

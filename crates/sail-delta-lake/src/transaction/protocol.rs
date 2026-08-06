@@ -448,184 +448,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn global_checker_accepts_vacuum_protocol_check_feature() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-        );
-
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
-    }
-
-    #[test]
-    fn global_checker_rejects_vacuum_protocol_check_reader_only() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-            Some(vec![TableFeature::AppendOnly]),
-        );
-
-        for error in [
-            INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
-            INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
-        ] {
-            assert!(
-                matches!(
-                    &error,
-                    TransactionError::InvalidProtocol(message)
-                        if message.contains("vacuumProtocolCheck")
-                            && message.contains("readerFeatures")
-                            && message.contains("writerFeatures")
-                ),
-                "unexpected protocol error: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn global_checker_rejects_vacuum_protocol_check_writer_only() {
-        let protocol: Protocol = serde_json::from_value(serde_json::json!({
-            "minReaderVersion": 3,
-            "minWriterVersion": 7,
-            "readerFeatures": [],
-            "writerFeatures": ["vacuumProtocolCheck"]
-        }))
-        .unwrap();
-
-        for error in [
-            INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
-            INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
-        ] {
-            assert!(
-                matches!(
-                    &error,
-                    TransactionError::InvalidProtocol(message)
-                        if message.contains("vacuumProtocolCheck")
-                            && message.contains("readerFeatures")
-                            && message.contains("writerFeatures")
-                ),
-                "unexpected protocol error: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn global_checker_rejects_feature_lists_at_legacy_versions() {
-        let protocols = [
-            Protocol::new(
-                1,
-                7,
-                Some(vec![TableFeature::VacuumProtocolCheck]),
-                Some(vec![TableFeature::VacuumProtocolCheck]),
-            ),
-            Protocol::new(3, 6, Some(vec![TableFeature::VacuumProtocolCheck]), None),
-        ];
-
-        for protocol in protocols {
-            for error in [
-                INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
-                INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
-            ] {
-                assert!(matches!(error, TransactionError::InvalidProtocol(_)));
-            }
-        }
-    }
-
-    #[test]
-    fn global_checker_rejects_missing_feature_lists_at_table_feature_versions() {
-        let protocols = [
-            Protocol::new(3, 7, None, Some(vec![TableFeature::VacuumProtocolCheck])),
-            Protocol::new(3, 7, Some(vec![TableFeature::VacuumProtocolCheck]), None),
-        ];
-
-        for protocol in protocols {
-            for error in [
-                INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
-                INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
-            ] {
-                assert!(matches!(error, TransactionError::InvalidProtocol(_)));
-            }
-        }
-    }
-
-    #[test]
-    fn protocol_preserves_empty_feature_lists_at_table_feature_versions() {
-        let protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
-
-        assert_eq!(protocol.reader_features(), Some([].as_slice()));
-        assert_eq!(protocol.writer_features(), Some([].as_slice()));
-        let json = serde_json::to_value(&protocol).unwrap();
-        assert_eq!(json["readerFeatures"], serde_json::json!([]));
-        assert_eq!(json["writerFeatures"], serde_json::json!([]));
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
-    }
-
-    #[test]
-    fn global_checker_rejects_non_positive_protocol_versions() {
-        for protocol in [
-            Protocol::new(0, 1, None, None),
-            Protocol::new(1, 0, None, None),
-            Protocol::new(-1, 1, None, None),
-            Protocol::new(1, -1, None, None),
-        ] {
-            assert!(matches!(
-                INSTANCE.can_read_from_protocol(&protocol),
-                Err(TransactionError::InvalidProtocol(_))
-            ));
-            assert!(matches!(
-                INSTANCE.can_write_to_protocol(&protocol),
-                Err(TransactionError::InvalidProtocol(_))
-            ));
-        }
-    }
-
-    #[test]
-    fn global_checker_rejects_writer_only_feature_in_reader_features() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::AppendOnly]),
-            Some(vec![TableFeature::AppendOnly]),
-        );
-
-        let error = INSTANCE.can_read_from_protocol(&protocol).unwrap_err();
-        assert!(matches!(
-            error,
-            TransactionError::InvalidProtocol(message)
-                if message.contains("writer-only feature appendOnly")
-        ));
-    }
-
-    #[test]
-    fn global_checker_rejects_stable_variant_shredding_without_variant_type() {
-        for extra_feature in [None, Some(TableFeature::VariantTypePreview)] {
-            let mut reader_features = vec![TableFeature::VariantShredding];
-            let mut writer_features = vec![TableFeature::VariantShredding];
-            if let Some(feature) = extra_feature {
-                reader_features.push(feature.clone());
-                writer_features.push(feature);
-            }
-            let protocol = Protocol::new(3, 7, Some(reader_features), Some(writer_features));
-
-            for error in [
-                INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
-                INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
-            ] {
-                assert!(matches!(
-                    error,
-                    TransactionError::InvalidProtocol(message)
-                        if message.contains("variantShredding requires variantType")
-                ));
-            }
-        }
-    }
-
-    #[test]
     fn global_checker_accepts_variant_shredding_features() {
         let protocol = Protocol::new(
             3,
@@ -674,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_accepts_variant_shredding_without_variant_type() {
-        let protocol = Protocol::new(
+    fn global_checker_distinguishes_stable_and_preview_variant_dependencies() {
+        let preview_protocol = Protocol::new(
             3,
             7,
             Some(vec![TableFeature::VariantShreddingPreview]),
@@ -686,24 +508,66 @@ mod tests {
             ]),
         );
 
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE.can_read_from_protocol(&preview_protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&preview_protocol).unwrap();
         INSTANCE
-            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .check_can_write_variant_shredding_to_protocol(&preview_protocol, true)
             .unwrap();
+
+        for extra_feature in [None, Some(TableFeature::VariantTypePreview)] {
+            let mut reader_features = vec![TableFeature::VariantShredding];
+            let mut writer_features = vec![TableFeature::VariantShredding];
+            if let Some(feature) = extra_feature {
+                reader_features.push(feature.clone());
+                writer_features.push(feature);
+            }
+            let stable_protocol = Protocol::new(3, 7, Some(reader_features), Some(writer_features));
+
+            for error in [
+                INSTANCE
+                    .can_read_from_protocol(&stable_protocol)
+                    .unwrap_err(),
+                INSTANCE
+                    .can_write_to_protocol(&stable_protocol)
+                    .unwrap_err(),
+            ] {
+                assert!(matches!(
+                    error,
+                    TransactionError::InvalidProtocol(message)
+                        if message.contains("variantShredding requires variantType")
+                ));
+            }
+        }
     }
 
     #[test]
-    fn global_checker_accepts_catalog_managed_feature() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::CatalogManaged]),
-            Some(vec![TableFeature::CatalogManaged]),
-        );
+    fn global_checker_accepts_valid_table_feature_protocols() {
+        let protocols = [
+            (
+                "catalog-managed feature",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::CatalogManaged]),
+                    Some(vec![TableFeature::CatalogManaged]),
+                ),
+            ),
+            (
+                "present empty feature lists",
+                Protocol::new(3, 7, Some(vec![]), Some(vec![])),
+            ),
+        ];
 
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        for (label, protocol) in protocols {
+            assert!(
+                INSTANCE.can_read_from_protocol(&protocol).is_ok(),
+                "reader rejected {label}"
+            );
+            assert!(
+                INSTANCE.can_write_to_protocol(&protocol).is_ok(),
+                "writer rejected {label}"
+            );
+        }
     }
 
     #[test]
@@ -831,8 +695,104 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_rejects_unknown_reader_version() {
-        let protocol = Protocol::new(99, 7, None, Some(vec![]));
-        assert!(INSTANCE.can_read_from_protocol(&protocol).is_err());
+    fn global_checker_rejects_invalid_protocols() {
+        let vacuum_writer_only: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": [],
+            "writerFeatures": ["vacuumProtocolCheck"]
+        }))
+        .unwrap();
+        let cases = [
+            (
+                "reader-writer feature listed only for readers",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                    Some(vec![TableFeature::AppendOnly]),
+                ),
+                "reader-writer feature vacuumProtocolCheck must be listed in both readerFeatures and writerFeatures",
+            ),
+            (
+                "reader-writer feature listed only for writers",
+                vacuum_writer_only,
+                "reader-writer feature vacuumProtocolCheck must be listed in both readerFeatures and writerFeatures",
+            ),
+            (
+                "reader features present at a legacy version",
+                Protocol::new(
+                    1,
+                    7,
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                ),
+                "readerFeatures must be absent",
+            ),
+            (
+                "table-feature reader version paired with legacy writer version",
+                Protocol::new(3, 6, Some(vec![TableFeature::VacuumProtocolCheck]), None),
+                "minReaderVersion 3 requires minWriterVersion 7",
+            ),
+            (
+                "reader features missing at the table-feature version",
+                Protocol::new(3, 7, None, Some(vec![TableFeature::VacuumProtocolCheck])),
+                "readerFeatures must be present",
+            ),
+            (
+                "writer features missing at the table-feature version",
+                Protocol::new(3, 7, Some(vec![TableFeature::VacuumProtocolCheck]), None),
+                "writerFeatures must be present",
+            ),
+            (
+                "zero reader version",
+                Protocol::new(0, 1, None, None),
+                "minReaderVersion must be at least 1",
+            ),
+            (
+                "zero writer version",
+                Protocol::new(1, 0, None, None),
+                "minWriterVersion must be at least 1",
+            ),
+            (
+                "negative reader version",
+                Protocol::new(-1, 1, None, None),
+                "minReaderVersion must be at least 1",
+            ),
+            (
+                "negative writer version",
+                Protocol::new(1, -1, None, None),
+                "minWriterVersion must be at least 1",
+            ),
+            (
+                "writer-only feature listed for readers",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::AppendOnly]),
+                    Some(vec![TableFeature::AppendOnly]),
+                ),
+                "writer-only feature appendOnly",
+            ),
+        ];
+
+        for (label, protocol, expected_message) in cases {
+            for error in [
+                INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
+                INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
+            ] {
+                assert!(
+                    matches!(
+                        &error,
+                        TransactionError::InvalidProtocol(message)
+                            if message.contains(expected_message)
+                    ),
+                    "unexpected {label} error: {error}"
+                );
+            }
+        }
+
+        let unknown_reader = Protocol::new(99, 7, None, Some(vec![]));
+        assert!(INSTANCE.can_read_from_protocol(&unknown_reader).is_err());
     }
 }

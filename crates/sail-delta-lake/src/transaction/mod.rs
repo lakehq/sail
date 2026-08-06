@@ -2324,17 +2324,52 @@ mod tests {
         }
     }
 
-    fn deletion_vector_commit_actions(add: Add) -> Vec<CommitAction> {
-        vec![
+    fn deletion_vector_commit_actions(
+        metadata: Metadata,
+        file_actions: impl IntoIterator<Item = CommitAction>,
+    ) -> Vec<CommitAction> {
+        let mut actions = vec![
             CommitAction::Protocol(Protocol::new(
                 3,
                 7,
                 Some(vec![TableFeature::DeletionVectors]),
                 Some(vec![TableFeature::DeletionVectors]),
             )),
-            CommitAction::Metadata(test_metadata([("delta.enableDeletionVectors", "true")])),
-            CommitAction::Add(add),
-        ]
+            CommitAction::Metadata(metadata),
+        ];
+        actions.extend(file_actions);
+        actions
+    }
+
+    fn deletion_vector_remove(add: &Add, data_change: bool) -> Remove {
+        Remove {
+            path: add.path.clone(),
+            data_change,
+            deletion_vector: add.deletion_vector.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn assert_effective_commit_validation(
+        case: &str,
+        read_snapshot: Option<&Arc<DeltaSnapshot>>,
+        actions: &[CommitAction],
+        expected_error: Option<&str>,
+    ) {
+        let result = validate_effective_commit_target(read_snapshot, actions);
+        if let Some(expected) = expected_error {
+            assert!(
+                result.is_err(),
+                "{case} expected an error containing {expected}"
+            );
+            let error = result.err().unwrap();
+            assert!(
+                error.to_string().contains(expected),
+                "{case} expected error containing {expected}, got: {error}"
+            );
+        } else {
+            assert!(result.is_ok(), "{case} unexpectedly failed: {result:?}");
+        }
     }
 
     async fn read_commit_actions(log_store: &LogStoreRef, version: i64) -> Vec<Action> {
@@ -2554,79 +2589,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_commit_accepts_vacuum_protocol_check_feature() -> DeltaResult<()> {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let log_store = test_log_store(store);
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-        );
-        let metadata = test_metadata([]);
-
-        let result = CommitBuilder::default()
-            .with_actions(vec![
-                CommitAction::Protocol(protocol.clone()),
-                CommitAction::Metadata(metadata.clone()),
-            ])
-            .build(
+    async fn create_commit_validates_reader_features() -> DeltaResult<()> {
+        let cases = [
+            (
+                "vacuum protocol check",
+                TableFeature::VacuumProtocolCheck,
                 None,
-                log_store,
-                DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: "memory:///".to_string(),
-                    protocol: Box::new(protocol),
-                    metadata: Box::new(metadata),
-                },
-            )
-            .await?;
-        assert!(result.snapshot.is_some());
+            ),
+            (
+                "unknown reader feature",
+                TableFeature::Unknown,
+                Some(TableFeature::Unknown),
+            ),
+        ];
+
+        for (case, feature, expected_unsupported_feature) in cases {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let log_store = test_log_store(store);
+            let protocol = Protocol::new(3, 7, Some(vec![feature.clone()]), Some(vec![feature]));
+            let metadata = test_metadata([]);
+            let result = CommitBuilder::default()
+                .with_actions(vec![
+                    CommitAction::Protocol(protocol.clone()),
+                    CommitAction::Metadata(metadata.clone()),
+                ])
+                .build(
+                    None,
+                    log_store,
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: "memory:///".to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
+                    },
+                )
+                .await;
+
+            if let Some(expected) = expected_unsupported_feature {
+                assert!(
+                    result.is_err(),
+                    "{case} unexpectedly accepted unsupported feature {}",
+                    expected.as_str()
+                );
+                let error = result.err().unwrap();
+                let contains_expected_feature = matches!(
+                    &error,
+                    DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
+                        if features.contains(&expected)
+                );
+                assert!(
+                    contains_expected_feature,
+                    "{case} expected unsupported feature {expected:?}, got: {error}"
+                );
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "{case} unexpectedly failed: {:?}",
+                    result.as_ref().err()
+                );
+                let result = result.ok().unwrap();
+                assert!(result.snapshot.is_some(), "{case} returned no snapshot");
+            }
+        }
+
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn create_commit_rejects_unsupported_reader_features() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let log_store = test_log_store(store);
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::Unknown]),
-            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
-        );
-        let metadata = test_metadata([]);
-
-        let result = CommitBuilder::default()
-            .with_actions(vec![
-                CommitAction::Protocol(protocol.clone()),
-                CommitAction::Metadata(metadata.clone()),
-            ])
-            .build(
-                None,
-                log_store,
-                DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: "memory:///".to_string(),
-                    protocol: Box::new(protocol),
-                    metadata: Box::new(metadata),
-                },
-            )
-            .await;
-        assert!(
-            result.is_err(),
-            "create commit should reject unsupported reader features"
-        );
-        let err = match result {
-            Err(err) => err,
-            Ok(_) => return,
-        };
-
-        assert!(matches!(
-            err,
-            DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
-                if features.contains(&TableFeature::Unknown)
-        ));
     }
 
     #[tokio::test]
@@ -2763,126 +2789,60 @@ mod tests {
     }
 
     #[test]
-    fn validate_effective_commit_target_rejects_invalid_deletion_vector_stats() {
-        let invalid_stats = [
-            ("missing stats", None, 1, "requires stats.numRecords"),
-            ("malformed stats", Some("{"), 1, "invalid stats.numRecords"),
+    fn validate_effective_commit_target_validates_deletion_vector_stats() {
+        let cases = [
+            ("missing stats", None, 1, Some("requires stats.numRecords")),
+            (
+                "malformed stats",
+                Some("{"),
+                1,
+                Some("invalid stats.numRecords"),
+            ),
             (
                 "missing numRecords",
                 Some(r#"{"tightBounds":true}"#),
                 1,
-                "invalid stats.numRecords",
+                Some("invalid stats.numRecords"),
             ),
             (
                 "negative numRecords",
                 Some(r#"{"numRecords":-1}"#),
                 1,
-                "negative stats.numRecords",
+                Some("negative stats.numRecords"),
             ),
             (
                 "negative deletion vector cardinality",
                 Some(r#"{"numRecords":1}"#),
                 -1,
-                "negative deletion vector cardinality",
+                Some("negative deletion vector cardinality"),
             ),
             (
                 "deletion vector cardinality exceeds numRecords",
                 Some(r#"{"numRecords":4}"#),
                 5,
-                "greater than stats.numRecords",
+                Some("greater than stats.numRecords"),
+            ),
+            ("zero records", Some(r#"{"numRecords":0}"#), 0, None),
+            ("equal cardinality", Some(r#"{"numRecords":5}"#), 5, None),
+            (
+                "cardinality below numRecords",
+                Some(r#"{"numRecords":6}"#),
+                5,
+                None,
             ),
         ];
 
-        for (case, stats, cardinality, expected_error) in invalid_stats {
-            let actions = deletion_vector_commit_actions(deletion_vector_add(stats, cardinality));
-            let error = validate_effective_commit_target(None, &actions).unwrap_err();
-
-            assert!(
-                error.to_string().contains(expected_error),
-                "{case} returned an unexpected error: {error}"
+        for (case, stats, cardinality, expected_error) in cases {
+            let actions = deletion_vector_commit_actions(
+                test_metadata([("delta.enableDeletionVectors", "true")]),
+                [CommitAction::Add(deletion_vector_add(stats, cardinality))],
             );
+            assert_effective_commit_validation(case, None, &actions, expected_error);
         }
     }
 
-    #[test]
-    fn validate_effective_commit_target_rejects_new_deletion_vector_when_disabled() {
-        let actions = vec![
-            CommitAction::Protocol(Protocol::new(
-                3,
-                7,
-                Some(vec![TableFeature::DeletionVectors]),
-                Some(vec![TableFeature::DeletionVectors]),
-            )),
-            CommitAction::Metadata(test_metadata([])),
-            CommitAction::Add(deletion_vector_add(Some(r#"{"numRecords":1}"#), 1)),
-        ];
-
-        let error = validate_effective_commit_target(None, &actions).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("delta.enableDeletionVectors is not true"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn validate_effective_commit_target_does_not_trust_fabricated_in_place_deletion_vector_update()
-    {
-        let add = deletion_vector_add(Some(r#"{"numRecords":1}"#), 1);
-        let remove = Remove {
-            path: add.path.clone(),
-            data_change: false,
-            deletion_vector: add.deletion_vector.clone(),
-            ..Default::default()
-        };
-        let actions = vec![
-            CommitAction::Protocol(Protocol::new(
-                3,
-                7,
-                Some(vec![TableFeature::DeletionVectors]),
-                Some(vec![TableFeature::DeletionVectors]),
-            )),
-            CommitAction::Metadata(test_metadata([("delta.enableDeletionVectors", "false")])),
-            CommitAction::Remove(remove),
-            CommitAction::Add(add),
-        ];
-
-        let error = validate_effective_commit_target(None, &actions).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("delta.enableDeletionVectors is not true"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn validate_effective_commit_target_allows_remove_only_when_deletion_vectors_are_disabled()
-    -> DeltaResult<()> {
-        let add = deletion_vector_add(Some(r#"{"numRecords":1}"#), 1);
-        let remove = Remove {
-            path: add.path,
-            data_change: true,
-            deletion_vector: add.deletion_vector,
-            ..Default::default()
-        };
-        let actions = vec![
-            CommitAction::Protocol(Protocol::new(
-                3,
-                7,
-                Some(vec![TableFeature::DeletionVectors]),
-                Some(vec![TableFeature::DeletionVectors]),
-            )),
-            CommitAction::Metadata(test_metadata([("delta.enableDeletionVectors", "false")])),
-            CommitAction::Remove(remove),
-        ];
-
-        validate_effective_commit_target(None, &actions)
-    }
-
     #[tokio::test]
-    async fn validate_effective_commit_target_allows_existing_deletion_vector_metadata_update()
+    async fn validate_effective_commit_target_validates_deletion_vector_lifecycle()
     -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
@@ -2893,12 +2853,12 @@ mod tests {
             Some(vec![TableFeature::DeletionVectors]),
         );
         let enabled_metadata = test_metadata([("delta.enableDeletionVectors", "true")]);
-        let add = deletion_vector_add(Some(r#"{"numRecords":1}"#), 1);
+        let existing_add = deletion_vector_add(Some(r#"{"numRecords":1}"#), 1);
         let created = CommitBuilder::default()
             .with_actions(vec![
                 CommitAction::Protocol(protocol.clone()),
                 CommitAction::Metadata(enabled_metadata.clone()),
-                CommitAction::Add(add.clone()),
+                CommitAction::Add(existing_add.clone()),
             ])
             .build(
                 None,
@@ -2925,31 +2885,58 @@ mod tests {
                 },
             )
             .await?;
-        let snapshot = disabled
+        let existing_snapshot = disabled
             .snapshot
             .as_ref()
             .ok_or_else(|| DeltaError::generic("metadata update should return a snapshot"))?;
-        let remove = Remove {
-            path: add.path.clone(),
-            data_change: false,
-            deletion_vector: add.deletion_vector.clone(),
-            ..Default::default()
-        };
-        let actions = vec![CommitAction::Remove(remove), CommitAction::Add(add)];
 
-        validate_effective_commit_target(Some(snapshot), &actions)
-    }
+        let cases = vec![
+            (
+                "new deletion vector with missing enablement property",
+                None,
+                deletion_vector_commit_actions(
+                    test_metadata([]),
+                    [CommitAction::Add(existing_add.clone())],
+                ),
+                Some("delta.enableDeletionVectors is not true"),
+            ),
+            (
+                "fabricated in-place update",
+                None,
+                deletion_vector_commit_actions(
+                    test_metadata([("delta.enableDeletionVectors", "false")]),
+                    [
+                        CommitAction::Remove(deletion_vector_remove(&existing_add, false)),
+                        CommitAction::Add(existing_add.clone()),
+                    ],
+                ),
+                Some("delta.enableDeletionVectors is not true"),
+            ),
+            (
+                "remove only while disabled",
+                None,
+                deletion_vector_commit_actions(
+                    test_metadata([("delta.enableDeletionVectors", "false")]),
+                    [CommitAction::Remove(deletion_vector_remove(
+                        &existing_add,
+                        true,
+                    ))],
+                ),
+                None,
+            ),
+            (
+                "existing deletion vector metadata update",
+                Some(existing_snapshot),
+                vec![
+                    CommitAction::Remove(deletion_vector_remove(&existing_add, false)),
+                    CommitAction::Add(existing_add),
+                ],
+                None,
+            ),
+        ];
 
-    #[test]
-    fn validate_effective_commit_target_accepts_valid_deletion_vector_stats() -> DeltaResult<()> {
-        for (num_records, cardinality) in [(0, 0), (5, 5), (6, 5)] {
-            let stats = format!(r#"{{"numRecords":{num_records}}}"#);
-            let actions = deletion_vector_commit_actions(deletion_vector_add(
-                Some(stats.as_str()),
-                cardinality,
-            ));
-
-            validate_effective_commit_target(None, &actions)?;
+        for (case, read_snapshot, actions, expected_error) in cases {
+            assert_effective_commit_validation(case, read_snapshot, &actions, expected_error);
         }
 
         Ok(())

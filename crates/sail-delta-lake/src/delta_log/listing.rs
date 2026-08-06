@@ -149,6 +149,13 @@ mod tests {
     #[tokio::test]
     async fn latest_version_from_listing_works_without_last_checkpoint_hint() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let sidecar = Path::from(
+            "_delta_log/_sidecars/00000000000000000042.checkpoint.0000000001.0000000001.uuid.parquet",
+        );
+        store
+            .put(&sidecar, b"sidecar".to_vec().into())
+            .await
+            .unwrap();
         store
             .put(
                 &Path::from("_delta_log/00000000000000000007.json"),
@@ -157,7 +164,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(7));
+        assert_eq!(parse_checkpoint_version_from_location(&sidecar), None);
+        assert_eq!(
+            latest_version_from_listing(store.clone()).await.unwrap(),
+            Some(7)
+        );
+        let entries = list_delta_log_entries_from(store, 0).await.unwrap();
+        assert_eq!(entries.len(), 1);
     }
 
     #[tokio::test]
@@ -228,32 +241,5 @@ mod tests {
 
         let entries = list_delta_log_entries_from(store, 21).await.unwrap();
         assert!(entries.is_empty());
-    }
-
-    #[tokio::test]
-    async fn listing_and_parsers_ignore_version_prefixed_sidecars() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let sidecar = Path::from(
-            "_delta_log/_sidecars/00000000000000000042.checkpoint.0000000001.0000000001.uuid.parquet",
-        );
-        store
-            .put(&sidecar, b"sidecar".to_vec().into())
-            .await
-            .unwrap();
-        store
-            .put(
-                &Path::from("_delta_log/00000000000000000007.json"),
-                b"{}".to_vec().into(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(parse_checkpoint_version_from_location(&sidecar), None);
-        assert_eq!(
-            latest_version_from_listing(store.clone()).await.unwrap(),
-            Some(7)
-        );
-        let entries = list_delta_log_entries_from(store, 0).await.unwrap();
-        assert_eq!(entries.len(), 1);
     }
 }
