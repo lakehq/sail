@@ -98,12 +98,9 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
   Rule: FLOAT/DOUBLE mixed with DECIMAL coerces the result to DOUBLE
 
     # Spark widens `float`/`double` + `decimal` to DOUBLE, so the result is a
-    # double (e.g. `1.5`), not a decimal. Sail instead widens to DECIMAL, which
-    # changes the result type and — when the double operand is Infinity/NaN —
-    # raises a spurious "cannot cast to Decimal128 ... overflow" error instead
-    # of returning the float result.
+    # double (e.g. `1.5`), not a decimal. `pmod` now takes the same operand coercion
+    # as the `%` operator, which promotes the pair to DOUBLE before the UDF sees it.
 
-    @sail-bug
     Scenario Outline: Double with decimal: <case>
       When query
         """
@@ -117,6 +114,62 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         | case                                                  | args                            | result |
         | double pmod decimal returns a double                  | CAST(5.5 AS DOUBLE), 2.0        | 1.5    |
         | infinity double pmod decimal returns NaN not an error | CAST('Infinity' AS DOUBLE), 2.0 | NaN    |
+
+  Rule: operand typing follows Spark's remainder rule, not DataFusion's coercion
+    # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands
+    # before the remainder rule can see them. The plan builder now applies Spark's own
+    # coercion first — the integer column takes its type-based decimal, and a string pair
+    # promotes BOTH operands to DOUBLE (leaving the peer alone let the UDF pick its own
+    # common type, which is what produced decimal(30,15) below).
+
+    Scenario Outline: Literal operands: <case>
+      When query
+        """
+        SELECT typeof(pmod(<left>, <right>)) AS t,
+               pmod(<left>, <right>) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                     | left       | right                      | t      | r   |
+        | a string and a decimal promote to double | '5.5'      | CAST(2.0 AS DECIMAL(10,2)) | double | 1.5 |
+        | Infinity and a decimal is NaN            | 'Infinity' | CAST(2.0 AS DECIMAL(10,2)) | double | NaN |
+
+    Scenario: pmod of a decimal and an integer column keeps the remainder type
+      When query
+        """
+        SELECT typeof(pmod(a, b)) AS t, pmod(a, b) AS r
+        FROM VALUES (CAST(1.5 AS DECIMAL(3,2)), CAST(2 AS INT)) AS t(a, b)
+        """
+      Then query result
+        | t            | r    |
+        | decimal(3,2) | 1.50 |
+
+    Scenario: pmod of NULL and a string is NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT pmod(NULL, '3') AS r
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+    Scenario: pmod of a decimal column and an integer column over rows
+      # The literal scenarios fold at plan time; this one drives the coercion through the
+      # runtime kernel.
+      When query
+        """
+        SELECT pmod(a, b) AS r
+        FROM VALUES (CAST(1.5 AS DECIMAL(3,2)), CAST(2 AS INT)),
+                    (CAST(-1.5 AS DECIMAL(3,2)), CAST(2 AS INT)) AS t(a, b)
+        """
+      Then query result
+        | r    |
+        | 1.50 |
+        | 0.50 |
 
   @function(nullability)
   Rule: Output schema

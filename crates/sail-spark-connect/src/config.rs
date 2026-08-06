@@ -280,6 +280,22 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_DECIMAL_OPERATIONS_ALLOW_PRECISION_LOSS)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.decimal_operations_allow_precision_loss = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_LITERAL_PICK_MINIMUM_PRECISION)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.literal_pick_minimum_precision = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CROSS_JOIN_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
             .transpose()?
