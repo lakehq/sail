@@ -7,6 +7,7 @@ use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
@@ -212,12 +213,16 @@ impl RemotePhysicalProtoConverter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+        let inner = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
             args,
             &input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
-        )?))
+        )?;
+        Ok(Arc::new(DistributedHigherOrderExpr::new(
+            Arc::new(inner),
+            Arc::new(input_schema),
+        )))
     }
 }
 

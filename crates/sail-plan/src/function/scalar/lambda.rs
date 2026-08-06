@@ -5,7 +5,9 @@ use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
+use datafusion_expr::{
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -146,29 +148,27 @@ fn anchor_lambda_prefix_params(lambda: Lambda, param_fields: &[FieldRef]) -> Pla
     };
 
     let Lambda { params, body } = lambda;
-    let body = params
-        .iter()
-        .enumerate()
-        .take(last_used)
-        .try_fold(body, |body, (index, param)| -> PlanResult<Box<expr::Expr>> {
+    let body = params.iter().enumerate().take(last_used).try_fold(
+        body,
+        |body, (index, param)| -> PlanResult<Box<expr::Expr>> {
             let field = param_fields.get(index).ok_or_else(|| {
                 PlanError::internal(format!(
                     "missing parameter field {index} for map_zip_with lambda"
                 ))
             })?;
-            let is_null = expr::Expr::IsNull(Box::new(expr::Expr::LambdaVariable(
-                LambdaVariable::new(
+            let is_null =
+                expr::Expr::IsNull(Box::new(expr::Expr::LambdaVariable(LambdaVariable::new(
                     param.clone(),
                     Some(FieldRef::clone(field).renamed(param.as_str())),
-                ),
-            )));
+                ))));
             let anchor = is_null.clone().or(expr::Expr::Not(Box::new(is_null)));
             Ok(Box::new(expr::Expr::Case(expr::Case {
                 expr: None,
                 when_then_expr: vec![(Box::new(anchor), body.clone())],
                 else_expr: Some(body),
             })))
-        })?;
+        },
+    )?;
 
     Ok(Lambda { params, body })
 }
