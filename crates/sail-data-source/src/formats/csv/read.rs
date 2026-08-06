@@ -65,9 +65,7 @@ impl ReadFormat for CsvReadFormat {
                     .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                     .boxed();
 
-                let stream = csv_format
-                    .read_to_delimited_chunks_from_stream(stream)
-                    .await;
+                let stream = csv_format.read_to_delimited_chunks_from_stream(stream);
                 let (schema, records_read) = csv_format
                     .infer_schema_from_stream(ctx, records_to_read, stream)
                     .await
@@ -125,7 +123,7 @@ impl ReadFormat for CsvReadFormat {
             .with_output_ordering(input.output_ordering)
             .with_file_compression_type(FileCompressionType::from(options.compression))
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

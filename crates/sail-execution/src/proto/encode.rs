@@ -4,10 +4,13 @@ use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, plan_err};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
+use datafusion::physical_expr::{HigherOrderFunctionExpr, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
-use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use datafusion_proto::physical_plan::to_proto::serialize_partitioning;
+use datafusion_proto::physical_plan::{
+    PhysicalExtensionCodec, PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
+};
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -45,6 +48,15 @@ pub fn encode_remote_physical_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<Vec<u8>> {
     try_encode_physical_expr(codec, expr)
+}
+
+pub fn encode_remote_partitioning(
+    codec: &dyn PhysicalExtensionCodec,
+    partitioning: &Partitioning,
+) -> Result<Vec<u8>> {
+    let partitioning =
+        serialize_partitioning(partitioning, codec, &RemotePhysicalProtoConverter {})?;
+    try_encode_message(partitioning)
 }
 
 pub(super) fn try_encode_message<M>(message: M) -> Result<Vec<u8>>

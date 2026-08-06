@@ -153,7 +153,6 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         let input_group_values = values[0].as_list::<i32>();
@@ -242,10 +241,6 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         );
 
         Ok(vec![Arc::new(converted_list_array)])
-    }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
     }
 
     fn size(&self) -> usize {

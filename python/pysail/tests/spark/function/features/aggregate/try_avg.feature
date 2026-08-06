@@ -78,6 +78,6 @@ Feature: try_avg
       Then query schema
         """
         root
-         |-- g: string (nullable = true)
+         |-- g: string (nullable = false)
          |-- avg_x: double (nullable = true)
         """

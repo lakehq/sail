@@ -346,7 +346,7 @@ impl ExecutionPlan for IcebergWriterExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.merge_distribution_keys {
-            Some(expressions) => vec![Distribution::HashPartitioned(expressions.clone())],
+            Some(expressions) => vec![Distribution::KeyPartitioned(expressions.clone())],
             None => vec![Distribution::UnspecifiedDistribution],
         }
     }
@@ -880,15 +880,20 @@ mod tests {
         distributions
             .first()
             .and_then(|distribution| match distribution {
-                Distribution::HashPartitioned(expressions) => Some(expressions.as_slice()),
+                Distribution::KeyPartitioned(expressions) => Some(expressions.as_slice()),
                 _ => None,
             })
             .expect("MERGE should require hash partitioning")
     }
 
+    fn input_distributions(plan: &dyn ExecutionPlan) -> Vec<Distribution> {
+        plan.input_distribution_requirements().into_per_child()
+    }
+
     #[test]
     fn unpartitioned_merge_hashes_file_delete_keys() {
-        let distributions = iceberg_writer(true, vec![]).required_input_distribution();
+        let writer = iceberg_writer(true, vec![]);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -909,7 +914,8 @@ mod tests {
                 transform: Some(PartitionTransform::Day),
             },
         ];
-        let distributions = iceberg_writer(true, partition_columns).required_input_distribution();
+        let writer = iceberg_writer(true, partition_columns);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 4);
@@ -929,8 +935,8 @@ mod tests {
             Field::new("id", DataType::Int64, true),
             Field::new(OPERATION_COLUMN, DataType::Int32, false),
         ]));
-        let distributions =
-            iceberg_writer_for_schema(true, vec![], schema).required_input_distribution();
+        let writer = iceberg_writer_for_schema(true, vec![], schema);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -954,8 +960,8 @@ mod tests {
             column: "event_time".to_string(),
             transform: Some(PartitionTransform::Day),
         }];
-        let distributions = iceberg_writer_for_schema(true, partition_columns, schema)
-            .required_input_distribution();
+        let writer = iceberg_writer_for_schema(true, partition_columns, schema);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -971,9 +977,7 @@ mod tests {
     #[test]
     fn ordinary_writes_preserve_upstream_distribution() {
         assert!(matches!(
-            iceberg_writer(false, vec![])
-                .required_input_distribution()
-                .as_slice(),
+            input_distributions(&iceberg_writer(false, vec![])).as_slice(),
             [Distribution::UnspecifiedDistribution]
         ));
     }

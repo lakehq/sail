@@ -15,6 +15,7 @@ use datafusion::physical_plan::execution_plan::{
 use datafusion::physical_plan::projection::{
     ProjectionExec, all_columns, make_with_child, update_expr,
 };
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -474,9 +475,21 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![if partition.is_none() {
+            ChildStats::At(None)
+        } else {
+            ChildStats::Skip
+        }]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_none() {
+            Ok(Arc::clone(&input_stats[0]))
         } else {
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
@@ -23,7 +24,9 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::proto::{
+    encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
+};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -680,6 +683,17 @@ impl JobScheduler {
                 TaskOutputDistribution::Hash {
                     keys,
                     channels: *channels,
+                }
+            }
+            OutputDistribution::Range { partitioning } => {
+                let channels = partitioning.partition_count();
+                let partitioning = encode_remote_partitioning(
+                    self.codec.as_ref(),
+                    &Partitioning::Range(partitioning.clone()),
+                )?;
+                TaskOutputDistribution::Range {
+                    partitioning: Arc::from(partitioning),
+                    channels,
                 }
             }
             OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {

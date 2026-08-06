@@ -21,6 +21,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
@@ -878,8 +879,12 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_none() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_none() {
             Ok(Arc::new(self.statistics.clone()))
         } else {
             Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
@@ -931,8 +936,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
@@ -1051,7 +1056,9 @@ mod tests {
         )
         .with_table_statistics(Some(table_stats));
 
-        let stats = scan.partition_statistics(None).ok();
+        let stats = StatisticsContext::new()
+            .compute(&scan, &StatisticsArgs::new())
+            .ok();
         assert!(stats.is_some());
         let stats = match stats {
             Some(s) => s,
@@ -1106,7 +1113,7 @@ mod tests {
         )
         .with_output_statistics(Some(output_stats));
 
-        let stats = scan.partition_statistics(None)?;
+        let stats = StatisticsContext::new().compute(&scan, &StatisticsArgs::new())?;
         assert_eq!(stats.num_rows, Precision::Exact(88));
         assert_eq!(stats.column_statistics.len(), 1);
         assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(6));

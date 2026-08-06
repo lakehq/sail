@@ -40,6 +40,8 @@ use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -47,6 +49,7 @@ use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
+use datafusion_proto::convert::FromProto;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
@@ -55,7 +58,9 @@ use datafusion_proto::physical_plan::from_proto::{
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
 };
-use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalPlanDecodeContext};
+use datafusion_proto::physical_plan::{
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+};
 use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
@@ -324,6 +329,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
@@ -777,7 +783,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 let join_type = ProtoJoinType::from_str_name(&join_type)
                     .ok_or_else(|| plan_datafusion_err!("invalid join type: {}", join_type))?;
-                let join_type: datafusion::common::JoinType = join_type.into();
+                let join_type = datafusion::common::JoinType::from_proto(join_type);
                 let sort_options: Vec<SortOptions> = sort_options
                     .into_iter()
                     .map(|opt| SortOptions {
@@ -1612,7 +1618,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         }
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
         let node_kind = if let Some(range) = node.downcast_ref::<RangeExec>() {
             let schema = try_encode_schema(range.original_schema().as_ref())?;
             let projection = self.try_encode_projection(range.projection())?;
@@ -1763,7 +1774,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 })
                 .map_or(Ok(None), |v: Result<r#gen::JoinFilter>| v.map(Some))?;
-            let join_type: ProtoJoinType = sort_merge_join.join_type().into();
+            let join_type = ProtoJoinType::from_proto(sort_merge_join.join_type());
             let join_type = join_type.as_str_name().to_string();
             let sort_options = sort_merge_join
                 .sort_options()
@@ -3523,6 +3534,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
+        _ctx: &PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let node = ExtendedPhysicalExprNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode physical expr: {e}"))?;
@@ -3605,7 +3617,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         }
     }
 
-    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_expr(
+        &self,
+        node: &Arc<dyn PhysicalExpr>,
+        buf: &mut Vec<u8>,
+        _ctx: &PhysicalExprEncodeCtx<'_>,
+    ) -> Result<()> {
         // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
         let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
@@ -4828,9 +4845,31 @@ mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::physical_expr::HigherOrderFunctionExpr;
+    use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
+    use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
+    use datafusion_proto::protobuf::PhysicalExprNode;
 
     use super::*;
+
+    struct UnusedPhysicalExprCodecContext;
+
+    impl PhysicalExprDecode for UnusedPhysicalExprCodecContext {
+        fn decode(
+            &self,
+            _node: &PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            plan_err!("nested expression decoding is not used by this test")
+        }
+    }
+
+    impl PhysicalExprEncode for UnusedPhysicalExprCodecContext {
+        fn encode(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            plan_err!("nested expression encoding is not used by this test")
+        }
+    }
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
         let codec = RemoteExecutionCodec;
@@ -5067,10 +5106,13 @@ mod tests {
         node.encode(&mut buf)
             .map_err(|error| plan_datafusion_err!("failed to encode test expression: {error}"))?;
         let input = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+        let schema = Schema::empty();
+        let context = UnusedPhysicalExprCodecContext;
+        let decode_context = PhysicalExprDecodeCtx::new(&schema, &context);
 
         assert!(
             RemoteExecutionCodec
-                .try_decode_expr(&buf, &[input])
+                .try_decode_expr(&buf, &[input], &decode_context)
                 .is_err()
         );
 
@@ -5078,9 +5120,10 @@ mod tests {
             Arc::new(Column::new("value", 0)),
             IcebergTransform::Unknown,
         )) as Arc<dyn PhysicalExpr>;
+        let encode_context = PhysicalExprEncodeCtx::new(&context);
         assert!(
             RemoteExecutionCodec
-                .try_encode_expr(&unknown, &mut Vec::new())
+                .try_encode_expr(&unknown, &mut Vec::new(), &encode_context)
                 .is_err()
         );
         Ok(())
@@ -5247,7 +5290,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["v"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         Ok((physical, schema_ref, list))
@@ -5301,7 +5349,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["v"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         as_hof(&physical)?;
@@ -5348,7 +5401,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["v"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         as_hof(&physical)?;
@@ -5406,7 +5464,12 @@ mod tests {
                 lambda(["acc"], finish_acc),
             ],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         as_hof(&physical)?;
@@ -5462,7 +5525,12 @@ mod tests {
                 lambda(["acc"], finish_acc),
             ],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -5662,6 +5730,50 @@ mod tests {
         assert_same_result(&physical, decoded, schema_ref, vec![Arc::new(list)])
     }
 
+    #[test]
+    fn test_range_output_partitioning_round_trip() -> Result<()> {
+        use datafusion::physical_expr::{RangePartitioning, SplitPoint};
+
+        use crate::proto::encode_remote_partitioning;
+        use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
+        use crate::task::r#gen as task_gen;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(key)])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty range ordering"))?;
+        let expected = Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
+            ],
+        )?);
+        let codec = RemoteExecutionCodec;
+        let encoded = encode_remote_partitioning(&codec, &expected)?;
+        let wire: task_gen::TaskOutputDistribution = TaskOutputDistribution::Range {
+            partitioning: Arc::from(encoded),
+            channels: 3,
+        }
+        .into();
+        let distribution = wire
+            .try_into()
+            .map_err(|error| plan_datafusion_err!("failed to decode task output: {error}"))?;
+        let output = TaskOutput {
+            distribution,
+            locator: TaskOutputLocator::Local { replicas: 1 },
+        };
+
+        let actual = output
+            .partitioning(&TaskContext::default(), &schema, &codec)
+            .map_err(|error| {
+                plan_datafusion_err!("failed to decode range partitioning: {error}")
+            })?;
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
     /// `filter(arr, v -> v > threshold)` where the lambda captures an OUTER
     /// column (`threshold`). Proves the captured `Column(threshold)` and the
     /// two-column input schema survive encode/decode.
@@ -5705,7 +5817,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["v"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -5761,7 +5878,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["i"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -5827,7 +5949,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["l", "r"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
         as_hof(&physical)?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
@@ -5874,7 +6001,12 @@ mod tests {
             func,
             vec![col("arr"), lambda(["r"], r)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -5929,7 +6061,12 @@ mod tests {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())),
             vec![col("arr"), lambda(["x", "i"], body)],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -5998,7 +6135,12 @@ mod tests {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())),
             vec![inner_filter, lambda(["v"], v_var.gt(lit(2i32)))],
         ));
-        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;
@@ -6076,7 +6218,12 @@ mod tests {
             filter_udf(),
             vec![col("arr2d"), lambda(["a"], inner.is_not_null())],
         ));
-        let physical = create_physical_expr(&outer, &dfschema, &ExecutionProps::new())?;
+        let physical = create_physical_expr(
+            &outer,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
         let decoded = round_trip_expr(&physical, &schema_ref)?;

@@ -168,6 +168,7 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 extensions: Extensions::default(),
                 metadata_size_hint: None,
                 table_reference: None,
+                arrow_schema: None,
             })
         })
         .collect()
@@ -190,6 +191,7 @@ fn to_partitioned_files_with_version(
             extensions: Extensions::default(),
             metadata_size_hint: None,
             table_reference: None,
+            arrow_schema: None,
         })
         .collect())
 }
@@ -322,14 +324,13 @@ pub async fn build_delta_log_datasource_scans_with_options(
     };
 
     let target_partitions = ctx.session().config().target_partitions();
-    let table_schema = TableSchema::new(
-        Arc::clone(&replay_schema),
-        vec![Arc::new(Field::new(
+    let table_schema = TableSchema::builder(Arc::clone(&replay_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
             COL_LOG_VERSION,
             DataType::Int64,
             false,
-        ))],
-    );
+        ))])
+        .build();
 
     let checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = if checkpoint_metas.is_empty() {
         None

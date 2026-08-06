@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -189,6 +189,9 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
+    Range {
+        partitioning: RangePartitioning,
+    },
     RoundRobin {
         channels: usize,
     },
@@ -204,6 +207,7 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
+            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
             OutputDistribution::RoundRobin { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
@@ -217,6 +221,7 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
+            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
             OutputDistribution::RoundRobin { channels } => {
                 write!(f, "RoundRobin(channels={})", channels)
             }

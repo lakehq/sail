@@ -9,12 +9,10 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
@@ -56,6 +54,15 @@ pub struct IcebergDeleteApplyExec {
 }
 
 impl IcebergDeleteApplyExec {
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
+            input.equivalence_properties().clone(),
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        ))
+    }
+
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         data_file_path: String,
@@ -74,13 +81,7 @@ impl IcebergDeleteApplyExec {
                 input_partitions
             );
         }
-        let output_schema = input.schema();
-        let cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema.clone()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             data_file_path,
@@ -167,12 +168,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         }
         let mut cloned = (*self).clone();
         cloned.input = children[0].clone();
-        cloned.cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(cloned.input.schema()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
+        cloned.cache = Self::compute_properties(&cloned.input);
         Ok(Arc::new(cloned))
     }
 

@@ -320,7 +320,9 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::new(logical_file_schema, table_partition_cols_schema);
+    let table_schema = TableSchema::builder(logical_file_schema)
+        .with_table_partition_cols(table_partition_cols_schema)
+        .build();
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema

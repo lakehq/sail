@@ -326,7 +326,7 @@ mod tests {
             exec.properties().partitioning,
             Partitioning::UnknownPartitioning(1)
         ));
-        let required_distribution = exec.required_input_distribution();
+        let required_distribution = exec.input_distribution_requirements().into_per_child();
         assert_eq!(required_distribution.len(), 1);
         assert!(matches!(
             required_distribution[0],

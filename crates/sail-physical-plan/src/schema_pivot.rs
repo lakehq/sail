@@ -27,6 +27,9 @@ impl SchemaPivotExec {
         let partitioning = match input.output_partitioning() {
             Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(*size),
             Partitioning::Hash(_phy_exprs, size) => Partitioning::UnknownPartitioning(*size),
+            Partitioning::Range(range) => {
+                Partitioning::UnknownPartitioning(range.partition_count())
+            }
             Partitioning::UnknownPartitioning(size) => Partitioning::UnknownPartitioning(*size),
         };
         let properties = Arc::new(PlanProperties::new(

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{Distribution, PhysicalExpr};
 use datafusion::physical_plan::filter::batch_filter;
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -28,7 +29,7 @@ impl StreamFilterExec {
         predicate: Arc<dyn PhysicalExpr>,
     ) -> Result<Self> {
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(input.schema()),
+            input.equivalence_properties().clone(),
             input.output_partitioning().clone(),
             // Filtering preserves pipeline behavior of input
             input.pipeline_behavior(),
@@ -116,7 +117,15 @@ impl ExecutionPlan for StreamFilterExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 }
