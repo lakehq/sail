@@ -430,6 +430,9 @@ data:
                           RangeExec
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
   
