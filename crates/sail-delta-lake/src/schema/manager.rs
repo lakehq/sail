@@ -11,8 +11,11 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
+use icu_casemap::CaseMapper;
 use indexmap::IndexSet;
+use regex::Regex;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
@@ -199,18 +202,52 @@ pub fn evolve_schema(
     Ok(updated)
 }
 
-/// Build Metadata for table creation from an existing kernel StructType.
-pub fn metadata_for_create_with_struct_type(
-    schema: StructType,
+// OpenJDK 17 uses Unicode 13, so newer characters must keep identity mappings.
+static JDK_17_ASSIGNED_CHARACTER: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"^\p{Age:13.0}$").ok());
+
+fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &str) -> bool {
+    let mut left_chars = left.chars();
+    let mut right_chars = right.chars();
+
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (None, None) => return true,
+            (Some(left), Some(right)) if java_char_eq_ignore_case(case_mapper, left, right) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+    let mut left_buffer = [0; 4];
+    let mut right_buffer = [0; 4];
+    if !JDK_17_ASSIGNED_CHARACTER.as_ref().is_some_and(|regex| {
+        regex.is_match(left.encode_utf8(&mut left_buffer))
+            && regex.is_match(right.encode_utf8(&mut right_buffer))
+    }) {
+        return false;
+    }
+
+    let left_upper = case_mapper.simple_uppercase(left);
+    let right_upper = case_mapper.simple_uppercase(right);
+    left_upper == right_upper
+        || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
+}
+
+pub(crate) fn canonicalize_partition_columns(
+    schema: &StructType,
     partition_columns: Vec<String>,
-    created_time: i64,
-    configuration: HashMap<String, String>,
-) -> DeltaResult<Metadata> {
+) -> DeltaResult<Vec<String>> {
+    let case_mapper = CaseMapper::new();
     let mut resolved_partition_columns = Vec::with_capacity(partition_columns.len());
     for partition_column in partition_columns {
-        let mut matches = schema
-            .fields()
-            .filter(|field| field.name().eq_ignore_ascii_case(&partition_column));
+        let mut matches = schema.fields().filter(|field| {
+            spark_case_insensitive_name_eq(&case_mapper, field.name(), &partition_column)
+        });
         let field = matches.next().ok_or_else(|| {
             DeltaTableError::schema(format!(
                 "partition column `{partition_column}` is not present in the table schema"
@@ -229,6 +266,17 @@ pub fn metadata_for_create_with_struct_type(
         }
         resolved_partition_columns.push(field.name().to_string());
     }
+    Ok(resolved_partition_columns)
+}
+
+/// Build Metadata for table creation from an existing kernel StructType.
+pub fn metadata_for_create_with_struct_type(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    created_time: i64,
+    configuration: HashMap<String, String>,
+) -> DeltaResult<Metadata> {
+    let resolved_partition_columns = canonicalize_partition_columns(&schema, partition_columns)?;
     Metadata::try_new(
         None,
         None,
@@ -486,7 +534,12 @@ pub fn protocol_for_create(
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use super::{metadata_for_create_with_struct_type, protocol_for_create, protocol_for_metadata};
+    use icu_casemap::CaseMapper;
+
+    use super::{
+        metadata_for_create_with_struct_type, protocol_for_create, protocol_for_metadata,
+        spark_case_insensitive_name_eq,
+    };
     use crate::spec::{
         ColumnMetadataKey, DataType, DeltaResult, Metadata, StructField, StructType, TableFeature,
     };
@@ -567,6 +620,71 @@ mod tests {
     }
 
     #[test]
+    fn metadata_for_create_canonicalizes_unicode_partition_column_case() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable("ÄDate", DataType::DATE)])?;
+
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec!["ädate".to_string()],
+            0,
+            HashMap::new(),
+        )?;
+
+        assert_eq!(metadata.partition_columns(), &["ÄDate".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn spark_case_insensitive_name_eq_matches_jdk_17_unicode_oracle() {
+        let case_mapper = CaseMapper::new();
+        for (left, right) in [
+            ("Σ", "ς"),
+            ("I", "ı"),
+            ("İ", "i"),
+            ("ß", "ẞ"),
+            ("K", "K"),
+            ("S", "ſ"),
+        ] {
+            assert!(spark_case_insensitive_name_eq(&case_mapper, left, right));
+            assert!(spark_case_insensitive_name_eq(&case_mapper, right, left));
+        }
+
+        assert!(!spark_case_insensitive_name_eq(&case_mapper, "ß", "ss"));
+    }
+
+    #[test]
+    fn spark_case_insensitive_name_eq_preserves_jdk_17_vithkuqi_distinction() {
+        let case_mapper = CaseMapper::new();
+
+        assert!(!spark_case_insensitive_name_eq(
+            &case_mapper,
+            "\u{10570}",
+            "\u{10597}"
+        ));
+        assert!(!spark_case_insensitive_name_eq(
+            &case_mapper,
+            "\u{10597}",
+            "\u{10570}"
+        ));
+    }
+
+    #[test]
+    fn metadata_for_create_canonicalizes_greek_final_sigma_partition_column_case() -> DeltaResult<()>
+    {
+        let schema = StructType::try_new([StructField::nullable("ΣDate", DataType::DATE)])?;
+
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec!["ςdate".to_string()],
+            0,
+            HashMap::new(),
+        )?;
+
+        assert_eq!(metadata.partition_columns(), &["ΣDate".to_string()]);
+        Ok(())
+    }
+
+    #[test]
     fn metadata_for_create_rejects_case_mismatched_variant_partition_column() -> DeltaResult<()> {
         let schema = StructType::try_new([StructField::nullable(
             "Payload",
@@ -629,6 +747,52 @@ mod tests {
                 "partition column `CATEGORY` is ambiguous under case-insensitive resolution"
             )
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_rejects_greek_sigma_partition_ambiguity() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("ΣDate", DataType::DATE),
+            StructField::nullable("ςDate", DataType::DATE),
+        ])?;
+
+        let result = metadata_for_create_with_struct_type(
+            schema,
+            vec!["σdate".to_string()],
+            0,
+            HashMap::new(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains(
+                "partition column `σdate` is ambiguous under case-insensitive resolution"
+            )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_preserves_jdk_17_vithkuqi_partition_distinction() -> DeltaResult<()> {
+        let uppercase_partition = "\u{10570}Date";
+        let lowercase_partition = "\u{10597}Date";
+        let schema = StructType::try_new([
+            StructField::nullable(uppercase_partition, DataType::DATE),
+            StructField::nullable(lowercase_partition, DataType::DATE),
+        ])?;
+
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![lowercase_partition.to_string()],
+            0,
+            HashMap::new(),
+        )?;
+
+        assert_eq!(
+            metadata.partition_columns(),
+            &[lowercase_partition.to_string()]
+        );
         Ok(())
     }
 

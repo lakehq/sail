@@ -43,7 +43,7 @@ use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
-use crate::schema::manager::is_check_constraint_property;
+use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
@@ -621,7 +621,7 @@ pub(crate) async fn plan_delta_write(
         }
     };
     let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
-    let partition_by = partition_by
+    let requested_partition_columns = partition_by
         .into_iter()
         .map(|field| field.column)
         .collect::<Vec<_>>();
@@ -685,6 +685,16 @@ pub(crate) async fn plan_delta_write(
         }
         _ => {}
     }
+
+    let partition_by = if requested_partition_columns.is_empty() {
+        requested_partition_columns
+    } else {
+        let normalized_write_schema = normalize_delta_schema(&physical_input.schema());
+        let delta_write_schema = StructType::try_from(normalized_write_schema.as_ref())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        canonicalize_partition_columns(&delta_write_schema, requested_partition_columns)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+    };
 
     let existing_partition_columns = table_snapshot
         .as_ref()

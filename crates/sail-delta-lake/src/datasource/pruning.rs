@@ -21,8 +21,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt64Array,
+    Array, ArrayRef, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt64Array,
 };
 use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
@@ -40,9 +40,23 @@ use crate::spec::Add;
 use crate::spec::statistics::Stats;
 use crate::table::DeltaSnapshot;
 
+fn widen_timestamp_max_struct_array(array: &StructArray) -> StructArray {
+    let columns = array
+        .columns()
+        .iter()
+        .cloned()
+        .map(widen_timestamp_max_stat)
+        .collect();
+    StructArray::new(array.fields().clone(), columns, array.nulls().cloned())
+}
+
 /// Delta timestamp JSON max statistics are truncated to milliseconds. Widen the upper bound
 /// by one millisecond (in the array's physical unit) so pruning remains conservative.
 pub(crate) fn widen_timestamp_max_stat(array: ArrayRef) -> ArrayRef {
+    if let Some(array) = array.as_any().downcast_ref::<StructArray>() {
+        return Arc::new(widen_timestamp_max_struct_array(array));
+    }
+
     let DataType::Timestamp(unit, timezone) = array.data_type().clone() else {
         return array;
     };
@@ -86,6 +100,9 @@ pub(crate) fn widen_timestamp_max_scalar(value: ScalarValue) -> ScalarValue {
             value.map(|value| value.saturating_add(1_000_000)),
             timezone,
         ),
+        ScalarValue::Struct(array) => {
+            ScalarValue::Struct(Arc::new(widen_timestamp_max_struct_array(&array)))
+        }
         value => value,
     }
 }
@@ -286,10 +303,10 @@ impl AddStatsPruningStatistics {
             .is_some_and(|field| self.referenced_columns.contains(field.name()))
     }
 
-    fn build_json_stat_array(
+    fn build_json_column_stat_array(
         &self,
         column: &Column,
-        lookup: impl for<'a> Fn(&'a Stats, &'a str) -> Option<&'a crate::spec::StatValue>,
+        lookup: impl for<'a> Fn(&'a Stats, &'a str) -> Option<&'a crate::spec::ColumnValueStat>,
     ) -> Option<ArrayRef> {
         if !self.should_build_stats_for(column) {
             return None;
@@ -306,13 +323,17 @@ impl AddStatsPruningStatistics {
         }
 
         let mut has_value = false;
-        let values: Vec<Option<&crate::spec::StatValue>> = self
+        let values: Vec<Option<&crate::spec::ColumnValueStat>> = self
             .stats
             .iter()
             .map(|stats| {
                 let value = stats.as_ref().and_then(|stats| lookup(stats, name));
-                has_value |=
-                    value.is_some_and(|value| !matches!(value, crate::spec::StatValue::Null));
+                has_value |= value.is_some_and(|value| {
+                    !matches!(
+                        value,
+                        crate::spec::ColumnValueStat::Value(crate::spec::StatValue::Null)
+                    )
+                });
                 value
             })
             .collect();
@@ -321,9 +342,30 @@ impl AddStatsPruningStatistics {
             return None;
         }
 
-        ScalarConverter::stat_values_to_array(&values, field.data_type())
-            .ok()
-            .flatten()
+        if matches!(
+            field.data_type(),
+            datafusion::arrow::datatypes::DataType::Struct(_)
+        ) {
+            let scalars = values.into_iter().map(|value| match value {
+                Some(value) => ScalarConverter::column_value_stat_to_arrow_scalar_value(
+                    value,
+                    field.data_type(),
+                )
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| Self::null_scalar(field.data_type())),
+                None => Self::null_scalar(field.data_type()),
+            });
+            ScalarValue::iter_to_array(scalars).ok()
+        } else {
+            let values = values
+                .into_iter()
+                .map(|value| value.and_then(crate::spec::ColumnValueStat::as_value))
+                .collect::<Vec<_>>();
+            ScalarConverter::stat_values_to_array(&values, field.data_type())
+                .ok()
+                .flatten()
+        }
     }
 
     fn build_count_array(
@@ -456,7 +498,8 @@ impl AddStatsPruningStatistics {
         if let Some(array) = self.build_partition_array(column) {
             return Some(array);
         }
-        if let Some(array) = self.build_json_stat_array(column, |stats, name| stats.min_value(name))
+        if let Some(array) =
+            self.build_json_column_stat_array(column, |stats, name| stats.min_values.get(name))
         {
             return Some(array);
         }
@@ -467,9 +510,9 @@ impl AddStatsPruningStatistics {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s.min_value(name)
+                && let Some(v) = s.min_values.get(name)
             {
-                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| Self::null_scalar(dt));
@@ -482,7 +525,8 @@ impl AddStatsPruningStatistics {
         if let Some(array) = self.build_partition_array(column) {
             return Some(array);
         }
-        if let Some(array) = self.build_json_stat_array(column, |stats, name| stats.max_value(name))
+        if let Some(array) =
+            self.build_json_column_stat_array(column, |stats, name| stats.max_values.get(name))
         {
             return Some(widen_timestamp_max_stat(array));
         }
@@ -493,9 +537,9 @@ impl AddStatsPruningStatistics {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s.max_value(name)
+                && let Some(v) = s.max_values.get(name)
             {
-                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| Self::null_scalar(dt));
@@ -574,7 +618,10 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{ArrayRef, TimestampMicrosecondArray, UInt64Array};
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Int64Array, StructArray, TimestampMicrosecondArray, UInt64Array,
+    };
+    use datafusion::arrow::buffer::NullBuffer;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::logical_expr::Operator;
     use datafusion::physical_expr::PhysicalExpr;
@@ -759,6 +806,68 @@ mod tests {
     }
 
     #[test]
+    fn nested_timestamp_json_stats_are_materialized_and_widened() -> Result<()> {
+        let payload_fields = vec![
+            Arc::new(Field::new(
+                "event_time",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            )),
+            Arc::new(Field::new("record_count", DataType::Int64, true)),
+        ]
+        .into();
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(payload_fields),
+            true,
+        )]));
+        let adds = vec![add_with_stats(
+            r#"{
+                "numRecords":1,
+                "minValues":{"payload":{"event_time":"1970-01-01T00:00:10.654","record_count":3}},
+                "maxValues":{"payload":{"event_time":"1970-01-01T00:00:10.654","record_count":7}}
+            }"#,
+        )];
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            adds,
+            HashSet::from(["payload".to_string()]),
+        )?;
+
+        let min_values = stats
+            .min_values(&Column::from_name("payload"))
+            .ok_or_else(|| DataFusionError::Internal("nested minimum stats".to_string()))?;
+        let min_values = min_values
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Internal("nested minimum struct".to_string()))?;
+        let max_values = stats
+            .max_values(&Column::from_name("payload"))
+            .ok_or_else(|| DataFusionError::Internal("nested maximum stats".to_string()))?;
+        let max_values = max_values
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Internal("nested maximum struct".to_string()))?;
+        let min_timestamp = min_values
+            .column_by_name("event_time")
+            .and_then(|array| array.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .ok_or_else(|| DataFusionError::Internal("nested minimum timestamp".to_string()))?;
+        let max_timestamp = max_values
+            .column_by_name("event_time")
+            .and_then(|array| array.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .ok_or_else(|| DataFusionError::Internal("nested maximum timestamp".to_string()))?;
+        let record_count = max_values
+            .column_by_name("record_count")
+            .and_then(|array| array.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| DataFusionError::Internal("nested integer stats".to_string()))?;
+
+        assert_eq!(min_timestamp.value(0), 10_654_000);
+        assert_eq!(max_timestamp.value(0), 10_655_000);
+        assert_eq!(record_count.value(0), 7);
+        Ok(())
+    }
+
+    #[test]
     fn timestamp_json_max_widening_prevents_false_file_pruning() -> Result<()> {
         let expected_max = chrono::DateTime::parse_from_rfc3339("2024-07-01T23:45:12.654Z")
             .map_err(|error| DataFusionError::External(Box::new(error)))?
@@ -827,6 +936,134 @@ mod tests {
         .and_utc()
         .timestamp_micros();
         assert_eq!(max_values.value(0), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_max_array_widening_recurses_into_nested_structs() -> Result<()> {
+        let nested_nulls = NullBuffer::from(vec![true, false, true]);
+        let nested = StructArray::new(
+            vec![
+                Arc::new(Field::new(
+                    "event_time",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )),
+                Arc::new(Field::new("record_count", DataType::UInt64, true)),
+            ]
+            .into(),
+            vec![
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(10_654_000),
+                    None,
+                    Some(i64::MAX),
+                ])) as ArrayRef,
+                Arc::new(UInt64Array::from(vec![Some(7), None, Some(9)])) as ArrayRef,
+            ],
+            Some(nested_nulls.clone()),
+        );
+        let root_nulls = NullBuffer::from(vec![true, false, true]);
+        let root = StructArray::new(
+            vec![Arc::new(Field::new(
+                "nested",
+                nested.data_type().clone(),
+                true,
+            ))]
+            .into(),
+            vec![Arc::new(nested) as ArrayRef],
+            Some(root_nulls.clone()),
+        );
+
+        let widened = super::widen_timestamp_max_stat(Arc::new(root));
+        let widened = widened
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Internal("root struct array".to_string()))?;
+        let nested = widened
+            .column_by_name("nested")
+            .and_then(|array| array.as_any().downcast_ref::<StructArray>())
+            .ok_or_else(|| DataFusionError::Internal("nested struct array".to_string()))?;
+        let event_time = nested
+            .column_by_name("event_time")
+            .and_then(|array| array.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .ok_or_else(|| DataFusionError::Internal("nested timestamp array".to_string()))?;
+        let record_count = nested
+            .column_by_name("record_count")
+            .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
+            .ok_or_else(|| DataFusionError::Internal("nested integer array".to_string()))?;
+
+        assert_eq!(widened.nulls(), Some(&root_nulls));
+        assert_eq!(nested.nulls(), Some(&nested_nulls));
+        assert_eq!(event_time.value(0), 10_655_000);
+        assert!(event_time.is_null(1));
+        assert_eq!(event_time.value(2), i64::MAX);
+        assert_eq!(record_count.value(0), 7);
+        assert!(record_count.is_null(1));
+        assert_eq!(record_count.value(2), 9);
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_max_scalar_widening_recurses_into_struct_leaves() -> Result<()> {
+        let nested = StructArray::from(vec![
+            (
+                Arc::new(Field::new(
+                    "event_time",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )),
+                Arc::new(TimestampMicrosecondArray::from(vec![Some(10_654_000)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "missing_time",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )),
+                Arc::new(TimestampMicrosecondArray::from(vec![None])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "latest_time",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )),
+                Arc::new(TimestampMicrosecondArray::from(vec![Some(i64::MAX)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("record_count", DataType::UInt64, true)),
+                Arc::new(UInt64Array::from(vec![Some(7)])) as ArrayRef,
+            ),
+        ]);
+        let value = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("nested", nested.data_type().clone(), true)),
+            Arc::new(nested) as ArrayRef,
+        )])));
+
+        let ScalarValue::Struct(widened) = super::widen_timestamp_max_scalar(value) else {
+            return Err(DataFusionError::Internal(
+                "widened value should remain a struct".to_string(),
+            ));
+        };
+        let nested = widened
+            .column_by_name("nested")
+            .and_then(|array| array.as_any().downcast_ref::<StructArray>())
+            .ok_or_else(|| DataFusionError::Internal("nested scalar struct".to_string()))?;
+        let timestamp = |name| {
+            nested
+                .column_by_name(name)
+                .and_then(|array| array.as_any().downcast_ref::<TimestampMicrosecondArray>())
+                .ok_or_else(|| DataFusionError::Internal(format!("{name} timestamp scalar")))
+        };
+        let record_count = nested
+            .column_by_name("record_count")
+            .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
+            .ok_or_else(|| DataFusionError::Internal("integer scalar".to_string()))?;
+
+        assert_eq!(timestamp("event_time")?.value(0), 10_655_000);
+        assert!(timestamp("missing_time")?.is_null(0));
+        assert_eq!(timestamp("latest_time")?.value(0), i64::MAX);
+        assert_eq!(record_count.value(0), 7);
         Ok(())
     }
 

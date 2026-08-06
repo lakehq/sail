@@ -227,15 +227,7 @@ impl<'a> SnapshotPruningStats<'a> {
             .is_ok_and(|field| arrow_type_contains_timestamp(field.data_type()));
         if !is_partition && contains_timestamp {
             min_value = min_value.to_inexact();
-            max_value = max_value
-                .map(|value| {
-                    if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
-                        widen_timestamp_max_scalar(value)
-                    } else {
-                        value
-                    }
-                })
-                .to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
         }
 
         Ok(ColumnStatistics {
@@ -457,5 +449,184 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
         }
 
         Some(BooleanArray::from(contains))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Int64Array, StructArray, TimestampMicrosecondArray,
+    };
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::ScalarValue;
+    use datafusion::common::stats::Precision;
+    use once_cell::sync::OnceCell;
+    use url::Url;
+
+    use super::SnapshotPruningStats;
+    use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
+    use crate::spec::fields::{
+        FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
+        STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
+    };
+    use crate::spec::{
+        DataType as DeltaDataType, Metadata, Protocol, StructField, StructType, TableProperties,
+    };
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+    fn column_stats_widens_nested_timestamp_maximum() {
+        let payload_fields = vec![
+            Arc::new(Field::new(
+                "event_time",
+                DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+                true,
+            )),
+            Arc::new(Field::new("record_count", DataType::Int64, true)),
+        ];
+        let payload = |event_time, record_count| {
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::clone(&payload_fields[0]),
+                    Arc::new(TimestampMicrosecondArray::from(vec![Some(event_time)])) as ArrayRef,
+                ),
+                (
+                    Arc::clone(&payload_fields[1]),
+                    Arc::new(Int64Array::from(vec![Some(record_count)])) as ArrayRef,
+                ),
+            ])) as ArrayRef
+        };
+        let value_struct = |name, event_time, record_count| {
+            (
+                Arc::new(Field::new(
+                    name,
+                    DataType::Struct(payload_fields.clone().into()),
+                    true,
+                )),
+                payload(event_time, record_count),
+            )
+        };
+        let min_values = Arc::new(StructArray::from(vec![value_struct(
+            "payload", 10_654_000, 3,
+        )])) as ArrayRef;
+        let max_values = Arc::new(StructArray::from(vec![value_struct(
+            "payload", 10_654_000, 7,
+        )])) as ArrayRef;
+        let null_count_payload = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("event_time", DataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("record_count", DataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+        let null_count = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new(
+                "payload",
+                null_count_payload.data_type().clone(),
+                true,
+            )),
+            null_count_payload,
+        )])) as ArrayRef;
+        let stats_parsed = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    STATS_FIELD_MIN_VALUES,
+                    min_values.data_type().clone(),
+                    true,
+                )),
+                min_values,
+            ),
+            (
+                Arc::new(Field::new(
+                    STATS_FIELD_MAX_VALUES,
+                    max_values.data_type().clone(),
+                    true,
+                )),
+                max_values,
+            ),
+            (
+                Arc::new(Field::new(
+                    STATS_FIELD_NULL_COUNT,
+                    null_count.data_type().clone(),
+                    true,
+                )),
+                null_count,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new(FIELD_NAME_SIZE, DataType::Int64, false),
+                Field::new(
+                    FIELD_NAME_STATS_PARSED,
+                    stats_parsed.data_type().clone(),
+                    false,
+                ),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+                stats_parsed as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let payload_schema = StructType::try_new([
+            StructField::nullable("event_time", DeltaDataType::TIMESTAMP_NTZ),
+            StructField::nullable("record_count", DeltaDataType::LONG),
+        ])
+        .unwrap();
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::nullable("payload", payload_schema)]).unwrap(),
+            Vec::new(),
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let snapshot = DeltaSnapshot {
+            version: 0,
+            table_url: Url::parse("file:///tmp/nested-stats-test").unwrap(),
+            config: DeltaSnapshotConfig::default(),
+            protocol: Protocol::new(1, 2, None, None),
+            table_properties: TableProperties::from(metadata.configuration().iter()),
+            arrow_schema: Arc::new(metadata.parse_schema_arrow().unwrap()),
+            metadata,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: Arc::new(HashMap::new()),
+            domain_metadata: Arc::new(HashMap::new()),
+            commit_timestamps: Arc::new(BTreeMap::new()),
+            files_batch: OnceCell::new(),
+        };
+
+        let stats = SnapshotPruningStats::try_new(&batch, &snapshot)
+            .unwrap()
+            .column_stats("payload")
+            .expect("payload statistics");
+        let Precision::Inexact(ScalarValue::Struct(maximum)) = stats.max_value else {
+            panic!("nested maximum should be an inexact struct scalar");
+        };
+        let event_time = maximum
+            .column_by_name("event_time")
+            .and_then(|array| array.as_any().downcast_ref::<TimestampMicrosecondArray>())
+            .expect("nested timestamp maximum");
+        let record_count = maximum
+            .column_by_name("record_count")
+            .and_then(|array| array.as_any().downcast_ref::<Int64Array>())
+            .expect("nested integer maximum");
+
+        assert_eq!(event_time.value(0), 10_655_000);
+        assert_eq!(record_count.value(0), 7);
     }
 }

@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -79,6 +81,44 @@ def test_delta_partitioning_creates_correct_directory_structure(spark, delta_tes
     assert_frame_equal(result_pandas, expected_data, check_dtype=False)
 
 
+@pytest.mark.parametrize(
+    ("column_mapping_mode", "schema_partition_name", "requested_partition_name"),
+    [
+        pytest.param("none", "EventDate", "eventdate", id="ascii-none"),
+        pytest.param("name", "EventDate", "eventdate", id="ascii-name"),
+        pytest.param("none", "ÄDate", "ädate", id="unicode-none"),
+        pytest.param("none", "ΣDate", "ςdate", id="unicode-final-sigma-none"),
+    ],
+)
+def test_delta_partition_name_resolution_canonicalizes_case(
+    spark,
+    tmp_path,
+    column_mapping_mode,
+    schema_partition_name,
+    requested_partition_name,
+):
+    delta_path = tmp_path / "case_insensitive_partition_name"
+    source = spark.createDataFrame([(1, "2026-08-06")], ["id", schema_partition_name])
+
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", column_mapping_mode)
+        .partitionBy(requested_partition_name)
+        .save(str(delta_path))
+    )
+
+    rows = spark.read.format("delta").load(str(delta_path)).collect()
+    assert [row.asDict() for row in rows] == [{"id": 1, schema_partition_name: "2026-08-06"}]
+
+    first_commit = delta_path / "_delta_log" / "00000000000000000000.json"
+    actions = [json.loads(line) for line in first_commit.read_text(encoding="utf-8").splitlines()]
+    first_metadata = next(action["metaData"] for action in actions if "metaData" in action)
+    assert first_metadata["partitionColumns"] == [schema_partition_name]
+    if column_mapping_mode == "name":
+        assert first_metadata["configuration"]["delta.columnMapping.mode"] == "name"
+
+
 def test_delta_partitioning_by_multiple_columns(spark, tmp_path):
     """Test multi-column partitioning behavior."""
     delta_path = tmp_path / "multi_partitioned_delta_table"
@@ -152,3 +192,20 @@ def test_delta_append_uses_existing_partition_metadata(spark, tmp_path):
     result_pdf = result_df.toPandas().sort_values("id").reset_index(drop=True)
     result_pdf = result_pdf[["id", "value", "category"]]
     assert_frame_equal(result_pdf, expected, check_dtype=False)
+
+
+def test_delta_ignore_existing_table_skips_partition_validation(spark, tmp_path):
+    delta_path = tmp_path / "ignore_existing_partitioned_table"
+    initial_rows = [Row(id=1, value="A"), Row(id=2, value="B")]
+    spark.createDataFrame(initial_rows).write.format("delta").mode("overwrite").save(str(delta_path))
+
+    commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
+    rows_before = spark.read.format("delta").load(str(delta_path)).sort("id").collect()
+
+    ignored_write = spark.createDataFrame([Row(id=3, value="C")])
+    ignored_write.write.format("delta").mode("ignore").partitionBy("missing").save(str(delta_path))
+
+    commit_files_after = sorted((delta_path / "_delta_log").glob("*.json"))
+    rows_after = spark.read.format("delta").load(str(delta_path)).sort("id").collect()
+    assert commit_files_after == commit_files_before
+    assert rows_after == rows_before

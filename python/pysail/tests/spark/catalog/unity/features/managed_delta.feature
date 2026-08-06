@@ -55,7 +55,7 @@ Feature: Unity Catalog managed Delta table operations
       | protocol.minReaderVersion                              | 3                                      |
       | protocol.minWriterVersion                              | 7                                      |
       | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"] |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                | ["appendOnly","invariants","catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                            |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |
 

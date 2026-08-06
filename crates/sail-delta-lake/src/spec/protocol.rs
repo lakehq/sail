@@ -211,6 +211,44 @@ mod tests {
             Some([TableFeature::AppendOnly, TableFeature::Invariants].as_slice())
         );
     }
+
+    #[test]
+    fn merge_upgrade_requirements_materializes_requirement_legacy_writer_features() {
+        let table = Protocol::new(1, 7, None, Some(vec![]));
+        let requirements = Protocol::new(1, 4, None, None);
+
+        assert_eq!(
+            table.merge_upgrade_requirements(&requirements),
+            Protocol::new(
+                1,
+                7,
+                None,
+                Some(vec![
+                    TableFeature::AppendOnly,
+                    TableFeature::Invariants,
+                    TableFeature::CheckConstraints,
+                    TableFeature::ChangeDataFeed,
+                    TableFeature::GeneratedColumns,
+                ]),
+            )
+        );
+    }
+
+    #[test]
+    fn merge_upgrade_requirements_preserves_column_mapping_across_reader_upgrade() {
+        let table = Protocol::new(2, 7, None, Some(vec![TableFeature::ColumnMapping]));
+        let requirements = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
+
+        assert_eq!(
+            table.merge_upgrade_requirements(&requirements),
+            Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::ColumnMapping]),
+                Some(vec![TableFeature::ColumnMapping]),
+            )
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -280,6 +318,12 @@ impl Protocol {
         let mut reader_features = self.reader_features().unwrap_or(&[]).to_vec();
         let mut writer_features = self.writer_features().unwrap_or(&[]).to_vec();
         if self.min_writer_version() >= 7 {
+            if self.min_reader_version() == 2
+                && writer_features.contains(&TableFeature::ColumnMapping)
+                && !reader_features.contains(&TableFeature::ColumnMapping)
+            {
+                reader_features.push(TableFeature::ColumnMapping);
+            }
             return (reader_features, writer_features);
         }
 
@@ -322,24 +366,25 @@ impl Protocol {
             .min_writer_version()
             .max(requirements.min_writer_version());
         let (mut reader_features, mut writer_features) = self.table_features_for_upgrade();
+        let (required_reader_features, required_writer_features) =
+            requirements.table_features_for_upgrade();
 
-        let append_requirements =
-            |features: &mut Vec<TableFeature>, required: Option<&[TableFeature]>| {
-                for feature in required.unwrap_or_default() {
-                    if !features.contains(feature) {
-                        features.push(feature.clone());
-                    }
+        let append_requirements = |features: &mut Vec<TableFeature>, required: &[TableFeature]| {
+            for feature in required {
+                if !features.contains(feature) {
+                    features.push(feature.clone());
                 }
-            };
+            }
+        };
 
         let reader_features = if min_reader_version >= 3 {
-            append_requirements(&mut reader_features, requirements.reader_features());
+            append_requirements(&mut reader_features, &required_reader_features);
             Some(reader_features)
         } else {
             self.reader_features().map(<[_]>::to_vec)
         };
         let writer_features = if min_writer_version >= 7 {
-            append_requirements(&mut writer_features, requirements.writer_features());
+            append_requirements(&mut writer_features, &required_writer_features);
             Some(writer_features)
         } else {
             self.writer_features().map(<[_]>::to_vec)

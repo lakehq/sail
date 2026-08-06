@@ -47,7 +47,7 @@ use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
-use crate::spec::{Add, ColumnMappingMode, MaxStat, MinStat};
+use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
@@ -643,35 +643,39 @@ fn stats_for_add(
         let mut null_count = Precision::Absent;
 
         for name in name_candidates {
-            if min_value == Precision::Absent {
-                let min_stat = stats.get_min_stat(name);
-                if let Some(value) = min_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    min_value = match min_stat {
-                        MinStat::Exact(_) => Precision::Exact(value),
-                        MinStat::LowerBound(_) => Precision::Inexact(value),
-                        MinStat::Absent => Precision::Absent,
-                    };
-                }
+            if min_value == Precision::Absent
+                && let Some(value) = stats.min_values.get(name).and_then(|value| {
+                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
+                        value,
+                        field.data_type(),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                && !value.is_null()
+            {
+                min_value = if stats.tight_bounds {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                };
             }
-            if max_value == Precision::Absent {
-                let max_stat = stats.get_max_stat(name);
-                if let Some(value) = max_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    max_value = match max_stat {
-                        MaxStat::Exact(_) => Precision::Exact(value),
-                        MaxStat::UpperBound(_) => Precision::Inexact(value),
-                        MaxStat::Absent => Precision::Absent,
-                    };
-                }
+            if max_value == Precision::Absent
+                && let Some(value) = stats.max_values.get(name).and_then(|value| {
+                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
+                        value,
+                        field.data_type(),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                && !value.is_null()
+            {
+                max_value = if stats.tight_bounds {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                };
             }
             if null_count == Precision::Absent
                 && let Some(value) = stats.null_count_value(name)
@@ -686,15 +690,7 @@ fn stats_for_add(
 
         if arrow_type_contains_timestamp(field.data_type()) {
             min_value = min_value.to_inexact();
-            max_value = max_value
-                .map(|value| {
-                    if matches!(value.data_type(), ArrowDataType::Timestamp(_, _)) {
-                        widen_timestamp_max_scalar(value)
-                    } else {
-                        value
-                    }
-                })
-                .to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
         }
 
         column_statistics.push(ColumnStatistics {
@@ -1062,5 +1058,70 @@ mod tests {
                 None,
             ))
         );
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+    fn test_stats_for_add_widens_nested_timestamp_maximum() {
+        let payload_fields = vec![
+            Arc::new(Field::new(
+                "event_time",
+                DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+                true,
+            )),
+            Arc::new(Field::new("record_count", DataType::Int64, true)),
+        ]
+        .into();
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(payload_fields),
+            true,
+        )]));
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(
+                r#"{"numRecords":1,"minValues":{"payload":{"event_time":"2024-01-15T10:30:00.654Z","record_count":3}},"maxValues":{"payload":{"event_time":"2024-01-15T10:30:00.654Z","record_count":7}},"nullCount":{"payload":{"event_time":0,"record_count":0}}}"#
+                    .to_string(),
+            ),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        };
+
+        let stats = stats_for_add(&add, &file_schema, &HashMap::new())
+            .unwrap()
+            .expect("stats should be present");
+        let max_value = &stats.column_statistics[0].max_value;
+        let Precision::Inexact(ScalarValue::Struct(maximum)) = max_value else {
+            panic!("nested maximum should be an inexact struct scalar, got {max_value:?}");
+        };
+        let event_time = maximum
+            .column_by_name("event_time")
+            .and_then(|array| {
+                array
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::TimestampMicrosecondArray>()
+            })
+            .expect("nested timestamp maximum");
+        let record_count = maximum
+            .column_by_name("record_count")
+            .and_then(|array| {
+                array
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            })
+            .expect("nested integer maximum");
+        let expected = 1_705_314_600_654_000_i64;
+
+        assert_eq!(event_time.value(0), expected + 1_000);
+        assert_eq!(record_count.value(0), 7);
     }
 }
