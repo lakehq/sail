@@ -95,10 +95,13 @@ impl PlanResolver<'_> {
         // A user-defined function shadows a built-in higher-order function of the
         // same name (Spark gives temporary/user functions precedence), so it must
         // NOT be intercepted by the HOF path — `transform(1, 2)` against a
-        // registered `transform(INT, INT)` UDF has to reach the UDF below.
+        // registered `transform(INT, INT)` UDF has to reach the UDF below. The
+        // built-in higher-order functions are resolved via `get_built_in_function`
+        // and are not in this catalog, so any registered function of the same name
+        // is a user function that wins — regardless of whether it is a Python UDF.
         let shadowed_by_udf = catalog_manager
             .get_function(&canonical_function_name)?
-            .is_some_and(|udf| udf.inner().is::<PySparkUnresolvedUDF>());
+            .is_some();
 
         // A higher-order function also takes this path when no argument is a
         // lambda syntactically, because Spark accepts a plain expression in a

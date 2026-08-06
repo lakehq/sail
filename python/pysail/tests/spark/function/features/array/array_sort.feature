@@ -196,3 +196,12 @@ Feature: array_sort higher-order function
         | result       |
         | [NULL, NULL] |
         | [NULL]       |
+
+  Rule: A subquery in a value argument is rejected
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT array_sort((SELECT array(2, 1)), (l, r) -> l - r) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

@@ -462,3 +462,26 @@ Feature: forall higher-order function
         | result |
         | false  |
         | true   |
+
+  Rule: Subquery expressions are rejected
+
+    Scenario: a subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT forall(array(1, 2), (SELECT true)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT forall((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery inside a lambda body is rejected
+      When query
+        """
+        SELECT forall(array(1, 2), x -> x > (SELECT 1)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

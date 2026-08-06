@@ -268,3 +268,19 @@ Feature: aggregate higher-order function
       Then query result
         | result |
         | 0      |
+
+  Rule: Subquery expressions are rejected in a value argument
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT aggregate((SELECT array(1, 2)), 0, (a, x) -> a + x) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    Scenario: a subquery in the zero argument is rejected
+      When query
+        """
+        SELECT aggregate(array(1, 2), (SELECT 0), (a, x) -> a + x) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

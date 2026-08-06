@@ -470,3 +470,12 @@ Feature: exists higher-order function
         SELECT exists(CAST(NULL AS ARRAY<INT>), 1) AS result
         """
       Then query error The second parameter requires the "BOOLEAN" type
+
+  Rule: A subquery in a value argument is rejected
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT exists((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

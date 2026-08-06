@@ -40,12 +40,15 @@ fn expr_python_udf_name(expr: &expr::Expr) -> PlanResult<Option<String>> {
     let mut found = None;
     expr.apply(|e| {
         Ok(match e {
-            // A resolved Python UDF is a scalar function whose inner impl is a
-            // `PySparkUDF`; its registered name is always `<name>@<md5>` (see
-            // `get_udf_name`), which no built-in function carries.
+            // A resolved scalar Python UDF is a scalar function whose inner impl is
+            // a `PySparkUDF` (see `resolve_python_udf_expr`). Unlike the shadowing
+            // gate, this only rejects Python UDFs: a non-Python user function
+            // resolves to a plain `ScalarFunction` indistinguishable from a
+            // built-in here, so it cannot be detected at this point (Spark also
+            // rejects SQL UDFs in a lambda, but that would need a check earlier,
+            // before resolution).
             expr::Expr::ScalarFunction(function)
-                if function.func.inner().downcast_ref::<PySparkUDF>().is_some()
-                    || function.func.name().contains('@') =>
+                if function.func.inner().downcast_ref::<PySparkUDF>().is_some() =>
             {
                 found = Some(get_udf_display_name(function.func.name()).to_string());
                 TreeNodeRecursion::Stop

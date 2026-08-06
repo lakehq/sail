@@ -748,3 +748,12 @@ Feature: array filter with lambda
         | result |
         | [1]    |
         | [3]    |
+
+  Rule: A subquery in a value argument is rejected
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT filter((SELECT array(1, 2)), x -> x > 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
