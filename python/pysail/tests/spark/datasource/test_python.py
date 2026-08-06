@@ -747,6 +747,14 @@ def test_python_ddl_schema_fallback(spark):
     assert rows[0].id == 0
 
 
+def test_python_datasource_options_are_case_insensitive(spark):
+    spark.dataSource.register(RangeDataSource)
+
+    rows = spark.read.format("range").option("END", "2").load().collect()
+
+    assert sorted(row.id for row in rows) == [0, 1]
+
+
 def test_python_filter_pushdown_comparison(spark):
     """Test that comparison filters (>, <, >=, <=) work correctly.
 
