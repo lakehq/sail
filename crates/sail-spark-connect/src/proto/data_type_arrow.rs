@@ -4,6 +4,7 @@ use sail_common::spec;
 use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
+use crate::proto::data_type::interval_fields;
 use crate::spark::connect::{DataType, data_type as sdt};
 
 /// Spark geometry and geography type metadata.
@@ -111,6 +112,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
+        } else if let Some(interval_metadata) =
+            field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        {
+            let interval_metadata: spec::SparkIntervalMetadata =
+                serde_json::from_str(interval_metadata)?;
+            interval_data_type(field.data_type(), &interval_metadata)?
         } else {
             field.data_type().clone().try_into()?
         };
@@ -121,6 +128,63 @@ impl TryFrom<adt::Field> for sdt::StructField {
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
+}
+
+/// Builds a Spark interval type with its leading and trailing fields, which are not part of the
+/// Arrow data type. Spark numbers the fields within each interval type, while the Sail
+/// specification numbers them across both, so the fields are mapped rather than cast.
+fn interval_data_type(
+    data_type: &adt::DataType,
+    interval: &spec::SparkIntervalMetadata,
+) -> SparkResult<DataType> {
+    use spec::IntervalFieldType;
+
+    let year_month = |field: IntervalFieldType| match field {
+        IntervalFieldType::Year => Ok(0),
+        IntervalFieldType::Month => Ok(1),
+        x => Err(SparkError::invalid(format!(
+            "year month interval field: {x:?}"
+        ))),
+    };
+    let day_time = |field: IntervalFieldType| match field {
+        IntervalFieldType::Day => Ok(0),
+        IntervalFieldType::Hour => Ok(1),
+        IntervalFieldType::Minute => Ok(2),
+        IntervalFieldType::Second => Ok(3),
+        x => Err(SparkError::invalid(format!(
+            "day time interval field: {x:?}"
+        ))),
+    };
+    let kind = match data_type {
+        adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
+            let (start_field, end_field) = interval_fields(
+                interval.start_field,
+                interval.end_field,
+                IntervalFieldType::Year,
+                IntervalFieldType::Month,
+            );
+            sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                start_field: start_field.map(year_month).transpose()?,
+                end_field: end_field.map(year_month).transpose()?,
+                type_variation_reference: 0,
+            })
+        }
+        adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
+            let (start_field, end_field) = interval_fields(
+                interval.start_field,
+                interval.end_field,
+                IntervalFieldType::Day,
+                IntervalFieldType::Second,
+            );
+            sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                start_field: start_field.map(day_time).transpose()?,
+                end_field: end_field.map(day_time).transpose()?,
+                type_variation_reference: 0,
+            })
+        }
+        x => return x.clone().try_into(),
+    };
+    Ok(DataType { kind: Some(kind) })
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala

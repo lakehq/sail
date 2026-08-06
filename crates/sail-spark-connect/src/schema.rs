@@ -74,6 +74,11 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         Kind::TimestampNtz(_) => write!(f, "timestamp_ntz"),
         Kind::CalendarInterval(_) => write!(f, "interval"),
         Kind::YearMonthInterval(interval) => match (interval.start_field, interval.end_field) {
+            // An interval spanning a single field is named after that field alone.
+            (Some(start), Some(end)) if start == end => {
+                write!(f, "interval ")?;
+                format_year_month_interval_field(f, start)
+            }
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_year_month_interval_field(f, start)?;
@@ -91,6 +96,11 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
             (None, None) => write!(f, "interval"),
         },
         Kind::DayTimeInterval(interval) => match (interval.start_field, interval.end_field) {
+            // An interval spanning a single field is named after that field alone.
+            (Some(start), Some(end)) if start == end => {
+                write!(f, "interval ")?;
+                format_day_time_interval_field(f, start)
+            }
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_day_time_interval_field(f, start)?;
