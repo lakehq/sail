@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::select_expr::SelectExpr;
@@ -8,7 +9,6 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
-use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -231,17 +231,8 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
         let array_column_name: String = state.register_field_name("array_value");
-        let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkSequence::new(
-                Arc::clone(&self.config.session_timezone),
-                self.config.ansi_mode,
-            ))),
-            args: vec![
-                Expr::Literal(ScalarValue::Int64(Some(1)), None),
-                col(rand_column_name),
-            ],
-        })
-        .alias(&array_column_name);
+        let arr_expr =
+            expr_fn::array_repeat(lit(1_i64), col(rand_column_name)).alias(&array_column_name);
         let plan = LogicalPlanBuilder::from(plan_with_rand)
             .project(
                 init_exprs_aux
