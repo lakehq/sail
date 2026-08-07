@@ -187,9 +187,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
-use sail_function::scalar::map::spark_map_zip_with::{
-    MapZipWithParameterOrder, SparkMapZipWith,
-};
+use sail_function::scalar::map::spark_map_zip_with::{MapZipWithParameterOrder, SparkMapZipWith};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -3796,9 +3794,9 @@ impl RemoteExecutionCodec {
             }
             HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf { parameter_order }) => {
                 Arc::new(HigherOrderUDF::new_from_impl(
-                    SparkMapZipWith::new_with_parameter_order(Self::decode_map_zip_with_parameter_order(
-                        parameter_order,
-                    )?),
+                    SparkMapZipWith::new_with_parameter_order(
+                        Self::decode_map_zip_with_parameter_order(parameter_order)?,
+                    ),
                 ))
             }
             HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {

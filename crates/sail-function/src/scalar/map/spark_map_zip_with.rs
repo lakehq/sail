@@ -227,12 +227,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
 }
 
 impl MapZipWithParameterOrder {
-    fn fields(
-        self,
-        key: FieldRef,
-        value1: FieldRef,
-        value2: FieldRef,
-    ) -> Vec<FieldRef> {
+    fn fields(self, key: FieldRef, value1: FieldRef, value2: FieldRef) -> Vec<FieldRef> {
         match self {
             Self::KeyValue1Value2 => vec![key, value1, value2],
             Self::KeyValue2Value1 => vec![key, value2, value1],

@@ -127,7 +127,7 @@ pub fn wrap_distributed_higher_order(
     if expr.downcast_ref::<DistributedHigherOrderExpr>().is_some() {
         return Ok(expr);
     }
-    
+
     if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
         let args = hof.args();
         let param_sets = lambda_parameter_fields(hof, schema)?;

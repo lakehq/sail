@@ -4,9 +4,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{
-    HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
-};
+use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -16,9 +14,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
-use sail_function::scalar::map::spark_map_zip_with::{
-    MapZipWithParameterOrder, SparkMapZipWith,
-};
+use sail_function::scalar::map::spark_map_zip_with::{MapZipWithParameterOrder, SparkMapZipWith};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
