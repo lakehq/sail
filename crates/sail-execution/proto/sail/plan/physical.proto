@@ -182,7 +182,11 @@ message SparkArrayTransformUdf {
   bool index_first = 1;
 }
 
-message SparkMapZipWithUdf {}
+message SparkMapZipWithUdf {
+  // Encoded `MapZipWithParameterOrder` ordinal. Zero preserves the original
+  // `(key, value1, value2)` order for older plans that used the empty message.
+  uint32 parameter_order = 1;
+}
 
 message SparkArrayZipWithUdf {}
 

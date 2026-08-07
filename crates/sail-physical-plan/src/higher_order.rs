@@ -123,6 +123,11 @@ pub fn wrap_distributed_higher_order(
     expr: Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    // If already wrapped, return as-is
+    if expr.downcast_ref::<DistributedHigherOrderExpr>().is_some() {
+        return Ok(expr);
+    }
+    
     if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
         let args = hof.args();
         let param_sets = lambda_parameter_fields(hof, schema)?;

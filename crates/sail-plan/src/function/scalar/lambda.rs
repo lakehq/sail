@@ -2,11 +2,10 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion_common::ScalarValue;
 use datafusion_common::arrow::datatypes::FieldRef;
-use datafusion_common::datatype::FieldExt;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+    HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
 };
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -17,7 +16,9 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
-use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+use sail_function::scalar::map::spark_map_zip_with::{
+    MapZipWithParameterOrder, SparkMapZipWith,
+};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -58,6 +59,27 @@ static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = La
 
 static SPARK_MAP_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new())));
+
+static SPARK_MAP_ZIP_WITH_KEY_VALUE2_VALUE1_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| {
+        Arc::new(HigherOrderUDF::new_from_impl(
+            SparkMapZipWith::new_with_parameter_order(MapZipWithParameterOrder::KeyValue2Value1),
+        ))
+    });
+
+static SPARK_MAP_ZIP_WITH_VALUE1_VALUE2_KEY_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| {
+        Arc::new(HigherOrderUDF::new_from_impl(
+            SparkMapZipWith::new_with_parameter_order(MapZipWithParameterOrder::Value1Value2Key),
+        ))
+    });
+
+static SPARK_MAP_ZIP_WITH_VALUE2_KEY_VALUE1_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| {
+        Arc::new(HigherOrderUDF::new_from_impl(
+            SparkMapZipWith::new_with_parameter_order(MapZipWithParameterOrder::Value2KeyValue1),
+        ))
+    });
 
 static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
@@ -131,46 +153,6 @@ fn lambda_body_uses_param(body: &expr::Expr, param: &str) -> PlanResult<bool> {
         })
     })?;
     Ok(found)
-}
-
-fn anchor_lambda_prefix_params(lambda: Lambda, param_fields: &[FieldRef]) -> PlanResult<Lambda> {
-    let last_used = lambda
-        .params
-        .iter()
-        .enumerate()
-        .map(|(index, param)| Ok(lambda_body_uses_param(&lambda.body, param)?.then_some(index)))
-        .collect::<PlanResult<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .max();
-    let Some(last_used) = last_used else {
-        return Ok(lambda);
-    };
-
-    let Lambda { params, body } = lambda;
-    let body = params.iter().enumerate().take(last_used).try_fold(
-        body,
-        |body, (index, param)| -> PlanResult<Box<expr::Expr>> {
-            let field = param_fields.get(index).ok_or_else(|| {
-                PlanError::internal(format!(
-                    "missing parameter field {index} for map_zip_with lambda"
-                ))
-            })?;
-            let is_null =
-                expr::Expr::IsNull(Box::new(expr::Expr::LambdaVariable(LambdaVariable::new(
-                    param.clone(),
-                    Some(FieldRef::clone(field).renamed(param.as_str())),
-                ))));
-            let anchor = is_null.clone().or(expr::Expr::Not(Box::new(is_null)));
-            Ok(Box::new(expr::Expr::Case(expr::Case {
-                expr: None,
-                when_then_expr: vec![(Box::new(anchor), body.clone())],
-                else_expr: Some(body),
-            })))
-        },
-    )?;
-
-    Ok(Lambda { params, body })
 }
 
 /// Builds a `(array, lambda)` higher-order function expression supporting Spark's
@@ -333,11 +315,7 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput {
-        arguments,
-        function_context,
-    } = input;
-    let (left, right, lambda) = arguments.three()?;
+    let (left, right, lambda) = input.arguments.three()?;
     let expr::Expr::Lambda(lambda) = lambda else {
         return Err(PlanError::AnalysisError(
             "`map_zip_with` expects a lambda function as its third argument".to_string(),
@@ -349,17 +327,46 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             lambda.params.len()
         )));
     }
-    let fields = vec![
-        ValueOrLambda::Value(left.to_field(function_context.schema)?.1),
-        ValueOrLambda::Value(right.to_field(function_context.schema)?.1),
-        ValueOrLambda::Lambda(None),
-    ];
-    let lambda_params = get_lambda_parameters("map_zip_with", &fields)?.one()?;
-    let lambda = anchor_lambda_prefix_params(lambda, &lambda_params)?;
+    let (func, lambda) = map_zip_with_lambda_order(lambda)?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        Arc::clone(&SPARK_MAP_ZIP_WITH_UDF),
+        func,
         vec![left, right, expr::Expr::Lambda(lambda)],
     )))
+}
+
+fn map_zip_with_lambda_order(lambda: Lambda) -> PlanResult<(Arc<HigherOrderUDF>, Lambda)> {
+    let Lambda { params, body } = lambda;
+    let [key, value1, value2] = params.as_slice() else {
+        return Err(PlanError::internal(format!(
+            "map_zip_with lambda arity was not checked: {}",
+            params.len()
+        )));
+    };
+    let uses_key = lambda_body_uses_param(&body, key)?;
+    let uses_value1 = lambda_body_uses_param(&body, value1)?;
+    let uses_value2 = lambda_body_uses_param(&body, value2)?;
+
+    let (func, params) = match (uses_key, uses_value1, uses_value2) {
+        (false, true, true) => (
+            Arc::clone(&SPARK_MAP_ZIP_WITH_VALUE1_VALUE2_KEY_UDF),
+            vec![value1.clone(), value2.clone()],
+        ),
+        (false, true, false) => (
+            Arc::clone(&SPARK_MAP_ZIP_WITH_VALUE1_VALUE2_KEY_UDF),
+            vec![value1.clone()],
+        ),
+        (false, false, true) => (
+            Arc::clone(&SPARK_MAP_ZIP_WITH_VALUE2_KEY_VALUE1_UDF),
+            vec![value2.clone()],
+        ),
+        (true, false, true) => (
+            Arc::clone(&SPARK_MAP_ZIP_WITH_KEY_VALUE2_VALUE1_UDF),
+            vec![key.clone(), value2.clone()],
+        ),
+        _ => (Arc::clone(&SPARK_MAP_ZIP_WITH_UDF), params),
+    };
+
+    Ok((func, Lambda { params, body }))
 }
 
 fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

@@ -27,9 +27,18 @@ type LambdaInputs = (
     Option<NullBuffer>,
 );
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MapZipWithParameterOrder {
+    KeyValue1Value2,
+    KeyValue2Value1,
+    Value1Value2Key,
+    Value2KeyValue1,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMapZipWith {
     signature: HigherOrderSignature,
+    parameter_order: MapZipWithParameterOrder,
 }
 
 impl Default for SparkMapZipWith {
@@ -40,6 +49,10 @@ impl Default for SparkMapZipWith {
 
 impl SparkMapZipWith {
     pub fn new() -> Self {
+        Self::new_with_parameter_order(MapZipWithParameterOrder::KeyValue1Value2)
+    }
+
+    pub fn new_with_parameter_order(parameter_order: MapZipWithParameterOrder) -> Self {
         Self {
             signature: HigherOrderSignature::exact(
                 vec![
@@ -49,7 +62,12 @@ impl SparkMapZipWith {
                 ],
                 Volatility::Immutable,
             ),
+            parameter_order,
         }
+    }
+
+    pub fn parameter_order(&self) -> MapZipWithParameterOrder {
+        self.parameter_order
     }
 }
 
@@ -78,11 +96,12 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                 right_key.data_type()
             );
         }
-        Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(Field::new("key", left_key.data_type().clone(), false)),
-            Arc::new(Field::new("value1", left_value.data_type().clone(), true)),
-            Arc::new(Field::new("value2", right_value.data_type().clone(), true)),
-        ]]))
+        let key = Arc::new(Field::new("key", left_key.data_type().clone(), false));
+        let value1 = Arc::new(Field::new("value1", left_value.data_type().clone(), true));
+        let value2 = Arc::new(Field::new("value2", right_value.data_type().clone(), true));
+        Ok(LambdaParametersProgress::Complete(vec![
+            self.parameter_order.fields(key, value1, value2),
+        ]))
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
@@ -137,7 +156,9 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         let key_param = || Ok(Arc::clone(&keys));
         let left_param = || Ok(Arc::clone(&left_values));
         let right_param = || Ok(Arc::clone(&right_values));
-        let params: [&dyn Fn() -> Result<ArrayRef>; 3] = [&key_param, &left_param, &right_param];
+        let params = self
+            .parameter_order
+            .params(&key_param, &left_param, &right_param);
         let output_values = lambda
             .evaluate(&params, |arrays| repeat_captures(arrays, &offsets))?
             .into_array(num_entries)?;
@@ -202,6 +223,36 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             );
         }
         Ok(vec![left.clone(), right.clone()])
+    }
+}
+
+impl MapZipWithParameterOrder {
+    fn fields(
+        self,
+        key: FieldRef,
+        value1: FieldRef,
+        value2: FieldRef,
+    ) -> Vec<FieldRef> {
+        match self {
+            Self::KeyValue1Value2 => vec![key, value1, value2],
+            Self::KeyValue2Value1 => vec![key, value2, value1],
+            Self::Value1Value2Key => vec![value1, value2, key],
+            Self::Value2KeyValue1 => vec![value2, key, value1],
+        }
+    }
+
+    fn params<'a>(
+        self,
+        key: &'a dyn Fn() -> Result<ArrayRef>,
+        value1: &'a dyn Fn() -> Result<ArrayRef>,
+        value2: &'a dyn Fn() -> Result<ArrayRef>,
+    ) -> [&'a dyn Fn() -> Result<ArrayRef>; 3] {
+        match self {
+            Self::KeyValue1Value2 => [key, value1, value2],
+            Self::KeyValue2Value1 => [key, value2, value1],
+            Self::Value1Value2Key => [value1, value2, key],
+            Self::Value2KeyValue1 => [value2, key, value1],
+        }
     }
 }
 

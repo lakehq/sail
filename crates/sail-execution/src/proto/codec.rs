@@ -187,7 +187,9 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
-use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+use sail_function::scalar::map::spark_map_zip_with::{
+    MapZipWithParameterOrder, SparkMapZipWith,
+};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -3727,8 +3729,12 @@ impl RemoteExecutionCodec {
             HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
                 swapped: sort.is_swapped(),
             })
-        } else if udf_inner.downcast_ref::<SparkMapZipWith>().is_some() {
-            HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {})
+        } else if let Some(map_zip_with) = udf_inner.downcast_ref::<SparkMapZipWith>() {
+            HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
+                parameter_order: Self::encode_map_zip_with_parameter_order(
+                    map_zip_with.parameter_order(),
+                ),
+            })
         } else if udf_inner.downcast_ref::<SparkArrayZipWith>().is_some() {
             HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
         } else {
@@ -3788,11 +3794,38 @@ impl RemoteExecutionCodec {
                     Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
                 }
             }
-            HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {}) => {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new()))
+            HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf { parameter_order }) => {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkMapZipWith::new_with_parameter_order(Self::decode_map_zip_with_parameter_order(
+                        parameter_order,
+                    )?),
+                ))
             }
             HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
+            }
+        })
+    }
+
+    fn encode_map_zip_with_parameter_order(order: MapZipWithParameterOrder) -> u32 {
+        match order {
+            MapZipWithParameterOrder::KeyValue1Value2 => 0,
+            MapZipWithParameterOrder::KeyValue2Value1 => 1,
+            MapZipWithParameterOrder::Value1Value2Key => 2,
+            MapZipWithParameterOrder::Value2KeyValue1 => 3,
+        }
+    }
+
+    fn decode_map_zip_with_parameter_order(order: u32) -> Result<MapZipWithParameterOrder> {
+        Ok(match order {
+            0 => MapZipWithParameterOrder::KeyValue1Value2,
+            1 => MapZipWithParameterOrder::KeyValue2Value1,
+            2 => MapZipWithParameterOrder::Value1Value2Key,
+            3 => MapZipWithParameterOrder::Value2KeyValue1,
+            other => {
+                return Err(plan_datafusion_err!(
+                    "invalid map_zip_with parameter order: {other}"
+                ));
             }
         })
     }

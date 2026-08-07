@@ -2092,9 +2092,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
   
-    physical_plan after wrap_higher_order_functions:
-    SAME TEXT AS ABOVE
-  
     physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
   
