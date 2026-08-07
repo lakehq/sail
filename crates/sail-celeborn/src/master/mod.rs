@@ -1,6 +1,5 @@
 pub mod client;
+mod common;
 
-pub use client::{
-    MasterClient, MasterClientOptions, PartitionLocation, SlotReservation, UserIdentifier,
-    WorkerSlotLocations,
-};
+pub use client::{MasterClient, MasterClientOptions};
+pub use common::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};

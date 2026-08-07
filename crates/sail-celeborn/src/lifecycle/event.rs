@@ -19,6 +19,18 @@ pub enum LifecycleManagerEvent {
         result: CelebornResult<SlotReservation>,
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     },
+    MapperEndBegin {
+        shuffle_id: i32,
+        map_id: i32,
+        attempt_id: i32,
+        num_mappers: i32,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
+    MapperEndCommitEnd {
+        shuffle_id: i32,
+        result: CelebornResult<()>,
+        reply: oneshot::Sender<CelebornResult<()>>,
+    },
     UnregisterShuffleBegin {
         shuffle_id: i32,
         result: oneshot::Sender<CelebornResult<()>>,
@@ -38,6 +50,8 @@ impl SpanAssociation for LifecycleManagerEvent {
         match self {
             Self::RequestSlotsBegin { .. } => "RequestSlotsBegin",
             Self::RequestSlotsEnd { .. } => "RequestSlotsEnd",
+            Self::MapperEndBegin { .. } => "MapperEndBegin",
+            Self::MapperEndCommitEnd { .. } => "MapperEndCommitEnd",
             Self::UnregisterShuffleBegin { .. } => "UnregisterShuffleBegin",
             Self::UnregisterShuffleEnd { .. } => "UnregisterShuffleEnd",
             Self::Stop { .. } => "Stop",

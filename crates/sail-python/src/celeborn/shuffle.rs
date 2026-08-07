@@ -96,17 +96,6 @@ impl PyShuffleClient {
         Ok(response.map_err(to_py_error)?.worker_ids)
     }
 
-    fn unregister_shuffle(&self, py: Python<'_>, shuffle_id: i32) -> PyResult<()> {
-        let client = self.client()?;
-        let runtime = self.runtime.clone();
-        py.detach(move || {
-            runtime
-                .primary()
-                .block_on(client.unregister_shuffle(shuffle_id))
-        })
-        .map_err(to_py_error)
-    }
-
     fn push_data(
         &self,
         py: Python<'_>,

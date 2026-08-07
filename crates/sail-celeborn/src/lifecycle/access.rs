@@ -49,6 +49,27 @@ impl LifecycleManager for LocalLifecycleManager {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
+    async fn mapper_end(
+        &self,
+        shuffle_id: i32,
+        map_id: i32,
+        attempt_id: i32,
+        num_mappers: i32,
+    ) -> CelebornResult<()> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerEvent::MapperEndBegin {
+                shuffle_id,
+                map_id,
+                attempt_id,
+                num_mappers,
+                result,
+            })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
     async fn stop(&self) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle

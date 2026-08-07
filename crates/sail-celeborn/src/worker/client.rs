@@ -79,14 +79,8 @@ impl WorkerClient {
         let request = PbReserveSlots {
             application_id,
             shuffle_id,
-            primary_locations: primary_locations
-                .into_iter()
-                .map(to_proto_location)
-                .collect(),
-            replica_locations: replica_locations
-                .into_iter()
-                .map(to_proto_location)
-                .collect(),
+            primary_locations: primary_locations.into_iter().map(Into::into).collect(),
+            replica_locations: replica_locations.into_iter().map(Into::into).collect(),
             split_threshold: 1_i64 << 30,
             split_mode: 0,
             partition_type: 0,
@@ -408,22 +402,6 @@ async fn write_bytes(stream: &mut TcpStream, bytes: &[u8]) -> CelebornResult<()>
         .await?;
     stream.write_all(bytes).await?;
     Ok(())
-}
-
-fn to_proto_location(location: PartitionLocation) -> crate::protocol::proto::PbPartitionLocation {
-    crate::protocol::proto::PbPartitionLocation {
-        mode: location.mode,
-        id: location.id,
-        epoch: location.epoch,
-        host: location.host,
-        rpc_port: i32::from(location.rpc_port),
-        push_port: i32::from(location.push_port),
-        fetch_port: i32::from(location.fetch_port),
-        replicate_port: i32::from(location.replicate_port),
-        peer: location.peer.map(|peer| Box::new(to_proto_location(*peer))),
-        storage_info: None,
-        map_id_bitmap: Vec::new(),
-    }
 }
 
 fn encode_transport_message(message_type: i32, payload: Vec<u8>) -> CelebornResult<Vec<u8>> {

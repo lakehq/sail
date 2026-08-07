@@ -34,24 +34,10 @@ pub enum ShuffleClientEvent {
         num_mappers: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
-    MapperEndCommitEnd {
-        shuffle_id: i32,
-        result: CelebornResult<()>,
-        reply: oneshot::Sender<CelebornResult<()>>,
-    },
     ReadPartition {
         shuffle_id: i32,
         partition_id: i32,
         result: oneshot::Sender<CelebornResult<Vec<u8>>>,
-    },
-    UnregisterShuffle {
-        shuffle_id: i32,
-        result: oneshot::Sender<CelebornResult<()>>,
-    },
-    UnregisterShuffleEnd {
-        shuffle_id: i32,
-        result: CelebornResult<()>,
-        reply: oneshot::Sender<CelebornResult<()>>,
     },
     Stop {
         result: oneshot::Sender<()>,
@@ -65,10 +51,7 @@ impl SpanAssociation for ShuffleClientEvent {
             Self::RegisterShuffleEnd { .. } => "RegisterShuffleEnd",
             Self::PushData { .. } => "PushData",
             Self::MapperEnd { .. } => "MapperEnd",
-            Self::MapperEndCommitEnd { .. } => "MapperEndCommitEnd",
             Self::ReadPartition { .. } => "ReadPartition",
-            Self::UnregisterShuffle { .. } => "UnregisterShuffle",
-            Self::UnregisterShuffleEnd { .. } => "UnregisterShuffleEnd",
             Self::Stop { .. } => "Stop",
         }
         .into()

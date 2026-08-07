@@ -14,15 +14,9 @@ impl Actor for ShuffleClientActor {
 
     fn new(options: Self::Options) -> Self {
         Self {
-            application_id: options.application_id,
-            lifecycle_manager: options.lifecycle_manager,
+            options,
             locations: Default::default(),
-            worker_locations: Default::default(),
             batch_ids: Default::default(),
-            mapper_attempts: Default::default(),
-            committing_shuffles: Default::default(),
-            committed_shuffles: Default::default(),
-            endpoint_resolver: options.endpoint_resolver,
         }
     }
 
@@ -70,24 +64,11 @@ impl Actor for ShuffleClientActor {
                 num_mappers,
                 result,
             } => self.handle_mapper_end(ctx, shuffle_id, map_id, attempt_id, num_mappers, result),
-            ShuffleClientEvent::MapperEndCommitEnd {
-                shuffle_id,
-                result,
-                reply,
-            } => self.handle_mapper_end_commit_end(shuffle_id, result, reply),
             ShuffleClientEvent::ReadPartition {
                 shuffle_id,
                 partition_id,
                 result,
             } => self.handle_read_partition(ctx, shuffle_id, partition_id, result),
-            ShuffleClientEvent::UnregisterShuffle { shuffle_id, result } => {
-                self.handle_unregister_shuffle(ctx, shuffle_id, result)
-            }
-            ShuffleClientEvent::UnregisterShuffleEnd {
-                shuffle_id,
-                result,
-                reply,
-            } => self.handle_unregister_shuffle_end(shuffle_id, result, reply),
             ShuffleClientEvent::Stop { result } => self.handle_stop(result),
         }
     }

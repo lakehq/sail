@@ -99,16 +99,6 @@ impl ShuffleClient {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    /// Release the slots reserved for a shuffle.
-    pub async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
-        let (result, receiver) = oneshot::channel();
-        self.handle
-            .send(ShuffleClientEvent::UnregisterShuffle { shuffle_id, result })
-            .await
-            .map_err(|_| CelebornError::ActorStopped)?;
-        receiver.await.map_err(|_| CelebornError::ActorStopped)?
-    }
-
     /// Stop the shuffle client and its lifecycle manager.
     pub async fn stop(&self) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
