@@ -6,12 +6,13 @@ use datafusion::arrow::datatypes::SchemaRef;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::time::Instant;
+use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
@@ -158,7 +159,7 @@ impl WorkerPool {
                 };
                 ctx.spawn(async move {
                     if let Err(e) = client.stop_worker().await {
-                        error!("failed to stop worker {worker_id}: {e}");
+                        Self::log_worker_control_error("stop worker", worker_id, &e);
                     }
                 });
                 worker.state = WorkerState::Completed;
@@ -286,7 +287,22 @@ impl WorkerPool {
             });
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            let message = format!(
+                "cannot assign {} to worker {} that is not running: {e}",
+                TaskKeyDisplay(&key),
+                worker_id
+            );
+            let cause = CommonErrorCause::Internal(message.clone());
+            ctx.send(DriverEvent::UpdateTask {
+                key,
+                status: TaskStatus::Failed,
+                message: Some(message),
+                cause: Some(cause),
+                sequence: None,
+            });
+            return;
+        }
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(client) => client.core,
             Err(e) => {
@@ -302,25 +318,6 @@ impl WorkerPool {
                 return;
             }
         };
-        match &mut worker.state {
-            WorkerState::Running { .. } => {}
-            _ => {
-                let message = format!(
-                    "cannot assign {} to worker {} that is not running",
-                    TaskKeyDisplay(&key),
-                    worker_id
-                );
-                let cause = CommonErrorCause::Internal(message.clone());
-                ctx.send(DriverEvent::UpdateTask {
-                    key,
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause: Some(cause),
-                    sequence: None,
-                });
-                return;
-            }
-        }
         let peers = running_workers
             .into_iter()
             .filter(|x| !worker.peers.contains(&x.worker_id))
@@ -351,21 +348,22 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        let operation = format!("stop task {}", TaskKeyDisplay(key));
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            debug!("{operation}: worker {worker_id} was already inactive: {e}");
+            return;
+        }
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.core,
             Err(e) => {
-                error!(
-                    "failed to stop {} in worker {worker_id}: {e}",
-                    TaskKeyDisplay(key)
-                );
+                Self::log_worker_control_error(&operation, worker_id, &e);
                 return;
             }
         };
         let key = key.clone();
         ctx.spawn(async move {
             if let Err(e) = client.stop_task(key.clone()).await {
-                error!("failed to stop {}: {e}", TaskKeyDisplay(&key));
+                Self::log_worker_control_error(&operation, worker_id, &e);
             }
         });
     }
@@ -382,7 +380,7 @@ impl WorkerPool {
                 "worker {worker_id} not found"
             )));
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options)?;
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.flight,
             Err(e) => {
@@ -413,7 +411,10 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            debug!("clean up job: worker {worker_id} was already inactive: {e}");
+            return;
+        }
         Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
@@ -453,15 +454,31 @@ impl WorkerPool {
         let client = match Self::get_client_set(worker_id, worker, options) {
             Ok(x) => x.core,
             Err(e) => {
-                error!("failed to clean up job in worker {worker_id}: {e}");
+                Self::log_worker_control_error("clean up job", worker_id, &e);
                 return;
             }
         };
         ctx.spawn(async move {
             if let Err(e) = client.clean_up_job(job_id, stage).await {
-                error!("failed to clean up job in worker {worker_id}: {e}");
+                Self::log_worker_control_error("clean up job", worker_id, &e);
             }
         });
+    }
+
+    fn log_worker_control_error(operation: &str, worker_id: WorkerId, error: &ExecutionError) {
+        if Self::is_worker_unavailable(error) {
+            debug!("{operation}: worker {worker_id} was already unavailable: {error}");
+        } else {
+            error!("{operation}: failed in worker {worker_id}: {error}");
+        }
+    }
+
+    fn is_worker_unavailable(error: &ExecutionError) -> bool {
+        match error {
+            ExecutionError::TonicTransportError(_) => true,
+            ExecutionError::TonicStatusError(status) => status.code() == Code::Unavailable,
+            _ => false,
+        }
     }
 
     fn schedule_idle_worker_probe(
@@ -507,10 +524,14 @@ impl WorkerPool {
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
-    ) {
-        if let WorkerState::Running { updated_at, .. } = &mut worker.state {
-            *updated_at = Instant::now();
-            Self::schedule_idle_worker_probe(ctx, worker_id, worker, options);
-        }
+    ) -> ExecutionResult<()> {
+        let WorkerState::Running { updated_at, .. } = &mut worker.state else {
+            return Err(ExecutionError::InternalError(format!(
+                "worker {worker_id} is not running"
+            )));
+        };
+        *updated_at = Instant::now();
+        Self::schedule_idle_worker_probe(ctx, worker_id, worker, options);
+        Ok(())
     }
 }
