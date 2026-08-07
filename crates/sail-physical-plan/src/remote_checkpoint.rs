@@ -755,6 +755,10 @@ fn checkpoint_partitioning_with_count(
             Partitioning::Hash(expressions, partition_count)
         }
         Partitioning::Hash(_, _) => Partitioning::UnknownPartitioning(partition_count),
+        Partitioning::Range(range) if range.partition_count() == partition_count => {
+            Partitioning::Range(range)
+        }
+        Partitioning::Range(_) => Partitioning::UnknownPartitioning(partition_count),
         Partitioning::UnknownPartitioning(_) => Partitioning::UnknownPartitioning(partition_count),
     }
 }

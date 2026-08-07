@@ -1,7 +1,6 @@
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::Arc;
-use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::error::ArrowError;
@@ -9,13 +8,14 @@ use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::decoder::{Decoder, DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::{PartitionedFile, RangeCalculation, TableSchema, calculate_range};
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -200,33 +200,48 @@ impl FileOpener for TextOpener {
         let config = self.config.clone();
 
         Ok(Box::pin(async move {
-            // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let calculated_range = calculate_range(&file, &store, line_sep).await?;
-            let range = match calculated_range {
-                RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range.into()),
-                RangeCalculation::TerminateEarly => {
-                    return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
-                }
-            };
-            let options = GetOptions {
-                range,
-                ..Default::default()
-            };
-            let result = store.get_opts(&file.object_meta.location, options).await?;
+            let file_size = file.object_meta.size;
+            let location = file.object_meta.location;
+
+            if let Some(file_range) = file.range.as_ref() {
+                let raw_start = u64::try_from(file_range.start).map_err(|_| {
+                    DataFusionError::Execution(format!(
+                        "text file range start does not fit in u64: {}",
+                        file_range.start
+                    ))
+                })?;
+                let raw_end = u64::try_from(file_range.end).map_err(|_| {
+                    DataFusionError::Execution(format!(
+                        "text file range end does not fit in u64: {}",
+                        file_range.end
+                    ))
+                })?;
+                let stream = AlignedBoundaryStream::new(
+                    Arc::clone(&store),
+                    location.clone(),
+                    raw_start,
+                    raw_end,
+                    file_size,
+                    line_sep.unwrap_or(b'\n'),
+                )
+                .await?
+                .map_err(DataFusionError::from);
+                let decoder = config.builder()?.build_decoder();
+                let input = file_compression_type.convert_stream(stream.boxed())?.fuse();
+                return Ok(deserialize_stream(
+                    input,
+                    DecoderDeserializer::new(TextDecoder::new(decoder)),
+                )
+                .map_err(DataFusionError::from)
+                .boxed());
+            }
+
+            let result = store.get_opts(&location, GetOptions::default()).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut local_file, _path) => {
-                    let is_whole_file_scanned = file.range.is_none();
-                    let decoder = if is_whole_file_scanned {
-                        // Don't seek if no range as breaks FIFO files
-                        file_compression_type.convert_read(local_file)?
-                    } else {
-                        local_file.seek(SeekFrom::Start(result.range.start as _))?;
-                        file_compression_type
-                            .convert_read(local_file.take(result.range.end - result.range.start))?
-                    };
+                GetResultPayload::File(local_file, _path) => {
+                    let decoder = file_compression_type.convert_read(local_file)?;
 
                     Ok(futures::stream::iter(config.open(decoder)?)
                         .map_err(DataFusionError::from)

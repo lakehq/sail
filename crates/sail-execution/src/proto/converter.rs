@@ -9,7 +9,8 @@ use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,

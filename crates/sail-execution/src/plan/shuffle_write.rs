@@ -166,12 +166,14 @@ impl ExecutionPlan for ShuffleWriteExec {
             .output_partitioning()
             .partition_count();
         let partitioner = match &self.shuffle_partitioning {
-            Partitioning::Hash(_, _) => ShufflePartitioner::Batch(BatchPartitioner::try_new(
-                self.shuffle_partitioning.clone(),
-                Default::default(),
-                partition,
-                num_input_partitions,
-            )?),
+            Partitioning::Hash(_, _) | Partitioning::Range(_) => {
+                ShufflePartitioner::Batch(BatchPartitioner::try_new(
+                    self.shuffle_partitioning.clone(),
+                    Default::default(),
+                    partition,
+                    num_input_partitions,
+                )?)
+            }
             Partitioning::RoundRobinBatch(size) | Partitioning::UnknownPartitioning(size) => {
                 if self.row_based {
                     ShufflePartitioner::RoundRobin(RowRoundRobinPartitioner::new(

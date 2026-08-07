@@ -143,6 +143,7 @@ impl ScanByDataFilesState {
                 ordering: None,
                 extensions: Default::default(),
                 metadata_size_hint: None,
+                arrow_schema: None,
                 table_reference: None,
             });
         }

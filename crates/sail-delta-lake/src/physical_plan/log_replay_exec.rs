@@ -574,7 +574,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
             let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
                 datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, idx),
             );
-            Distribution::HashPartitioned(vec![expr])
+            Distribution::KeyPartitioned(vec![expr])
         };
 
         match &self.mode {

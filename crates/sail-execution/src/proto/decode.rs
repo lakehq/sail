@@ -4,13 +4,17 @@ use datafusion::arrow::datatypes::{Field, FieldRef, Schema};
 use datafusion::common::{Result, plan_datafusion_err};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::HigherOrderUDF;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
+use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
+    PhysicalProtoConverterExtension,
 };
-use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+use datafusion_proto::protobuf::{
+    Partitioning as ProtoPartitioning, PhysicalExprNode, PhysicalPlanNode,
+};
 use prost::Message;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
@@ -41,6 +45,22 @@ pub fn decode_remote_physical_expr(
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     try_decode_physical_expr(ctx, codec, buf, schema)
+}
+
+pub fn decode_remote_partitioning(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    buf: &[u8],
+    schema: &Schema,
+) -> Result<Partitioning> {
+    let partitioning = try_decode_message::<ProtoPartitioning>(buf)?;
+    parse_protobuf_partitioning(
+        Some(&partitioning),
+        &PhysicalPlanDecodeContext::new(ctx, codec),
+        schema,
+        &RemotePhysicalProtoConverter {},
+    )?
+    .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
 }
 
 pub(super) fn try_decode_message<M>(buf: &[u8]) -> Result<M>

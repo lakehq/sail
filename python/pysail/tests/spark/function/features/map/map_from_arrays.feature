@@ -1,5 +1,17 @@
 Feature: map_from_arrays output schema
 
+  Rule: Duplicate key policy
+
+    Scenario: LAST_WIN map_from_arrays keeps the final value
+      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT map_from_arrays(array(1, 1), array('a', 'b')) AS result
+        """
+      Then query result
+        | result   |
+        | {1 -> b} |
+
   @function(nullability)
   Rule: Output schema
 

@@ -6,11 +6,10 @@ use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, RecordBa
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
@@ -96,12 +95,12 @@ impl IcebergMergeMetadataExec {
             metadata_columns
         };
         let output_schema = Arc::new(metadata_columns.append_to_schema(input.schema().as_ref())?);
-        let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema.clone()),
-            Partitioning::UnknownPartitioning(partition_count),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
+            EquivalenceProperties::new(output_schema.clone())
+                .extend(input.equivalence_properties().clone())?,
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ));
         Ok(Self {
             input,

@@ -8,7 +8,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
-use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::{LexRequirement, Partitioning};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -123,7 +123,7 @@ pub struct ListingScanInput {
     pub preserve_order: bool,
     pub output_ordering: Vec<LexOrdering>,
     pub statistics: Statistics,
-    pub partitioned_by_file_group: bool,
+    pub output_partitioning: Option<Partitioning>,
     pub schema: TableSchema,
     pub compression: CompressionTypeVariant,
 }
@@ -261,7 +261,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: urls,
-            schema: TableSchema::new(schema, partition_fields),
+            schema: TableSchema::builder(schema)
+                .with_table_partition_cols(partition_fields)
+                .build(),
             constraints,
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),

@@ -569,7 +569,7 @@ impl ExecutionPlan for DeltaWriterExec {
             ));
         }
 
-        vec![Distribution::HashPartitioned(exprs)]
+        vec![Distribution::KeyPartitioned(exprs)]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

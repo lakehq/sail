@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
-use datafusion::logical_expr::execution_props::ScalarSubqueryResults;
+use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::aggregates::AggregateExec;
@@ -411,7 +411,9 @@ fn plan_job_graph_stages(
                 );
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
-            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::Range(_) => {
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
         };
@@ -811,6 +813,7 @@ fn create_shuffle(
             OutputDistribution::RoundRobin { channels }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
+        Partitioning::Range(partitioning) => OutputDistribution::Range { partitioning },
     };
     let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(
@@ -961,14 +964,19 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::common::ScalarValue;
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
-    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+    use datafusion::logical_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::{binary, col};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-    use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+    use datafusion::physical_expr::{
+        Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
@@ -1049,6 +1057,32 @@ mod tests {
                 mode: InputMode::Shuffle,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_preserves_range_shuffle() {
+        let schema = schema();
+        let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
+        let range = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )
+        .unwrap();
+        let graph = job_graph(Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::Range(range.clone())).unwrap(),
+        ))
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert!(matches!(
+            &graph.stages()[0].distribution,
+            OutputDistribution::Range { .. }
+        ));
+        let OutputDistribution::Range { partitioning } = &graph.stages()[0].distribution else {
+            return;
+        };
+        assert_eq!(partitioning, &range);
+        assert_eq!(graph.stages()[0].distribution.channels(), 2);
     }
 
     #[test]

@@ -80,6 +80,6 @@ Feature: try_sum
       Then query schema
         """
         root
-         |-- g: string (nullable = true)
+         |-- g: string (nullable = false)
          |-- sum_x: long (nullable = true)
         """

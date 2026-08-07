@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::common::Result;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -25,7 +26,8 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {
             let [logical_input] = logical_inputs else {
@@ -38,7 +40,7 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
                     "IcebergWriteNode requires exactly one physical input"
                 );
             };
-            return plan_iceberg_write(session_state, logical_input, physical_input.clone(), node)
+            return plan_iceberg_write(session, logical_input, physical_input.clone(), node)
                 .await
                 .map(Some);
         }
@@ -62,7 +64,7 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
             if !node.target_format().eq_ignore_ascii_case("iceberg") {
                 return Ok(None);
             }
-            return plan_iceberg_row_level_write(session_state, planner, node, physical_inputs)
+            return plan_iceberg_row_level_write(session, planner, node, physical_inputs)
                 .await
                 .map(Some);
         }
@@ -74,7 +76,8 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         &self,
         _planner: &dyn PhysicalPlanner,
         scan: &TableScan,
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() else {
             return Ok(None);
@@ -82,12 +85,7 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         let filters = unnormalize_cols(scan.filters.clone());
         let plan = source
             .provider()
-            .scan(
-                session_state,
-                scan.projection.as_ref(),
-                &filters,
-                scan.fetch,
-            )
+            .scan(session, scan.projection.as_ref(), &filters, scan.fetch)
             .await?;
         Ok(Some(plan))
     }

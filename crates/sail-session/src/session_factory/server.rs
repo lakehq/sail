@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -126,7 +127,7 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
-        self.apply_execution_config(&mut config);
+        self.apply_execution_config(&mut config)?;
         self.apply_execution_parquet_config(&mut config);
         self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
@@ -160,10 +161,10 @@ impl ServerSessionFactory {
         )))
     }
 
-    fn apply_execution_config(&mut self, config: &mut SessionConfig) {
+    fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let execution = &mut config.options_mut().execution;
 
-        execution.batch_size = self.config.execution.batch_size;
+        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         if self.config.execution.default_parallelism > 0 {
             execution.target_partitions = self.config.execution.default_parallelism;
         }
@@ -173,6 +174,7 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        Ok(())
     }
 
     fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {

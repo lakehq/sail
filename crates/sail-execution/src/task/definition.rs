@@ -7,7 +7,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
-use crate::proto::decode_remote_physical_expr;
+use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::r#gen;
@@ -57,6 +57,10 @@ pub struct TaskOutput {
 pub enum TaskOutputDistribution {
     Hash {
         keys: Vec<Arc<[u8]>>,
+        channels: usize,
+    },
+    Range {
+        partitioning: Arc<[u8]>,
         channels: usize,
     },
     RoundRobin {
@@ -412,6 +416,13 @@ impl From<TaskOutputDistribution> for r#gen::TaskOutputDistribution {
                     channels: channels as u64,
                 })
             }
+            TaskOutputDistribution::Range {
+                partitioning,
+                channels,
+            } => r#gen::task_output_distribution::Kind::Range(r#gen::TaskOutputRangeDistribution {
+                partitioning: partitioning.to_vec(),
+                channels: channels as u64,
+            }),
             TaskOutputDistribution::RoundRobin { channels } => {
                 r#gen::task_output_distribution::Kind::RoundRobin(
                     r#gen::TaskOutputRoundRobinDistribution {
@@ -440,6 +451,15 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
                 r#gen::TaskOutputHashDistribution { keys, channels },
             )) => Ok(TaskOutputDistribution::Hash {
                 keys: keys.into_iter().map(Arc::from).collect(),
+                channels: channels as usize,
+            }),
+            Some(r#gen::task_output_distribution::Kind::Range(
+                r#gen::TaskOutputRangeDistribution {
+                    partitioning,
+                    channels,
+                },
+            )) => Ok(TaskOutputDistribution::Range {
+                partitioning: Arc::from(partitioning),
                 channels: channels as usize,
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobin(
@@ -553,6 +573,7 @@ impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
+            TaskOutputDistribution::Range { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
@@ -605,6 +626,21 @@ impl TaskOutput {
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
+            }
+            TaskOutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let partitioning =
+                    decode_remote_partitioning(ctx, codec, partitioning.as_ref(), schema)
+                        .map_err(ExecutionError::from)?;
+                if partitioning.partition_count() != *channels {
+                    return Err(ExecutionError::InvalidArgument(format!(
+                        "range partition count {} does not match task output channel count {channels}",
+                        partitioning.partition_count()
+                    )));
+                }
+                Ok(partitioning)
             }
             TaskOutputDistribution::RoundRobin { channels }
             | TaskOutputDistribution::RoundRobinRow { channels } => {

@@ -1,5 +1,17 @@
 Feature: map_entries function
 
+  Rule: Duplicate key policy
+
+    Scenario: LAST_WIN map_entries returns one entry with the final value
+      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT map_entries(map(1, 'a', 1, 'b')) AS result
+        """
+      Then query result
+        | result   |
+        | [{1, b}] |
+
   Rule: Basic usage
 
     Scenario: map_entries returns entries for a non-nullable map value

@@ -7,7 +7,6 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, Sch
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -596,7 +595,7 @@ impl UserDefinedLogicalNodeCore for DeltaWriteNode {
 }
 
 pub(crate) async fn plan_delta_write(
-    ctx: &SessionState,
+    ctx: &dyn Session,
     logical_input: &LogicalPlan,
     physical_input: Arc<dyn ExecutionPlan>,
     node: &DeltaWriteNode,
@@ -771,7 +770,7 @@ pub(crate) async fn plan_delta_write(
 }
 
 async fn open_delta_write_planning_table(
-    ctx: &SessionState,
+    ctx: &dyn Session,
     table_url: Url,
     object_store: Arc<dyn object_store::ObjectStore>,
     lakehouse_table: Option<&LakehouseExecutionContext>,
@@ -790,7 +789,7 @@ async fn open_delta_write_planning_table(
             StorageConfig,
         )?;
         table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-            ctx,
+            &ctx,
             lakehouse_table,
             &table_url,
             log_store.clone(),

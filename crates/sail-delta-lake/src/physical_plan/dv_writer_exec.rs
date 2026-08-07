@@ -402,7 +402,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 Err(_) => return Distribution::SinglePartition,
             };
             let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(&self.path_column, idx));
-            Distribution::HashPartitioned(vec![expr])
+            Distribution::KeyPartitioned(vec![expr])
         };
         vec![dist_for(&self.input), dist_for(&self.adds_input)]
     }
