@@ -64,10 +64,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         );
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                cast(left, DataType::Timestamp(TimeUnit::Microsecond, None))
+                    + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
             (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
-                cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+                cast(left, DataType::Interval(IntervalUnit::MonthDayNano))
+                    + cast(right, DataType::Timestamp(TimeUnit::Microsecond, None))
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
