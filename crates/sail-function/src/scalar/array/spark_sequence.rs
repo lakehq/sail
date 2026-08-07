@@ -323,10 +323,13 @@ fn sequence_length(start: i64, stop: i64, step: i64) -> Result<usize> {
         return illegal_sequence_boundaries(start, stop, step);
     }
 
-    let length = if start == stop {
-        1_i128
-    } else {
-        1_i128 + (i128::from(stop) - i128::from(start)) / i128::from(step)
+    if start == stop {
+        return Ok(1);
+    }
+
+    let length = match stop.checked_sub(start) {
+        Some(delta) if !(delta == i64::MIN && step == -1) => 1_i128 + i128::from(delta / step),
+        _ => 1_i128 + (i128::from(stop) - i128::from(start)) / i128::from(step),
     };
 
     if length > i128::from(MAX_ROUNDED_ARRAY_LENGTH) {
