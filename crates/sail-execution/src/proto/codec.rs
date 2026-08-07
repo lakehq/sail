@@ -3635,7 +3635,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     transform,
                 )))
             }
-            other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
 
@@ -5189,16 +5188,18 @@ mod tests {
             .ok_or_else(|| plan_datafusion_err!("transform input is not a column"))?;
         assert_eq!(input.name(), "event_time");
         assert_eq!(input.index(), 0);
-        assert_same_result(
-            &expression,
-            &decoded,
+        let batch = RecordBatch::try_new(
             schema,
             vec![Arc::new(TimestampMicrosecondArray::from(vec![
                 Some(0),
                 Some(86_400_000_000),
                 None,
             ]))],
-        )
+        )?;
+        let original_result = expression.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+        Ok(())
     }
 
     #[test]
