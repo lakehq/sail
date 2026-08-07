@@ -18,6 +18,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::{MapZipWithParameterOrder, SparkMapZipWith};
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -148,6 +150,28 @@ pub(super) fn try_decode_higher_order_udf(
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
             }
+        }
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf { parameter_order }) => Arc::new(
+            HigherOrderUDF::new_from_impl(SparkMapZipWith::new_with_parameter_order(
+                decode_map_zip_with_parameter_order(parameter_order)?,
+            )),
+        ),
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
+        }
+    })
+}
+
+fn decode_map_zip_with_parameter_order(order: u32) -> Result<MapZipWithParameterOrder> {
+    Ok(match order {
+        0 => MapZipWithParameterOrder::KeyValue1Value2,
+        1 => MapZipWithParameterOrder::KeyValue2Value1,
+        2 => MapZipWithParameterOrder::Value1Value2Key,
+        3 => MapZipWithParameterOrder::Value2KeyValue1,
+        other => {
+            return Err(plan_datafusion_err!(
+                "invalid map_zip_with parameter order: {other}"
+            ));
         }
     })
 }
