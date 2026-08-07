@@ -7983,6 +7983,7 @@ dependencies = [
  "datafusion",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 

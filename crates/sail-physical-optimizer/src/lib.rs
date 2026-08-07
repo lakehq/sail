@@ -26,11 +26,13 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
+use crate::streaming_repartition::RemoveStreamingRoundRobinRepartition;
 
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
+mod streaming_repartition;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -65,6 +67,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(TopKRepartition::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
+    // Before `EnsureCooperative`, so that it sees the final shape of the plan:
+    // with the repartition gone, an unbounded source needs its own yield point.
+    rules.push(Arc::new(RemoveStreamingRoundRobinRepartition::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
