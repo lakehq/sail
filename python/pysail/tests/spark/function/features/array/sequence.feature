@@ -129,7 +129,7 @@ Feature: sequence output schema
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT typeof(sequence(1, '3')) AS result_type, sequence(1, '3') AS result
+        SELECT typeof(sequence(1, ' 3 ')) AS result_type, sequence(1, ' 3 ') AS result
         """
       Then query result
         | result_type   | result    |

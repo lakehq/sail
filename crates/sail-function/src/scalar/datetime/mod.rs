@@ -20,4 +20,5 @@ pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;
 pub mod spark_year;
 pub mod timestamp_now;
+pub(crate) mod timezone;
 pub(crate) mod utils;

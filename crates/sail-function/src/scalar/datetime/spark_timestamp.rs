@@ -33,7 +33,7 @@ fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -
 }
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::datetime::convert_tz::parse_spark_timezone;
+use crate::scalar::datetime::timezone::parse_spark_timezone;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {

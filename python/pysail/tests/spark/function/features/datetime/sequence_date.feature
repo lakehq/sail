@@ -99,6 +99,27 @@ Feature: sequence() over DATE returns expected arrays
         | 3  | NULL                                                                 |
         | 4  | NULL                                                                 |
 
+    Scenario: sequence widening uses Spark temporal cast semantics
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            TIMESTAMP_NTZ '2021-11-07 01:00:00',
+            TIMESTAMP '2021-11-07 02:00:00',
+            INTERVAL 30 MINUTES
+          ) AS STRING) AS mixed_timestamp_types,
+          CAST(sequence(
+            TIMESTAMP '2021-11-07 00:30:00',
+            '2021-11-07 01:30:00',
+            INTERVAL 30 MINUTES
+          ) AS STRING) AS string_stop
+        """
+      Then query result
+        | mixed_timestamp_types                                                                                                                 | string_stop                                                          |
+        | [2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 02:00:00] | [2021-11-07 00:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00] |
+
     Scenario: timestamp sequence crosses daylight-saving transitions
       Given config spark.sql.session.timeZone = Europe/Prague
       When query
@@ -141,3 +162,66 @@ Feature: sequence() over DATE returns expected arrays
         | +1:00               | [2022-03-09, 2022-03-13] |
         | +01:02:03           | [2022-03-09, 2022-03-13] |
         | PST                 | [2022-03-09, 2022-03-14] |
+
+    Scenario: temporal sequence uses Spark's microsecond-exclusive boundary
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            DATE '2024-01-02',
+            DATE '2024-01-01',
+            INTERVAL '-1 00:00:00.000001' DAY TO SECOND
+          ) AS STRING) AS dates,
+          CAST(sequence(
+            TIMESTAMP_NTZ '2024-01-02 00:00:00',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00',
+            INTERVAL '-1 00:00:00.000001' DAY TO SECOND
+          ) AS STRING) AS timestamps
+        """
+      Then query result
+        | dates                    | timestamps                                                        |
+        | [2024-01-02, 2023-12-31] | [2024-01-02 00:00:00, 2023-12-31 23:59:59.999999] |
+
+    Scenario: sequence wraps calendar interval estimates like Spark
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT CAST(sequence(
+          TIMESTAMP '1970-01-01 00:00:00',
+          TIMESTAMP '1970-01-01 00:00:00',
+          make_interval(0, 69000000, 0, -2100000000)
+        ) AS STRING) AS result
+        """
+      Then query result
+        | result                |
+        | [1970-01-01 00:00:00] |
+
+    Scenario: date sequence boundary errors show the original interval
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT sequence(
+          DATE '1970-01-01',
+          DATE '1970-02-01',
+          INTERVAL '-0-1' YEAR TO MONTH
+        ) AS result
+        """
+      Then query error Illegal sequence boundaries: 0 to 2678400000000 by -1
+
+    Scenario Outline: date sequence sub-day errors identify the interval type
+      When query
+        """
+        SELECT sequence(
+          DATE '2021-07-01',
+          DATE '2021-07-10',
+          <step>
+        ) AS result
+        """
+      Then query error sequence step must be an <interval_type> of day granularity if start and end values are dates
+
+      Examples:
+        | step                                | interval_type          |
+        | make_interval(0, 0, 0, 0, 1)       | interval               |
+        | INTERVAL '0-0' YEAR TO MONTH        | interval year to month |
+        | INTERVAL '0 03:00:00' DAY TO SECOND | interval day to second |

@@ -1,7 +1,9 @@
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use chrono::{
-    DateTime, Days, LocalResult, Months, NaiveDateTime, Offset, TimeDelta, TimeZone, Utc,
+    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta,
+    TimeZone, Utc,
 };
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
@@ -18,10 +20,11 @@ use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::datetime::convert_tz::{SparkTimeZone, parse_spark_timezone};
+use crate::scalar::datetime::timezone::{SparkTimeZone, parse_spark_timezone};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
@@ -303,7 +306,7 @@ fn valid_boundaries(start: i64, stop: i64, step: i64) -> bool {
     (step > 0 && start <= stop) || (step < 0 && start >= stop) || (step == 0 && start == stop)
 }
 
-fn illegal_sequence_boundaries<T>(start: i64, stop: i64, step: i64) -> Result<T> {
+fn illegal_sequence_boundaries<T>(start: i64, stop: i64, step: impl Display) -> Result<T> {
     exec_err!("Illegal sequence boundaries: {start} to {stop} by {step}")
 }
 
@@ -314,8 +317,17 @@ fn collection_size_limit_error<T>(length: i128) -> Result<T> {
 }
 
 fn sequence_length(start: i64, stop: i64, step: i64) -> Result<usize> {
+    sequence_length_with_display_step(start, stop, step, step)
+}
+
+fn sequence_length_with_display_step(
+    start: i64,
+    stop: i64,
+    step: i64,
+    display_step: impl Display,
+) -> Result<usize> {
     if !valid_boundaries(start, stop, step) {
-        return illegal_sequence_boundaries(start, stop, step);
+        return illegal_sequence_boundaries(start, stop, display_step);
     }
 
     if start == stop {
@@ -573,6 +585,36 @@ impl TemporalStep {
             }
         }
     }
+
+    fn interval_type_name(self) -> &'static str {
+        match self {
+            Self::Calendar { .. } => "interval",
+            Self::YearMonth { .. } => "interval year to month",
+            Self::DayTime { .. } => "interval day to second",
+        }
+    }
+}
+
+impl Display for TemporalStep {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Calendar {
+                months,
+                days,
+                micros,
+            } => write!(
+                formatter,
+                "{}",
+                IntervalMonthDayNanoFormatter(IntervalMonthDayNanoType::make_value(
+                    months,
+                    days,
+                    micros * 1_000,
+                ))
+            ),
+            Self::YearMonth { months } => write!(formatter, "{months}"),
+            Self::DayTime { micros } => write!(formatter, "{micros}"),
+        }
+    }
 }
 
 fn temporal_step_at(array: &ArrayRef, index: usize) -> Result<Option<TemporalStep>> {
@@ -614,12 +656,10 @@ fn temporal_step_at(array: &ArrayRef, index: usize) -> Result<Option<TemporalSte
     }
 }
 
-fn estimated_temporal_step(months: i32, days: i32, micros: i64) -> Result<i64> {
-    let estimated = i128::from(micros)
-        + i128::from(months) * i128::from(MICROS_PER_MONTH)
-        + i128::from(days) * i128::from(MICROS_PER_DAY);
-    i64::try_from(estimated)
-        .map_err(|_| exec_datafusion_err!("sequence interval estimate does not fit in i64"))
+fn estimated_temporal_step(months: i32, days: i32, micros: i64) -> i64 {
+    micros
+        .wrapping_add(i64::from(months).wrapping_mul(MICROS_PER_MONTH))
+        .wrapping_add(i64::from(days).wrapping_mul(MICROS_PER_DAY))
 }
 
 fn scaled_i32(value: i32, index: usize, component: &str) -> Result<i32> {
@@ -646,6 +686,65 @@ fn checked_add_days(datetime: NaiveDateTime, days: i32) -> Option<NaiveDateTime>
     } else {
         datetime.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
     }
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.rem_euclid(4) == 0
+            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
+        {
+            29
+        }
+        2 => 28,
+        _ => unreachable!("month is normalized to 1..=12"),
+    }
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - if month <= 2 { 1 } else { 0 };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = shifted_month + if shifted_month < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    (year, month as u32, day as u32)
+}
+
+fn add_calendar_interval_wide(
+    datetime: NaiveDateTime,
+    months: i32,
+    days: i32,
+) -> Option<NaiveDateTime> {
+    let date = datetime.date();
+    let month_index = i64::from(date.year())
+        .checked_mul(12)?
+        .checked_add(i64::from(date.month0()))?
+        .checked_add(i64::from(months))?;
+    let year = month_index.div_euclid(12);
+    let month = u32::try_from(month_index.rem_euclid(12) + 1).ok()?;
+    let day = date.day().min(days_in_month(year, month));
+    let epoch_day = days_from_civil(year, month, day).checked_add(i64::from(days))?;
+    let (year, month, day) = civil_from_days(epoch_day);
+    let year = i32::try_from(year).ok()?;
+
+    NaiveDate::from_ymd_opt(year, month, day).map(|date| date.and_time(datetime.time()))
 }
 
 fn localize_with_preferred_offset(
@@ -681,16 +780,29 @@ fn add_ltz_interval(
         .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
 
-    if months != 0 {
+    let calendar_fits = checked_add_months(datetime.naive_local(), months)
+        .and_then(|value| checked_add_days(value, days))
+        .is_some();
+
+    if calendar_fits {
+        if months != 0 {
+            let preferred_offset = datetime.offset().fix().local_minus_utc();
+            let local = checked_add_months(datetime.naive_local(), months)
+                .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+        }
+        if days != 0 {
+            let preferred_offset = datetime.offset().fix().local_minus_utc();
+            let local = checked_add_days(datetime.naive_local(), days)
+                .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+        }
+    } else {
         let preferred_offset = datetime.offset().fix().local_minus_utc();
-        let local = checked_add_months(datetime.naive_local(), months)
-            .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-        datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
-    }
-    if days != 0 {
-        let preferred_offset = datetime.offset().fix().local_minus_utc();
-        let local = checked_add_days(datetime.naive_local(), days)
-            .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+        let local =
+            add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
+                exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
+            })?;
         datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
     }
 
@@ -702,12 +814,14 @@ fn add_ltz_interval(
 }
 
 fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
-    let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
+    let datetime = as_datetime::<TimestampMicrosecondType>(start)
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-    datetime = checked_add_months(datetime, months)
-        .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-    datetime = checked_add_days(datetime, days)
-        .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+    let mut datetime = checked_add_months(datetime, months)
+        .and_then(|value| checked_add_days(value, days))
+        .or_else(|| add_calendar_interval_wide(datetime, months, days))
+        .ok_or_else(|| {
+            exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
+        })?;
     datetime = datetime
         .checked_add_signed(TimeDelta::microseconds(micros))
         .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))?;
@@ -747,16 +861,17 @@ fn temporal_timestamp_row(
         return integral_row(start, stop, micros, max_values);
     }
 
-    let estimated_step = estimated_temporal_step(months, days, micros)?;
-    let estimated_length = sequence_length(start, stop, estimated_step)?;
+    let estimated_step = estimated_temporal_step(months, days, micros);
+    let estimated_length = sequence_length_with_display_step(start, stop, estimated_step, step)?;
     let mut values = Vec::new();
     reserve(&mut values, estimated_length.min(max_values))?;
-    let ascending = estimated_step > 0;
+    let step_sign = if estimated_step > 0 { 1 } else { -1 };
+    let exclusive_item = stop.wrapping_add(step_sign);
     let mut index = 0_usize;
     loop {
         let value =
             add_temporal_interval(start, index, months, days, micros, timezone, timestamp_ntz)?;
-        if (ascending && value > stop) || (!ascending && value < stop) {
+        if !((value < exclusive_item) ^ (step_sign < 0)) {
             break;
         }
         if values.len() as i128 >= i128::from(MAX_ROUNDED_ARRAY_LENGTH) {
@@ -803,7 +918,10 @@ fn temporal_date_row(
 ) -> Result<Vec<i32>> {
     let (months, days, micros) = step.parts()?;
     if months == 0 && days == 0 {
-        return exec_err!("sequence step must be an interval with day granularity for DATE values");
+        return exec_err!(
+            "sequence step must be an {} of day granularity if start and end values are dates",
+            step.interval_type_name()
+        );
     }
     if months == 0 && micros == 0 {
         return integral_row(start, stop, days, max_values);
@@ -811,16 +929,18 @@ fn temporal_date_row(
 
     let start_micros = date_to_micros(start, timezone)?;
     let stop_micros = date_to_micros(stop, timezone)?;
-    let estimated_step = estimated_temporal_step(months, days, micros)?;
-    let estimated_length = sequence_length(start_micros, stop_micros, estimated_step)?;
+    let estimated_step = estimated_temporal_step(months, days, micros);
+    let estimated_length =
+        sequence_length_with_display_step(start_micros, stop_micros, estimated_step, step)?;
     let mut values = Vec::new();
     reserve(&mut values, estimated_length.min(max_values))?;
-    let ascending = estimated_step > 0;
+    let step_sign = if estimated_step > 0 { 1 } else { -1 };
+    let exclusive_item = stop_micros.wrapping_add(step_sign);
     let mut index = 0_usize;
     loop {
         let value =
             add_temporal_interval(start_micros, index, months, days, micros, timezone, false)?;
-        if (ascending && value > stop_micros) || (!ascending && value < stop_micros) {
+        if !((value < exclusive_item) ^ (step_sign < 0)) {
             break;
         }
         if values.len() as i128 >= i128::from(MAX_ROUNDED_ARRAY_LENGTH) {
