@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "success": {}
+        "success": "ok"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "success": {}
+        "success": "ok"
       }
     },
     {
