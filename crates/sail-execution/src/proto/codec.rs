@@ -184,6 +184,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -197,6 +198,7 @@ use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
+use sail_function::scalar::math::spark_sqrt::SparkSqrt;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
@@ -2612,6 +2614,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
+                let udf = SparkMapFromArrays::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
+                let udf = SparkMapFromEntries::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::StrToMap(r#gen::StrToMapUdf { last_value_wins }) => {
+                let udf = StrToMap::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2884,6 +2898,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
+            "spark_sqrt" | "sqrt" => Ok(Arc::new(ScalarUDF::from(SparkSqrt::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -2902,7 +2917,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
+            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::default()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
@@ -2999,6 +3014,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
             || node_inner.is::<SparkSignum>()
+            || node_inner.is::<SparkSqrt>()
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
@@ -3028,7 +3044,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
-            || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
@@ -3040,6 +3055,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<StrToMap>() {
+            UdfKind::StrToMap(r#gen::StrToMapUdf {
+                last_value_wins: func.last_value_wins(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
             let kind = self.try_encode_pyspark_udf_kind(func.kind())?;
             let input_types = func
@@ -6287,6 +6314,34 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDateFormat::new(Arc::from("UTC"))))?;
 
         assert!(decoded.inner().downcast_ref::<SparkDateFormat>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_map_key_dedup_policy() -> Result<()> {
+        for last_value_wins in [false, true] {
+            let decoded =
+                round_trip_udf(ScalarUDF::from(SparkMapFromArrays::new(last_value_wins)))?;
+            let decoded = downcast_udf::<SparkMapFromArrays>(&decoded, "SparkMapFromArrays")?;
+            assert_eq!(decoded.last_value_wins(), last_value_wins);
+
+            let decoded =
+                round_trip_udf(ScalarUDF::from(SparkMapFromEntries::new(last_value_wins)))?;
+            let decoded = downcast_udf::<SparkMapFromEntries>(&decoded, "SparkMapFromEntries")?;
+            assert_eq!(decoded.last_value_wins(), last_value_wins);
+
+            let decoded = round_trip_udf(ScalarUDF::from(StrToMap::new(last_value_wins)))?;
+            let decoded = downcast_udf::<StrToMap>(&decoded, "StrToMap")?;
+            assert_eq!(decoded.last_value_wins(), last_value_wins);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_sqrt_standard_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkSqrt::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkSqrt>().is_some());
         Ok(())
     }
 

@@ -24,6 +24,7 @@ use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
+use sail_function::scalar::math::spark_sqrt::SparkSqrt;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
@@ -529,6 +530,10 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
     move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
 }
 
+fn spark_sqrt(arg: Expr) -> Expr {
+    ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
+}
+
 /// Modulo operation with division-by-zero handling.
 ///
 /// In ANSI mode: raises error for integral/decimal modulo by zero.
@@ -721,7 +726,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(double(expr_fn::sin))),
         ("sinh", F::unary(double(expr_fn::sinh))),
-        ("sqrt", F::unary(double(expr_fn::sqrt))),
+        ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
         ("try_add", F::udf(SparkTryAdd::new())),
