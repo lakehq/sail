@@ -299,6 +299,22 @@ fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    if !matches!(input.arguments.len(), 2 | 3) {
+        return Err(PlanError::invalid(format!(
+            "sequence requires 2 or 3 arguments, got {}",
+            input.arguments.len()
+        )));
+    }
+
+    let config = input.function_context.plan_config;
+    Ok(ScalarUDF::from(SparkSequence::new(
+        Arc::clone(&config.session_timezone),
+        config.ansi_mode,
+    ))
+    .call(input.arguments))
+}
+
 fn array_update_output_type(
     array: &expr::Expr,
     element: &expr::Expr,
@@ -400,7 +416,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
-        ("sequence", F::udf(SparkSequence::new())),
+        ("sequence", F::custom(sequence)),
         ("shuffle", F::unary(array_fn::shuffle)),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),

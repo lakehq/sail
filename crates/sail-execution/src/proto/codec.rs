@@ -2597,6 +2597,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkUnixTimestamp::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSequence(r#gen::SparkSequenceUdf {
+                session_timezone,
+                ansi_mode,
+            }) => {
+                let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2851,7 +2858,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
-            "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_shuffle" | "shuffle" => Ok(Arc::new(ScalarUDF::from(SparkShuffle::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
@@ -2982,7 +2988,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkRegexpExtract>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
-            || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkShuffle>()
@@ -3091,6 +3096,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let session_timezone = func.session_timezone().to_string();
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkSequence>() {
+            let session_timezone = func.session_timezone().to_string();
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkSequence(r#gen::SparkSequenceUdf {
                 session_timezone,
                 ansi_mode,
             })
@@ -6131,6 +6143,20 @@ mod tests {
         let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
         assert!(decoded.ansi_mode());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_sequence_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkSequence::new(
+            Arc::from("America/Los_Angeles"),
+            false,
+        )))?;
+
+        let decoded = downcast_udf::<SparkSequence>(&decoded, "SparkSequence")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(!decoded.ansi_mode());
 
         Ok(())
     }

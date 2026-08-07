@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -48,6 +50,32 @@ def test_sequence_with_column_bound_in_cluster_mode(spark):
         3: [1, 2, 3],
         12: list(range(1, 13)),
     }
+
+
+@pytest.mark.timeout(30)
+def test_temporal_sequence_in_cluster_mode(spark):
+    start = datetime(2018, 1, 1)  # noqa: DTZ001
+    noon = datetime(2018, 1, 1, 12)  # noqa: DTZ001
+    stop = datetime(2018, 1, 2)  # noqa: DTZ001
+    df = spark.createDataFrame(
+        [(start, stop)],
+        "start TIMESTAMP_NTZ, stop TIMESTAMP_NTZ",
+    )
+
+    row = df.select(
+        F.expr("sequence(start, stop)").alias("default_step"),
+        F.expr("sequence(start, stop, INTERVAL 12 HOURS)").alias("explicit_step"),
+    ).collect()[0]
+
+    assert row.default_step == [
+        start,
+        stop,
+    ]
+    assert row.explicit_step == [
+        start,
+        noon,
+        stop,
+    ]
 
 
 def test_dataframe_operations(spark):

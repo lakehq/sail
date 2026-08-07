@@ -130,7 +130,7 @@ impl PlanResolver<'_> {
             }
         }
 
-        Self::apply_sample_to_plan(
+        self.apply_sample_to_plan(
             input,
             lower_bound,
             upper_bound,
@@ -143,6 +143,7 @@ impl PlanResolver<'_> {
     /// Apply sampling to an existing LogicalPlan.
     /// This is used by both `resolve_query_sample` and TABLESAMPLE clause handling.
     pub(super) fn apply_sample_to_plan(
+        &self,
         input: LogicalPlan,
         lower_bound: f64,
         upper_bound: f64,
@@ -180,7 +181,7 @@ impl PlanResolver<'_> {
             .build()?;
 
         if with_replacement {
-            Self::resolve_sample_with_replacement(
+            self.resolve_sample_with_replacement(
                 plan_with_rand,
                 &rand_column_name,
                 init_exprs,
@@ -217,6 +218,7 @@ impl PlanResolver<'_> {
 
     /// Poisson sampling - replicate rows based on Poisson distribution
     fn resolve_sample_with_replacement(
+        &self,
         plan_with_rand: LogicalPlan,
         rand_column_name: &str,
         init_exprs: Vec<Expr>,
@@ -230,7 +232,10 @@ impl PlanResolver<'_> {
             .collect();
         let array_column_name: String = state.register_field_name("array_value");
         let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+            func: Arc::new(ScalarUDF::from(SparkSequence::new(
+                Arc::clone(&self.config.session_timezone),
+                self.config.ansi_mode,
+            ))),
             args: vec![
                 Expr::Literal(ScalarValue::Int64(Some(1)), None),
                 col(rand_column_name),
