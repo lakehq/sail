@@ -99,7 +99,7 @@ impl ShuffleClient {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    /// Stop the shuffle client and its lifecycle manager.
+    /// Stop the shuffle client.
     pub async fn stop(&self) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle

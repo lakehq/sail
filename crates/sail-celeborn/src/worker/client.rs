@@ -20,6 +20,9 @@ const RPC_REQUEST: u8 = 3;
 const RPC_RESPONSE: u8 = 4;
 const CHUNK_FETCH_REQUEST: u8 = 0;
 const CHUNK_FETCH_SUCCESS: u8 = 1;
+const MAP_ENDED: u8 = 15;
+const PUSH_DATA_SUCCESS_PRIMARY_CONGESTED: u8 = 30;
+const PUSH_DATA_SUCCESS_REPLICA_CONGESTED: u8 = 31;
 const WORKER_ENDPOINT_NAME: &str = "WorkerEndpoint";
 
 /// A small async client for a Celeborn worker endpoint.
@@ -373,10 +376,22 @@ impl WorkerClient {
                 })?
             ];
             stream.read_exact(&mut response).await?;
-            if let Some(status) = response.first() {
-                return Err(CelebornError::Application(format!(
-                    "worker requested push recovery with status {status}"
-                )));
+            match response.first().copied() {
+                // Celeborn normally returns an empty response on success. It can also return a
+                // success status, MAP_ENDED, or a congestion notification after accepting the
+                // batch.
+                None
+                | Some(
+                    0
+                    | MAP_ENDED
+                    | PUSH_DATA_SUCCESS_PRIMARY_CONGESTED
+                    | PUSH_DATA_SUCCESS_REPLICA_CONGESTED,
+                ) => {}
+                Some(status) => {
+                    return Err(CelebornError::Application(format!(
+                        "worker requested push recovery with status {status}"
+                    )));
+                }
             }
             usize::try_from(body_length)
                 .map_err(|_| CelebornError::Protocol("invalid push body length".to_string()))
