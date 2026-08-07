@@ -22,6 +22,14 @@ pub trait LifecycleManager: Send + Sync + 'static {
         max_workers: i32,
     ) -> CelebornResult<SlotReservation>;
 
+    async fn mapper_end(
+        &self,
+        shuffle_id: i32,
+        map_id: i32,
+        attempt_id: i32,
+        num_mappers: i32,
+    ) -> CelebornResult<()>;
+
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()>;
 
     async fn stop(&self) -> CelebornResult<()>;

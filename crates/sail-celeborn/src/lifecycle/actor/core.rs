@@ -21,6 +21,9 @@ impl Actor for LifecycleManagerActor {
             options,
             client,
             registered_shuffles: Default::default(),
+            mapper_attempts: Default::default(),
+            committing_shuffles: Default::default(),
+            committed_shuffles: Default::default(),
             application_registration: ApplicationRegistration::Pending,
         }
     }
@@ -61,6 +64,25 @@ impl Actor for LifecycleManagerActor {
                 result,
                 reply,
             } => self.handle_request_slots_end(shuffle_id, result, reply),
+            LifecycleManagerEvent::MapperEndBegin {
+                shuffle_id,
+                map_id,
+                attempt_id,
+                num_mappers,
+                result,
+            } => self.handle_mapper_end_begin(
+                ctx,
+                shuffle_id,
+                map_id,
+                attempt_id,
+                num_mappers,
+                result,
+            ),
+            LifecycleManagerEvent::MapperEndCommitEnd {
+                shuffle_id,
+                result,
+                reply,
+            } => self.handle_mapper_end_commit_end(shuffle_id, result, reply),
             LifecycleManagerEvent::UnregisterShuffleBegin { shuffle_id, result } => {
                 self.handle_unregister_shuffle_begin(ctx, shuffle_id, result)
             }
