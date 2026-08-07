@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone};
 use chrono_tz::{GapInfo, Tz};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
@@ -11,7 +9,8 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common::error::CommonError;
+use sail_common::utils::datetime::{spark_timezone_parser, time_unit_to_multiplier};
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -67,64 +66,12 @@ impl ScalarUDFImpl for ConvertTz {
 }
 
 fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
-    let legacy_timezones = HashMap::from([
-        ("ACT", "Australia/Darwin"),
-        ("AET", "Australia/Sydney"),
-        ("AGT", "America/Argentina/Buenos_Aires"),
-        ("ART", "Africa/Cairo"),
-        ("AST", "America/Anchorage"),
-        ("BET", "America/Sao_Paulo"),
-        ("BST", "Asia/Dhaka"),
-        ("CAT", "Africa/Harare"),
-        ("CNT", "America/St_Johns"),
-        ("CST", "America/Chicago"),
-        ("CTT", "Asia/Shanghai"),
-        ("EAT", "Africa/Addis_Ababa"),
-        ("ECT", "Europe/Paris"),
-        ("EST", "America/New_York"),
-        ("HST", "Pacific/Honolulu"),
-        ("IET", "America/Indianapolis"),
-        ("IST", "Asia/Calcutta"),
-        ("JST", "Asia/Tokyo"),
-        ("MIT", "Pacific/Apia"),
-        ("MST", "America/Denver"),
-        ("NET", "Asia/Yerevan"),
-        ("NST", "Pacific/Auckland"),
-        ("PLT", "Asia/Karachi"),
-        ("PNT", "America/Phoenix"),
-        ("PRT", "America/Puerto_Rico"),
-        ("PST", "America/Los_Angeles"),
-        ("SST", "Pacific/Guadalcanal"),
-        ("VST", "Asia/Saigon"),
-    ]);
-
-    let parse_tz = |input: Option<&str>| {
-        input
-            .map(|tz_str_opt| {
-                let tz_err = |tz_str| {
-                    exec_err!(
-                        "[INVALID_TIMEZONE] The timezone: {tz_str:?} is invalid. \
-        The timezone must be either a region-based zone ID or a zone offset. \
-        Region IDs must have the form 'area/city', such as 'America/Los_Angeles'. \
-        Zone offsets must be in the format '(+|-)HH', '(+|-)HH:mm’ or '(+|-)HH:mm:ss', \
-        e.g '-08' , '+01:00' or '-13:33:33', and must be in the range from -18:00 to +18:00. \
-        'Z' and 'UTC' are accepted as synonyms for '+00:00'."
-                    )
-                };
-
-                match tz_str_opt.parse::<Tz>() {
-                    Ok(tz) => Ok(Some(tz)),
-                    Err(_) => match legacy_timezones.get(tz_str_opt).cloned() {
-                        Some(tz_str) => match tz_str.parse::<Tz>() {
-                            Ok(tz) => Ok(Some(tz)),
-                            Err(_) => tz_err(tz_str),
-                        },
-                        None => tz_err(tz_str_opt),
-                    },
-                }
-            })
-            .transpose()
-            .map(|opt| opt.flatten())
+    let common_parse_tz = spark_timezone_parser::<Tz>();
+    let parse_tz = |input| {
+        common_parse_tz(input).map_err(|error| match error {
+            CommonError::InvalidArgument(message) => DataFusionError::Execution(message),
+            error => DataFusionError::External(Box::new(error)),
+        })
     };
 
     let convert = if classic {

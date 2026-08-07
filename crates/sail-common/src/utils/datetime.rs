@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use iana_time_zone::get_timezone;
 
@@ -20,7 +20,10 @@ pub const fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
     }
 }
 
-pub fn spark_timezone_parser() -> impl Fn(Option<&str>) -> CommonResult<Option<Tz>> {
+pub fn spark_timezone_parser<T>() -> impl Fn(Option<&str>) -> CommonResult<Option<T>>
+where
+    T: FromStr,
+{
     let legacy_timezones = HashMap::from([
         ("ACT", "Australia/Darwin"),
         ("AET", "Australia/Sydney"),
@@ -66,10 +69,10 @@ pub fn spark_timezone_parser() -> impl Fn(Option<&str>) -> CommonResult<Option<T
                     )))
                 };
 
-                match tz_str_opt.parse::<Tz>() {
+                match tz_str_opt.parse::<T>() {
                     Ok(tz) => Ok(Some(tz)),
                     Err(_) => match legacy_timezones.get(tz_str_opt).cloned() {
-                        Some(tz_str) => match tz_str.parse::<Tz>() {
+                        Some(tz_str) => match tz_str.parse::<T>() {
                             Ok(tz) => Ok(Some(tz)),
                             Err(_) => tz_err(tz_str),
                         },
