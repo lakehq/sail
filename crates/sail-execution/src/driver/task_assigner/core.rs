@@ -163,7 +163,7 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
-    /// Records pipelined and storage stream ownership for each resource based on task assignments.
+    /// Records local and storage stream ownership for each resource based on task assignments.
     pub fn track_streams(&mut self, assignments: &[TaskSetAssignment]) {
         for assignment in assignments {
             self.driver.track_storage_streams(&assignment.set);
