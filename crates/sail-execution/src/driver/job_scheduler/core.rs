@@ -739,7 +739,7 @@ fn build_task_input_keys(
         }
         // Enumerate channels in the outer loop and partitions in the inner loop.
         // This is the whole point of shuffle!
-        InputMode::Shuffle => {
+        InputMode::Shuffle | InputMode::Barrier => {
             let mut groups = Vec::with_capacity(input_channels);
             for channel in 0..input_channels {
                 let mut group = Vec::with_capacity(input_partitions);

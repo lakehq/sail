@@ -360,7 +360,7 @@ def _parse_i64_list(raw: str) -> list[int]:
 @then(
     parsers.re(
         r"delta log (?P<which>latest commit info|first commit protocol and metadata|latest effective protocol and metadata) "
-        r"(?P<mode>matches snapshot(?: for paths)?|contains)"
+        r"(?P<mode>matches snapshot(?: for paths)?|contains|does not contain paths)"
     )
 )
 def delta_log_assert(
@@ -371,8 +371,24 @@ def delta_log_assert(
     snapshot: SnapshotAssertion,
     datatable=None,
 ):
-    """Delta log assertions: snapshot whole/subset, or assert specific paths."""
+    """Delta log assertions: snapshot whole/subset, or assert present/absent paths."""
     obj = _delta_log_compute(which, variables, delta_log_cache)
+
+    if mode == "does not contain paths":
+        assert datatable is not None, "expected a datatable: | path |"
+        header, *rows = datatable
+        assert header == ["path"], "expected datatable with single header column: path"
+        for row in rows:
+            if not row or not row[0].strip():
+                continue
+            path = row[0]
+            try:
+                actual = _get_by_path(obj, path)
+            except KeyError:
+                continue
+            message = f"path {path!r} unexpectedly exists with value {actual!r}"
+            raise AssertionError(message)
+        return
 
     if mode == "contains":
         assert datatable is not None, "expected a datatable: | path | value |"

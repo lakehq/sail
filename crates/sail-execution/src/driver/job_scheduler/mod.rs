@@ -13,6 +13,8 @@ use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
+#[cfg(test)]
+pub(crate) use topology::JobTopology;
 
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;

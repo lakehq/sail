@@ -23,10 +23,8 @@ use futures::{StreamExt, TryStreamExt};
 /// until all partitions of the preconditions are completed, even if we only call `execute()` for
 /// one partition of the precondition.
 ///
-/// **Distributed execution note**: In distributed processing, `BarrierExec` does not prevent
-/// tasks in dependent stages from being _scheduled_. The barrier is only meaningful within a
-/// single stage: the write node and `BarrierExec` belong to the same stage, so the actual write
-/// only starts after preconditions for the corresponding partition have been exhausted.
+/// **Distributed execution note**: Sail's job graph planner drains preconditions in prerequisite
+/// task regions before scheduling the stage that contains the actual plan.
 #[derive(Debug, Clone)]
 pub struct BarrierExec {
     preconditions: Vec<Arc<dyn ExecutionPlan>>,
