@@ -230,40 +230,62 @@ impl DeleteFileIndex {
 
     /// Return all delete files applicable to `data_file` at `data_sequence_number`.
     pub fn for_data_file(&self, data_file: &DataFile, data_sequence_number: i64) -> MatchedDeletes {
-        let mut matched = MatchedDeletes::default();
-        let key = PartitionKey::new(data_file.partition_spec_id, &data_file.partition);
+        if self.is_empty() {
+            return MatchedDeletes::default();
+        }
+
+        let key = if self.pos_by_partition.is_empty() && self.eq_by_partition.is_empty() {
+            None
+        } else {
+            Some(PartitionKey::new(
+                data_file.partition_spec_id,
+                &data_file.partition,
+            ))
+        };
+        let positional_by_path = self.pos_by_path.get(&data_file.file_path);
+        let positional_by_partition = key.as_ref().and_then(|key| self.pos_by_partition.get(key));
+        let equality_by_partition = key.as_ref().and_then(|key| self.eq_by_partition.get(key));
+        let mut matched = MatchedDeletes {
+            positional: Vec::with_capacity(
+                positional_by_path.map_or(0, Vec::len)
+                    + positional_by_partition.map_or(0, Vec::len),
+            ),
+            equality: Vec::with_capacity(
+                equality_by_partition.map_or(0, Vec::len) + self.global_eq.len(),
+            ),
+        };
 
         // Positional deletes that reference this path.
-        if let Some(refs) = self.pos_by_path.get(&data_file.file_path) {
-            for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
-                    matched.positional.push(r.clone());
+        if let Some(refs) = positional_by_path {
+            for file_ref in refs {
+                if data_sequence_number <= file_ref.data_sequence_number {
+                    matched.positional.push(file_ref.clone());
                 }
             }
         }
 
         // Positional deletes scoped to the same partition.
-        if let Some(refs) = self.pos_by_partition.get(&key) {
-            for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
-                    matched.positional.push(r.clone());
+        if let Some(refs) = positional_by_partition {
+            for file_ref in refs {
+                if data_sequence_number <= file_ref.data_sequence_number {
+                    matched.positional.push(file_ref.clone());
                 }
             }
         }
 
         // Equality deletes scoped to the same partition.
-        if let Some(refs) = self.eq_by_partition.get(&key) {
-            for r in refs {
-                if data_sequence_number < r.data_sequence_number {
-                    matched.equality.push(r.clone());
+        if let Some(refs) = equality_by_partition {
+            for file_ref in refs {
+                if data_sequence_number < file_ref.data_sequence_number {
+                    matched.equality.push(file_ref.clone());
                 }
             }
         }
 
         // Global (unpartitioned) equality deletes.
-        for r in &self.global_eq {
-            if data_sequence_number < r.data_sequence_number {
-                matched.equality.push(r.clone());
+        for file_ref in &self.global_eq {
+            if data_sequence_number < file_ref.data_sequence_number {
+                matched.equality.push(file_ref.clone());
             }
         }
 
