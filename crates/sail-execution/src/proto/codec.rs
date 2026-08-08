@@ -6212,6 +6212,20 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_spark_sequence_preserves_true_ansi_mode() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkSequence::new(
+            Arc::from("America/Los_Angeles"),
+            true,
+        )))?;
+
+        let decoded = downcast_udf::<SparkSequence>(&decoded, "SparkSequence")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(decoded.ansi_mode());
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_spark_date_format_round_trip() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDateFormat::new(Arc::from("UTC"))))?;
 
