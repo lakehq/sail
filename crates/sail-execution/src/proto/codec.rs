@@ -5848,6 +5848,56 @@ mod tests {
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
+    #[test]
+    fn test_round_trip_distributed_sequence_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::Int32Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::HigherOrderFunction;
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+
+        let fields = vec![
+            Field::new("start", DataType::Int32, true),
+            Field::new("stop", DataType::Int32, true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let lazy =
+            SparkSequenceLazy::new(SparkSequence::new(Arc::from("America/Los_Angeles"), true));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(lazy)),
+            vec![
+                lambda(["unused"], col("start")),
+                lambda(["unused"], col("stop")),
+            ],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let decoded = round_trip_expr(&physical, schema.as_ref())?;
+
+        let hof = as_hof(&decoded)?;
+        let udf_any = hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let sequence = udf_any
+            .downcast_ref::<SparkSequenceLazy>()
+            .ok_or_else(|| plan_datafusion_err!("decoded HOF should be SparkSequenceLazy"))?;
+        assert_eq!(sequence.session_timezone(), "America/Los_Angeles");
+        assert!(sequence.ansi_mode());
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(3), Some(3)])),
+            ],
+        )
+    }
+
     /// A right-only comparator routed to `SparkArraySort::new_swapped()`. Proves
     /// the `swapped` flag survives encode/decode.
     #[test]
