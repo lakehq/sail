@@ -1,11 +1,11 @@
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
-use crate::shuffle::ShuffleClientEvent;
+use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::{ShuffleClientActor, ShuffleClientOptions};
 
 #[tonic::async_trait]
 impl Actor for ShuffleClientActor {
-    type Message = ShuffleClientEvent;
+    type Message = ShuffleClientMessage;
     type Options = ShuffleClientOptions;
 
     fn name() -> &'static str {
@@ -22,7 +22,7 @@ impl Actor for ShuffleClientActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            ShuffleClientEvent::RegisterShuffle {
+            ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,
                 should_replicate,
@@ -36,12 +36,12 @@ impl Actor for ShuffleClientActor {
                 max_workers,
                 result,
             ),
-            ShuffleClientEvent::RegisterShuffleEnd {
+            ShuffleClientMessage::RegisterShuffleEnd {
                 shuffle_id,
                 result,
                 reply,
             } => self.handle_register_shuffle_end(shuffle_id, result, reply),
-            ShuffleClientEvent::PushData {
+            ShuffleClientMessage::PushData {
                 shuffle_id,
                 partition_id,
                 map_id,
@@ -57,19 +57,19 @@ impl Actor for ShuffleClientActor {
                 data,
                 result,
             ),
-            ShuffleClientEvent::MapperEnd {
+            ShuffleClientMessage::MapperEnd {
                 shuffle_id,
                 map_id,
                 attempt_id,
                 num_mappers,
                 result,
             } => self.handle_mapper_end(ctx, shuffle_id, map_id, attempt_id, num_mappers, result),
-            ShuffleClientEvent::ReadPartition {
+            ShuffleClientMessage::ReadPartition {
                 shuffle_id,
                 partition_id,
                 result,
             } => self.handle_read_partition(ctx, shuffle_id, partition_id, result),
-            ShuffleClientEvent::Stop { result } => self.handle_stop(result),
+            ShuffleClientMessage::Stop { result } => self.handle_stop(result),
         }
     }
 }

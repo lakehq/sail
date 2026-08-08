@@ -2,8 +2,8 @@ use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
+use crate::lifecycle::LifecycleManagerMessage;
 use crate::lifecycle::actor::LifecycleManagerActor;
-use crate::lifecycle::event::LifecycleManagerEvent;
 use crate::master::{SlotReservation, UserIdentifier};
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
@@ -68,7 +68,7 @@ impl LifecycleManagerActor {
             }
             .await;
             let _ = handle
-                .send(LifecycleManagerEvent::RequestSlotsEnd {
+                .send(LifecycleManagerMessage::RequestSlotsEnd {
                     shuffle_id,
                     result,
                     reply,
@@ -185,7 +185,7 @@ impl LifecycleManagerActor {
             }
             .await;
             let _ = handle
-                .send(LifecycleManagerEvent::MapperEndCommitEnd {
+                .send(LifecycleManagerMessage::MapperEndCommitEnd {
                     shuffle_id,
                     result,
                     reply,
@@ -225,7 +225,7 @@ impl LifecycleManagerActor {
         ctx.spawn(async move {
             let result = client.unregister_shuffle(application_id, shuffle_id).await;
             let _ = handle
-                .send(LifecycleManagerEvent::UnregisterShuffleEnd {
+                .send(LifecycleManagerMessage::UnregisterShuffleEnd {
                     shuffle_id,
                     result,
                     reply,

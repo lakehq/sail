@@ -5,7 +5,7 @@ use crate::id::{JobId, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::{TaskStreamFlightClient, TaskStreamOwner};
 use crate::task::definition::TaskDefinition;
-use crate::worker::event::WorkerLocation;
+use crate::worker::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
 use crate::worker::r#gen::{
     CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,

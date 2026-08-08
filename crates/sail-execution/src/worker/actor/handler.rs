@@ -14,9 +14,8 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
-use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
-use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
+use crate::worker::{WorkerLocation, WorkerMessage, WorkerStreamOwner};
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -54,11 +53,11 @@ impl WorkerActor {
                 .await
             {
                 error!("failed to register worker with retries: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
-            if let Err(e) = handle.send(WorkerEvent::StartHeartbeat).await {
+            if let Err(e) = handle.send(WorkerMessage::StartHeartbeat).await {
                 error!("failed to start worker heartbeat: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
         });
         ActorAction::Continue
@@ -160,7 +159,7 @@ impl WorkerActor {
                 // missing worker heartbeats and mark all the task attempts
                 // on this worker as failed.
                 error!("failed to report task status with retries: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
         });
         ActorAction::Continue

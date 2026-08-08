@@ -1,7 +1,6 @@
 mod access;
 mod actor;
-mod event;
 
 pub use access::ShuffleClient;
+pub(crate) use actor::ShuffleClientMessage;
 pub use actor::{ShuffleClientActor, ShuffleClientOptions};
-use event::ShuffleClientEvent;

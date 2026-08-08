@@ -15,7 +15,7 @@ use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
 use crate::worker::r#gen;
 
-pub enum WorkerEvent {
+pub enum WorkerMessage {
     ServerReady {
         /// The local port that the worker server listens on.
         /// This may be different from the port accessible from other nodes.
@@ -86,23 +86,23 @@ pub enum WorkerStreamOwner {
     },
 }
 
-impl SpanAssociation for WorkerEvent {
+impl SpanAssociation for WorkerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            WorkerEvent::ServerReady { .. } => "ServerReady",
-            WorkerEvent::StartHeartbeat => "StartHeartbeat",
-            WorkerEvent::ReportKnownPeers { .. } => "ReportKnownPeers",
-            WorkerEvent::RunTask { .. } => "RunTask",
-            WorkerEvent::StopTask { .. } => "StopTask",
-            WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
-            WorkerEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
-            WorkerEvent::CreateLocalStream { .. } => "CreateLocalStream",
-            WorkerEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
-            WorkerEvent::FetchDriverStream { .. } => "FetchDriverStream",
-            WorkerEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
-            WorkerEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            WorkerEvent::CleanUpJob { .. } => "CleanUpJob",
-            WorkerEvent::Shutdown => "Shutdown",
+            WorkerMessage::ServerReady { .. } => "ServerReady",
+            WorkerMessage::StartHeartbeat => "StartHeartbeat",
+            WorkerMessage::ReportKnownPeers { .. } => "ReportKnownPeers",
+            WorkerMessage::RunTask { .. } => "RunTask",
+            WorkerMessage::StopTask { .. } => "StopTask",
+            WorkerMessage::ReportTaskStatus { .. } => "ReportTaskStatus",
+            WorkerMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
+            WorkerMessage::CreateLocalStream { .. } => "CreateLocalStream",
+            WorkerMessage::CreateRemoteStream { .. } => "CreateRemoteStream",
+            WorkerMessage::FetchDriverStream { .. } => "FetchDriverStream",
+            WorkerMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            WorkerMessage::FetchRemoteStream { .. } => "FetchRemoteStream",
+            WorkerMessage::CleanUpJob { .. } => "CleanUpJob",
+            WorkerMessage::Shutdown => "Shutdown",
         };
         name.into()
     }
@@ -110,12 +110,12 @@ impl SpanAssociation for WorkerEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            WorkerEvent::ServerReady { port, signal: _ } => {
+            WorkerMessage::ServerReady { port, signal: _ } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
-            WorkerEvent::StartHeartbeat => {}
-            WorkerEvent::ReportKnownPeers { peer_worker_ids: _ } => {}
-            WorkerEvent::RunTask {
+            WorkerMessage::StartHeartbeat => {}
+            WorkerMessage::ReportKnownPeers { peer_worker_ids: _ } => {}
+            WorkerMessage::RunTask {
                 key:
                     TaskKey {
                         job_id,
@@ -131,7 +131,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            WorkerEvent::StopTask {
+            WorkerMessage::StopTask {
                 key:
                     TaskKey {
                         job_id,
@@ -145,7 +145,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            WorkerEvent::ReportTaskStatus {
+            WorkerMessage::ReportTaskStatus {
                 key:
                     TaskKey {
                         job_id,
@@ -172,7 +172,7 @@ impl SpanAssociation for WorkerEvent {
                     ));
                 }
             }
-            WorkerEvent::ProbePendingLocalStream {
+            WorkerMessage::ProbePendingLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -188,7 +188,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerEvent::CreateLocalStream {
+            WorkerMessage::CreateLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -211,7 +211,7 @@ impl SpanAssociation for WorkerEvent {
                     storage.to_string(),
                 ));
             }
-            WorkerEvent::CreateRemoteStream {
+            WorkerMessage::CreateRemoteStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -230,7 +230,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerEvent::FetchDriverStream {
+            WorkerMessage::FetchDriverStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -248,7 +248,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerEvent::FetchWorkerStream {
+            WorkerMessage::FetchWorkerStream {
                 owner,
                 key:
                     TaskStreamKey {
@@ -269,7 +269,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerEvent::FetchRemoteStream {
+            WorkerMessage::FetchRemoteStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -288,13 +288,13 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerEvent::CleanUpJob { job_id, stage } => {
+            WorkerMessage::CleanUpJob { job_id, stage } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 if let Some(stage) = stage {
                     p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 }
             }
-            WorkerEvent::Shutdown => {}
+            WorkerMessage::Shutdown => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

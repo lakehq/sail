@@ -12,7 +12,7 @@ use tonic::{Status, async_trait};
 
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
-use crate::driver::{DriverEvent, DriverRegistryAccessor};
+use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
@@ -78,7 +78,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
         self.registry
             .get(key.driver_id)
             .await?
-            .send(DriverEvent::FetchDriverStream {
+            .send(DriverMessage::FetchDriverStream {
                 key: key.stream,
                 result: sender,
             })

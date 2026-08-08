@@ -13,7 +13,7 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverHandle, DriverOptions};
+use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
@@ -126,9 +126,9 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
     async fn observe(&self, observer: JobRunnerObserver) {
         let result = self
             .driver
-            .send(DriverEvent::ObserveState { observer })
+            .send(DriverMessage::ObserveState { observer })
             .await;
-        if let Err(SendError(DriverEvent::ObserveState { observer })) = result {
+        if let Err(SendError(DriverMessage::ObserveState { observer })) = result {
             observer.fail(internal_datafusion_err!(
                 "failed to observe state for cluster job runner"
             ));
@@ -153,7 +153,7 @@ impl JobRunner for ClusterJobRunner {
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob {
+            .send(DriverMessage::ExecuteJob {
                 plan,
                 context: ctx.task_ctx(),
                 result: tx,

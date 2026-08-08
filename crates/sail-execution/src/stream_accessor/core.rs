@@ -27,7 +27,7 @@ where
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
         let (tx, rx) = oneshot::channel();
-        let event = match location {
+        let message = match location {
             TaskReadLocation::Driver { key } => {
                 T::Message::fetch_driver_stream(key.clone(), schema, tx)
             }
@@ -38,7 +38,7 @@ where
                 T::Message::fetch_remote_stream(key.clone(), schema, self.context.clone(), tx)
             }
         };
-        self.handle.send(event).await.map_err(|_| {
+        self.handle.send(message).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream reader".to_string())
         })?;
         rx.await
@@ -58,7 +58,7 @@ where
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
         let (tx, rx) = oneshot::channel();
-        let event = match location {
+        let message = match location {
             TaskWriteLocation::Local { key, storage } => {
                 T::Message::create_local_stream(key.clone(), *storage, schema, tx)
             }
@@ -66,7 +66,7 @@ where
                 T::Message::create_remote_stream(key.clone(), schema, self.context.clone(), tx)
             }
         };
-        self.handle.send(event).await.map_err(|_| {
+        self.handle.send(message).await.map_err(|_| {
             DataFusionError::Internal("actor send error for stream writer".to_string())
         })?;
         rx.await

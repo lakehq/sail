@@ -11,10 +11,10 @@ pub use options::StreamManagerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
 
-use crate::driver::DriverEvent;
+use crate::driver::DriverMessage;
 use crate::id::TaskStreamKey;
 use crate::stream::error::TaskStreamResult;
-use crate::worker::WorkerEvent;
+use crate::worker::WorkerMessage;
 
 pub struct StreamManager {
     options: StreamManagerOptions,
@@ -38,14 +38,14 @@ pub trait StreamManagerMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self;
 }
 
-impl StreamManagerMessage for DriverEvent {
+impl StreamManagerMessage for DriverMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self {
-        DriverEvent::ProbePendingLocalStream { key }
+        DriverMessage::ProbePendingLocalStream { key }
     }
 }
 
-impl StreamManagerMessage for WorkerEvent {
+impl StreamManagerMessage for WorkerMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self {
-        WorkerEvent::ProbePendingLocalStream { key }
+        WorkerMessage::ProbePendingLocalStream { key }
     }
 }

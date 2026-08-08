@@ -18,7 +18,7 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
-pub enum DriverEvent {
+pub enum DriverMessage {
     Activate,
     RegisterWorker {
         worker_id: WorkerId,
@@ -145,28 +145,28 @@ impl From<TaskStatus> for r#gen::TaskStatus {
     }
 }
 
-impl SpanAssociation for DriverEvent {
+impl SpanAssociation for DriverMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverEvent::Activate => "Activate",
-            DriverEvent::RegisterWorker { .. } => "RegisterWorker",
-            DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
-            DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
-            DriverEvent::ProbePendingWorker { .. } => "ProbePendingWorker",
-            DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
-            DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
-            DriverEvent::ExecuteJob { .. } => "ExecuteJob",
-            DriverEvent::CleanUpJob { .. } => "CleanUpJob",
-            DriverEvent::UpdateTask { .. } => "UpdateTask",
-            DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
-            DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
-            DriverEvent::CreateLocalStream { .. } => "CreateLocalStream",
-            DriverEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
-            DriverEvent::FetchDriverStream { .. } => "FetchDriverStream",
-            DriverEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
-            DriverEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            DriverEvent::ObserveState { .. } => "ObserveState",
-            DriverEvent::Shutdown { .. } => "Shutdown",
+            DriverMessage::Activate => "Activate",
+            DriverMessage::RegisterWorker { .. } => "RegisterWorker",
+            DriverMessage::WorkerHeartbeat { .. } => "WorkerHeartbeat",
+            DriverMessage::WorkerKnownPeers { .. } => "WorkerKnownPeers",
+            DriverMessage::ProbePendingWorker { .. } => "ProbePendingWorker",
+            DriverMessage::ProbeIdleWorker { .. } => "ProbeIdleWorker",
+            DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
+            DriverMessage::ExecuteJob { .. } => "ExecuteJob",
+            DriverMessage::CleanUpJob { .. } => "CleanUpJob",
+            DriverMessage::UpdateTask { .. } => "UpdateTask",
+            DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
+            DriverMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
+            DriverMessage::CreateLocalStream { .. } => "CreateLocalStream",
+            DriverMessage::CreateRemoteStream { .. } => "CreateRemoteStream",
+            DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
+            DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            DriverMessage::FetchRemoteStream { .. } => "FetchRemoteStream",
+            DriverMessage::ObserveState { .. } => "ObserveState",
+            DriverMessage::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -174,8 +174,8 @@ impl SpanAssociation for DriverEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverEvent::Activate => {}
-            DriverEvent::RegisterWorker {
+            DriverMessage::Activate => {}
+            DriverMessage::RegisterWorker {
                 worker_id,
                 host,
                 port,
@@ -185,31 +185,31 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::CLUSTER_WORKER_HOST, host.clone()));
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
-            DriverEvent::WorkerHeartbeat { worker_id }
-            | DriverEvent::WorkerKnownPeers {
+            DriverMessage::WorkerHeartbeat { worker_id }
+            | DriverMessage::WorkerKnownPeers {
                 worker_id,
                 peer_worker_ids: _,
             }
-            | DriverEvent::ProbePendingWorker { worker_id }
-            | DriverEvent::ProbeIdleWorker {
+            | DriverMessage::ProbePendingWorker { worker_id }
+            | DriverMessage::ProbeIdleWorker {
                 worker_id,
                 instant: _,
             }
-            | DriverEvent::ProbeLostWorker {
+            | DriverMessage::ProbeLostWorker {
                 worker_id,
                 instant: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
-            DriverEvent::ExecuteJob {
+            DriverMessage::ExecuteJob {
                 plan: _,
                 context: _,
                 result: _,
             } => {}
-            DriverEvent::CleanUpJob { job_id } => {
+            DriverMessage::CleanUpJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
-            DriverEvent::UpdateTask {
+            DriverMessage::UpdateTask {
                 key:
                     TaskKey {
                         job_id,
@@ -237,7 +237,7 @@ impl SpanAssociation for DriverEvent {
                     ));
                 }
             }
-            DriverEvent::ProbePendingTask {
+            DriverMessage::ProbePendingTask {
                 key:
                     TaskKey {
                         job_id,
@@ -251,7 +251,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            DriverEvent::ProbePendingLocalStream {
+            DriverMessage::ProbePendingLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -267,7 +267,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::CreateLocalStream {
+            DriverMessage::CreateLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -290,7 +290,7 @@ impl SpanAssociation for DriverEvent {
                     storage.to_string(),
                 ));
             }
-            DriverEvent::CreateRemoteStream {
+            DriverMessage::CreateRemoteStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -309,7 +309,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::FetchDriverStream {
+            DriverMessage::FetchDriverStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -326,7 +326,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::FetchWorkerStream {
+            DriverMessage::FetchWorkerStream {
                 worker_id,
                 key:
                     TaskStreamKey {
@@ -346,7 +346,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::FetchRemoteStream {
+            DriverMessage::FetchRemoteStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -365,8 +365,8 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::ObserveState { observer: _ } => {}
-            DriverEvent::Shutdown { .. } => {}
+            DriverMessage::ObserveState { observer: _ } => {}
+            DriverMessage::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }
