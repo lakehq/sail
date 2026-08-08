@@ -821,9 +821,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
-            OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
-                channels: *channels,
-            },
+            OutputDistribution::RoundRobinBatch { channels } => {
+                TaskOutputDistribution::RoundRobinBatch {
+                    channels: *channels,
+                }
+            }
             OutputDistribution::RoundRobinRow { channels } => {
                 TaskOutputDistribution::RoundRobinRow {
                     channels: *channels,

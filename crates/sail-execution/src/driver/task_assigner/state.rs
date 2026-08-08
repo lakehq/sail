@@ -89,7 +89,7 @@ pub enum WorkerResource {
         ///
         /// The worker needs to be running if there are active local task streams, even if
         /// no tasks are currently assigned to it. But the worker can be stopped if there are
-        /// active remote task streams stored in object storage.
+        /// active storage task streams.
         local_streams: IndexSet<TaskKey>,
     },
     Inactive,

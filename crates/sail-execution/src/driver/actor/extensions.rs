@@ -8,8 +8,8 @@ pub struct DriverExtensions {
     pub storage_streams: Option<StorageStreamManager>,
 }
 
-impl From<&DriverOptions> for DriverExtensions {
-    fn from(options: &DriverOptions) -> Self {
+impl DriverExtensions {
+    pub fn new(options: &DriverOptions) -> Self {
         let storage_streams = match &options.shuffle_backend {
             ShuffleBackendKind::Flight => None,
             ShuffleBackendKind::Storage {

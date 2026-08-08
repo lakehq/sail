@@ -28,7 +28,7 @@ impl Actor for DriverActor {
         let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
-        let extensions = DriverExtensions::from(&options);
+        let extensions = DriverExtensions::new(&options);
         Self {
             options,
             history_reporter,

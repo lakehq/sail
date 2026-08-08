@@ -8,8 +8,8 @@ pub struct WorkerExtensions {
     pub storage_streams: Option<StorageStreamManager>,
 }
 
-impl From<&WorkerOptions> for WorkerExtensions {
-    fn from(options: &WorkerOptions) -> Self {
+impl WorkerExtensions {
+    pub fn new(options: &WorkerOptions) -> Self {
         let storage_streams = match &options.shuffle_backend {
             ShuffleBackendKind::Flight => None,
             ShuffleBackendKind::Storage {

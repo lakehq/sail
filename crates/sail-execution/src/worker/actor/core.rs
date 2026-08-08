@@ -31,7 +31,7 @@ impl Actor for WorkerActor {
             },
         );
         let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
-        let extensions = WorkerExtensions::from(&options);
+        let extensions = WorkerExtensions::new(&options);
         Self {
             options,
             server: ServerMonitor::new(),

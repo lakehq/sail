@@ -55,7 +55,7 @@ pub enum TaskOutputDistribution {
         keys: Vec<Arc<[u8]>>,
         channels: usize,
     },
-    RoundRobin {
+    RoundRobinBatch {
         channels: usize,
     },
     RoundRobinRow {
@@ -397,7 +397,7 @@ impl From<TaskOutputDistribution> for r#gen::TaskOutputDistribution {
                     channels: channels as u64,
                 })
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobinBatch { channels } => {
                 r#gen::task_output_distribution::Kind::RoundRobin(
                     r#gen::TaskOutputRoundRobinDistribution {
                         channels: channels as u64,
@@ -429,7 +429,7 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobin(
                 r#gen::TaskOutputRoundRobinDistribution { channels },
-            )) => Ok(TaskOutputDistribution::RoundRobin {
+            )) => Ok(TaskOutputDistribution::RoundRobinBatch {
                 channels: channels as usize,
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobinRow(
@@ -482,7 +482,7 @@ impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
-            TaskOutputDistribution::RoundRobin { channels, .. } => channels,
+            TaskOutputDistribution::RoundRobinBatch { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
     }
@@ -504,7 +504,7 @@ impl TaskOutput {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(ShufflePartitioning::Hash(keys, *channels))
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobinBatch { channels } => {
                 Ok(ShufflePartitioning::RoundRobinBatch(*channels))
             }
             TaskOutputDistribution::RoundRobinRow { channels } => {

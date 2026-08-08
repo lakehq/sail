@@ -4,14 +4,12 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use futures::StreamExt;
 use sail_common::actor::{Actor, ActorHandle};
 
 use crate::id::TaskKey;
 pub(crate) use crate::stream::local::accessor::LocalStreamAccessorMessage;
 use crate::stream::local::accessor::{LocalTaskStreamReader, LocalTaskStreamWriter};
-use crate::stream::merge::MergedRecordBatchStream;
-use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
+use crate::stream::reader::TaskStreamReader;
 pub(crate) use crate::stream::storage::accessor::StorageStreamAccessorMessage;
 use crate::stream::storage::accessor::{StorageTaskStreamReader, StorageTaskStreamWriter};
 use crate::stream::writer::{
@@ -90,25 +88,12 @@ impl<T: Actor> TaskStreamFactory<T> {
     }
 }
 
-pub(crate) fn merged_stream(schema: SchemaRef, streams: Vec<TaskStreamSource>) -> TaskStreamSource {
-    Box::pin(MergedRecordBatchStream::new(schema, streams).map(|item| {
-        item.map_err(|error| crate::stream::error::TaskStreamError::External(Arc::new(error)))
-    }))
-}
-
-pub(crate) fn invalid_writer_partition(key: &TaskKey, partition: usize) -> DataFusionError {
-    DataFusionError::Execution(format!(
-        "task stream writer for partition {} cannot open partition {partition}",
-        key.partition
-    ))
-}
-
-pub(crate) struct TaskOutputSink {
+pub(crate) struct MultiChannelTaskStreamSink {
     pub(crate) sinks: Vec<Option<Box<dyn TaskStreamChannelSink>>>,
 }
 
 #[tonic::async_trait]
-impl TaskStreamSink for TaskOutputSink {
+impl TaskStreamSink for MultiChannelTaskStreamSink {
     async fn write(&mut self, channel: usize, batch: RecordBatch) -> Result<TaskStreamWriteState> {
         let state = match self.sinks.get_mut(channel).ok_or_else(|| {
             DataFusionError::Execution(format!("shuffle output channel {channel} not found"))

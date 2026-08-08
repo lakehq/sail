@@ -9,13 +9,14 @@ use tokio::sync::oneshot;
 use crate::driver::DriverMessage;
 use crate::error::ExecutionResult;
 use crate::id::{TaskKey, TaskStreamKey, WorkerId};
-use crate::stream::accessor::{TaskOutputSink, invalid_writer_partition, merged_stream};
+use crate::stream::accessor::MultiChannelTaskStreamSink;
+use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter};
 use crate::task::definition::{TaskInput, TaskInputKey, TaskInputLocator};
 use crate::worker::{WorkerMessage, WorkerStreamOwner};
 
-/// Actor-specific operations required for pipelined task streams.
+/// Actor-specific operations required for local task streams.
 pub trait LocalStreamAccessorMessage {
     fn create_stream(
         key: TaskStreamKey,
@@ -322,7 +323,10 @@ where
 {
     async fn open(&self, partition: usize) -> Result<Box<dyn TaskStreamSink>> {
         if partition != self.key.partition {
-            return Err(invalid_writer_partition(&self.key, partition));
+            return Err(DataFusionError::Execution(format!(
+                "task stream writer for partition {} cannot open partition {partition}",
+                self.key.partition
+            )));
         }
         let sinks = try_join_all((0..self.channels).map(|channel| {
             self.local.create_stream(
@@ -332,7 +336,7 @@ where
             )
         }))
         .await?;
-        Ok(Box::new(TaskOutputSink {
+        Ok(Box::new(MultiChannelTaskStreamSink {
             sinks: sinks.into_iter().map(Some).collect(),
         }))
     }
