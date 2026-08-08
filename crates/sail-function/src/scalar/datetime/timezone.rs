@@ -74,73 +74,88 @@ impl TimeZone for SparkTimeZone {
     }
 }
 
+/// Mirrors the two rewrites in
+/// `org.apache.spark.sql.catalyst.util.SparkDateTimeUtils#getZoneId`, which support the
+/// pre-Spark-3.0 `(+|-)h:mm` and `(+|-)hh:m` forms. Java applies them with unanchored
+/// `Matcher#replaceFirst`, so they also pad prefixed IDs such as `GMT+8:30`.
 fn normalize_spark_zone_id(value: &str) -> String {
     let mut value = value.to_string();
 
-    let add_hour_zero = {
-        let bytes = value.as_bytes();
-        bytes.len() >= 3
-            && matches!(bytes.first().copied(), Some(b'+' | b'-'))
-            && bytes[1].is_ascii_digit()
-            && bytes[2] == b':'
-    };
-    if add_hour_zero {
-        value.insert(1, '0');
+    // `(\+|\-)(\d):` -> `$10$2:`
+    let bytes = value.as_bytes();
+    let single_hour = (0..bytes.len().saturating_sub(2)).find(|&index| {
+        matches!(bytes[index], b'+' | b'-')
+            && bytes[index + 1].is_ascii_digit()
+            && bytes[index + 2] == b':'
+    });
+    if let Some(index) = single_hour {
+        value.insert(index + 1, '0');
     }
 
-    let add_minute_zero = {
-        let bytes = value.as_bytes();
-        bytes.len() == 5
-            && matches!(bytes.first().copied(), Some(b'+' | b'-'))
-            && bytes[1].is_ascii_digit()
-            && bytes[2].is_ascii_digit()
-            && bytes[3] == b':'
-            && bytes[4].is_ascii_digit()
+    // `(\+|\-)(\d\d):(\d)$` -> `$1$2:0$3`
+    let bytes = value.as_bytes();
+    let single_minute = bytes.len() >= 5 && {
+        let index = bytes.len() - 5;
+        matches!(bytes[index], b'+' | b'-')
+            && bytes[index + 1].is_ascii_digit()
+            && bytes[index + 2].is_ascii_digit()
+            && bytes[index + 3] == b':'
+            && bytes[index + 4].is_ascii_digit()
     };
-    if add_minute_zero {
-        value.insert(4, '0');
+    if single_minute {
+        value.insert(value.len() - 1, '0');
     }
 
     value
 }
 
+/// Mirrors `java.time.ZoneOffset#of`, whose parser dispatches purely on the length of the
+/// offset ID: `+h`, `+hh`, `+hhmm`, `+hh:mm`, `+hhmmss` and `+hh:mm:ss`. Colons are never
+/// optional — they are implied by the length.
 fn parse_spark_fixed_offset(value: &str) -> Option<FixedOffset> {
-    let (sign, value) = match value.as_bytes().first().copied() {
-        Some(b'+') => (1_i32, &value[1..]),
-        Some(b'-') => (-1_i32, &value[1..]),
+    if !value.is_ascii() {
+        return None;
+    }
+
+    let bytes = value.as_bytes();
+    let sign = match bytes.first().copied() {
+        Some(b'+') => 1_i32,
+        Some(b'-') => -1_i32,
         _ => return None,
     };
 
-    let parse_component = |value: &str| {
-        if value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_digit()) {
-            value.parse::<u32>().ok()
-        } else {
-            None
-        }
+    let component = |value: &str| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse::<i32>())
+            .and_then(Result::ok)
     };
 
-    let parts = value.split(':').collect::<Vec<_>>();
-    let (hours, minutes, seconds) = match parts.as_slice() {
-        [hours] => (parse_component(hours)?, 0, 0),
-        [hours, minutes] => (parse_component(hours)?, parse_component(minutes)?, 0),
-        [hours, minutes, seconds] => (
-            parse_component(hours)?,
-            parse_component(minutes)?,
-            parse_component(seconds)?,
+    let (hours, minutes, seconds) = match bytes.len() {
+        2 => (component(&value[1..2])?, 0, 0),
+        3 => (component(&value[1..3])?, 0, 0),
+        5 => (component(&value[1..3])?, component(&value[3..5])?, 0),
+        6 if bytes[3] == b':' => (component(&value[1..3])?, component(&value[4..6])?, 0),
+        7 => (
+            component(&value[1..3])?,
+            component(&value[3..5])?,
+            component(&value[5..7])?,
+        ),
+        9 if bytes[3] == b':' && bytes[6] == b':' => (
+            component(&value[1..3])?,
+            component(&value[4..6])?,
+            component(&value[7..9])?,
         ),
         _ => return None,
     };
 
-    if minutes >= 60
-        || seconds >= 60
-        || hours > 18
-        || (hours == 18 && (minutes != 0 || seconds != 0))
+    if minutes > 59 || seconds > 59 || hours > 18 || (hours == 18 && (minutes != 0 || seconds != 0))
     {
         return None;
     }
 
-    let seconds = hours * 3_600 + minutes * 60 + seconds;
-    FixedOffset::east_opt(sign * seconds as i32)
+    FixedOffset::east_opt(sign * (hours * 3_600 + minutes * 60 + seconds))
 }
 
 impl FromStr for SparkTimeZone {
@@ -158,11 +173,14 @@ impl FromStr for SparkTimeZone {
         }
 
         for prefix in ["UTC", "GMT", "UT"] {
-            if let Some(suffix) = normalized.strip_prefix(prefix)
-                && !suffix.is_empty()
-                && let Some(offset) = parse_spark_fixed_offset(suffix)
-            {
-                return Ok(Self::Fixed(offset));
+            if let Some(suffix) = normalized.strip_prefix(prefix) {
+                // `java.time.ZoneId#of` resolves a bare `UTC`, `GMT` or `UT` to `+00:00`.
+                if suffix.is_empty() {
+                    return FixedOffset::east_opt(0).map(Self::Fixed).ok_or(());
+                }
+                if let Some(offset) = parse_spark_fixed_offset(suffix) {
+                    return Ok(Self::Fixed(offset));
+                }
             }
         }
 
