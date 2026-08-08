@@ -5651,6 +5651,7 @@ mod tests {
 
     #[test]
     fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
+        use crate::plan::ShufflePartitioning;
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
 
         let (physical, schema_ref, list) = build_filter()?;
@@ -5661,15 +5662,15 @@ mod tests {
                 keys: vec![Arc::from(key)],
                 channels: 4,
             },
-            locator: TaskOutputLocator::Local { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined { replicas: 1 },
         };
 
         let ctx = TaskContext::default();
         let partitioning = output
-            .partitioning(&ctx, &schema_ref, &codec)
+            .shuffle_partitioning(&ctx, &schema_ref, &codec)
             .map_err(|e| plan_datafusion_err!("{e}"))?;
 
-        let Partitioning::Hash(keys, channels) = partitioning else {
+        let ShufflePartitioning::Hash(keys, channels) = partitioning else {
             return plan_err!("expected hash partitioning");
         };
         assert_eq!(channels, 4);

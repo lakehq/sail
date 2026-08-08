@@ -16,7 +16,7 @@ use crate::driver::r#gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::stream::writer::TaskStreamChannelSink;
 
 pub enum DriverMessage {
     Activate,
@@ -69,15 +69,15 @@ pub enum DriverMessage {
     },
     CreateLocalStream {
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
-    CreateRemoteStream {
+    CreateStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -89,7 +89,7 @@ pub enum DriverMessage {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchRemoteStream {
+    FetchStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -161,10 +161,10 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             DriverMessage::CreateLocalStream { .. } => "CreateLocalStream",
-            DriverMessage::CreateRemoteStream { .. } => "CreateRemoteStream",
+            DriverMessage::CreateStorageStream { .. } => "CreateStorageStream",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
-            DriverMessage::FetchRemoteStream { .. } => "FetchRemoteStream",
+            DriverMessage::FetchStorageStream { .. } => "FetchStorageStream",
             DriverMessage::ObserveState { .. } => "ObserveState",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
@@ -276,7 +276,7 @@ impl SpanAssociation for DriverMessage {
                         attempt,
                         channel,
                     },
-                storage,
+                replicas: _,
                 schema: _,
                 result: _,
             } => {
@@ -285,12 +285,8 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((
-                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
-                    storage.to_string(),
-                ));
             }
-            DriverMessage::CreateRemoteStream {
+            DriverMessage::CreateStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -346,7 +342,7 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverMessage::FetchRemoteStream {
+            DriverMessage::FetchStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,

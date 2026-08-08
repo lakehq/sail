@@ -9,7 +9,7 @@ use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
-use crate::stream_service::{TaskStreamFlightClient, TaskStreamOwner};
+use crate::stream::service::{TaskStreamFlightClient, TaskStreamOwner};
 
 #[derive(Clone)]
 pub struct DriverClientSet {

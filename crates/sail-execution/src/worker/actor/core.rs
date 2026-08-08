@@ -7,8 +7,8 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
+use crate::worker::actor::extensions::WorkerExtensions;
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
@@ -31,14 +31,14 @@ impl Actor for WorkerActor {
             },
         );
         let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
+        let extensions = WorkerExtensions::from(&options);
         Self {
             options,
             server: ServerMonitor::new(),
             driver_client_set,
             peer_tracker,
             task_runner: TaskRunner::new(),
-            stream_manager,
+            extensions,
             sequence: 42,
         }
     }
@@ -81,16 +81,16 @@ impl Actor for WorkerActor {
             }
             WorkerMessage::CreateLocalStream {
                 key,
-                storage,
+                replicas,
                 schema,
                 result,
-            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
-            WorkerMessage::CreateRemoteStream {
+            } => self.handle_create_local_stream(ctx, key, replicas, schema, result),
+            WorkerMessage::CreateStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
+            } => self.handle_create_storage_stream(ctx, key, schema, context, result),
             WorkerMessage::FetchDriverStream {
                 key,
                 schema,
@@ -99,12 +99,12 @@ impl Actor for WorkerActor {
             WorkerMessage::FetchWorkerStream { owner, key, result } => {
                 self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
-            WorkerMessage::FetchRemoteStream {
+            WorkerMessage::FetchStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
+            } => self.handle_fetch_storage_stream(ctx, key, schema, context, result),
             WorkerMessage::CleanUpJob { job_id, stage } => {
                 self.handle_clean_up_job(ctx, job_id, stage)
             }

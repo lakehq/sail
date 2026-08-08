@@ -17,7 +17,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
+use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
 
 enum DriverGatewayState {
     Pending {

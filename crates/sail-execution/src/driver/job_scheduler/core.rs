@@ -355,7 +355,7 @@ impl JobScheduler {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
                     OutputMode::Pipelined => TaskOutputKind::Local,
-                    OutputMode::Blocking => TaskOutputKind::Remote,
+                    OutputMode::Blocking => TaskOutputKind::Storage,
                 };
                 let key = StageGroupKey {
                     placement: stage.placement,
@@ -623,10 +623,7 @@ impl JobScheduler {
                             ))),
                         }
                     })?;
-                    TaskInputLocator::Driver {
-                        stage: input.stage,
-                        keys,
-                    }
+                    TaskInputLocator::Driver { keys }
                 }
                 TaskPlacement::Worker => {
                     let keys = keys.into_iter().map(|keys| {
@@ -647,18 +644,15 @@ impl JobScheduler {
                             Ok((*worker_id, k))
                         }).collect::<ExecutionResult<Vec<_>>>()
                     }).collect::<ExecutionResult<Vec<Vec<_>>>>()?;
-                    TaskInputLocator::Worker {
-                        stage: input.stage,
-                        keys,
-                    }
+                    TaskInputLocator::Worker { keys }
                 }
             },
-            OutputMode::Blocking => TaskInputLocator::Remote {
-                stage: input.stage,
-                keys,
-            },
+            OutputMode::Blocking => TaskInputLocator::Storage { keys },
         };
-        Ok(TaskInput { locator })
+        Ok(TaskInput {
+            stage: input.stage,
+            locator,
+        })
     }
 
     fn get_task_output(
@@ -692,8 +686,8 @@ impl JobScheduler {
             }
         };
         let locator = match stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
-            OutputMode::Blocking => TaskOutputLocator::Remote,
+            OutputMode::Pipelined => TaskOutputLocator::Pipelined { replicas },
+            OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
         Ok(TaskOutput {
             distribution,
