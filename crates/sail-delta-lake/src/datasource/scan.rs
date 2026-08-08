@@ -43,10 +43,11 @@ use sail_common_datafusion::schema_evolution::{
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
 use crate::conversion::ScalarConverter;
+use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
-use crate::spec::{Add, ColumnMappingMode, MaxStat, MinStat};
+use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
@@ -551,27 +552,11 @@ fn sanitize_bound_for_type(
     bound: &Precision<ScalarValue>,
     data_type: &ArrowDataType,
 ) -> Precision<ScalarValue> {
-    let sanitize_value = |value: &ScalarValue| {
-        if value.is_null() {
-            return None;
-        }
-        if value.data_type() == *data_type {
-            return Some(value.clone());
-        }
-        value
-            .cast_to(data_type)
-            .ok()
-            .filter(|casted| !casted.is_null())
-    };
-
-    match bound {
-        Precision::Exact(value) => sanitize_value(value)
-            .map(Precision::Exact)
-            .unwrap_or(Precision::Absent),
-        Precision::Inexact(value) => sanitize_value(value)
-            .map(Precision::Inexact)
-            .unwrap_or(Precision::Absent),
-        Precision::Absent => Precision::Absent,
+    let sanitized = bound.cast_to(data_type).unwrap_or(Precision::Absent);
+    if sanitized.get_value().is_some_and(ScalarValue::is_null) {
+        Precision::Absent
+    } else {
+        sanitized
     }
 }
 
@@ -658,35 +643,39 @@ fn stats_for_add(
         let mut null_count = Precision::Absent;
 
         for name in name_candidates {
-            if min_value == Precision::Absent {
-                let min_stat = stats.get_min_stat(name);
-                if let Some(value) = min_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    min_value = match min_stat {
-                        MinStat::Exact(_) => Precision::Exact(value),
-                        MinStat::LowerBound(_) => Precision::Inexact(value),
-                        MinStat::Absent => Precision::Absent,
-                    };
-                }
+            if min_value == Precision::Absent
+                && let Some(value) = stats.min_values.get(name).and_then(|value| {
+                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
+                        value,
+                        field.data_type(),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                && !value.is_null()
+            {
+                min_value = if stats.tight_bounds {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                };
             }
-            if max_value == Precision::Absent {
-                let max_stat = stats.get_max_stat(name);
-                if let Some(value) = max_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    max_value = match max_stat {
-                        MaxStat::Exact(_) => Precision::Exact(value),
-                        MaxStat::UpperBound(_) => Precision::Inexact(value),
-                        MaxStat::Absent => Precision::Absent,
-                    };
-                }
+            if max_value == Precision::Absent
+                && let Some(value) = stats.max_values.get(name).and_then(|value| {
+                    ScalarConverter::column_value_stat_to_arrow_scalar_value(
+                        value,
+                        field.data_type(),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                && !value.is_null()
+            {
+                max_value = if stats.tight_bounds {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                };
             }
             if null_count == Precision::Absent
                 && let Some(value) = stats.null_count_value(name)
@@ -697,6 +686,11 @@ fn stats_for_add(
                     Precision::Inexact(value.max(0) as usize)
                 };
             }
+        }
+
+        if arrow_type_contains_timestamp(field.data_type()) {
+            min_value = min_value.to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
         }
 
         column_statistics.push(ColumnStatistics {

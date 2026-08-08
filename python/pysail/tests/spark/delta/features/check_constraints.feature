@@ -95,6 +95,34 @@ Feature: Delta Lake CHECK Constraints
         | id | value |
         | 0  | bad   |
 
+    Scenario: ADD CONSTRAINT canonicalizes names and rejects case-insensitive duplicates
+      Given statement template
+        """
+        CREATE TABLE delta_check_constraints_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_check_constraints_test VALUES (1, 'existing')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT ÄRule_ID CHECK (id > 0)
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                   | value                                            |
+        | metaData.configuration | {"delta.constraints.ärule_id":"id > 0"}       |
+      Given statement with error already exists
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT äRULE_id CHECK (id > 1)
+        """
+
     Scenario: Direct mutation of delta.constraints table properties is rejected
       Given statement template
         """

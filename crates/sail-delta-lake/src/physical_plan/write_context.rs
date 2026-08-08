@@ -18,14 +18,13 @@ use crate::schema::{
     compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
     inject_default_expressions, inject_generation_expressions, inject_identity_columns,
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
-    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
-    schema_contains_type_widening_metadata, schema_has_column_defaults,
-    schema_has_generated_columns, schema_has_identity_columns, strip_column_mapping_metadata,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
+    schema_contains_type_widening_metadata, strip_column_mapping_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, ColumnMappingMode, DeltaOperation, DomainMetadata, Metadata, Protocol, SaveMode,
-    StructType, TableProperties, Transaction, contains_timestampntz_arrow, contains_variant_arrow,
+    StructType, Transaction,
 };
 use crate::table::DeltaSnapshot;
 
@@ -184,8 +183,6 @@ pub fn prepare_delta_write_context(
     let mut operation = planned_operation;
     let mut annotated_schema_opt: Option<StructType> = None;
     if !table_exists {
-        let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
-        let has_variant = contains_variant_arrow(final_schema.as_ref());
         let mut kernel_schema = StructType::try_from(final_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if !options.generation_expressions.is_empty() {
@@ -216,17 +213,6 @@ pub fn prepare_delta_write_context(
             kernel_schema
         };
 
-        let protocol = protocol_for_create(
-            !matches!(effective_mode, ColumnMappingMode::None),
-            has_timestamp_ntz,
-            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
-            schema_has_generated_columns(&metadata_schema),
-            schema_has_column_defaults(&metadata_schema),
-            schema_has_identity_columns(&metadata_schema),
-            has_variant,
-            &configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let metadata = metadata_for_create_with_struct_type(
             metadata_schema,
             partition_columns.to_vec(),
@@ -234,6 +220,8 @@ pub fn prepare_delta_write_context(
             configuration,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let protocol =
+            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         initial_actions.push(Action::Protocol(protocol.clone()));
         initial_actions.push(Action::Metadata(metadata.clone()));

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.types import (
     ArrayType,
@@ -46,6 +48,14 @@ def _latest_delta_schema(delta_path):
                     schema = json.loads(metadata["schemaString"])
     assert schema is not None
     return schema
+
+
+def _delta_log_actions(delta_path):
+    actions = []
+    for log_file in sorted((delta_path / "_delta_log").glob("*.json")):
+        with log_file.open(encoding="utf-8") as f:
+            actions.extend(json.loads(line) for line in f)
+    return actions
 
 
 def _delta_field(schema, name):
@@ -228,6 +238,161 @@ def test_delta_schema_timestamp_ntz_cast(spark, tmp_path, session_timezone):
         (1, datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)),
         (2, datetime(2024, 5, 2, 7, 30, tzinfo=timezone.utc)),
     ]
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_delta_schema_timestamp_ntz_write_artifacts(spark, tmp_path, session_timezone):
+    """TimestampNTZ partition values, stats, and Parquet metadata preserve wall-clock time."""
+    _ = session_timezone
+    delta_path = tmp_path / "delta_timestamp_ntz_write_artifacts"
+    table_name = "delta_timestamp_ntz_write_artifacts_table"
+    partition_time = "2024-01-15 10:30:00.123456"
+    event_time = "2024-07-01 23:45:12.654321"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              event_time TIMESTAMP_NTZ,
+              partition_time TIMESTAMP_NTZ
+            )
+            USING DELTA
+            PARTITIONED BY (partition_time)
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
+            """
+        )
+        spark.sql(
+            f"""
+            INSERT INTO {table_name} VALUES (
+              1,
+              CAST('{event_time}' AS TIMESTAMP_NTZ),
+              CAST('{partition_time}' AS TIMESTAMP_NTZ)
+            )
+            """  # noqa: S608
+        )
+
+        data_files = sorted(path for path in delta_path.rglob("*.parquet") if "_delta_log" not in path.parts)
+        assert len(data_files) == 1
+        assert data_files[0].parent.relative_to(delta_path).as_posix() == (
+            "partition_time=2024-01-15%2010%3A30%3A00.123456"
+        )
+
+        add = next(action["add"] for action in reversed(_delta_log_actions(delta_path)) if "add" in action)
+        assert add["partitionValues"] == {"partition_time": partition_time}
+        stats = json.loads(add["stats"])
+        expected_stat = "2024-07-01T23:45:12.654"
+        assert stats["minValues"]["event_time"] == expected_stat
+        assert stats["maxValues"]["event_time"] == expected_stat
+        assert not stats["minValues"]["event_time"].endswith("Z")
+        assert not stats["maxValues"]["event_time"].endswith("Z")
+
+        parquet_schema = pq.ParquetFile(data_files[0]).schema
+        event_time_column = next(
+            parquet_schema.column(index)
+            for index in range(len(parquet_schema))
+            if parquet_schema.column(index).name == "event_time"
+        )
+        logical_type = str(event_time_column.logical_type)
+        assert "Timestamp(" in logical_type
+        assert "isAdjustedToUTC=false" in logical_type
+        arrow_type = parquet_schema.to_arrow_schema().field("event_time").type
+        assert pa.types.is_timestamp(arrow_type)
+        assert arrow_type.tz is None
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.parametrize(
+    ("timestamp_type", "sql_type", "expected_stat", "expected_protocol"),
+    [
+        (
+            TimestampType(),
+            "TIMESTAMP",
+            "2024-07-01T23:45:12.654Z",
+            {"minReaderVersion": 1, "minWriterVersion": 2},
+        ),
+        (
+            TimestampNTZType(),
+            "TIMESTAMP_NTZ",
+            "2024-07-01T23:45:12.654",
+            {
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["timestampNtz"],
+                "writerFeatures": ["timestampNtz", "appendOnly", "invariants"],
+            },
+        ),
+    ],
+    ids=["timestamp", "timestamp_ntz"],
+)
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_delta_timestamp_stats_do_not_replace_or_prune_microseconds(
+    spark,
+    tmp_path,
+    session_timezone,
+    timestamp_type,
+    sql_type,
+    expected_stat,
+    expected_protocol,
+):
+    """Millisecond JSON stats remain conservative for driver and metadata reads."""
+    _ = session_timezone
+    suffix = "timestamp_ntz" if isinstance(timestamp_type, TimestampNTZType) else "timestamp"
+    delta_path = tmp_path / f"delta_timestamp_stats_{suffix}"
+    table_name = f"delta_timestamp_stats_{suffix}_table"
+    location = escape_sql_string_literal(str(delta_path))
+    expected = datetime(2024, 7, 1, 23, 45, 12, 654321)  # noqa: DTZ001
+    if isinstance(timestamp_type, TimestampType):
+        expected = expected.replace(tzinfo=timezone.utc)
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def normalized(value):
+        if isinstance(timestamp_type, TimestampType):
+            return _as_utc(value)
+        return value
+
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, event_time {sql_type})
+            USING DELTA
+            LOCATION '{location}'
+            TBLPROPERTIES (
+              'delta.checkpointInterval' = '1',
+              'delta.checkpoint.writeStatsAsStruct' = 'true'
+            )
+            """
+        ).collect()
+        protocol = next(action["protocol"] for action in _delta_log_actions(delta_path) if "protocol" in action)
+        assert protocol == expected_protocol
+        spark.sql(
+            f"""
+            INSERT INTO {table_name}
+            VALUES (1, CAST('2024-07-01 23:45:12.654321' AS {sql_type}))
+            """  # noqa: S608
+        )
+
+        add = next(action["add"] for action in reversed(_delta_log_actions(delta_path)) if "add" in action)
+        stats = json.loads(add["stats"])
+        assert stats["minValues"]["event_time"] == expected_stat
+        assert stats["maxValues"]["event_time"] == expected_stat
+        assert list((delta_path / "_delta_log").glob("00000000000000000001.checkpoint*.parquet"))
+
+        driver_read = spark.read.format("delta").load(str(delta_path))
+        driver_value = driver_read.select("event_time").first().event_time
+        assert normalized(driver_value) == expected
+        bounds = driver_read.selectExpr("min(event_time) AS min_value", "max(event_time) AS max_value").first()
+        assert normalized(bounds.min_value) == expected
+        assert normalized(bounds.max_value) == expected
+
+        metadata_read = spark.read.format("delta").option("metadataAsDataRead", "true").load(str(delta_path))
+        filtered = metadata_read.where(f"event_time > CAST('2024-07-01 23:45:12.654100' AS {sql_type})").collect()
+        assert len(filtered) == 1
+        assert normalized(filtered[0].event_time) == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
 
 
 @pytest.mark.parametrize(

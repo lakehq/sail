@@ -7717,6 +7717,7 @@ dependencies = [
  "datafusion-physical-expr",
  "educe",
  "futures",
+ "icu_casemap",
  "indexmap 2.14.0",
  "itertools",
  "log",

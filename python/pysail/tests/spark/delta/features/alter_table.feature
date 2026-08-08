@@ -96,7 +96,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
       Then delta log latest effective protocol and metadata contains
         | path                                                                       | value  |
         | protocol.minWriterVersion                                                  | 7      |
-        | protocol.writerFeatures                                                    | ["inCommitTimestamp"] |
+        | protocol.writerFeatures                                                    | ["appendOnly", "invariants", "inCommitTimestamp"] |
         | metaData.configuration['delta.enableInCommitTimestamps']                   | "true" |
 
     Scenario: Time travel ignores pre-enablement in-commit timestamps after ALTER TABLE enables ICT
@@ -151,8 +151,49 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                           | 3      |
         | protocol.minWriterVersion                           | 7      |
         | protocol.readerFeatures                             | ["typeWidening"] |
-        | protocol.writerFeatures                             | ["typeWidening"] |
+        | protocol.writerFeatures                             | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.configuration['delta.enableTypeWidening']  | "true" |
+
+    Scenario: Reader upgrade preserves the legacy column mapping feature
+      Given variable location for temporary directory delta_alter_mapping_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_mapping_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_mapping_type_widening_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_mapping_type_widening_test VALUES (1, 'before')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_mapping_type_widening_test
+        SET TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                | value |
+        | protocol.minReaderVersion                           | 3 |
+        | protocol.minWriterVersion                           | 7 |
+        | protocol.readerFeatures                             | ["columnMapping", "typeWidening"] |
+        | protocol.writerFeatures                             | ["columnMapping", "appendOnly", "invariants", "typeWidening"] |
+        | metaData.configuration['delta.columnMapping.mode']  | "name" |
+        | metaData.configuration['delta.enableTypeWidening']  | "true" |
+      When query
+        """
+        SELECT id, value FROM delta_alter_mapping_type_widening_test
+        """
+      Then query result ordered
+        | id | value  |
+        | 1  | before |
 
     Scenario: ALTER COLUMN TYPE applies Delta type widening and records metadata
       Given variable location for temporary directory delta_alter_column_type_widening
@@ -235,7 +276,7 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | protocol.minReaderVersion                                       | 3         |
         | protocol.minWriterVersion                                       | 7         |
         | protocol.readerFeatures                                         | ["typeWidening"] |
-        | protocol.writerFeatures                                         | ["typeWidening"] |
+        | protocol.writerFeatures                                         | ["appendOnly", "invariants", "typeWidening"] |
         | metaData.schemaString.fields[0].type                            | "long"    |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].fromType | "integer" |
         | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].toType   | "long"    |
