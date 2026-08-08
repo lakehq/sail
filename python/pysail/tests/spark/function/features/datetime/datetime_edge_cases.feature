@@ -276,3 +276,17 @@ Feature: datetime edge cases
         | case                                           | in                         | result                     |
         | `to_timestamp` parses without optional section | 2026-06-15 14:30:45        | 2026-06-15 14:30:45        |
         | `to_timestamp` parses with optional section    | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+
+  Rule: Spark session timezone identifiers
+
+    Scenario: timestamp literals use the Spark timezone parser
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT unix_micros(
+          TIMESTAMP '1970-01-01 00:00:00'
+        ) AS result
+        """
+      Then query result
+        | result      |
+        | -3723000000 |

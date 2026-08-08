@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 use datafusion::arrow::array::Array;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -34,6 +33,7 @@ fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -
 }
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::scalar::datetime::timezone::parse_spark_timezone;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {
@@ -53,17 +53,17 @@ impl TimestampParser {
     fn localize(&self, datetime: NaiveDateTime, timezone: &str, safe: bool) -> Result<Option<i64>> {
         match self {
             TimestampParser::Ltz { default_timezone } => {
-                let tz: Tz = if timezone.is_empty() {
-                    match default_timezone.parse() {
+                let tz = if timezone.is_empty() {
+                    match parse_spark_timezone(default_timezone) {
                         Ok(v) => v,
                         Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     }
                 } else {
-                    match timezone.parse() {
+                    match parse_spark_timezone(timezone) {
                         Ok(v) => v,
                         Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     }
                 };
                 match localize_with_fallback(&tz, &datetime) {
@@ -99,10 +99,10 @@ impl TimestampParser {
                         .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
                 } else {
                     let timezone_name = parsed.timezone.as_deref().unwrap_or(default_timezone);
-                    let timezone: Tz = match timezone_name.parse() {
+                    let timezone = match parse_spark_timezone(timezone_name) {
                         Ok(v) => v,
                         Err(_e) if is_try => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     };
                     match localize_with_fallback(&timezone, &parsed.datetime) {
                         Ok(v) => v,

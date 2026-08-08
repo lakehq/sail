@@ -45,6 +45,20 @@ Feature: to_utc_timestamp
         | '2025-03-09 11:30:00' | 2025-03-09 18:30:00 |
 
   @function(nullability)
+  Rule: Zone ID parsing
+
+  Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: `to_utc_timestamp` accepts a prefixed zone offset ID
+      When query
+        """
+        SELECT CAST(to_utc_timestamp(TIMESTAMP_NTZ '2024-01-01 12:00:00', 'GMT+8:30') AS STRING) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 03:30:00 |
+
   Rule: Output schema
 
     Scenario: a non-null literal input to to_utc_timestamp yields the schema Spark declares
