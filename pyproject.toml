@@ -52,11 +52,13 @@ test = [
     "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
+    "adbc-driver-postgresql>=1.0,<2",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
 ]
 jdbc = [
+    "adbc-driver-postgresql>=1.0,<2",
     "connectorx>=0.3",
     "pyarrow>=10.0",
 ]
@@ -112,6 +114,7 @@ dependencies = [
     "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
+    "adbc-driver-postgresql>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
@@ -166,6 +169,7 @@ dependencies = [
     "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
+    "adbc-driver-postgresql>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
