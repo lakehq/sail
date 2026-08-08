@@ -2,7 +2,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 use datafusion::arrow::array::Array;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
@@ -11,11 +10,10 @@ use sail_common_datafusion::formatter::{
     DurationNanosecondFormatter, DurationSecondFormatter, IntervalDayTimeFormatter,
     IntervalMonthDayNanoFormatter, IntervalYearMonthFormatter, Time32MillisecondFormatter,
     Time32SecondFormatter, Time64MicrosecondFormatter, Time64NanosecondFormatter,
-    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
-    TimestampSecondFormatter,
 };
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::format_timestamp_literal;
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SparkPlanFormatter;
@@ -209,48 +207,51 @@ impl PlanFormatter for SparkPlanFormatter {
             // For timestamp values with no time zone, we use UTC as the time zone for formatting.
             ScalarValue::TimestampSecond(seconds, timezone) => match seconds {
                 Some(seconds) => {
-                    let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
+                    let (prefix, timezone) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(display_timezone))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
-                    let timestamp = TimestampSecondFormatter(*seconds, tz.as_ref());
+                    let timestamp = format_timestamp_literal(*seconds, TimeUnit::Second, timezone)?;
                     Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampMillisecond(milliseconds, timezone) => match milliseconds {
                 Some(milliseconds) => {
-                    let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
+                    let (prefix, timezone) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(display_timezone))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
-                    let timestamp = TimestampMillisecondFormatter(*milliseconds, tz.as_ref());
+                    let timestamp =
+                        format_timestamp_literal(*milliseconds, TimeUnit::Millisecond, timezone)?;
                     Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampMicrosecond(microseconds, timezone) => match microseconds {
                 Some(microseconds) => {
-                    let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
+                    let (prefix, timezone) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(display_timezone))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
-                    let timestamp = TimestampMicrosecondFormatter(*microseconds, tz.as_ref());
+                    let timestamp =
+                        format_timestamp_literal(*microseconds, TimeUnit::Microsecond, timezone)?;
                     Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampNanosecond(nanoseconds, timezone) => match nanoseconds {
                 Some(nanoseconds) => {
-                    let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
+                    let (prefix, timezone) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(display_timezone))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
-                    let timestamp = TimestampNanosecondFormatter(*nanoseconds, tz.as_ref());
+                    let timestamp =
+                        format_timestamp_literal(*nanoseconds, TimeUnit::Nanosecond, timezone)?;
                     Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
@@ -868,6 +869,36 @@ mod tests {
                 Some(Arc::from("UTC")),
             ))?,
             "TIMESTAMP '1970-01-01 00:02:03'",
+        );
+        let to_string_with_second_offset =
+            |literal| formatter.literal_to_string(&literal, "+01:02:03");
+        assert_eq!(
+            to_string_with_second_offset(ScalarValue::TimestampSecond(
+                Some(0),
+                Some(Arc::from("UTC")),
+            ))?,
+            "TIMESTAMP '1970-01-01 01:02:03'",
+        );
+        assert_eq!(
+            to_string_with_second_offset(ScalarValue::TimestampMillisecond(
+                Some(123),
+                Some(Arc::from("UTC")),
+            ))?,
+            "TIMESTAMP '1970-01-01 01:02:03.123'",
+        );
+        assert_eq!(
+            to_string_with_second_offset(ScalarValue::TimestampMicrosecond(
+                Some(123_456),
+                Some(Arc::from("UTC")),
+            ))?,
+            "TIMESTAMP '1970-01-01 01:02:03.123456'",
+        );
+        assert_eq!(
+            to_string_with_second_offset(ScalarValue::TimestampNanosecond(
+                Some(123_456_789),
+                Some(Arc::from("UTC")),
+            ))?,
+            "TIMESTAMP '1970-01-01 01:02:03.123456789'",
         );
         assert_eq!(
             to_string(ScalarValue::TimestampMicrosecond(Some(-1), None))?,

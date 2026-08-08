@@ -2,10 +2,16 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, MappedLocalTime, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use chrono_tz::Tz;
+use datafusion::arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
 use datafusion_common::error::DataFusionError;
 use sail_common::error::CommonError;
 use sail_common::utils::datetime::parse_spark_timezone_id;
+use sail_common_datafusion::formatter::{
+    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
+    TimestampSecondFormatter,
+};
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SparkTimeZone {
@@ -192,5 +198,32 @@ pub(crate) fn parse_spark_timezone(value: &str) -> Result<SparkTimeZone> {
     parse_spark_timezone_id::<SparkTimeZone>(value).map_err(|error| match error {
         CommonError::InvalidArgument(message) => DataFusionError::Execution(message),
         error => DataFusionError::External(Box::new(error)),
+    })
+}
+
+pub fn validate_spark_timezone(value: &str) -> Result<()> {
+    parse_spark_timezone(value).map(|_| ())
+}
+
+pub fn local_datetime_to_micros(datetime: &NaiveDateTime, timezone: &str) -> Result<i64> {
+    let timezone = parse_spark_timezone(timezone)?;
+    Ok(localize_with_fallback(&timezone, datetime)?.timestamp_micros())
+}
+
+pub fn format_timestamp_literal(
+    value: i64,
+    unit: TimeUnit,
+    timezone: Option<&str>,
+) -> Result<String> {
+    let timezone = timezone.map(parse_spark_timezone).transpose()?;
+    Ok(match unit {
+        TimeUnit::Second => TimestampSecondFormatter(value, timezone.as_ref()).to_string(),
+        TimeUnit::Millisecond => {
+            TimestampMillisecondFormatter(value, timezone.as_ref()).to_string()
+        }
+        TimeUnit::Microsecond => {
+            TimestampMicrosecondFormatter(value, timezone.as_ref()).to_string()
+        }
+        TimeUnit::Nanosecond => TimestampNanosecondFormatter(value, timezone.as_ref()).to_string(),
     })
 }

@@ -232,3 +232,23 @@ Feature: sequence() over DATE returns expected arrays
         | make_interval(0, 0, 0, 0, 1)       | interval               |
         | INTERVAL '0-0' YEAR TO MONTH        | interval year to month |
         | INTERVAL '0 03:00:00' DAY TO SECOND | interval day to second |
+
+    Scenario: mixed LTZ and NTZ sequences support timestamps outside the nanosecond range
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            TIMESTAMP_NTZ '1000-01-01 00:00:00',
+            TIMESTAMP '1000-01-03 00:00:00',
+            INTERVAL 1 DAY
+          ) AS STRING) AS ancient,
+          CAST(sequence(
+            TIMESTAMP_NTZ '2500-01-01 00:00:00',
+            TIMESTAMP '2500-01-03 00:00:00',
+            INTERVAL 1 DAY
+          ) AS STRING) AS future
+        """
+      Then query result
+        | ancient                                                         | future                                                          |
+        | [1000-01-01 00:00:00, 1000-01-02 00:00:00, 1000-01-03 00:00:00] | [2500-01-01 00:00:00, 2500-01-02 00:00:00, 2500-01-03 00:00:00] |

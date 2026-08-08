@@ -1,15 +1,13 @@
 use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone};
 use chrono_tz::GapInfo;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
-use datafusion::arrow::compute::kernels::{cast, numeric, take};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::error::DataFusionError;
+use datafusion::arrow::compute::kernels::{cast, take};
+use datafusion::arrow::datatypes::{DataType, Int64Type, TimeUnit};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common::utils::datetime::time_unit_to_multiplier;
 
 use crate::scalar::datetime::timezone::{SparkTimeZone, parse_spark_timezone};
 
@@ -80,8 +78,8 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
         Result<Option<SparkTimeZone>>,
         Result<Option<SparkTimeZone>>,
     )| match inputs {
-        (Some(ts_nanos), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
-            Ok(convert(ts_nanos, &from_tz, &to_tz))
+        (Some(ts_micros), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
+            Ok(convert(ts_micros, &from_tz, &to_tz))
         }
         (_, Err(e), _) | (_, _, Err(e)) => Err(e),
         _ => Ok(None),
@@ -119,7 +117,7 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
             ts_arr.clone()
         };
 
-        let nanos_arr = timestamp_to_nanoseconds(&ts_arr)?;
+        let micros_arr = timestamp_to_microseconds(ts_arr.as_ref())?;
 
         let first = |iter: &mut dyn Iterator<Item = Result<Option<SparkTimeZone>>>| {
             iter.next().transpose().map(|opt| opt.flatten())
@@ -133,14 +131,14 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
                 let from_tz = first(&mut from_tzs)?;
                 let to_tz = first(&mut to_tzs)?;
 
-                nanos_arr
+                micros_arr
                     .iter()
                     .map(|ts| from_to_utc_timestamp_func((ts, Ok(from_tz), Ok(to_tz))))
                     .collect::<Result<Int64Array>>()
             }
             (true, false) => {
                 let from_tz = first(&mut from_tzs)?;
-                nanos_arr
+                micros_arr
                     .iter()
                     .zip(to_tzs)
                     .map(|(ts, to_tz)| from_to_utc_timestamp_func((ts, Ok(from_tz), to_tz)))
@@ -149,13 +147,13 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
             (false, true) => {
                 let to_tz = first(&mut to_tzs)?;
 
-                nanos_arr
+                micros_arr
                     .iter()
                     .zip(from_tzs)
                     .map(|(ts, from_tz)| from_to_utc_timestamp_func((ts, from_tz, Ok(to_tz))))
                     .collect::<Result<Int64Array>>()
             }
-            (false, false) => nanos_arr
+            (false, false) => micros_arr
                 .iter()
                 .zip(from_tzs.zip(to_tzs))
                 .map(|(a, (b, c))| (a, b, c))
@@ -169,7 +167,7 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
         x => return exec_err!("invalid timestamp type for `convert_tz`: {x:?}"),
     };
 
-    nanoseconds_to_timestamp(results, time_unit)
+    microseconds_to_timestamp(results, time_unit)
 }
 
 fn disambiguate_local_datetime(
@@ -196,41 +194,50 @@ fn disambiguate_local_datetime(
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(
-    ts_nanos: i64,
+    ts_micros: i64,
     from_zone: &SparkTimeZone,
     to_zone: &SparkTimeZone,
 ) -> Option<i64> {
-    let local = DateTime::from_timestamp_nanos(ts_nanos).naive_utc();
+    let local = DateTime::from_timestamp_micros(ts_micros)?.naive_utc();
     let datetime = disambiguate_local_datetime(local, from_zone)?;
-    datetime
-        .with_timezone(to_zone)
-        .naive_local()
-        .and_utc()
-        .timestamp_nanos_opt()
+    Some(
+        datetime
+            .with_timezone(to_zone)
+            .naive_local()
+            .and_utc()
+            .timestamp_micros(),
+    )
 }
 
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.SparkDateTimeUtils#convertTz`
 fn convert_tz_non_classic(
-    ts_nanos: i64,
+    ts_micros: i64,
     from_zone: &SparkTimeZone,
     to_zone: &SparkTimeZone,
 ) -> Option<i64> {
-    let local = to_zone.timestamp_nanos(ts_nanos).naive_local();
+    let local = to_zone.timestamp_micros(ts_micros).single()?.naive_local();
     let datetime = disambiguate_local_datetime(local, from_zone)?;
-    datetime.timestamp_nanos_opt()
+    Some(datetime.timestamp_micros())
 }
 
-fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
+fn timestamp_to_microseconds(array: &dyn Array) -> Result<Int64Array> {
     match array.data_type() {
-        DataType::Timestamp(time_unit, None) => numeric::mul(
-            &cast::cast(array, &DataType::Int64)?,
-            &Int64Array::new_scalar(1_000_000_000i64 / time_unit_to_multiplier(time_unit)),
-        )?
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .cloned()
-        .ok_or_else(|| DataFusionError::Execution("".to_string())),
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            let values = cast::cast(array, &DataType::Int64)?;
+            let values = values.as_primitive::<Int64Type>();
+            // Spark normalizes an instant to microseconds with floor division. Arrow's timestamp
+            // cast truncates toward zero, which is incorrect for negative sub-microsecond values.
+            Ok(values
+                .iter()
+                .map(|value| value.map(|value| value.div_euclid(1_000)))
+                .collect())
+        }
+        DataType::Timestamp(_, None) => {
+            let timestamp = cast::cast(array, &DataType::Timestamp(TimeUnit::Microsecond, None))?;
+            let values = cast::cast(timestamp.as_ref(), &DataType::Int64)?;
+            Ok(values.as_primitive::<Int64Type>().clone())
+        }
         _ => {
             exec_err!(
                 "`convert_timezone`: third argument type must coerce to NTZ timestamp, received {:?}",
@@ -240,12 +247,32 @@ fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
     }
 }
 
-fn nanoseconds_to_timestamp(array: Int64Array, time_unit: TimeUnit) -> Result<ArrayRef> {
+fn microseconds_to_timestamp(array: Int64Array, time_unit: TimeUnit) -> Result<ArrayRef> {
+    let timestamp = cast::cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None))?;
     Ok(cast::cast(
-        &numeric::div(
-            &array,
-            &Int64Array::new_scalar(1_000_000_000i64 / time_unit_to_multiplier(&time_unit)),
-        )?,
+        timestamp.as_ref(),
         &DataType::Timestamp(time_unit, None),
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::TimestampNanosecondArray;
+    use datafusion::arrow::datatypes::TimestampNanosecondType;
+
+    use super::*;
+
+    #[test]
+    fn nanoseconds_are_normalized_to_spark_microseconds() -> Result<()> {
+        let input = TimestampNanosecondArray::from(vec![Some(-999), Some(999), None]);
+        let micros = timestamp_to_microseconds(&input)?;
+        assert_eq!(micros, Int64Array::from(vec![Some(-1), Some(0), None]));
+
+        let output = microseconds_to_timestamp(micros, TimeUnit::Nanosecond)?;
+        assert_eq!(
+            output.as_primitive::<TimestampNanosecondType>(),
+            &TimestampNanosecondArray::from(vec![Some(-1_000), Some(0), None]),
+        );
+        Ok(())
+    }
 }
