@@ -3,7 +3,7 @@ use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::master::SlotReservation;
-use crate::shuffle::{ShuffleClientActor, ShuffleClientEvent};
+use crate::shuffle::{ShuffleClientActor, ShuffleClientMessage};
 
 /// A local handle to a Celeborn shuffle client actor.
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ impl ShuffleClient {
     ) -> CelebornResult<usize> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientEvent::PushData {
+            .send(ShuffleClientMessage::PushData {
                 shuffle_id,
                 partition_id,
                 map_id,
@@ -48,7 +48,7 @@ impl ShuffleClient {
     ) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientEvent::MapperEnd {
+            .send(ShuffleClientMessage::MapperEnd {
                 shuffle_id,
                 map_id,
                 attempt_id,
@@ -67,7 +67,7 @@ impl ShuffleClient {
     ) -> CelebornResult<Vec<u8>> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientEvent::ReadPartition {
+            .send(ShuffleClientMessage::ReadPartition {
                 shuffle_id,
                 partition_id,
                 result,
@@ -87,7 +87,7 @@ impl ShuffleClient {
     ) -> CelebornResult<SlotReservation> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientEvent::RegisterShuffle {
+            .send(ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,
                 should_replicate,
@@ -103,7 +103,7 @@ impl ShuffleClient {
     pub async fn stop(&self) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientEvent::Stop { result })
+            .send(ShuffleClientMessage::Stop { result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)

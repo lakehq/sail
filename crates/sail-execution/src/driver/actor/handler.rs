@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
-use crate::driver::{DriverEvent, TaskStatus};
+use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
 use crate::stream::error::TaskStreamError;
@@ -260,11 +260,11 @@ impl DriverActor {
                     .options
                     .worker_launch_timeout
                     .min(self.options.task_launch_timeout);
-                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
+                ctx.send_with_delay(DriverMessage::ProbePendingTask { key }, delay);
             } else {
                 let message = "task scheduling timeout".to_string();
                 let cause = CommonErrorCause::Execution(message.clone());
-                ctx.send(DriverEvent::UpdateTask {
+                ctx.send(DriverMessage::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
@@ -440,7 +440,7 @@ impl DriverActor {
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
-                            DriverEvent::ProbePendingTask {
+                            DriverMessage::ProbePendingTask {
                                 key: entry.key.clone(),
                             },
                             self.options.task_launch_timeout,
@@ -541,7 +541,7 @@ impl DriverActor {
                     Err(e) => {
                         // The task failure will be handled as a separate event
                         // after processing the current assignments.
-                        ctx.send(DriverEvent::UpdateTask {
+                        ctx.send(DriverMessage::UpdateTask {
                             key: entry.key,
                             status: TaskStatus::Failed,
                             message: Some(e.to_string()),

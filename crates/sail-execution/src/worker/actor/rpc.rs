@@ -11,11 +11,10 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer};
-use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
-use crate::worker::event::WorkerStreamOwner;
 use crate::worker::r#gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
+use crate::worker::{WorkerMessage, WorkerStreamOwner};
 
 struct WorkerTaskStreamFetcher {
     handle: ActorHandle<WorkerActor>,
@@ -28,7 +27,7 @@ impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
         key: TaskStreamKey,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let event = WorkerEvent::FetchWorkerStream {
+        let event = WorkerMessage::FetchWorkerStream {
             owner: WorkerStreamOwner::This,
             key,
             result: sender,
@@ -66,7 +65,7 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Zstd);
 
         handle
-            .send(WorkerEvent::ServerReady { port, signal: tx })
+            .send(WorkerMessage::ServerReady { port, signal: tx })
             .await?;
 
         ServerBuilder::new("sail_worker", Default::default())

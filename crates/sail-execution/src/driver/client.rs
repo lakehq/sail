@@ -1,12 +1,11 @@
 use sail_common_datafusion::error::CommonErrorCause;
 
-use crate::driver::event::TaskStatus;
-use crate::driver::r#gen;
 use crate::driver::r#gen::driver_service_client::DriverServiceClient;
 use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse,
 };
+use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};

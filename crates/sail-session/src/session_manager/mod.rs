@@ -1,6 +1,4 @@
 mod actor;
-mod event;
-mod options;
 mod session;
 
 use std::fmt;
@@ -18,9 +16,10 @@ use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{
     ServerSessionInfo, ServerSessionJobRunnerFactory, SessionFactory, SessionJobRunnerFactory,
 };
-pub(crate) use crate::session_manager::actor::SessionManagerActor;
-pub(crate) use crate::session_manager::event::SessionManagerEvent;
-pub use crate::session_manager::options::{SessionManagerComponents, SessionManagerOptions};
+pub(crate) use crate::session_manager::actor::{
+    SessionHistory, SessionManagerActor, SessionManagerMessage,
+};
+pub use crate::session_manager::actor::{SessionManagerComponents, SessionManagerOptions};
 
 pub type ServerSessionFactoryFn =
     fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
@@ -52,7 +51,7 @@ impl SessionManager {
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::GetOrCreateSession {
+        let event = SessionManagerMessage::GetOrCreateSession {
             session_id,
             user_id,
             result: tx,
@@ -64,7 +63,7 @@ impl SessionManager {
 
     pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::DeleteSession {
+        let event = SessionManagerMessage::DeleteSession {
             session_id,
             result: tx,
         };
@@ -77,7 +76,7 @@ impl SessionManager {
     pub async fn shutdown(&self) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
         self.handle
-            .send(SessionManagerEvent::Shutdown { result: tx })
+            .send(SessionManagerMessage::Shutdown { result: tx })
             .await?;
         rx.await.map_err(|e| {
             SessionError::internal(format!("failed to shut down session manager: {e}"))

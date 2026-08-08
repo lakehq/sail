@@ -8,12 +8,12 @@ use datafusion::execution::TaskContext;
 use sail_common::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
-use crate::driver::DriverEvent;
+use crate::driver::DriverMessage;
 use crate::error::ExecutionResult;
 use crate::id::{TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::{WorkerEvent, WorkerStreamOwner};
+use crate::worker::{WorkerMessage, WorkerStreamOwner};
 
 pub struct StreamAccessor<T: Actor> {
     handle: ActorHandle<T>,
@@ -71,14 +71,14 @@ pub trait StreamAccessorMessage {
     ) -> Self;
 }
 
-impl StreamAccessorMessage for DriverEvent {
+impl StreamAccessorMessage for DriverMessage {
     fn create_local_stream(
         key: TaskStreamKey,
         storage: LocalStreamStorage,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
-        DriverEvent::CreateLocalStream {
+        DriverMessage::CreateLocalStream {
             key,
             storage,
             schema,
@@ -92,7 +92,7 @@ impl StreamAccessorMessage for DriverEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
-        DriverEvent::CreateRemoteStream {
+        DriverMessage::CreateRemoteStream {
             key,
             schema,
             context,
@@ -105,7 +105,7 @@ impl StreamAccessorMessage for DriverEvent {
         _schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        DriverEvent::FetchDriverStream { key, result }
+        DriverMessage::FetchDriverStream { key, result }
     }
 
     fn fetch_worker_stream(
@@ -114,7 +114,7 @@ impl StreamAccessorMessage for DriverEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        DriverEvent::FetchWorkerStream {
+        DriverMessage::FetchWorkerStream {
             worker_id,
             key,
             schema,
@@ -128,7 +128,7 @@ impl StreamAccessorMessage for DriverEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        DriverEvent::FetchRemoteStream {
+        DriverMessage::FetchRemoteStream {
             key,
             schema,
             context,
@@ -137,14 +137,14 @@ impl StreamAccessorMessage for DriverEvent {
     }
 }
 
-impl StreamAccessorMessage for WorkerEvent {
+impl StreamAccessorMessage for WorkerMessage {
     fn create_local_stream(
         key: TaskStreamKey,
         storage: LocalStreamStorage,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
-        WorkerEvent::CreateLocalStream {
+        WorkerMessage::CreateLocalStream {
             key,
             storage,
             schema,
@@ -158,7 +158,7 @@ impl StreamAccessorMessage for WorkerEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> Self {
-        WorkerEvent::CreateRemoteStream {
+        WorkerMessage::CreateRemoteStream {
             key,
             schema,
             context,
@@ -171,7 +171,7 @@ impl StreamAccessorMessage for WorkerEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        WorkerEvent::FetchDriverStream {
+        WorkerMessage::FetchDriverStream {
             key,
             schema,
             result,
@@ -184,7 +184,7 @@ impl StreamAccessorMessage for WorkerEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        WorkerEvent::FetchWorkerStream {
+        WorkerMessage::FetchWorkerStream {
             owner: WorkerStreamOwner::Worker { worker_id, schema },
             key,
             result,
@@ -197,7 +197,7 @@ impl StreamAccessorMessage for WorkerEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
-        WorkerEvent::FetchRemoteStream {
+        WorkerMessage::FetchRemoteStream {
             key,
             schema,
             context,

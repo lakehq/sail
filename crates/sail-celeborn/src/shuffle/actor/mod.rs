@@ -1,9 +1,11 @@
 mod core;
 mod handler;
+mod message;
 mod options;
 
 use std::collections::HashMap;
 
+pub use message::ShuffleClientMessage;
 pub use options::ShuffleClientOptions;
 
 use crate::master::PartitionLocation;

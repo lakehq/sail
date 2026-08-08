@@ -16,7 +16,7 @@ use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
-use crate::driver::{DriverActor, DriverEvent, TaskStatus};
+use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::rpc::ClientOptions;
@@ -40,7 +40,7 @@ impl WorkerPool {
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.generate() else {
             error!("failed to generate worker ID");
-            ctx.send(DriverEvent::Shutdown { result: None });
+            ctx.send(DriverMessage::Shutdown { result: None });
             return;
         };
         let descriptor = WorkerDescriptor {
@@ -52,7 +52,7 @@ impl WorkerPool {
         };
         self.workers.insert(worker_id, descriptor);
         ctx.send_with_delay(
-            DriverEvent::ProbePendingWorker { worker_id },
+            DriverMessage::ProbePendingWorker { worker_id },
             self.options.worker_launch_timeout,
         );
         // We create a placeholder span when starting the worker before creating the new trace.
@@ -278,7 +278,7 @@ impl WorkerPool {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             let message = format!("worker {} not found", worker_id);
             let cause = CommonErrorCause::Internal(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
+            ctx.send(DriverMessage::UpdateTask {
                 key,
                 status: TaskStatus::Failed,
                 message: Some(message),
@@ -294,7 +294,7 @@ impl WorkerPool {
                 worker_id
             );
             let cause = CommonErrorCause::Internal(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
+            ctx.send(DriverMessage::UpdateTask {
                 key,
                 status: TaskStatus::Failed,
                 message: Some(message),
@@ -308,7 +308,7 @@ impl WorkerPool {
             Err(e) => {
                 let message = format!("failed to get worker {} client: {e}", worker_id);
                 let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
-                ctx.send(DriverEvent::UpdateTask {
+                ctx.send(DriverMessage::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
@@ -326,7 +326,7 @@ impl WorkerPool {
         ctx.spawn(async move {
             if let Err(e) = client.run_task(key.clone(), definition, peers).await {
                 let _ = handle
-                    .send(DriverEvent::UpdateTask {
+                    .send(DriverMessage::UpdateTask {
                         key,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
@@ -492,7 +492,7 @@ impl WorkerPool {
             return;
         };
         ctx.send_with_delay(
-            DriverEvent::ProbeIdleWorker {
+            DriverMessage::ProbeIdleWorker {
                 worker_id,
                 instant: *updated_at,
             },
@@ -511,7 +511,7 @@ impl WorkerPool {
             return;
         };
         ctx.send_with_delay(
-            DriverEvent::ProbeLostWorker {
+            DriverMessage::ProbeLostWorker {
                 worker_id,
                 instant: *heartbeat_at,
             },

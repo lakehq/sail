@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::master::SlotReservation;
-use crate::shuffle::ShuffleClientEvent;
+use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::ShuffleClientActor;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
@@ -26,7 +26,7 @@ impl ShuffleClientActor {
                 .request_slots(shuffle_id, partition_ids, should_replicate, max_workers)
                 .await;
             let _ = handle
-                .send(ShuffleClientEvent::RegisterShuffleEnd {
+                .send(ShuffleClientMessage::RegisterShuffleEnd {
                     shuffle_id,
                     result,
                     reply,

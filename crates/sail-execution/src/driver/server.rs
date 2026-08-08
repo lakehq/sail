@@ -10,7 +10,7 @@ use crate::driver::r#gen::{
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
     ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{DriverEvent, DriverRegistryAccessor, r#gen};
+use crate::driver::{DriverMessage, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
 use crate::id::{DriverId, TaskKey, WorkerId};
 
@@ -42,7 +42,7 @@ impl DriverService for DriverServer {
             Status::invalid_argument("port must be a valid 16-bit unsigned integer")
         })?;
         let (tx, rx) = oneshot::channel();
-        let event = DriverEvent::RegisterWorker {
+        let event = DriverMessage::RegisterWorker {
             worker_id: WorkerId::from(worker_id),
             host,
             port,
@@ -70,7 +70,7 @@ impl DriverService for DriverServer {
             driver_id,
             worker_id,
         } = request;
-        let event = DriverEvent::WorkerHeartbeat {
+        let event = DriverMessage::WorkerHeartbeat {
             worker_id: worker_id.into(),
         };
         self.registry
@@ -95,7 +95,7 @@ impl DriverService for DriverServer {
             worker_id,
             peer_worker_ids,
         } = request;
-        let event = DriverEvent::WorkerKnownPeers {
+        let event = DriverMessage::WorkerKnownPeers {
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
         };
@@ -132,7 +132,7 @@ impl DriverService for DriverServer {
             .map(|x| serde_json::from_str(&x))
             .transpose()
             .map_err(ExecutionError::from)?;
-        let event = DriverEvent::UpdateTask {
+        let event = DriverMessage::UpdateTask {
             key: TaskKey {
                 job_id: job_id.into(),
                 stage: stage as usize,

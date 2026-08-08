@@ -2,7 +2,7 @@ use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
-use crate::lifecycle::{LifecycleManager, LifecycleManagerActor, LifecycleManagerEvent};
+use crate::lifecycle::{LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage};
 use crate::master::SlotReservation;
 
 /// A lifecycle manager backed by a local actor.
@@ -28,7 +28,7 @@ impl LifecycleManager for LocalLifecycleManager {
     ) -> CelebornResult<SlotReservation> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerEvent::RequestSlotsBegin {
+            .send(LifecycleManagerMessage::RequestSlotsBegin {
                 shuffle_id,
                 partition_ids,
                 should_replicate,
@@ -43,7 +43,7 @@ impl LifecycleManager for LocalLifecycleManager {
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerEvent::UnregisterShuffleBegin { shuffle_id, result })
+            .send(LifecycleManagerMessage::UnregisterShuffleBegin { shuffle_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
@@ -58,7 +58,7 @@ impl LifecycleManager for LocalLifecycleManager {
     ) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerEvent::MapperEndBegin {
+            .send(LifecycleManagerMessage::MapperEndBegin {
                 shuffle_id,
                 map_id,
                 attempt_id,
@@ -73,7 +73,7 @@ impl LifecycleManager for LocalLifecycleManager {
     async fn stop(&self) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerEvent::Stop { result })
+            .send(LifecycleManagerMessage::Stop { result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)

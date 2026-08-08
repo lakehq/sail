@@ -7,9 +7,9 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverEvent, TaskStatus};
+use crate::driver::{DriverMessage, TaskStatus};
 use crate::id::TaskKey;
-use crate::worker::WorkerEvent;
+use crate::worker::WorkerMessage;
 
 pub struct TaskRunner {
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
@@ -25,14 +25,14 @@ pub trait TaskRunnerMessage {
     ) -> Self;
 }
 
-impl TaskRunnerMessage for DriverEvent {
+impl TaskRunnerMessage for DriverMessage {
     fn report_task_status(
         key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) -> Self {
-        DriverEvent::UpdateTask {
+        DriverMessage::UpdateTask {
             key,
             status,
             message,
@@ -42,14 +42,14 @@ impl TaskRunnerMessage for DriverEvent {
     }
 }
 
-impl TaskRunnerMessage for WorkerEvent {
+impl TaskRunnerMessage for WorkerMessage {
     fn report_task_status(
         key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) -> Self {
-        WorkerEvent::ReportTaskStatus {
+        WorkerMessage::ReportTaskStatus {
             key,
             status,
             message,
