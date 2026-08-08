@@ -231,7 +231,7 @@ impl CacheState {
         *self
             .location_ids
             .entry(location.clone())
-            .or_insert_with(|| self.next_location_id.fetch_add(1, Ordering::SeqCst))
+            .or_insert_with(|| self.next_location_id.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Drop a location's cache identity so its pages and metadata become
@@ -245,6 +245,9 @@ impl CacheState {
     /// Adapted from ocra `read_through.rs`/`memory.rs` `head`.
     async fn cached_head(&self, location: &Path) -> Result<ObjectMeta> {
         let id = self.location_id(location);
+        if let Some(entry) = self.metas.get(&id) {
+            return Ok(entry.value().clone());
+        }
         let store = self.store.clone();
         let loc = location.clone();
         let entry = self
@@ -289,21 +292,22 @@ impl CacheState {
     /// `get_range_with` read-through closure) + `memory.rs` `get_with`.
     async fn fetch_page_slice(&self, location: &Path, plan: PagePlan) -> Result<Bytes> {
         let id = self.location_id(location);
+        let key = (id, plan.page_id);
+        if let Some(entry) = self.pages.get(&key) {
+            return Ok(page_slice(entry.value(), plan.in_page));
+        }
         let store = self.store.clone();
         let loc = location.clone();
         let offset = plan.offset;
         let page_end = plan.page_end;
         let entry = self
             .pages
-            .get_or_fetch(&(id, plan.page_id), move || async move {
+            .get_or_fetch(&key, move || async move {
                 store.get_range(&loc, offset..page_end).await
             })
             .await
             .map_err(|err| map_cache_error(location, err))?;
-        let page = entry.value();
-        let end = plan.in_page.end.min(page.len());
-        let start = plan.in_page.start.min(end);
-        Ok(page.slice(start..end))
+        Ok(page_slice(entry.value(), plan.in_page))
     }
 
     /// Read an absolute byte range, assembling it from cached pages.
@@ -366,6 +370,12 @@ impl CacheState {
             attributes: Attributes::default(),
         }
     }
+}
+
+fn page_slice(page: &Bytes, range: Range<usize>) -> Bytes {
+    let end = range.end.min(page.len());
+    let start = range.start.min(end);
+    page.slice(start..end)
 }
 
 fn estimate_meta_weight(meta: &ObjectMeta) -> usize {
