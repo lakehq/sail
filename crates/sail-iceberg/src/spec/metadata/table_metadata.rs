@@ -125,6 +125,14 @@ enum TableMetadataEnum {
     V3(TableMetadata),
 }
 
+impl TableMetadataEnum {
+    fn into_inner(self) -> TableMetadata {
+        match self {
+            Self::V1(metadata) | Self::V2(metadata) | Self::V3(metadata) => metadata,
+        }
+    }
+}
+
 impl TableMetadata {
     /// Get the current schema
     pub fn current_schema(&self) -> Option<&Schema> {
@@ -168,6 +176,11 @@ impl TableMetadata {
     pub fn from_json(data: &[u8]) -> Result<Self, serde_json::Error> {
         log::trace!("Attempting to parse table metadata JSON");
 
+        if !log::log_enabled!(log::Level::Trace) {
+            return serde_json::from_slice::<TableMetadataEnum>(data)
+                .map(TableMetadataEnum::into_inner);
+        }
+
         match serde_json::from_slice::<serde_json::Value>(data) {
             Ok(json_value) => {
                 if let Some(obj) = json_value.as_object() {
@@ -193,11 +206,7 @@ impl TableMetadata {
                         log::trace!("Failed to deserialize TableMetadata: {:?}", e);
                         e
                     })
-                    .map(|tm| match tm {
-                        TableMetadataEnum::V1(t)
-                        | TableMetadataEnum::V2(t)
-                        | TableMetadataEnum::V3(t) => t,
-                    })
+                    .map(TableMetadataEnum::into_inner)
             }
             Err(e) => {
                 log::trace!("Failed to parse as JSON: {:?}", e);
