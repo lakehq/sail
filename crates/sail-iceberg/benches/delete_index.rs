@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use sail_iceberg::spec::{
     DataContentType, DataFile, DataFileFormat, DeleteFileIndex, DeleteFileRef, Literal,
-    PrimitiveLiteral,
+    MatchedDeletes, PrimitiveLiteral,
 };
 
 const SAMPLES: usize = 11;
@@ -34,6 +34,32 @@ fn measure(name: &str, iterations: usize, mut run: impl FnMut()) {
         let started = Instant::now();
         for _ in 0..iterations {
             run();
+        }
+        nanos.push(started.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    nanos.sort_by(f64::total_cmp);
+    println!(
+        "{name}\titerations={iterations}\tmin_ns={:.1}\tmedian_ns={:.1}\tmax_ns={:.1}",
+        nanos[0],
+        nanos[SAMPLES / 2],
+        nanos[SAMPLES - 1]
+    );
+}
+
+fn measure_batched<T: Clone>(name: &str, iterations: usize, input: &T, mut run: impl FnMut(T)) {
+    if !selected(name) {
+        return;
+    }
+    for _ in 0..(iterations / 10).max(1) {
+        run(input.clone());
+    }
+
+    let mut nanos = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let inputs = (0..iterations).map(|_| input.clone()).collect::<Vec<_>>();
+        let started = Instant::now();
+        for input in inputs {
+            run(input);
         }
         nanos.push(started.elapsed().as_nanos() as f64 / iterations as f64);
     }
@@ -157,6 +183,62 @@ fn benchmark(name: &str, iterations: usize, index: &DeleteFileIndex, data_file: 
     });
 }
 
+fn legacy_partition_data_files(
+    index: &DeleteFileIndex,
+    data_files: Vec<(DataFile, i64)>,
+) -> (Vec<DataFile>, Vec<(DataFile, MatchedDeletes)>) {
+    let mut clean = Vec::new();
+    let mut dirty = Vec::new();
+    for (data_file, sequence_number) in data_files.iter().cloned() {
+        let matched = index.for_data_file(&data_file, sequence_number);
+        if matched.is_empty() {
+            clean.push(data_file);
+        } else {
+            dirty.push((data_file, matched));
+        }
+    }
+    (clean, dirty)
+}
+
+fn batch_data_files(count: usize) -> Vec<(DataFile, i64)> {
+    (0..count)
+        .map(|index| {
+            (
+                data_file(
+                    DataContentType::Data,
+                    format!("s3://warehouse/events/data/{index:08}.parquet"),
+                ),
+                10,
+            )
+        })
+        .collect()
+}
+
+fn benchmark_partition(
+    name: &str,
+    iterations: usize,
+    index: &DeleteFileIndex,
+    data_files: &[(DataFile, i64)],
+) {
+    let input = data_files.to_vec();
+    measure_batched(
+        &format!("delete_partition/legacy_{name}"),
+        iterations,
+        &input,
+        |input| {
+            black_box(legacy_partition_data_files(index, input));
+        },
+    );
+    measure_batched(
+        &format!("delete_partition/current_{name}"),
+        iterations,
+        &input,
+        |input| {
+            black_box(index.partition_data_files(input));
+        },
+    );
+}
+
 fn main() {
     let data = data_file(DataContentType::Data, DATA_PATH.to_string());
     benchmark(
@@ -188,5 +270,15 @@ fn main() {
         10_000,
         &index_with(8, 8, 8, 8),
         &data,
+    );
+
+    let files_1_000 = batch_data_files(1_000);
+    benchmark_partition("empty_1000", 20, &DeleteFileIndex::new(), &files_1_000);
+    benchmark_partition("path_miss_1000", 20, &index_with(8, 0, 0, 0), &files_1_000);
+    benchmark_partition(
+        "mixed_100",
+        10,
+        &index_with(8, 8, 8, 8),
+        &files_1_000[..100],
     );
 }

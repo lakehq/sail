@@ -291,6 +291,37 @@ impl DeleteFileIndex {
 
         matched
     }
+
+    /// Partition data files into files with and without applicable deletes.
+    ///
+    /// The input is consumed so clean files can move directly into scan planning
+    /// without cloning their metrics and partition values.
+    pub fn partition_data_files(
+        &self,
+        data_files: Vec<(DataFile, i64)>,
+    ) -> (Vec<DataFile>, Vec<(DataFile, MatchedDeletes)>) {
+        if self.is_empty() {
+            return (
+                data_files
+                    .into_iter()
+                    .map(|(data_file, _)| data_file)
+                    .collect(),
+                Vec::new(),
+            );
+        }
+
+        let mut clean = Vec::with_capacity(data_files.len());
+        let mut dirty = Vec::new();
+        for (data_file, sequence_number) in data_files {
+            let matched = self.for_data_file(&data_file, sequence_number);
+            if matched.is_empty() {
+                clean.push(data_file);
+            } else {
+                dirty.push((data_file, matched));
+            }
+        }
+        (clean, dirty)
+    }
 }
 
 /// Errors surfaced when building a [`DeleteFileIndex`].

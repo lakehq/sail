@@ -653,8 +653,12 @@ impl IcebergTableProvider {
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files
-    fn aggregate_statistics(&self, data_files: &[DataFile]) -> Statistics {
-        if data_files.is_empty() {
+    fn aggregate_statistics<'a>(
+        &self,
+        data_files: impl IntoIterator<Item = &'a DataFile>,
+    ) -> Statistics {
+        let mut data_files = data_files.into_iter().peekable();
+        if data_files.peek().is_none() {
             return Statistics::new_unknown(&self.arrow_schema);
         }
 
@@ -898,16 +902,7 @@ impl TableProvider for IcebergTableProvider {
         // Partition each data file into "clean" (no matching deletes) vs "dirty"
         // (one or more matching deletes) buckets. We only pay the cost of
         // `IcebergDeleteApplyExec` for dirty files.
-        let mut clean_files: Vec<DataFile> = Vec::new();
-        let mut dirty_units: Vec<(DataFile, Vec<DeleteFileRef>, Vec<DeleteFileRef>)> = Vec::new();
-        for (df, seq) in data_files_with_seq.iter().cloned() {
-            let matched = delete_index.for_data_file(&df, seq);
-            if matched.is_empty() {
-                clean_files.push(df);
-            } else {
-                dirty_units.push((df, matched.positional, matched.equality));
-            }
-        }
+        let (clean_files, dirty_units) = delete_index.partition_data_files(data_files_with_seq);
         log::trace!(
             "Delete split: {} clean, {} dirty",
             clean_files.len(),
@@ -915,11 +910,11 @@ impl TableProvider for IcebergTableProvider {
         );
 
         // Aggregate stats over ALL files (before split) for the planner.
-        let all_data_files: Vec<DataFile> = data_files_with_seq
-            .iter()
-            .map(|(df, _)| df.clone())
-            .collect();
-        let table_stats = self.aggregate_statistics(&all_data_files);
+        let table_stats = self.aggregate_statistics(
+            clean_files
+                .iter()
+                .chain(dirty_units.iter().map(|(data_file, _)| data_file)),
+        );
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
@@ -927,7 +922,7 @@ impl TableProvider for IcebergTableProvider {
         if dirty_units.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
-            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
+            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
             let file_groups = self.create_file_groups(partitioned_files);
             let parquet_source = self.build_parquet_source(
                 session,
@@ -980,7 +975,7 @@ impl TableProvider for IcebergTableProvider {
         }
 
         // Branch B: one branch per dirty file.
-        for (df, pos_deletes, eq_deletes) in dirty_units {
+        for (df, matched) in dirty_units {
             let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
             let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
@@ -999,8 +994,8 @@ impl TableProvider for IcebergTableProvider {
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
                 data_file_raw_path,
-                pos_deletes,
-                eq_deletes,
+                matched.positional,
+                matched.equality,
                 self.table_uri.clone(),
                 self.schema.clone(),
             ));
