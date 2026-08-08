@@ -135,6 +135,34 @@ Feature: sequence output schema
         | result_type   | result    |
         | array<bigint> | [1, 2, 3] |
 
+    Scenario: ANSI sequence coercion trims Spark control whitespace
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          typeof(sequence(
+            1,
+            concat(chr(9), '3', chr(10))
+          )) AS result_type,
+          sequence(
+            1,
+            concat(chr(9), '3', chr(10))
+          ) AS result
+        """
+      Then query result
+        | result_type   | result    |
+        | array<bigint> | [1, 2, 3] |
+
+    Scenario: ANSI sequence coercion trims Spark whitespace in an integral context
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(1, '\t3\n') AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
     Scenario Outline: sequence rejects unresolved input families
       Given config spark.sql.ansi.enabled = <ansi>
       When query

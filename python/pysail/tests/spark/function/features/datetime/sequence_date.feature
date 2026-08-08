@@ -162,6 +162,13 @@ Feature: sequence() over DATE returns expected arrays
         | +1:00               | [2022-03-09, 2022-03-13] |
         | +01:02:03           | [2022-03-09, 2022-03-13] |
         | PST                 | [2022-03-09, 2022-03-14] |
+        | EST                 | [2022-03-09, 2022-03-13] |
+        | MST                 | [2022-03-09, 2022-03-13] |
+        | UT                  | [2022-03-09, 2022-03-13] |
+        | UTC+8               | [2022-03-09, 2022-03-13] |
+        | GMT+8:30            | [2022-03-09, 2022-03-13] |
+        | +8                  | [2022-03-09, 2022-03-13] |
+        | +0130               | [2022-03-09, 2022-03-13] |
 
     Scenario: temporal sequence uses Spark's microsecond-exclusive boundary
       Given config spark.sql.session.timeZone = UTC
