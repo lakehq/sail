@@ -41,6 +41,10 @@ foyer = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[[bench]]
+name = "object_store_cache"
+harness = false
+
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
 default = ["hdfs"]
