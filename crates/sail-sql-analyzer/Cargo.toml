@@ -16,3 +16,7 @@ lazy_static = { workspace = true }
 chrono = { workspace = true }
 chumsky = { workspace = true }
 either = { workspace = true }
+
+[[bench]]
+name = "sql_frontend"
+harness = false
