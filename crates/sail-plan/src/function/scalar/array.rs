@@ -321,6 +321,17 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
     )
 }
 
+/// Characters Spark strips from both ends of a string before parsing it as an integer.
+///
+/// Spark has no such literal: `org.apache.spark.unsafe.types.UTF8String#toLong` trims while
+/// `isWhitespaceOrISOControl(getByte(i))` holds, and `getByte` returns a *signed* byte, so
+/// `0x80..=0xFF` sign-extend to negative values and never match. Over the 256 byte values that
+/// predicate is true for exactly `0x00..=0x20` and `0x7F`. Every byte of a multi-byte UTF-8
+/// sequence is `>= 0x80`, so trimming these characters is equivalent to Spark's byte-wise trim.
+/// The `toInt` family (and therefore INT, SMALLINT and TINYINT) shares the same set, while
+/// DOUBLE, FLOAT and DECIMAL use Java `String#trim` instead.
+const SPARK_INTEGER_TRIM_CHARACTERS: &str = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x7f";
+
 fn sequence_cast(
     argument: expr::Expr,
     source_type: &DataType,
@@ -333,7 +344,7 @@ fn sequence_cast(
 
     Ok(match (source_type, target_type) {
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Int64) => {
-            cast(btrim(vec![argument]), target_type.clone())
+            cast(btrim(vec![argument, lit(SPARK_INTEGER_TRIM_CHARACTERS)]), target_type.clone())
         }
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
             ScalarUDF::from(SparkDate::new(false)).call(vec![argument])
