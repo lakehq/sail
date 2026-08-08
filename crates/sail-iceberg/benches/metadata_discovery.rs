@@ -33,12 +33,7 @@ fn report(name: &str, iterations: usize, mut nanos: Vec<f64>) {
     );
 }
 
-fn measure(
-    name: &str,
-    iterations: usize,
-    store: &Arc<dyn ObjectStore>,
-    table_url: &Url,
-) {
+fn measure(name: &str, iterations: usize, store: &Arc<dyn ObjectStore>, table_url: &Url) {
     if !selected(name) {
         return;
     }
