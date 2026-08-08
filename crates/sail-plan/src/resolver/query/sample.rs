@@ -68,7 +68,7 @@ impl PlanResolver<'_> {
             seed,
             deterministic_order,
         } = sample;
-        if lower_bound >= upper_bound {
+        if lower_bound > upper_bound {
             return Err(PlanError::invalid(format!(
                 "invalid sample bounds: [{lower_bound}, {upper_bound})"
             )));

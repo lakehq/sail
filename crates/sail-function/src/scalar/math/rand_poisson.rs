@@ -75,6 +75,10 @@ impl ScalarUDFImpl for RandPoisson {
                 );
             }
         };
+        if lambda == 0.0 {
+            let values = Int64Array::from_value(0, number_rows);
+            return Ok(ColumnarValue::Array(Arc::new(values)));
+        }
         if args.len() == 1 {
             return invoke_no_seed(lambda, number_rows);
         }
