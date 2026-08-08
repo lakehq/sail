@@ -74,5 +74,9 @@ harness = false
 name = "delete_index"
 harness = false
 
+[[bench]]
+name = "metadata_discovery"
+harness = false
+
 [lints]
 workspace = true
