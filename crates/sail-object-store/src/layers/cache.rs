@@ -326,6 +326,16 @@ impl CacheState {
         Ok(page_slice(entry.value(), plan.in_page))
     }
 
+    async fn fetch_owned_page_slice(
+        self: Arc<Self>,
+        location_id: u64,
+        location: Arc<Path>,
+        plan: PagePlan,
+    ) -> Result<Bytes> {
+        self.fetch_page_slice(location_id, location.as_ref(), plan)
+            .await
+    }
+
     /// Read an absolute byte range, assembling it from cached pages.
     /// Adapted from ocra `read_through.rs` `get_range`.
     async fn read_range(
@@ -335,27 +345,24 @@ impl CacheState {
         meta: &ObjectMeta,
         range: Range<u64>,
     ) -> Result<Bytes> {
-        let plans = self.page_plan(range, meta.size);
+        let mut plans = self.page_plan(range, meta.size);
         if plans.is_empty() {
             return Ok(Bytes::new());
         }
+        if plans.len() == 1 {
+            return self
+                .fetch_owned_page_slice(location_id, location, plans.remove(0))
+                .await;
+        }
         let pages: Vec<Bytes> = stream::iter(plans)
             .map(|plan| {
-                let this = self.clone();
-                let location = Arc::clone(&location);
-                async move {
-                    this.fetch_page_slice(location_id, location.as_ref(), plan)
-                        .await
-                }
+                self.clone()
+                    .fetch_owned_page_slice(location_id, Arc::clone(&location), plan)
             })
             .buffered(self.parallelism)
             .try_collect()
             .await?;
 
-        // Avoid a copy for the common single-page case.
-        if let [single] = pages.as_slice() {
-            return Ok(single.clone());
-        }
         let total: usize = pages.iter().map(Bytes::len).sum();
         let mut buf = Vec::with_capacity(total);
         for page in pages {
@@ -374,19 +381,20 @@ impl CacheState {
         meta: ObjectMeta,
         range: Range<u64>,
     ) -> GetResult {
-        let plans = self.page_plan(range.clone(), meta.size);
+        let mut plans = self.page_plan(range.clone(), meta.size);
         let parallelism = self.parallelism;
-        let stream = stream::iter(plans)
-            .map(move |plan| {
-                let this = self.clone();
-                let location = Arc::clone(&location);
-                async move {
-                    this.fetch_page_slice(location_id, location.as_ref(), plan)
-                        .await
-                }
-            })
-            .buffered(parallelism)
-            .boxed();
+        let stream = if plans.len() == 1 {
+            stream::once(self.fetch_owned_page_slice(location_id, location, plans.remove(0)))
+                .boxed()
+        } else {
+            stream::iter(plans)
+                .map(move |plan| {
+                    self.clone()
+                        .fetch_owned_page_slice(location_id, Arc::clone(&location), plan)
+                })
+                .buffered(parallelism)
+                .boxed()
+        };
         GetResult {
             payload: GetResultPayload::Stream(stream),
             meta,
@@ -692,6 +700,23 @@ mod tests {
         let got = cache.get_range(&path, 500..2500).await.unwrap();
         assert_eq!(got.len(), 2000);
         assert_eq!(&got[..], &data[500..2500]);
+    }
+
+    #[tokio::test]
+    async fn get_ranges_preserves_order_across_pages() {
+        let data = pattern(3000);
+        let (_dir, _counting, cache, path) = setup(&data, 1024);
+        let ranges = [2048..2100, 100..200, 900..1200];
+
+        let got = cache.get_ranges(&path, &ranges).await.unwrap();
+
+        assert_eq!(got.len(), ranges.len());
+        for (bytes, range) in got.iter().zip(ranges) {
+            assert_eq!(
+                bytes.as_ref(),
+                &data[range.start as usize..range.end as usize]
+            );
+        }
     }
 
     #[tokio::test]
