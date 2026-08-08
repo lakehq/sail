@@ -51,23 +51,23 @@ impl SessionManager {
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerMessage::GetOrCreateSession {
+        let message = SessionManagerMessage::GetOrCreateSession {
             session_id,
             user_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?
     }
 
     pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerMessage::DeleteSession {
+        let message = SessionManagerMessage::DeleteSession {
             session_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }

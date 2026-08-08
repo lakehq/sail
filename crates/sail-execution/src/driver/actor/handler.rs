@@ -539,7 +539,7 @@ impl DriverActor {
                 {
                     Ok(x) => x,
                     Err(e) => {
-                        // The task failure will be handled as a separate event
+                        // The task failure will be handled as a separate message
                         // after processing the current assignments.
                         ctx.send(DriverMessage::UpdateTask {
                             key: entry.key,

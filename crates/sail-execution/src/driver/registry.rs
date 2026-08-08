@@ -14,7 +14,7 @@ use crate::id::DriverId;
 /// This wrapper lets the session manager own the driver lifecycle without exposing
 /// [`DriverActor`] or [`DriverMessage`] outside the `sail-execution` crate.
 /// Keeping the underlying actor handle private prevents callers from sending arbitrary
-/// driver events and avoids coupling session management to the driver actor implementation.
+/// driver messages and avoids coupling session management to the driver actor implementation.
 #[derive(Clone)]
 pub struct DriverHandle {
     handle: ActorHandle<DriverActor>,
@@ -25,8 +25,11 @@ impl DriverHandle {
         Self { handle }
     }
 
-    pub(crate) async fn send(&self, event: DriverMessage) -> Result<(), SendError<DriverMessage>> {
-        self.handle.send(event).await
+    pub(crate) async fn send(
+        &self,
+        message: DriverMessage,
+    ) -> Result<(), SendError<DriverMessage>> {
+        self.handle.send(message).await
     }
 
     pub async fn activate(&self) -> ExecutionResult<()> {

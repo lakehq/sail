@@ -46,7 +46,7 @@ impl WorkerService for WorkerServer {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
             .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
-        let event = WorkerMessage::RunTask {
+        let message = WorkerMessage::RunTask {
             key: TaskKey {
                 job_id: job_id.into(),
                 stage: stage as usize,
@@ -57,7 +57,7 @@ impl WorkerService for WorkerServer {
             peers,
         };
         self.handle
-            .send(event)
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = RunTaskResponse {};
@@ -77,7 +77,7 @@ impl WorkerService for WorkerServer {
             partition,
             attempt,
         } = request;
-        let event = WorkerMessage::StopTask {
+        let message = WorkerMessage::StopTask {
             key: TaskKey {
                 job_id: job_id.into(),
                 stage: stage as usize,
@@ -86,7 +86,7 @@ impl WorkerService for WorkerServer {
             },
         };
         self.handle
-            .send(event)
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
@@ -101,12 +101,12 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
-        let event = WorkerMessage::CleanUpJob {
+        let message = WorkerMessage::CleanUpJob {
             job_id: job_id.into(),
             stage: stage.map(|x| x as usize),
         };
         self.handle
-            .send(event)
+            .send(message)
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};

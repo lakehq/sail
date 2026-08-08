@@ -20,6 +20,6 @@ pub struct WorkerActor {
     peer_tracker: PeerTracker,
     task_runner: TaskRunner,
     stream_manager: StreamManager,
-    /// A monotonically increasing sequence number for ordered events.
+    /// A monotonically increasing sequence number for ordered messages.
     sequence: u64,
 }

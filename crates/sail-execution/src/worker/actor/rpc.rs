@@ -27,12 +27,15 @@ impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
         key: TaskStreamKey,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let event = WorkerMessage::FetchWorkerStream {
+        let message = WorkerMessage::FetchWorkerStream {
             owner: WorkerStreamOwner::This,
             key,
             result: sender,
         };
-        self.handle.send(event).await.map_err(ExecutionError::from)
+        self.handle
+            .send(message)
+            .await
+            .map_err(ExecutionError::from)
     }
 }
 

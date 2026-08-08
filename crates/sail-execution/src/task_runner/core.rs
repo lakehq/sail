@@ -48,13 +48,13 @@ impl TaskRunner {
         let stream = match self.execute_plan(ctx, &key, definition, context) {
             Ok(x) => x,
             Err(e) => {
-                let event = T::Message::report_task_status(
+                let message = T::Message::report_task_status(
                     key,
                     TaskStatus::Failed,
                     Some(format!("failed to execute plan: {e}")),
                     Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
                 );
-                ctx.send(event);
+                ctx.send(message);
                 return;
             }
         };
