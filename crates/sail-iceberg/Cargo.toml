@@ -70,5 +70,9 @@ harness = false
 name = "metadata_updates"
 harness = false
 
+[[bench]]
+name = "delete_index"
+harness = false
+
 [lints]
 workspace = true
