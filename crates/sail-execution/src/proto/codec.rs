@@ -1473,8 +1473,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(IcebergDeleteApplyExec::new(
                     input,
                     data_file_path,
-                    positional_deletes,
-                    equality_deletes,
+                    positional_deletes.into_iter().map(Arc::new).collect(),
+                    equality_deletes.into_iter().map(Arc::new).collect(),
                     table_url,
                     iceberg_schema,
                 )))
