@@ -37,11 +37,14 @@ pub struct TaskSetEntry {
     pub output: TaskOutputKind,
 }
 
-/// Whether a task's output stream is stored locally on the executing node or written to a remote location.
+/// Where a task's output stream is materialized.
 #[derive(Debug, Clone)]
 pub enum TaskOutputKind {
     Local,
-    Remote,
+    Storage,
+    /// An externally managed shuffle service owns this stream, so the driver does not track it.
+    #[expect(dead_code, reason = "reserved for external shuffle services")]
+    External,
 }
 
 impl TaskRegion {
@@ -62,10 +65,10 @@ impl TaskSet {
             .map(|entry| &entry.key)
     }
 
-    pub fn remote_streams(&self) -> impl Iterator<Item = &TaskKey> {
+    pub fn storage_streams(&self) -> impl Iterator<Item = &TaskKey> {
         self.entries
             .iter()
-            .filter(|entry| matches!(entry.output, TaskOutputKind::Remote))
+            .filter(|entry| matches!(entry.output, TaskOutputKind::Storage))
             .map(|entry| &entry.key)
     }
 

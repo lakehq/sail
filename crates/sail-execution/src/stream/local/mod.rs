@@ -1,13 +1,12 @@
+pub(crate) mod accessor;
 mod core;
-mod local;
+mod memory;
 mod options;
-mod remote;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-pub use options::StreamManagerOptions;
+pub use options::LocalStreamManagerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
 
@@ -16,10 +15,9 @@ use crate::id::TaskStreamKey;
 use crate::stream::error::TaskStreamResult;
 use crate::worker::WorkerMessage;
 
-pub struct StreamManager {
-    options: StreamManagerOptions,
-    remote_streams: Option<Arc<remote::RemoteStreamManager>>,
-    local_streams: HashMap<TaskStreamKey, LocalStreamState>,
+pub struct LocalStreamManager {
+    options: LocalStreamManagerOptions,
+    streams: HashMap<TaskStreamKey, LocalStreamState>,
 }
 
 pub enum LocalStreamState {
@@ -27,24 +25,24 @@ pub enum LocalStreamState {
         senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
     },
     Created {
-        stream: Box<dyn local::LocalStream>,
+        stream: memory::MemoryStream,
     },
     Failed {
         cause: CommonErrorCause,
     },
 }
 
-pub trait StreamManagerMessage {
+pub trait LocalStreamManagerMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self;
 }
 
-impl StreamManagerMessage for DriverMessage {
+impl LocalStreamManagerMessage for DriverMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self {
         DriverMessage::ProbePendingLocalStream { key }
     }
 }
 
-impl StreamManagerMessage for WorkerMessage {
+impl LocalStreamManagerMessage for WorkerMessage {
     fn probe_pending_local_stream(key: TaskStreamKey) -> Self {
         WorkerMessage::ProbePendingLocalStream { key }
     }

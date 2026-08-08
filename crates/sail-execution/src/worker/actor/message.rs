@@ -11,7 +11,7 @@ use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::stream::writer::TaskStreamChannelSink;
 use crate::task::definition::TaskDefinition;
 use crate::worker::r#gen;
 
@@ -45,15 +45,15 @@ pub enum WorkerMessage {
     },
     CreateLocalStream {
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
-    CreateRemoteStream {
+    CreateStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -65,7 +65,7 @@ pub enum WorkerMessage {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchRemoteStream {
+    FetchStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -97,10 +97,10 @@ impl SpanAssociation for WorkerMessage {
             WorkerMessage::ReportTaskStatus { .. } => "ReportTaskStatus",
             WorkerMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             WorkerMessage::CreateLocalStream { .. } => "CreateLocalStream",
-            WorkerMessage::CreateRemoteStream { .. } => "CreateRemoteStream",
+            WorkerMessage::CreateStorageStream { .. } => "CreateStorageStream",
             WorkerMessage::FetchDriverStream { .. } => "FetchDriverStream",
             WorkerMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
-            WorkerMessage::FetchRemoteStream { .. } => "FetchRemoteStream",
+            WorkerMessage::FetchStorageStream { .. } => "FetchStorageStream",
             WorkerMessage::CleanUpJob { .. } => "CleanUpJob",
             WorkerMessage::Shutdown => "Shutdown",
         };
@@ -197,7 +197,7 @@ impl SpanAssociation for WorkerMessage {
                         attempt,
                         channel,
                     },
-                storage,
+                replicas: _,
                 schema: _,
                 result: _,
             } => {
@@ -206,12 +206,8 @@ impl SpanAssociation for WorkerMessage {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((
-                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
-                    storage.to_string(),
-                ));
             }
-            WorkerMessage::CreateRemoteStream {
+            WorkerMessage::CreateStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -269,7 +265,7 @@ impl SpanAssociation for WorkerMessage {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            WorkerMessage::FetchRemoteStream {
+            WorkerMessage::FetchStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,

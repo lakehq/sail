@@ -1,10 +1,12 @@
 mod core;
+mod extensions;
 mod handler;
 mod message;
 mod options;
 
 use std::collections::HashMap;
 
+use extensions::DriverExtensions;
 pub(crate) use message::{DriverMessage, TaskStatus};
 pub use options::{DriverComponents, DriverOptions};
 use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
@@ -14,7 +16,6 @@ use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
 use crate::driver::worker_pool::WorkerPool;
 use crate::id::TaskKey;
-use crate::stream_manager::StreamManager;
 use crate::task_runner::TaskRunner;
 
 pub struct DriverActor {
@@ -24,7 +25,7 @@ pub struct DriverActor {
     job_scheduler: JobScheduler,
     task_assigner: TaskAssigner,
     task_runner: TaskRunner,
-    stream_manager: StreamManager,
+    extensions: DriverExtensions,
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
