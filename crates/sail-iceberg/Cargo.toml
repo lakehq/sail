@@ -66,5 +66,9 @@ sail-build-scripts = { path = "../sail-build-scripts" }
 name = "manifest_parsing"
 harness = false
 
+[[bench]]
+name = "metadata_updates"
+harness = false
+
 [lints]
 workspace = true
