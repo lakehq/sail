@@ -62,5 +62,9 @@ educe = { workspace = true }
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
 
+[[bench]]
+name = "manifest_parsing"
+harness = false
+
 [lints]
 workspace = true
