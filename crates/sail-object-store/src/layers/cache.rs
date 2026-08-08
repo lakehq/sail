@@ -219,6 +219,11 @@ struct PagePlan {
     in_page: Range<usize>,
 }
 
+struct CachedHead {
+    location_id: u64,
+    meta: ObjectMeta,
+}
+
 impl CacheState {
     /// Resolve (or assign) the compact id for a location.
     /// Adapted from ocra `memory.rs` `location_id`.
@@ -243,10 +248,13 @@ impl CacheState {
 
     /// Return cached object metadata, fetching from the inner store on a miss.
     /// Adapted from ocra `read_through.rs`/`memory.rs` `head`.
-    async fn cached_head(&self, location: &Path) -> Result<ObjectMeta> {
+    async fn cached_head(&self, location: &Path) -> Result<CachedHead> {
         let id = self.location_id(location);
         if let Some(entry) = self.metas.get(&id) {
-            return Ok(entry.value().clone());
+            return Ok(CachedHead {
+                location_id: id,
+                meta: entry.value().clone(),
+            });
         }
         let store = self.store.clone();
         let loc = location.clone();
@@ -255,7 +263,10 @@ impl CacheState {
             .get_or_fetch(&id, move || async move { store.head(&loc).await })
             .await
             .map_err(|err| map_cache_error(location, err))?;
-        Ok(entry.value().clone())
+        Ok(CachedHead {
+            location_id: id,
+            meta: entry.value().clone(),
+        })
     }
 
     /// Compute the per-page fetch plan covering the absolute byte range `range`.
@@ -267,7 +278,8 @@ impl CacheState {
         }
         let page_size = self.page_size;
         let start = (range.start / page_size) * page_size;
-        let mut plans = Vec::new();
+        let page_count = (range.end - start).div_ceil(page_size) as usize;
+        let mut plans = Vec::with_capacity(page_count);
         let mut offset = start;
         while offset < range.end {
             let page_id = (offset / page_size) as u32;
@@ -290,9 +302,13 @@ impl CacheState {
     /// Fetch a single page (read-through, deduplicated by Foyer) and return the
     /// requested sub-slice. Adapted from ocra `read_through.rs` (the
     /// `get_range_with` read-through closure) + `memory.rs` `get_with`.
-    async fn fetch_page_slice(&self, location: &Path, plan: PagePlan) -> Result<Bytes> {
-        let id = self.location_id(location);
-        let key = (id, plan.page_id);
+    async fn fetch_page_slice(
+        &self,
+        location_id: u64,
+        location: &Path,
+        plan: PagePlan,
+    ) -> Result<Bytes> {
+        let key = (location_id, plan.page_id);
         if let Some(entry) = self.pages.get(&key) {
             return Ok(page_slice(entry.value(), plan.in_page));
         }
@@ -313,8 +329,9 @@ impl CacheState {
     /// Read an absolute byte range, assembling it from cached pages.
     /// Adapted from ocra `read_through.rs` `get_range`.
     async fn read_range(
-        self: &Arc<Self>,
-        location: &Path,
+        self: Arc<Self>,
+        location_id: u64,
+        location: Arc<Path>,
         meta: &ObjectMeta,
         range: Range<u64>,
     ) -> Result<Bytes> {
@@ -325,8 +342,11 @@ impl CacheState {
         let pages: Vec<Bytes> = stream::iter(plans)
             .map(|plan| {
                 let this = self.clone();
-                let location = location.clone();
-                async move { this.fetch_page_slice(&location, plan).await }
+                let location = Arc::clone(&location);
+                async move {
+                    this.fetch_page_slice(location_id, location.as_ref(), plan)
+                        .await
+                }
             })
             .buffered(self.parallelism)
             .try_collect()
@@ -349,7 +369,8 @@ impl CacheState {
     /// Adapted from ocra `read_through.rs` `get` (the page stream).
     fn range_get_result(
         self: Arc<Self>,
-        location: Path,
+        location_id: u64,
+        location: Arc<Path>,
         meta: ObjectMeta,
         range: Range<u64>,
     ) -> GetResult {
@@ -358,8 +379,11 @@ impl CacheState {
         let stream = stream::iter(plans)
             .map(move |plan| {
                 let this = self.clone();
-                let location = location.clone();
-                async move { this.fetch_page_slice(&location, plan).await }
+                let location = Arc::clone(&location);
+                async move {
+                    this.fetch_page_slice(location_id, location.as_ref(), plan)
+                        .await
+                }
             })
             .buffered(parallelism)
             .boxed();
@@ -436,7 +460,7 @@ impl ObjectStore for CachingObjectStore {
         }
 
         if options.head {
-            let meta = self.state.cached_head(location).await?;
+            let CachedHead { meta, .. } = self.state.cached_head(location).await?;
             return Ok(GetResult {
                 payload: GetResultPayload::Stream(stream::empty().boxed()),
                 meta,
@@ -445,7 +469,7 @@ impl ObjectStore for CachingObjectStore {
             });
         }
 
-        let meta = self.state.cached_head(location).await?;
+        let CachedHead { location_id, meta } = self.state.cached_head(location).await?;
         let range = match &options.range {
             Some(get_range) => get_range
                 .as_range(meta.size)
@@ -455,24 +479,26 @@ impl ObjectStore for CachingObjectStore {
                 })?,
             None => 0..meta.size,
         };
-        Ok(self
-            .state
-            .clone()
-            .range_get_result(location.clone(), meta, range))
+        Ok(self.state.clone().range_get_result(
+            location_id,
+            Arc::new(location.clone()),
+            meta,
+            range,
+        ))
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         // Serve each range through the page cache (rather than the default,
         // which would still route through our cached `get_opts`, but this keeps
         // a single `head` lookup and bounds concurrency explicitly).
-        let meta = self.state.cached_head(location).await?;
+        let CachedHead { location_id, meta } = self.state.cached_head(location).await?;
         let state = self.state.clone();
-        stream::iter(ranges.to_vec())
+        let location = Arc::new(location.clone());
+        stream::iter(ranges.iter().cloned())
             .map(|range| {
                 let state = state.clone();
-                let location = location.clone();
-                let meta = meta.clone();
-                async move { state.read_range(&location, &meta, range).await }
+                let location = Arc::clone(&location);
+                state.read_range(location_id, location, &meta, range)
             })
             .buffered(self.state.parallelism)
             .try_collect()
