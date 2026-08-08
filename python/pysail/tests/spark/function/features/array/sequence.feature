@@ -236,3 +236,29 @@ Feature: sequence output schema
         | call                                                                                  |
         | sequence(-2147483648, 2147483647, 1)                                                  |
         | sequence(CAST(9223372036854775807 AS BIGINT), CAST(-1 AS BIGINT), CAST(-1 AS BIGINT)) |
+
+    Scenario Outline: sequence reports Spark's collection limit message verbatim
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query error \[COLLECTION_SIZE_LIMIT_EXCEEDED\.PARAMETER\] Can't create array with <elements> elements which exceeding the array size limit 2147483632, the value of parameter\(s\) `count` in the function `sequence` is invalid\.
+
+      Examples:
+        | call                                                                                  | elements            |
+        | sequence(-2147483648, 2147483647, 1)                                                  | 4294967296          |
+        | sequence(CAST(9223372036854775807 AS BIGINT), CAST(-1 AS BIGINT), CAST(-1 AS BIGINT)) | 9223372036854775809 |
+
+    @sail-only
+    Scenario: sequence returns exact results where Spark reports an internal error
+      When query
+        """
+        SELECT sequence(
+          CAST(-9223372036854775808 AS BIGINT),
+          CAST(9223372036854775807 AS BIGINT),
+          CAST(9223372036854775807 AS BIGINT)
+        ) AS result
+        """
+      Then query result
+        | result                                          |
+        | [-9223372036854775808, -1, 9223372036854775806] |

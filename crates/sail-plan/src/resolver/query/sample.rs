@@ -130,7 +130,7 @@ impl PlanResolver<'_> {
             }
         }
 
-        self.apply_sample_to_plan(
+        Self::apply_sample_to_plan(
             input,
             lower_bound,
             upper_bound,
@@ -143,7 +143,6 @@ impl PlanResolver<'_> {
     /// Apply sampling to an existing LogicalPlan.
     /// This is used by both `resolve_query_sample` and TABLESAMPLE clause handling.
     pub(super) fn apply_sample_to_plan(
-        &self,
         input: LogicalPlan,
         lower_bound: f64,
         upper_bound: f64,
@@ -181,7 +180,7 @@ impl PlanResolver<'_> {
             .build()?;
 
         if with_replacement {
-            self.resolve_sample_with_replacement(
+            Self::resolve_sample_with_replacement(
                 plan_with_rand,
                 &rand_column_name,
                 init_exprs,
@@ -218,7 +217,6 @@ impl PlanResolver<'_> {
 
     /// Poisson sampling - replicate rows based on Poisson distribution
     fn resolve_sample_with_replacement(
-        &self,
         plan_with_rand: LogicalPlan,
         rand_column_name: &str,
         init_exprs: Vec<Expr>,

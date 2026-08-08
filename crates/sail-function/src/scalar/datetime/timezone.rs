@@ -2,10 +2,10 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, MappedLocalTime, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use chrono_tz::Tz;
+use datafusion_common::Result;
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_datafusion_err};
 use sail_common::error::CommonError;
-use sail_common::utils::datetime::spark_timezone_parser;
+use sail_common::utils::datetime::parse_spark_timezone_id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SparkTimeZone {
@@ -189,10 +189,8 @@ impl FromStr for SparkTimeZone {
 }
 
 pub(crate) fn parse_spark_timezone(value: &str) -> Result<SparkTimeZone> {
-    spark_timezone_parser::<SparkTimeZone>()(Some(value))
-        .map_err(|error| match error {
-            CommonError::InvalidArgument(message) => DataFusionError::Execution(message),
-            error => DataFusionError::External(Box::new(error)),
-        })?
-        .ok_or_else(|| exec_datafusion_err!("cannot parse timezone {value:?}"))
+    parse_spark_timezone_id::<SparkTimeZone>(value).map_err(|error| match error {
+        CommonError::InvalidArgument(message) => DataFusionError::Execution(message),
+        error => DataFusionError::External(Box::new(error)),
+    })
 }

@@ -339,7 +339,7 @@ fn invalid_sequence_arity<T>(arity: usize) -> Result<T> {
 
 fn sequence_wrong_input_types_error(arg_types: &[DataType]) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
-        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES: Spark `sequence` function cannot accept argument types ({})",
+        "[DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES] Spark `sequence` function cannot accept argument types ({})",
         arg_types
             .iter()
             .map(ToString::to_string)
@@ -490,7 +490,7 @@ fn illegal_sequence_boundaries<T>(start: i64, stop: i64, step: impl Display) -> 
 
 fn collection_size_limit_error<T>(length: i128) -> Result<T> {
     exec_err!(
-        "COLLECTION_SIZE_LIMIT_EXCEEDED.PARAMETER: Cannot create array with {length} elements; the limit is {MAX_ROUNDED_ARRAY_LENGTH}"
+        "[COLLECTION_SIZE_LIMIT_EXCEEDED.PARAMETER] Can't create array with {length} elements which exceeding the array size limit {MAX_ROUNDED_ARRAY_LENGTH}, the value of parameter(s) `count` in the function `sequence` is invalid."
     )
 }
 

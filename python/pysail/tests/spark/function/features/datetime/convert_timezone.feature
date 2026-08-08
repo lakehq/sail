@@ -180,7 +180,6 @@ Feature: convert_timezone
         | +19:00    |
         | Foo/Bar   |
 
-    @sail-bug
     Scenario: an invalid zone ID is reported without quoting
       When query
         """

@@ -277,7 +277,7 @@ impl PlanResolver<'_> {
         });
 
         // TABLESAMPLE is without replacement
-        self.apply_sample_to_plan(plan, lower_bound, upper_bound, false, seed, state)
+        Self::apply_sample_to_plan(plan, lower_bound, upper_bound, false, seed, state)
     }
 
     /// Evaluate a sample expression to get a float value.
