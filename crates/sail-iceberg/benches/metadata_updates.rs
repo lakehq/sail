@@ -187,6 +187,14 @@ fn main() {
         let updates = append_updates(snapshot_count as i64 + 1);
 
         measure(
+            &format!("metadata_current_snapshot_{snapshot_count}"),
+            100_000,
+            0,
+            || {
+                black_box(black_box(&metadata).current_snapshot());
+            },
+        );
+        measure(
             &format!("metadata_parse_{snapshot_count}"),
             iterations,
             bytes.len(),
