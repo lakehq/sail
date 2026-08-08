@@ -36,12 +36,11 @@ impl FieldInfo {
         self.hidden
     }
 
-    pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
-        self.name.eq_ignore_ascii_case(name)
-            && match plan_id {
-                Some(plan_id) => self.plan_ids.contains(&plan_id),
-                None => true,
-            }
+    pub fn has_plan_id(&self, plan_id: Option<i64>) -> bool {
+        match plan_id {
+            Some(plan_id) => self.plan_ids.contains(&plan_id),
+            None => true,
+        }
     }
 }
 
@@ -314,11 +313,16 @@ impl PlanResolverState {
     /// Returns the declared spelling of the parameter so that the emitted
     /// lambda variable matches the lambda parameter list exactly, along with
     /// the parameter field if known.
-    pub fn resolve_lambda_parameter(&self, name: &str) -> Option<(&str, Option<&FieldRef>)> {
+    /// The name is matched by the caller since the rule depends on the resolver configuration.
+    pub fn resolve_lambda_parameter(
+        &self,
+        name: &str,
+        matches: impl Fn(&str, &str) -> bool,
+    ) -> Option<(&str, Option<&FieldRef>)> {
         self.lambda_param_scopes
             .iter()
             .rev()
-            .find_map(|frame| frame.iter().find(|(p, _)| p.eq_ignore_ascii_case(name)))
+            .find_map(|frame| frame.iter().find(|(p, _)| matches(p, name)))
             .map(|(p, f)| (p.as_str(), f.as_ref()))
     }
 

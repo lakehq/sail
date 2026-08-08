@@ -64,11 +64,11 @@ impl PlanResolver<'_> {
                     Strategy::All { value } => Some(value.clone()),
                     Strategy::Columns { columns, value } => columns
                         .iter()
-                        .any(|col| info.matches(col, None))
+                        .any(|col| self.match_field(info, col, None))
                         .then(|| value.clone()),
-                    Strategy::EachColumn { columns } => columns
-                        .iter()
-                        .find_map(|(col, val)| info.matches(col, None).then(|| val.clone())),
+                    Strategy::EachColumn { columns } => columns.iter().find_map(|(col, val)| {
+                        self.match_field(info, col, None).then(|| val.clone())
+                    }),
                 };
                 let column_expr = col((qualifier, field));
                 let expr = if let Some(value) = value {
@@ -128,7 +128,7 @@ impl PlanResolver<'_> {
                     let columns: Vec<String> = columns.iter().map(|x| x.as_ref().into()).collect();
                     state
                         .get_field_info(column.name())
-                        .is_ok_and(|info| columns.iter().any(|c| info.matches(c, None)))
+                        .is_ok_and(|info| columns.iter().any(|c| self.match_field(info, c, None)))
                 })
                 .then(|| {
                     col(column.clone()).get_type(schema).ok().map(|col_type| {

@@ -8030,7 +8030,6 @@ dependencies = [
  "educe",
  "either",
  "half",
- "indexmap 2.14.0",
  "lazy_static",
  "log",
  "object_store",
