@@ -168,6 +168,25 @@ where
         .then_ignore(end())
 }
 
+/// Creates a parser specialized for exactly one SQL statement.
+pub fn create_one_statement_parser<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, Statement, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
+    let semicolon = Semicolon::parser((), options);
+    whitespace()
+        .repeated()
+        .ignore_then(semicolon.clone().repeated())
+        .ignore_then(statement(options))
+        .then_ignore(semicolon.repeated())
+        .then_ignore(end())
+}
+
 macro_rules! define_sub_parser {
     ($name:ident, $type:ty, $parse:ident $(,)?) => {
         pub fn $name<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, $type, E> + Clone
