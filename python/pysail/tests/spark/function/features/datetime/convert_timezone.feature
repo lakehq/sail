@@ -127,8 +127,6 @@ Feature: convert_timezone
         | GMT+0130 | 2024-01-01 10:30:00 |
         | UT+01:00 | 2024-01-01 11:00:00 |
 
-    # `EST`, `MST` and `HST` are fixed offsets in `java.time.ZoneId#SHORT_IDS`, not region IDs,
-    # so they never observe daylight saving time.
     Scenario Outline: `convert_timezone` resolves the legacy short zone IDs
       When query
         """
