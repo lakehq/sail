@@ -77,6 +77,16 @@ Feature: min and max reach a nested partition level when its ancestors are pinne
         """
       Then query plan matches snapshot
 
+    # The pinned ancestors become the prefix carried by the node, which is the single
+    # directory the listing will read. Only the logical plan shows it.
+    Scenario: the pinned ancestors become the prefix of the PartitionBounds node
+      When query
+        """
+        EXPLAIN EXTENDED SELECT max(day) FROM partition_bounds_nested
+        WHERE year = '2025' AND month = '10'
+        """
+      Then query plan matches snapshot
+
   Rule: a level whose ancestors are not pinned still scans the files
 
     # Every month of every year would have to be listed to answer this.

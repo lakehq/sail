@@ -36,6 +36,23 @@ Feature: min and max over a partition column are answered from directory listing
         """
       Then query plan matches snapshot
 
+    # The physical plan alone cannot tell this rule apart from the folding DataFusion
+    # already does from file statistics, since both end in a literal over a placeholder
+    # row. The logical plan is where the rewrite is visible.
+    Scenario: the aggregate is replaced by a PartitionBounds node
+      When query
+        """
+        EXPLAIN EXTENDED SELECT max(dt) FROM partition_bounds_flat
+        """
+      Then query plan matches snapshot
+
+    Scenario: the node is absent when the aggregate is not resolvable from directories
+      When query
+        """
+        EXPLAIN EXTENDED SELECT max(id) FROM partition_bounds_flat
+        """
+      Then query plan matches snapshot
+
     Scenario: max over the partition column returns the latest partition
       When query
         """

@@ -46,3 +46,30 @@ data:
     ProjectionExec: expr=[#4@0 as max(year)]
       ProjectionExec: expr=[2025 as #4]
         PlaceholderRowExec
+---
+name: "test_the_pinned_ancestors_become_the_prefix_of_the_partitionbounds_node"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: max(partition_bounds_nested.#3) AS #4
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_nested.#3)]]
+        Filter: partition_bounds_nested.#1 = Utf8("2025") AND partition_bounds_nested.#2 = Utf8("10")
+          Projection: partition_bounds_nested.id AS #0, partition_bounds_nested.year AS #1, partition_bounds_nested.month AS #2, partition_bounds_nested.day AS #3
+            TableScan: partition_bounds_nested
+  
+    == Analyzed Logical Plan ==
+    #4: Utf8
+    Projection: max(partition_bounds_nested.#3) AS #4
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_nested.#3)]]
+        Filter: partition_bounds_nested.#1 = Utf8("2025") AND partition_bounds_nested.#2 = Utf8("10")
+          Projection: partition_bounds_nested.id AS #0, partition_bounds_nested.year AS #1, partition_bounds_nested.month AS #2, partition_bounds_nested.day AS #3
+            TableScan: partition_bounds_nested
+  
+    == Optimized Logical Plan ==
+    Projection: max(partition_bounds_nested.#3) AS #4
+      PartitionBounds: column=day, bounds=[Max], path=file://<tmp>/partition_bounds_nested/, prefix=year=2025/month=10
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as max(day)]
+      ProjectionExec: expr=[04 as #4]
+        PlaceholderRowExec

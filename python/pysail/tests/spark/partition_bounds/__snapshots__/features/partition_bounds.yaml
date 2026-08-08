@@ -66,3 +66,58 @@ data:
     ProjectionExec: expr=[#2@0 as min(dt), #3@1 as max(dt)]
       ProjectionExec: expr=[2025-10-01 as #2, 2025-10-04 as #3]
         PlaceholderRowExec
+---
+name: "test_the_aggregate_is_replaced_by_a_partitionbounds_node"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: max(partition_bounds_flat.#1) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#1)]]
+        Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+          TableScan: partition_bounds_flat
+  
+    == Analyzed Logical Plan ==
+    #2: Utf8
+    Projection: max(partition_bounds_flat.#1) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#1)]]
+        Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+          TableScan: partition_bounds_flat
+  
+    == Optimized Logical Plan ==
+    Projection: max(partition_bounds_flat.#1) AS #2
+      PartitionBounds: column=dt, bounds=[Max], path=file://<tmp>/partition_bounds_flat/
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as max(dt)]
+      ProjectionExec: expr=[2025-10-04 as #2]
+        PlaceholderRowExec
+---
+name: "test_the_node_is_absent_when_the_aggregate_is_not_resolvable_from_directories"
+data:
+  |-
+    == Parsed Logical Plan ==
+    Projection: max(partition_bounds_flat.#0) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#0)]]
+        Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+          TableScan: partition_bounds_flat
+  
+    == Analyzed Logical Plan ==
+    #2: Int32
+    Projection: max(partition_bounds_flat.#0) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#0)]]
+        Projection: partition_bounds_flat.id AS #0, partition_bounds_flat.dt AS #1
+          TableScan: partition_bounds_flat
+  
+    == Optimized Logical Plan ==
+    Projection: max(partition_bounds_flat.#0) AS #2
+      Aggregate: groupBy=[[]], aggr=[[max(partition_bounds_flat.#0)]]
+        Projection: partition_bounds_flat.id AS #0
+          TableScan: partition_bounds_flat projection=[id]
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as max(id)]
+      ProjectionExec: expr=[max(partition_bounds_flat.#0)@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[max(partition_bounds_flat.#0)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[max(partition_bounds_flat.#0)]
+              DataSourceExec: file_groups={4 groups: [[<tmp>/partition_bounds_flat/dt=2025-10-01/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-02/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-03/<id>.zst.parquet], [<tmp>/partition_bounds_flat/dt=2025-10-04/<id>.zst.parquet]]}, projection=[id@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ]

@@ -22,6 +22,23 @@
 //! and is left alone: its answer is the largest value seen in each column separately,
 //! which need not be a partition that exists.
 //!
+//! # Relation to Spark
+//!
+//! Spark answers the same class of query with `OptimizeMetadataOnlyQuery`, behind
+//! `spark.sql.optimizer.metadataOnly`. That setting is also off by default, and its
+//! own documentation gives the same reason: it may return incorrect results when the
+//! files are empty. The two differ in shape, deliberately:
+//!
+//! - Spark rewrites the *relation* into a `LocalRelation` of partition values, so it
+//!   must require that every scanned column be a partition column. This rule rewrites
+//!   the *aggregate* instead, and the result of `min`/`max` depends only on the set of
+//!   values of the aggregated column, so no such guard is needed. Whatever else the
+//!   scan would have read cannot change the answer.
+//! - Spark covers more shapes: `GROUP BY partition_col`, and any aggregate that is
+//!   insensitive to duplicates. This rule covers only `min` and `max` for now; the
+//!   others need a node producing one row per partition rather than a single row.
+//! - Both accept `DISTINCT`, since it cannot change `min` or `max`.
+//!
 //! This is opt-in because it changes the result for partitions whose files contain
 //! no rows: such a partition is invisible to a real scan, but its directory is
 //! listed here. Partitions with no non-empty file at all are still excluded, which
@@ -30,6 +47,7 @@
 //! [`pruned_partition_list`]: datafusion::datasource::listing::helpers::pruned_partition_list
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -52,6 +70,7 @@ use datafusion_common::{DFSchemaRef, Result, ScalarValue, internal_err};
 use datafusion_datasource::ListingTableUrl;
 use educe::Educe;
 use futures::StreamExt;
+use log::warn;
 use object_store::ObjectStore;
 use object_store::path::{Path, PathPart};
 use percent_encoding::percent_decode_str;
@@ -76,7 +95,8 @@ pub enum PartitionBound {
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct PartitionBoundsNode {
-    table_url: String,
+    #[educe(PartialOrd(ignore))]
+    table_url: ListingTableUrl,
     column: String,
     #[educe(PartialOrd(ignore))]
     data_type: DataType,
@@ -156,9 +176,19 @@ impl OptimizerRule for ResolvePartitionBounds {
             return Ok(Transformed::no(plan));
         };
         match rewrite_aggregate(aggregate) {
-            Some(node) => Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                node: Arc::new(node) as Arc<dyn UserDefinedLogicalNode>,
-            }))),
+            Some(node) => {
+                // Spark's `OptimizeMetadataOnlyQuery` warns on every rewrite for the
+                // same reason, so that a surprising result has a trail to follow.
+                warn!(
+                    "Answering {:?} over partition column `{}` from directory names \
+                     because `execution.partition_bounds_from_listing` is enabled. \
+                     This can differ from a scan when a partition holds files with no rows.",
+                    node.bounds, node.column
+                );
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(node) as Arc<dyn UserDefinedLogicalNode>,
+                })))
+            }
             None => Ok(Transformed::no(plan)),
         }
     }
@@ -242,7 +272,7 @@ fn rewrite_aggregate(aggregate: &Aggregate) -> Option<PartitionBoundsNode> {
     let prefix = partition_prefix(&scan.filters, partition_columns, depth)?;
 
     Some(PartitionBoundsNode {
-        table_url: table_path.as_str().to_string(),
+        table_url: table_path.clone(),
         column: field.name().clone(),
         data_type: field.data_type().clone(),
         prefix,
@@ -322,35 +352,49 @@ fn resolve_scan_column(plan: &LogicalPlan, index: usize) -> Option<(&TableScan, 
     }
 }
 
-/// A partition directory directly below the table root.
+/// A partition directory at the level being aggregated.
 struct PartitionCandidate {
     value: ScalarValue,
     path: Path,
+    /// The `col=value` directory name, as it appears in the path.
+    name: String,
 }
+
+/// How many partitions are inspected one request at a time before the search
+/// switches to a single listing that settles every remaining candidate at once.
+///
+/// Object stores have no empty directories, so a partition that is listed almost
+/// always holds data and the first probe succeeds. Filesystems do keep them, and a
+/// retention policy that empties the oldest partitions would otherwise make `min`
+/// cost one request per emptied partition.
+const MAX_INDIVIDUAL_PROBES: usize = 8;
 
 pub(crate) async fn plan_partition_bounds(
     session_state: &SessionState,
     node: &PartitionBoundsNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let url = ListingTableUrl::parse(&node.table_url)?;
-    let store = session_state.runtime_env().object_store(&url)?;
+    let store = session_state.runtime_env().object_store(&node.table_url)?;
+    let prefix = search_prefix(node);
 
-    let mut candidates = list_partition_candidates(store.as_ref(), &url, node).await?;
+    let mut candidates = list_partition_candidates(store.as_ref(), node, &prefix).await?;
     candidates.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(Ordering::Equal));
 
     // Each bound is resolved at most once, walking the sorted candidates from the
     // end that bound cares about and stopping at the first partition holding data.
     let null = ScalarValue::try_from(&node.data_type)?;
     let min = if node.bounds.contains(&PartitionBound::Min) {
-        first_non_empty(store.as_ref(), &url, candidates.iter(), &null).await?
+        first_non_empty(store.as_ref(), node, &prefix, &candidates, false).await?
     } else {
-        null.clone()
+        None
     };
     let max = if node.bounds.contains(&PartitionBound::Max) {
-        first_non_empty(store.as_ref(), &url, candidates.iter().rev(), &null).await?
+        first_non_empty(store.as_ref(), node, &prefix, &candidates, true).await?
     } else {
-        null.clone()
+        None
     };
+    // A table with no partition holding data has no bounds, which is `NULL`.
+    let min = min.unwrap_or_else(|| null.clone());
+    let max = max.unwrap_or_else(|| null.clone());
 
     let mut expressions = Vec::with_capacity(node.bounds.len());
     for (index, bound) in node.bounds.iter().enumerate() {
@@ -371,21 +415,26 @@ pub(crate) async fn plan_partition_bounds(
     Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
 }
 
-/// Lists the directories directly below the table root and turns each one into the
-/// partition value it encodes. Only the top level is listed, so this is a single
-/// request regardless of how many partitions the table has.
-async fn list_partition_candidates(
-    store: &dyn ObjectStore,
-    url: &ListingTableUrl,
-    node: &PartitionBoundsNode,
-) -> Result<Vec<PartitionCandidate>> {
-    let prefix = Path::from_iter(
-        url.prefix()
+/// The single directory whose children hold the values of the aggregated column.
+fn search_prefix(node: &PartitionBoundsNode) -> Path {
+    Path::from_iter(
+        node.table_url
+            .prefix()
             .parts()
             .chain(node.prefix.iter().map(|part| PathPart::from(part.as_str()))),
-    );
+    )
+}
+
+/// Lists the directories below `prefix` and turns each one into the partition value
+/// it encodes. Only that one level is listed, so this does not grow with the depth
+/// of the table nor with the number of files it holds.
+async fn list_partition_candidates(
+    store: &dyn ObjectStore,
+    node: &PartitionBoundsNode,
+    prefix: &Path,
+) -> Result<Vec<PartitionCandidate>> {
     let listing = store
-        .list_with_delimiter(Some(&prefix).filter(|p| !p.as_ref().is_empty()))
+        .list_with_delimiter(Some(prefix).filter(|p| !p.as_ref().is_empty()))
         .await?;
 
     let mut candidates = Vec::with_capacity(listing.common_prefixes.len());
@@ -393,6 +442,7 @@ async fn list_partition_candidates(
         let Some(name) = path.filename() else {
             continue;
         };
+        let name = name.to_string();
         let Some(raw) = name.strip_prefix(&format!("{}=", node.column)) else {
             continue;
         };
@@ -406,32 +456,76 @@ async fn list_partition_candidates(
         let Ok(value) = ScalarValue::try_from_string(decoded.into_owned(), &node.data_type) else {
             continue;
         };
+        // Unreachable for the string types the rule accepts, where the conversion is
+        // a cast between string types. It guards the numeric and date types that are
+        // still to come, whose directory names can fail to parse.
         if value.is_null() {
             continue;
         }
-        candidates.push(PartitionCandidate { value, path });
+        candidates.push(PartitionCandidate { value, path, name });
     }
     Ok(candidates)
 }
 
-/// Returns the value of the first candidate that holds at least one file a scan
-/// would read, so that partitions left behind by a deleted or empty write do not
-/// win the comparison.
-async fn first_non_empty<'a, I>(
+/// Returns the value of the first candidate holding at least one file a scan would
+/// read, so that a partition left behind by a deleted or empty write does not win
+/// the comparison. `from_largest` picks the end of the sorted candidates to start from.
+///
+/// Returns `None` when no candidate holds data, which is the empty table case and
+/// yields a `NULL` bound.
+async fn first_non_empty(
     store: &dyn ObjectStore,
-    url: &ListingTableUrl,
-    candidates: I,
-    null: &ScalarValue,
-) -> Result<ScalarValue>
-where
-    I: Iterator<Item = &'a PartitionCandidate>,
-{
-    for candidate in candidates {
-        if has_readable_file(store, url, &candidate.path).await? {
-            return Ok(candidate.value.clone());
+    node: &PartitionBoundsNode,
+    prefix: &Path,
+    candidates: &[PartitionCandidate],
+    from_largest: bool,
+) -> Result<Option<ScalarValue>> {
+    let ordered: Vec<&PartitionCandidate> = if from_largest {
+        candidates.iter().rev().collect()
+    } else {
+        candidates.iter().collect()
+    };
+
+    for candidate in ordered.iter().take(MAX_INDIVIDUAL_PROBES) {
+        if has_readable_file(store, &node.table_url, &candidate.path).await? {
+            return Ok(Some(candidate.value.clone()));
         }
     }
-    Ok(null.clone())
+    if ordered.len() <= MAX_INDIVIDUAL_PROBES {
+        return Ok(None);
+    }
+
+    // Enough partitions turned out to be empty that probing them one at a time is no
+    // longer the cheaper option. One listing of the whole prefix settles all of them,
+    // and costs the same order of requests as the candidate listing already did.
+    let with_data = list_partitions_holding_data(store, node, prefix).await?;
+    Ok(ordered
+        .iter()
+        .skip(MAX_INDIVIDUAL_PROBES)
+        .find(|candidate| with_data.contains(&candidate.name))
+        .map(|candidate| candidate.value.clone()))
+}
+
+/// The names of the directories below `prefix` that hold at least one readable file,
+/// collected with a single listing.
+async fn list_partitions_holding_data(
+    store: &dyn ObjectStore,
+    node: &PartitionBoundsNode,
+    prefix: &Path,
+) -> Result<HashSet<String>> {
+    let depth = prefix.parts().count();
+    let mut names = HashSet::new();
+    let mut objects = store.list(Some(prefix));
+    while let Some(object) = objects.next().await {
+        let object = object?;
+        if object.size == 0 || has_hidden_path_component(&node.table_url, &object.location) {
+            continue;
+        }
+        if let Some(part) = object.location.parts().nth(depth) {
+            names.insert(part.as_ref().to_string());
+        }
+    }
+    Ok(names)
 }
 
 async fn has_readable_file(
