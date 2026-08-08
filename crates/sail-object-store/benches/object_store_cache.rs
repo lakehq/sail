@@ -1,3 +1,8 @@
+#![expect(
+    clippy::expect_used,
+    reason = "benchmark setup and operations must fail immediately on an invalid result"
+)]
+
 use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
