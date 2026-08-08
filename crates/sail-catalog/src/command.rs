@@ -1,10 +1,11 @@
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::Constraints;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
+use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatRegistry, is_lakehouse_format,
+    OptionLayer, SourceInfo, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatRegistry, is_lakehouse_format,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -22,6 +23,11 @@ use crate::provider::{
     DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct CreateTableStatisticsWarmup {
+    pub read_case_sensitive: bool,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -57,6 +63,8 @@ pub enum CatalogCommand {
     CreateTable {
         table: Vec<String>,
         options: CreateTableOptions,
+        #[serde(default)]
+        statistics_warmup: Option<CreateTableStatisticsWarmup>,
     },
     TableExists {
         table: Vec<String>,
@@ -326,7 +334,11 @@ impl CatalogCommand {
                 manager.drop_database(&database, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
-            CatalogCommand::CreateTable { table, options } => {
+            CatalogCommand::CreateTable {
+                table,
+                options,
+                statistics_warmup,
+            } => {
                 let existed_before = if options.mode.ignore_if_exists() {
                     match manager.get_table_or_view(&table).await {
                         Ok(_) => true,
@@ -351,6 +363,15 @@ impl CatalogCommand {
                         &create_plan,
                     )
                     .await?;
+                    if let Some(warmup) = statistics_warmup
+                        && let Err(error) =
+                            prewarm_created_table_statistics(ctx, &status, warmup).await
+                    {
+                        log::warn!(
+                            "failed to prewarm file statistics for catalog table '{}': {error}",
+                            table.join(".")
+                        );
+                    }
                 }
                 display.bools().to_record_batch(vec![true])?
             }
@@ -731,6 +752,74 @@ impl CatalogCommand {
     }
 }
 
+async fn prewarm_created_table_statistics<C: SessionExtensionAccessor>(
+    ctx: &C,
+    status: &sail_common_datafusion::catalog::TableStatus,
+    warmup: CreateTableStatisticsWarmup,
+) -> CatalogResult<()> {
+    let session_config = ctx.session_config();
+    let runtime_env = ctx.runtime_env();
+    if !session_config.collect_statistics()
+        || runtime_env.cache_manager.get_file_statistic_cache_limit() == 0
+    {
+        return Ok(());
+    }
+
+    let TableKind::Table {
+        columns,
+        constraints: _,
+        location: Some(location),
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        properties,
+        ..
+    } = &status.kind
+    else {
+        return Ok(());
+    };
+
+    let registry = ctx.extension::<TableFormatRegistry>().map_err(|error| {
+        CatalogError::External(format!(
+            "missing TableFormatRegistry for statistics warmup on format '{format}': {error}"
+        ))
+    })?;
+    let table_format = registry.get(format).map_err(|error| {
+        CatalogError::External(format!(
+            "unknown table format '{format}' for statistics warmup: {error}"
+        ))
+    })?;
+    table_format
+        .prewarm_statistics(
+            session_config,
+            runtime_env,
+            SourceInfo {
+                paths: vec![location.clone()],
+                lakehouse_table: None,
+                schema: Some(Schema::new(
+                    columns
+                        .iter()
+                        .map(|column| column.field())
+                        .collect::<Vec<_>>(),
+                )),
+                constraints: Constraints::default(),
+                partition_by: partition_by
+                    .iter()
+                    .map(|field| field.column.clone())
+                    .collect(),
+                bucket_by: bucket_by.clone().map(Into::into),
+                sort_order: sort_by.iter().cloned().map(Into::into).collect(),
+                options: vec![OptionLayer::TablePropertyList {
+                    items: properties.clone(),
+                }],
+                read_case_sensitive: warmup.read_case_sensitive,
+            },
+        )
+        .await
+        .map_err(CatalogError::DataFusionError)
+}
+
 async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     ctx: &C,
     manager: &CatalogManager,
@@ -1078,6 +1167,7 @@ struct DescribeFunctionRow {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use datafusion::catalog::Session;
@@ -1212,7 +1302,7 @@ mod tests {
             _table: &str,
             _options: CreateTableOptions,
         ) -> CatalogResult<TableStatus> {
-            unreachable!()
+            Ok(self.table_status.clone())
         }
 
         async fn get_table(
@@ -1301,7 +1391,10 @@ mod tests {
         }
     }
 
-    struct TestTableFormat;
+    struct TestTableFormat {
+        warmup_count: Arc<AtomicUsize>,
+        read_case_sensitive: Arc<AtomicBool>,
+    }
 
     #[async_trait]
     impl TableFormat for TestTableFormat {
@@ -1325,6 +1418,18 @@ mod tests {
             not_impl_err!("unused in test")
         }
 
+        async fn prewarm_statistics(
+            &self,
+            _session_config: SessionConfig,
+            _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+            info: SourceInfo,
+        ) -> datafusion_common::Result<()> {
+            self.warmup_count.fetch_add(1, Ordering::Relaxed);
+            self.read_case_sensitive
+                .store(info.read_case_sensitive, Ordering::Relaxed);
+            Ok(())
+        }
+
         async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -1337,8 +1442,18 @@ mod tests {
     }
 
     fn test_session_context() -> SessionContext {
+        test_session_context_with_statistics_warmup().0
+    }
+
+    fn test_session_context_with_statistics_warmup()
+    -> (SessionContext, Arc<AtomicUsize>, Arc<AtomicBool>) {
+        let warmup_count = Arc::new(AtomicUsize::new(0));
+        let read_case_sensitive = Arc::new(AtomicBool::new(false));
         let registry = Arc::new(TableFormatRegistry::new());
-        let register_result = registry.register(Arc::new(TestTableFormat));
+        let register_result = registry.register(Arc::new(TestTableFormat {
+            warmup_count: Arc::clone(&warmup_count),
+            read_case_sensitive: Arc::clone(&read_case_sensitive),
+        }));
         assert!(
             register_result.is_ok(),
             "failed to register test table format: {register_result:?}"
@@ -1350,7 +1465,11 @@ mod tests {
         let config = SessionConfig::new()
             .with_extension(registry)
             .with_extension(plan_service);
-        SessionContext::new_with_config(config)
+        (
+            SessionContext::new_with_config(config),
+            warmup_count,
+            read_case_sensitive,
+        )
     }
 
     fn test_manager(alter_error: Option<&str>) -> CatalogManager {
@@ -1418,6 +1537,41 @@ mod tests {
             unreachable!();
         };
         manager
+    }
+
+    #[tokio::test]
+    async fn create_table_prewarms_statistics_after_registration() {
+        let (ctx, warmup_count, read_case_sensitive) =
+            test_session_context_with_statistics_warmup();
+        let manager = test_manager_with_catalog_behavior(None, false, false);
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: CreateTableOptions {
+                columns: vec![],
+                comment: None,
+                constraints: vec![],
+                location: Some("s3://bucket/items".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                mode: Default::default(),
+                properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
+            },
+            statistics_warmup: Some(CreateTableStatisticsWarmup {
+                read_case_sensitive: true,
+            }),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected CREATE TABLE to succeed, got {result:?}"
+        );
+        assert_eq!(warmup_count.load(Ordering::Relaxed), 1);
+        assert!(read_case_sensitive.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
