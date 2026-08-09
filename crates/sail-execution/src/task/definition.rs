@@ -113,8 +113,8 @@ impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
         let TaskInput { stage, locator } = value;
         r#gen::TaskInput {
-            locator: Some(locator.into()),
             stage: stage as u64,
+            locator: Some(locator.into()),
         }
     }
 }

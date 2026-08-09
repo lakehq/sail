@@ -22,7 +22,7 @@ pub trait TaskStreamSink: Send {
     async fn abort(self: Box<Self>) -> Result<()>;
 }
 
-/// A physical sink for exactly one task-stream channel.
+/// A physical sink for exactly one channel of the task stream.
 #[tonic::async_trait]
 pub trait TaskStreamChannelSink: Send {
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;

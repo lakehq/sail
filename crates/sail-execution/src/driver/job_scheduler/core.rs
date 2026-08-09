@@ -530,7 +530,7 @@ impl JobScheduler {
         let inputs = stage
             .inputs
             .iter()
-            .map(|input| TaskInputBuilder::new(job, key, input, assignments)?.build())
+            .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
@@ -594,7 +594,7 @@ struct TaskInputBuilder<'a> {
 }
 
 impl<'a> TaskInputBuilder<'a> {
-    fn new(
+    fn try_new(
         job: &'a JobDescriptor,
         key: &'a TaskKey,
         input: &'a StageInput,

@@ -205,7 +205,7 @@ where
     async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
         let TaskInputLocator::Storage { keys } = &self.input.locator else {
             return Err(DataFusionError::Internal(
-                "local input assigned to storage stream reader".to_string(),
+                "non-storage input assigned to storage stream reader".to_string(),
             ));
         };
         let keys = keys.get(partition).ok_or_else(|| {

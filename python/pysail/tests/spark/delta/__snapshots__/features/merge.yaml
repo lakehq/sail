@@ -2320,7 +2320,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     FilterExec: NULL IS NULL AND column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
       DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2329,7 +2329,7 @@ data:
     inputs=[StageInput(stage=3, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -2380,7 +2380,7 @@ data:
     inputs=[StageInput(stage=8, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
@@ -2419,7 +2419,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     FilterExec: column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
       DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2428,7 +2428,7 @@ data:
     inputs=[StageInput(stage=13, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -2479,7 +2479,7 @@ data:
     inputs=[StageInput(stage=18, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
@@ -2488,7 +2488,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=2
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   
@@ -2505,7 +2505,7 @@ data:
     inputs=[StageInput(stage=19, mode=Broadcast), StageInput(stage=21, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
@@ -2518,7 +2518,7 @@ data:
     inputs=[StageInput(stage=2, mode=Shuffle), StageInput(stage=4, mode=Shuffle), StageInput(stage=9, mode=Broadcast), StageInput(stage=12, mode=Shuffle), StageInput(stage=14, mode=Shuffle), StageInput(stage=22, mode=Shuffle)]
     mode=Pipelined
     partitions=11
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
@@ -2556,7 +2556,7 @@ data:
     inputs=[StageInput(stage=23, mode=Shuffle)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Driver
     DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -2565,7 +2565,7 @@ data:
     inputs=[StageInput(stage=24, mode=Forward)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---

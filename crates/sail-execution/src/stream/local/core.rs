@@ -152,8 +152,6 @@ impl LocalStreamManager {
         }
     }
 
-    pub async fn stop(&mut self) {}
-
     fn create_stream_with_senders(
         replicas: usize,
         senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
