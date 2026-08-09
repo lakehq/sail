@@ -17,6 +17,8 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
+
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {
     data_type.is_primitive()
@@ -68,11 +70,6 @@ impl PlanResolver<'_> {
             seed,
             deterministic_order,
         } = sample;
-        if lower_bound > upper_bound {
-            return Err(PlanError::invalid(format!(
-                "invalid sample bounds: [{lower_bound}, {upper_bound})"
-            )));
-        }
         // if defined seed use these values otherwise use random seed
         // to generate the random values in with_replacement mode, in lambda value
         let seed: i64 = seed.unwrap_or_else(|| {
@@ -150,12 +147,29 @@ impl PlanResolver<'_> {
         seed: i64,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let fraction = upper_bound - lower_bound;
+        let valid_fraction = if with_replacement {
+            fraction >= -SAMPLE_ROUNDING_EPSILON
+        } else {
+            (-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction)
+        };
+        if !valid_fraction {
+            let requirement = if with_replacement {
+                "nonnegative with replacement"
+            } else {
+                "on interval [0, 1] without replacement"
+            };
+            return Err(PlanError::invalid(format!(
+                "Sampling fraction ({fraction}) must be {requirement}"
+            )));
+        }
+
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
                 args: vec![
-                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
+                    Expr::Literal(ScalarValue::Float64(Some(fraction.max(0.0))), None),
                     Expr::Literal(ScalarValue::Int64(Some(seed)), None),
                 ],
             })
