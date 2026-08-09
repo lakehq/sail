@@ -142,18 +142,6 @@ impl fmt::Display for TaskStreamKeyDisplay<'_> {
     }
 }
 
-pub struct TaskStreamKeyDenseDisplay<'a>(pub &'a TaskStreamKey);
-
-impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}/{}/{}/{}/{}",
-            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
-        )
-    }
-}
-
 impl From<TaskStreamKey> for TaskKey {
     fn from(key: TaskStreamKey) -> Self {
         Self {

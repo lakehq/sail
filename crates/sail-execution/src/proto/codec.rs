@@ -253,6 +253,7 @@ use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjec
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -2737,6 +2738,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
+            "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
@@ -2923,6 +2925,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
+            || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -5281,6 +5284,21 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_vector_inner_product_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorInnerProduct::new()))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<VectorInnerProduct>()
+                .is_some()
+        );
+        assert_eq!(decoded.name(), "vector_inner_product");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_spark_date_part_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
 
@@ -5512,6 +5530,67 @@ mod tests {
         assert_eq!(&original_result, &decoded_result);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_checkpoint_data_source_partitioning() -> Result<()> {
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let source = MemorySourceConfig::try_new(&[vec![], vec![]], Arc::clone(&schema), None)?;
+        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
+        let source = Arc::new(CheckpointDataSource::new(
+            Arc::new(source),
+            Partitioning::Hash(vec![key], 2),
+        ));
+        let scan = DataSourceExec::new(source);
+        let remote_scan = RemoteDataSourceExec::new(&scan);
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+
+        assert!(decoded.is::<DataSourceExec>());
+        assert!(matches!(
+            decoded.output_partitioning(),
+            Partitioning::Hash(_, 2)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
+        use crate::plan::ShufflePartitioning;
+        use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
+
+        let (physical, schema_ref, list) = build_filter()?;
+        let codec = RemoteExecutionCodec;
+        let key = try_encode_physical_expr(&codec, &physical)?;
+        let output = TaskOutput {
+            distribution: TaskOutputDistribution::Hash {
+                keys: vec![Arc::from(key)],
+                channels: 4,
+            },
+            locator: TaskOutputLocator::Pipelined { replicas: 1 },
+        };
+
+        let ctx = TaskContext::default();
+        let partitioning = output
+            .shuffle_partitioning(&ctx, &schema_ref, &codec)
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+
+        let ShufflePartitioning::Hash(keys, channels) = partitioning else {
+            return plan_err!("expected hash partitioning");
+        };
+        assert_eq!(channels, 4);
+        let [decoded] = keys.as_slice() else {
+            return plan_err!("expected one hash key, got {}", keys.len());
+        };
+        as_hof(decoded)?;
+        assert_same_result(&physical, decoded, schema_ref, vec![Arc::new(list)])
     }
 
     /// `filter(arr, v -> v > threshold)` where the lambda captures an OUTER

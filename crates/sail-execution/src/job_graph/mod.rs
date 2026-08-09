@@ -189,11 +189,11 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
-    RoundRobin {
+    RoundRobinBatch {
         channels: usize,
     },
     /// Row-level round-robin distribution for explicit user repartition calls.
-    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// Unlike `RoundRobinBatch`, this distributes individual rows across
     /// output partitions to ensure even data distribution.
     RoundRobinRow {
         channels: usize,
@@ -204,7 +204,7 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
@@ -217,8 +217,8 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::RoundRobin { channels } => {
-                write!(f, "RoundRobin(channels={})", channels)
+            OutputDistribution::RoundRobinBatch { channels } => {
+                write!(f, "RoundRobinBatch(channels={})", channels)
             }
             OutputDistribution::RoundRobinRow { channels } => {
                 write!(f, "RoundRobinRow(channels={})", channels)

@@ -135,6 +135,10 @@ Feature: try_to_timestamp
 
   Rule: Output schema (migrated from test_try_to_timestamp.txt printSchema doctests)
 
+    # A TIMESTAMP input cannot fail to convert, so Spark keeps the result non-nullable even for
+    # the `try_` variant. Sail widens it.
+    @sail-bug
+    @function(nullability)
     Scenario: try_to_timestamp doctest #3 (schema) — timestampType TIMESTAMP_LTZ
       Given config spark.sql.session.timeZone = Europe/Amsterdam
       And config spark.sql.timestampType = TIMESTAMP_LTZ
@@ -145,9 +149,11 @@ Feature: try_to_timestamp
       Then query schema
         """
         root
-         |-- r: timestamp (nullable = true)
+         |-- r: timestamp (nullable = false)
         """
 
+    @sail-bug
+    @function(nullability)
     Scenario: try_to_timestamp doctest #5 (schema) — timestampType TIMESTAMP_NTZ
       Given config spark.sql.session.timeZone = Europe/Amsterdam
       And config spark.sql.timestampType = TIMESTAMP_NTZ
@@ -158,5 +164,5 @@ Feature: try_to_timestamp
       Then query schema
         """
         root
-         |-- r: timestamp_ntz (nullable = true)
+         |-- r: timestamp_ntz (nullable = false)
         """

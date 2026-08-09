@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use sail_celeborn::endpoint::EndpointResolver;
 use sail_celeborn::error::CelebornError;
 use sail_celeborn::lifecycle::{
     LifecycleManager as LifecycleManagerTrait, LifecycleManagerActor, LifecycleManagerOptions,
@@ -9,6 +12,8 @@ use sail_celeborn::master::MasterClientOptions;
 use sail_common::actor::ActorSystem;
 use sail_common::runtime::RuntimeHandle;
 
+use crate::celeborn::endpoint::PyStaticEndpointResolver;
+use crate::celeborn::to_py_error;
 use crate::globals::GlobalState;
 
 enum LifecycleManagerState {
@@ -24,6 +29,7 @@ pub(super) struct PyLifecycleManager {
     master_host: String,
     master_port: u16,
     application_id: String,
+    endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
     runtime: RuntimeHandle,
     state: LifecycleManagerState,
 }
@@ -31,17 +37,22 @@ pub(super) struct PyLifecycleManager {
 #[pymethods]
 impl PyLifecycleManager {
     #[new]
-    #[pyo3(signature = (master_host, master_port, application_id, /))]
+    #[pyo3(signature = (master_host, master_port, application_id, endpoint_resolver=None, /))]
     fn new(
         py: Python<'_>,
         master_host: String,
         master_port: u16,
         application_id: String,
+        endpoint_resolver: Option<Py<PyStaticEndpointResolver>>,
     ) -> PyResult<Self> {
+        let endpoint_resolver = endpoint_resolver.map(|resolver| {
+            Arc::new(resolver.bind(py).borrow().clone()) as Arc<dyn EndpointResolver>
+        });
         Ok(Self {
             master_host,
             master_port,
             application_id,
+            endpoint_resolver,
             runtime: GlobalState::instance(py)?.runtime.handle(),
             state: LifecycleManagerState::Stopped,
         })
@@ -59,10 +70,13 @@ impl PyLifecycleManager {
             ));
         }
         let runtime = self.runtime.clone();
-        let options = LifecycleManagerOptions::new(
+        let mut options = LifecycleManagerOptions::new(
             self.application_id.clone(),
             MasterClientOptions::new(self.master_host.clone(), self.master_port),
         );
+        if let Some(endpoint_resolver) = self.endpoint_resolver.clone() {
+            options = options.with_endpoint_resolver(endpoint_resolver);
+        }
         let state = py.detach(move || {
             runtime.primary().block_on(async move {
                 let mut system = ActorSystem::new();
@@ -151,7 +165,15 @@ impl PyLifecycleManager {
 }
 
 impl PyLifecycleManager {
-    fn manager(&self) -> PyResult<LocalLifecycleManager> {
+    pub(super) fn application_id(&self) -> &str {
+        &self.application_id
+    }
+
+    pub(super) fn endpoint_resolver(&self) -> Option<Arc<dyn EndpointResolver>> {
+        self.endpoint_resolver.clone()
+    }
+
+    pub(super) fn manager(&self) -> PyResult<LocalLifecycleManager> {
         match &self.state {
             LifecycleManagerState::Stopped => Err(PyRuntimeError::new_err(
                 "the lifecycle manager is not started",
@@ -159,8 +181,4 @@ impl PyLifecycleManager {
             LifecycleManagerState::Running { manager, .. } => Ok(manager.clone()),
         }
     }
-}
-
-fn to_py_error(error: CelebornError) -> PyErr {
-    PyRuntimeError::new_err(error.to_string())
 }

@@ -14,7 +14,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
-use crate::driver::{DriverActor, DriverEvent};
+use crate::driver::{DriverActor, DriverMessage};
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
@@ -112,7 +112,7 @@ pub fn build_job_output(
         // `rx` will also end, signaling to the consumer that the job has completed.
         // This is how we ensure the data plane event (output stream termination) is consistent
         // with the control plane event (job termination).
-        let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
+        let _ = handle.send(DriverMessage::CleanUpJob { job_id }).await;
     });
     (
         JobOutputManager { sender },

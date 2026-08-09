@@ -59,7 +59,7 @@ impl JobGraph {
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -755,7 +755,7 @@ fn create_merge_input(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
         OutputMode::Pipelined,
     )?;
@@ -769,7 +769,7 @@ fn create_scalar_subquery_input(
     let stage = push_stage(
         Arc::clone(plan),
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
         OutputMode::Pipelined,
     )?;
@@ -789,7 +789,7 @@ fn create_rescale_input(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
         OutputMode::Pipelined,
     )?;
@@ -808,7 +808,7 @@ fn create_shuffle(
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
-            OutputDistribution::RoundRobin { channels }
+            OutputDistribution::RoundRobinBatch { channels }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
@@ -871,7 +871,7 @@ fn create_shuffle_input(
     let stage = push_stage(
         merge,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
         OutputMode::Blocking,
     )?;
@@ -947,7 +947,7 @@ fn create_driver_stage(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Driver,
         OutputMode::Pipelined,
     )?;
@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(generic_graph.stages().len(), 2);
         assert!(matches!(
             &generic_graph.stages()[0].distribution,
-            OutputDistribution::RoundRobin { channels: 4 }
+            OutputDistribution::RoundRobinBatch { channels: 4 }
         ));
         assert!(matches!(
             generic_graph.stages()[1].inputs.as_slice(),
