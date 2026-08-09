@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -16,6 +16,7 @@ use regex::Regex;
 use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
+use crate::udf_utils::any_arg_nullable;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSplit {
@@ -52,18 +53,20 @@ impl ScalarUDFImpl for SparkSplit {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
+    // Spark: `StringSplit` is a null-intolerant `TernaryExpression` with no `nullable`
+    // override (regexpExpressions.scala, `StringSplit`).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
         Ok(Arc::new(Field::new(
             self.name(),
-            self.output_type(&[])?,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            self.output_type(&data_types)?,
+            any_arg_nullable(&args),
         )))
     }
 

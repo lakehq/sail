@@ -3,13 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
-use datafusion_common::internal_err;
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::url::parse_url::{ParseUrl, spark_handled_parse_url};
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryParseUrl {
@@ -44,23 +44,12 @@ impl ScalarUDFImpl for SparkTryParseUrl {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // `try_*` swallows the failure and yields NULL, so the output is always nullable
-    // (TryEval.scala:51).
+    // (TryEval.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

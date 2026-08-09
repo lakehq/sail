@@ -9,9 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, Int64T
 use datafusion_common::cast::{
     as_date32_array, as_large_string_array, as_string_array, as_string_view_array,
 };
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -19,6 +17,7 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::udf_utils::any_arg_nullable;
 
 const DEFAULT_PATTERN: &str = "yyyy-MM-dd HH:mm:ss";
 
@@ -61,12 +60,7 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if !matches!(arg_types.len(), 1 | 2) {
@@ -107,11 +101,11 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
     }
 
     // Spark: `ToTimestamp.nullable` is `if (failOnError) children.exists(_.nullable)
-    // else true` (datetimeExpressions.scala:1302), and `failOnError` follows
+    // else true` (datetimeExpressions.scala), and `failOnError` follows
     // `spark.sql.ansi.enabled` — with ANSI off a non-null malformed string still
     // yields NULL.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = !self.ansi_mode || args.arg_fields.iter().any(|field| field.is_nullable());
+        let nullable = !self.ansi_mode || any_arg_nullable(&args);
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 

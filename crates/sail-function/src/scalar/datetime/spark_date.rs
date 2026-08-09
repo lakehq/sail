@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -69,12 +69,7 @@ impl ScalarUDFImpl for SparkDate {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Parsing can fail, which yields NULL when ANSI is off.
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

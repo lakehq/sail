@@ -5,8 +5,10 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_common::{internal_err, plan_err};
+use datafusion_common::plan_err;
 use datafusion_expr::ScalarFunctionArgs;
+
+use crate::udf_utils::arg_data_types;
 
 pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     match name {
@@ -46,6 +48,8 @@ impl Explode {
         }
     }
 
+    /// Public because `sail-plan`'s `ExplodeRewriter` needs the exploded element type to
+    /// build the replacement projection; this UDF is a placeholder that never executes.
     pub fn output_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types {
             &[DataType::List(f)]
@@ -77,23 +81,12 @@ impl ScalarUDFImpl for Explode {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Generator: `explode_outer` emits a NULL row for an empty or NULL input, and the
     // element type of the exploded array is nullable in Spark.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

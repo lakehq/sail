@@ -10,7 +10,7 @@ use datafusion::arrow::array::{
     StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -131,15 +131,10 @@ impl ScalarUDFImpl for SparkToJson {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `StructsToJson` declares `override def nullable: Boolean = true`
-    // (jsonExpressions.scala:379).
+    // (jsonExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }

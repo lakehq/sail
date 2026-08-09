@@ -9,7 +9,7 @@ use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -53,17 +53,12 @@ macro_rules! define_interval_udf {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                internal_err!(
-                    "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-                    self.name()
-                )
-            }
+            crate::unused_return_type!();
 
             // These implement `CAST(string AS INTERVAL)`, and Spark's `Cast.nullable` is
-            // `child.nullable || Cast.forceNullable(from, to)` (Cast.scala:656).
+            // `child.nullable || Cast.forceNullable(from, to)` (Cast.scala).
             // `Cast.forceNullable` is true for every `String -> non-string` cast
-            // (Cast.scala:458), so Spark declares all three interval cast forms nullable
+            // (Cast.scala), so Spark declares all three interval cast forms nullable
             // regardless of the input. Deriving from the kernel's error behaviour instead
             // would report a non-null literal as non-nullable.
             fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

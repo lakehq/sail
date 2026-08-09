@@ -13,7 +13,7 @@ use datafusion::arrow::temporal_conversions::{
     as_datetime, date32_to_datetime, date64_to_datetime,
 };
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -53,12 +53,7 @@ impl ScalarUDFImpl for SparkDateFormat {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark's `DateFormatClass` alone would be `children.exists(_.nullable)`, but this UDF
     // also backs `from_unixtime`, whose Spark counterpart declares

@@ -7,7 +7,7 @@ use datafusion_common::cast::{
     as_date32_array, as_float64_array, as_int32_array, as_time64_microsecond_array, as_uint32_array,
 };
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -42,12 +42,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Kept nullable on purpose: Sail const-folds `CAST('NaN' AS DOUBLE)` to a non-nullable
     // Float64, yet NaN seconds still produce NULL. Deriving from the inputs would stamp

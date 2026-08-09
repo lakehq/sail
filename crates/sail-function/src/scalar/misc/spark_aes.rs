@@ -14,12 +14,12 @@ use datafusion::arrow::array::{
     StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+
+use crate::udf_utils::arg_data_types;
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
@@ -131,23 +131,12 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `AesEncrypt` rewrites to `StaticInvoke(..)` with the default
-    // `returnNullable = true` (misc.scala:442).
+    // `returnNullable = true` (misc.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -653,23 +642,12 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `AesDecrypt` rewrites to `StaticInvoke(..)` with the default
-    // `returnNullable = true` (misc.scala:523).
+    // `returnNullable = true` (misc.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -1088,15 +1066,10 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // `try_*` swallows the failure and yields NULL, so the output is always nullable
-    // (TryEval.scala:51).
+    // (TryEval.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
@@ -1138,15 +1111,10 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // `try_*` swallows the failure and yields NULL, so the output is always nullable
-    // (TryEval.scala:51).
+    // (TryEval.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }

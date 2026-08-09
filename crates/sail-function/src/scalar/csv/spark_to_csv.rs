@@ -3,9 +3,9 @@ use std::sync::Arc;
 use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
-use datafusion::arrow::datatypes::{Field, FieldRef, *};
+use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -218,15 +218,10 @@ impl ScalarUDFImpl for SparkToCsv {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `StructsToCsv` declares `override def nullable: Boolean = true`
-    // (csvExpressions.scala:227).
+    // (csvExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }

@@ -6,13 +6,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::internal_err;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use url::Url;
 
 use crate::functions_utils::make_scalar_function;
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
@@ -176,23 +176,12 @@ impl ScalarUDFImpl for ParseUrl {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ParseUrl` declares `override def nullable: Boolean = true`
-    // (urlExpressions.scala:221) — an absent URL part yields NULL.
+    // (urlExpressions.scala) — an absent URL part yields NULL.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

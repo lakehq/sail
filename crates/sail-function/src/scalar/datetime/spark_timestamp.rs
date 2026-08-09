@@ -6,16 +6,20 @@ use std::sync::Arc;
 use chrono::NaiveDateTime;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::udf_utils::arg_data_types;
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -32,12 +36,6 @@ fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -
     // Combine seconds and microseconds
     timestamp_secs * 1_000_000 + micros_from_nanos
 }
-
-use datafusion::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::internal_err;
-use datafusion_expr::ReturnFieldArgs;
-
-use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {
@@ -153,13 +151,6 @@ pub struct SparkTimestamp {
 }
 
 impl SparkTimestamp {
-    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            self.timezone.clone(),
-        ))
-    }
-
     pub fn try_new(timezone: Option<Arc<str>>, ansi_mode: bool, is_try: bool) -> Result<Self> {
         let parser = if let Some(ref timezone) = timezone {
             TimestampParser::Ltz {
@@ -175,6 +166,13 @@ impl SparkTimestamp {
             ansi_mode,
             is_try,
         })
+    }
+
+    fn output_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            self.timezone.clone(),
+        ))
     }
 
     pub fn timezone(&self) -> Option<&str> {
@@ -210,23 +208,12 @@ impl ScalarUDFImpl for SparkTimestamp {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Parsing can fail, which yields NULL when ANSI is off, and the `try_` variant is
     // always nullable.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

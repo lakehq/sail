@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+
+use crate::udf_utils::any_arg_nullable;
 
 /// Spark-compatible "rename struct fields by position".
 ///
@@ -46,12 +48,7 @@ impl ScalarUDFImpl for SparkStructRename {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Pure rename of the struct fields; nullability follows the input.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -59,7 +56,7 @@ impl ScalarUDFImpl for SparkStructRename {
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

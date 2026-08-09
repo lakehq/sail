@@ -7,12 +7,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::udf_utils::{any_arg_nullable, arg_data_types};
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.
@@ -58,27 +59,18 @@ impl ScalarUDFImpl for SparkArrayCompact {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ArrayCompact` rewrites to `KnownNotContainsNull(ArrayFilter(child, ..))`
-    // (collectionOperations.scala:5395), so nullability follows the input array.
+    // (collectionOperations.scala, `ArrayCompact`), so the array itself follows the input.
+    // `KnownNotContainsNull` additionally forces `containsNull = false` on the element, which
+    // `output_type` does not do yet — see the `@sail-bug` scenarios in array_compact.feature.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

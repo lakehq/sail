@@ -5,12 +5,14 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array, as_large_binary_array,
 };
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
+
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeValidUtf8 {
@@ -54,23 +56,12 @@ impl ScalarUDFImpl for MakeValidUtf8 {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Sail-only helper with no Spark expression to read the rule off, so the loose default
     // stays: `true` costs an optimisation, `false` would let the optimizer drop null checks.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

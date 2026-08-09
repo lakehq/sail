@@ -5,7 +5,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -148,13 +148,8 @@ impl ScalarUDFImpl for SparkFromCSV {
         &self.signature
     }
 
-    /// The base return type is unknown until arguments are provided
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    // The output type is unknown until the arguments are known.
+    crate::unused_return_type!();
 
     /// Determines the return type of the function based on the schema string and separator
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

@@ -8,7 +8,7 @@ use datafusion::arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -16,6 +16,8 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::concat::ArrayConcat;
 use sail_common_datafusion::utils::items::ItemTaker;
+
+use crate::udf_utils::any_arg_nullable;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConcat {
@@ -48,11 +50,7 @@ impl ScalarUDFImpl for SparkConcat {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "spark_concat: `return_type` should not be called; `return_field_from_args` is used instead"
-        )
-    }
+    crate::unused_return_type!();
 
     /// `concat` propagates NULL: the result is null iff any argument is null
     /// (mirrors Spark `Concat.nullable`). Set here rather than in the deprecated
@@ -64,7 +62,7 @@ impl ScalarUDFImpl for SparkConcat {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let return_type = concat_return_type(&data_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        let nullable = any_arg_nullable(&args);
         Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 

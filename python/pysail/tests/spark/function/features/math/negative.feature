@@ -212,21 +212,11 @@ Feature: unary minus (negative) honors ANSI overflow semantics
          |-- result: integer (nullable = true)
         """
 
-  Rule: Nullability through Spark's implicit casts
-
-    # Here the literal is constant-folded before the UDF runs, so Sail agrees.
-    # With a string argument (below) the fold cannot happen and the divergence shows.
-    Scenario: negative without a cast is non-nullable, because the argument is already numeric
-      When query
-        """
-        SELECT negative(5) AS result
-        """
-      Then query schema
-        """
-        root
-         |-- result: integer (nullable = false)
-        """
-
+    # Paired with "a non-null integer literal yields a non-nullable integer" above, which Sail
+    # gets right only because the literal is constant-folded before the UDF runs. With a
+    # string argument the fold cannot happen, Spark inserts a force-nullable
+    # `Cast(String AS Double)`, and `return_field_from_args` only sees the type AFTER
+    # coercion — so the divergence shows.
     Scenario: a non-null string input is nullable, because Spark casts it to DOUBLE
       When query
         """

@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+
+use crate::udf_utils::{any_arg_nullable, arg_data_types};
 
 /// A placeholder UDF used to represent a list of expressions that come from the output
 /// of generator expressions or wildcard expressions.
@@ -46,25 +48,16 @@ impl ScalarUDFImpl for MultiExpr {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
+        self.output_type(&[])
     }
 
     // Internal plumbing; nullability follows the inputs.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

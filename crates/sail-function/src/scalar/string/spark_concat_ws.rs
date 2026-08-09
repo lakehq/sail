@@ -15,7 +15,7 @@ use datafusion::arrow::array::{
     StringBuilder, StringViewArray, new_null_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -52,11 +52,7 @@ impl ScalarUDFImpl for SparkConcatWs {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "spark_concat_ws: `return_type` should not be called; `return_field_from_args` is used instead"
-        )
-    }
+    crate::unused_return_type!();
 
     /// `concat_ws` is null only when the separator is null; null value arguments
     /// are skipped, so a non-null separator always yields a (possibly empty)

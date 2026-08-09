@@ -9,12 +9,12 @@ use datafusion::arrow::array::{
     LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err,
-};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+
+use crate::udf_utils::{any_arg_nullable, arg_data_types};
 
 const SPARK_BASE64_DECODE: GeneralPurpose = GeneralPurpose::new(
     &alphabet::STANDARD,
@@ -74,27 +74,16 @@ impl ScalarUDFImpl for SparkBase64 {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Base64` rewrites to `StaticInvoke(.., returnNullable = false)`
-    // (stringExpressions.scala:2884), so nullability follows the input.
+    // (stringExpressions.scala), so nullability follows the input.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 
@@ -392,27 +381,16 @@ impl ScalarUDFImpl for SparkUnbase64 {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `UnBase64` is a null-intolerant `UnaryExpression` with no `nullable` override
-    // (stringExpressions.scala:2924).
+    // (stringExpressions.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

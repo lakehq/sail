@@ -9,7 +9,6 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-use datafusion_common::internal_err;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
@@ -193,12 +192,7 @@ impl ScalarUDFImpl for SparkParseJson {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
         let data_type = self.output_type(

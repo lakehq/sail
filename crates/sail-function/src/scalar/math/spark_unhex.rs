@@ -13,7 +13,7 @@ use datafusion_common::cast::{
     as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
     as_string_view_array,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::signature::TypeSignature;
 
@@ -52,15 +52,10 @@ impl ScalarUDFImpl for SparkUnHex {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Unhex` declares `override def nullable: Boolean = true`
-    // (mathExpressions.scala:1182) — invalid hex yields NULL.
+    // (mathExpressions.scala) — invalid hex yields NULL.
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }

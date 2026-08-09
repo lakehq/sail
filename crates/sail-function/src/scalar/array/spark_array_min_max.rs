@@ -5,13 +5,14 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     Accumulator, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::udf_utils::arg_data_types;
 
 enum ArrayOp {
     Min,
@@ -54,24 +55,13 @@ impl ScalarUDFImpl for ArrayMin {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ArrayMin` declares `override def nullable: Boolean = true`
-    // (collectionOperations.scala:2329) even though it is null-intolerant — an empty array
+    // (collectionOperations.scala) even though it is null-intolerant — an empty array
     // yields NULL. Deriving from the inputs here would be the unsound direction.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -120,24 +110,13 @@ impl ScalarUDFImpl for ArrayMax {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ArrayMax` declares `override def nullable: Boolean = true`
-    // (collectionOperations.scala:2402) even though it is null-intolerant — an empty array
+    // (collectionOperations.scala) even though it is null-intolerant — an empty array
     // yields NULL. Deriving from the inputs here would be the unsound direction.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

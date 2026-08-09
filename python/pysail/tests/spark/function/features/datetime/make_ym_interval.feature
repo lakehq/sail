@@ -123,23 +123,11 @@ Feature: make_ym_interval builds a year-month interval from years and months
          |-- result: interval year to month (nullable = true)
         """
 
-  Rule: Nullability through Spark's implicit casts
-
-    # The pair below is the whole point: same value, different nullability.
-    # Sail cannot tell them apart because `return_field_from_args` only sees the
-    # type AFTER coercion, so it reports nullable for both.
-    @sail-bug
-    Scenario: make_ym_interval without a cast is non-nullable, because the arguments are already INTs
-      When query
-        """
-        SELECT make_ym_interval(1, 2) AS result
-        """
-      Then query schema
-        """
-        root
-         |-- result: interval year to month (nullable = false)
-        """
-
+    # Paired with "a non-null literal input to make_ym_interval yields the schema Spark
+    # declares" above: same value, different nullability, because Spark inserts a
+    # `Cast(String AS Int)` here and `Cast.forceNullable(StringType, _)` is true. Sail cannot
+    # tell the two apart because `return_field_from_args` only sees the type AFTER coercion,
+    # so it reports nullable for both.
     Scenario: non-null string arguments are nullable, because Spark casts them to INT
       When query
         """

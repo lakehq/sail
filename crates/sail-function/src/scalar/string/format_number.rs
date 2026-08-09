@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -40,15 +40,10 @@ impl ScalarUDFImpl for FormatNumber {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `FormatNumber` declares `override def nullable: Boolean = true`
-    // (stringExpressions.scala:3369).
+    // (stringExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }

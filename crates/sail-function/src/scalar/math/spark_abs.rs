@@ -21,6 +21,7 @@ use datafusion_expr::{
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAbs {
@@ -71,27 +72,16 @@ impl ScalarUDFImpl for SparkAbs {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Abs` derives from its child, but a STRING input is implicitly cast to DOUBLE
-    // and `Cast.forceNullable(StringType, _)` is true (Cast.scala:458), so `abs('13')` is
+    // and `Cast.forceNullable(StringType, _)` is true (Cast.scala), so `abs('13')` is
     // nullable in Spark in both ANSI modes. Sail's coercion keeps `nullable = false` and the
     // original type is gone here, so deriving would be unsound.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // `abs` is null-intolerant, so nullability follows the input.
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Arc::new(Field::new(
             self.name(),
-            self.output_type(&data_types)?,
+            self.output_type(&arg_data_types(&args))?,
             true,
         )))
     }

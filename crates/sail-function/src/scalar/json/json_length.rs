@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, UInt64Array, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
@@ -16,6 +16,7 @@ use jiter::Peek;
 use crate::scalar::json::common::{
     GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
 };
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonLength {
@@ -51,23 +52,12 @@ impl ScalarUDFImpl for JsonLength {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `LengthOfJsonArray` declares `override def nullable: Boolean = true`
-    // (jsonExpressions.scala:522) — malformed JSON yields NULL.
+    // (jsonExpressions.scala) — malformed JSON yields NULL.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

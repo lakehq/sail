@@ -7,7 +7,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
-use datafusion_common::{exec_err, internal_err};
+use datafusion_common::exec_err;
 use parquet_variant_compute::{VariantType, cast_to_variant};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
@@ -52,12 +52,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
         let data_type = self.output_type(

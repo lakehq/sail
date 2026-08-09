@@ -69,13 +69,8 @@ impl ScalarUDFImpl for SparkToNumber {
         &self.signature
     }
 
-    /// The base return type is unknown until arguments are provided
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    // The output type is unknown until the arguments are known.
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {

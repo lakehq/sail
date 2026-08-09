@@ -53,15 +53,10 @@ impl ScalarUDFImpl for RaiseError {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `RaiseError` declares `override def nullable: Boolean = true`
-    // (misc.scala:86).
+    // (misc.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Null, true)))
     }

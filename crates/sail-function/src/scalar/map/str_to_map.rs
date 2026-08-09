@@ -16,6 +16,7 @@ use crate::scalar::map::utils::{
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
 use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array};
+use crate::udf_utils::any_arg_nullable;
 
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
@@ -54,20 +55,15 @@ impl ScalarUDFImpl for StrToMap {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `StringToMap` is a null-intolerant `TernaryExpression` with no `nullable`
-    // override (complexTypeCreator.scala:575), so nullability follows the inputs.
+    // override (complexTypeCreator.scala), so nullability follows the inputs.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
             map_type_from_key_value_types(&DataType::Utf8, &DataType::Utf8),
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

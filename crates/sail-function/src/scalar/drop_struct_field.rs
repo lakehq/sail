@@ -3,10 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+
+use crate::udf_utils::{any_arg_nullable, arg_data_types};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DropStructField {
@@ -120,26 +122,15 @@ impl ScalarUDFImpl for DropStructField {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `DropField` only rewrites the struct; nullability follows the input struct.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

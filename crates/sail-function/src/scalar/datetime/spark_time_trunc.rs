@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, PrimitiveBuilder, StringArrayType, new_null_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Time64MicrosecondType, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -52,15 +52,10 @@ impl ScalarUDFImpl for SparkTimeTrunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
-    // Spark: `TimeTrunc` has no `nullable` override (timeExpressions.scala:740).
-    // Spark: `TimeTrunc` is `RuntimeReplaceable` (timeExpressions.scala:740), so its
+    // Spark: `TimeTrunc` has no `nullable` override (timeExpressions.scala).
+    // Spark: `TimeTrunc` is `RuntimeReplaceable` (timeExpressions.scala), so its
     // nullability comes from the replacement, not from `BinaryExpression`. The replacement
     // is a `StaticInvoke` with the default `returnNullable = true`, so the result is always
     // nullable.

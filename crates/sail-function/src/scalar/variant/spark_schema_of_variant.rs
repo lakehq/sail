@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow_schema::{DataType, Field, FieldRef};
-use datafusion::common::{DataFusionError, exec_datafusion_err, exec_err, internal_err};
+use datafusion::common::{DataFusionError, exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -14,6 +14,7 @@ use parquet_variant_compute::VariantArray;
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_variant_scalar};
 use crate::schema_inference::{InferredType, TypeMerger};
+use crate::udf_utils::any_arg_nullable;
 
 /// Returns the schema (type string) of a variant value using Spark type names.
 ///
@@ -51,19 +52,14 @@ impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // `schema_of_variant` is null-intolerant, so nullability follows the input.
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Utf8,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

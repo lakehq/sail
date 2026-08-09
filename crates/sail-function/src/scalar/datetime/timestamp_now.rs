@@ -7,6 +7,8 @@ use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+use crate::udf_utils::arg_data_types;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TimestampNow {
     signature: Signature,
@@ -48,23 +50,12 @@ impl ScalarUDFImpl for TimestampNow {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `CurrentTimestamp`/`Now` declare `override def nullable: Boolean = false`
-    // via `CurrentTimestampLike` (datetimeExpressions.scala:221).
+    // via `CurrentTimestampLike` (datetimeExpressions.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, false)))
     }
 

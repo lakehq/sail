@@ -5,7 +5,7 @@ use datafusion::arrow::compute::try_binary;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type, IntervalUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -42,17 +42,12 @@ impl ScalarUDFImpl for SparkMakeYmInterval {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `MakeYMInterval` is a `BinaryExpression` with no `nullable` override
-    // (intervalExpressions.scala:576).
+    // (intervalExpressions.scala).
     // Spark: `MakeYMInterval` derives from its children, but STRING arguments are implicitly
-    // cast to INT and `Cast.forceNullable(StringType, _)` is true (Cast.scala:458), so
+    // cast to INT and `Cast.forceNullable(StringType, _)` is true (Cast.scala), so
     // `make_ym_interval('1', '2')` is nullable in Spark. DataFusion keeps `nullable = false`
     // through that coercion, so deriving here would be unsound.
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

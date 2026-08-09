@@ -9,7 +9,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::error::generic_internal_err;
+use crate::udf_utils::any_arg_nullable;
 
 /// Spark measures the byte length of both string and binary data, unlike DataFusion's
 /// `octet_length` and `bit_length`, whose signatures accept string data only. Feeding them
@@ -59,15 +59,10 @@ macro_rules! define_length_udf {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Err(generic_internal_err(
-                    $name,
-                    "`return_type` should not be called, call `return_field_from_args` instead",
-                ))
-            }
+            crate::unused_return_type!();
 
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+                let nullable = any_arg_nullable(&args);
                 Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
             }
 

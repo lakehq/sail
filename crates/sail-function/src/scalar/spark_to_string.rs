@@ -8,10 +8,11 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_common::internal_err;
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
+
+use crate::udf_utils::any_arg_nullable;
 
 macro_rules! define_to_string_udf {
     ($udf:ident, $name:expr_2021, $return_type:expr_2021, $func:expr_2021 $(,)?) => {
@@ -45,19 +46,14 @@ macro_rules! define_to_string_udf {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                internal_err!(
-                    "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-                    self.name()
-                )
-            }
+            crate::unused_return_type!();
 
-            // Spark: `Cast` is null-intolerant (Cast.scala:582) and the kernel below only
+            // Spark: `Cast` is null-intolerant (Cast.scala) and the kernel below only
             // emits a null where the input is null. Deriving from the input is what makes
             // `CAST(TIMESTAMP .. AS STRING)` agree with `CAST(12345 AS STRING)`, which goes
             // through the plain cast path and already derives from its child.
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+                let nullable = any_arg_nullable(&args);
                 Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
             }
 

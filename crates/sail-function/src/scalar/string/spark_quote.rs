@@ -3,12 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::functions_utils::make_scalar_function;
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkQuote {
@@ -45,23 +46,12 @@ impl ScalarUDFImpl for SparkQuote {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Quote` declares `override def nullable: Boolean = true`
-    // (stringExpressions.scala:3736).
+    // (stringExpressions.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

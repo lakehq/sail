@@ -1367,6 +1367,7 @@ Feature: to_char with an argument coming from a column
         """
       Then query error (?i).*
 
+  @function(nullability)
   Rule: Nullability through Spark's implicit casts
 
     # The pair below is the whole point: same value, different nullability.

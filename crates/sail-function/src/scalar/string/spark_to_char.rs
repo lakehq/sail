@@ -14,6 +14,7 @@ use datafusion_expr::{
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::downcast_arg;
 use crate::functions_utils::make_scalar_function;
+use crate::udf_utils::arg_data_types;
 
 /// The `to_char` / `to_varchar` function for numeric input, formatting a decimal value
 /// as a string according to a number format such as `'$99,999.99S'`.
@@ -63,26 +64,16 @@ impl ScalarUDFImpl for SparkToChar {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ToCharacter` casts the value to DECIMAL, and both `String -> Decimal`
-    // (Cast.scala:458) and a non-null-safe `_ -> Decimal` (Cast.scala:470) are
+    // (Cast.scala) and a non-null-safe `_ -> Decimal` (Cast.scala) are
     // force-nullable, so `to_char('12', '99')` and `to_char(CAST(12 AS DOUBLE), '99')` are
     // nullable in Spark. Sail keeps those inputs and converts inside the UDF.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Arc::new(Field::new(
             self.name(),
-            self.output_type(&data_types)?,
+            self.output_type(&arg_data_types(&args))?,
             true,
         )))
     }

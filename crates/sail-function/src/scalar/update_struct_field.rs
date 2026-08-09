@@ -10,6 +10,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+use crate::udf_utils::arg_data_types;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpdateStructField {
     signature: Signature,
@@ -171,25 +173,14 @@ impl ScalarUDFImpl for UpdateStructField {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `UpdateFields` declares `override def nullable: Boolean = structExpr.nullable`
-    // (complexTypeCreator.scala:755) — only the struct being updated decides. A nullable
+    // (complexTypeCreator.scala) — only the struct being updated decides. A nullable
     // replacement value changes the nested field's nullability but cannot make a non-null
     // input struct null, so this must not derive from all the arguments.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         let [struct_field, ..] = args.arg_fields else {
             return internal_err!("{} requires at least 1 argument", self.name());
         };

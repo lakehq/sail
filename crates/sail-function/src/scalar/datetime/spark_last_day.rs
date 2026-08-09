@@ -4,9 +4,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use datafusion_common::types::NativeType;
-use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err,
-};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -46,17 +44,12 @@ impl ScalarUDFImpl for SparkLastDay {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `LastDay` is a `UnaryExpression` with no `nullable` override
-    // (datetimeExpressions.scala:1530).
+    // (datetimeExpressions.scala).
     // Spark: `LastDay` derives from its child, but a STRING input is implicitly cast to
-    // DATE and `Cast.forceNullable(StringType, DateType)` is true (Cast.scala:458). Sail's
+    // DATE and `Cast.forceNullable(StringType, DateType)` is true (Cast.scala). Sail's
     // `coerce_types` performs the same cast while DataFusion keeps `nullable = false`, and
     // the pre-coercion type is not visible here, so deriving would report
     // `last_day('2024-01-15')` non-nullable where Spark reports true.

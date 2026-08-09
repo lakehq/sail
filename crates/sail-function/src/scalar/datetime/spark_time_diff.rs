@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::binary;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -55,16 +55,11 @@ impl ScalarUDFImpl for SparkTimeDiff {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `TimeDiff` is a `TernaryExpression` with no `nullable` override
-    // (timeExpressions.scala:679).
-    // Spark: `TimeDiff` is `RuntimeReplaceable` (timeExpressions.scala:683), so its
+    // (timeExpressions.scala).
+    // Spark: `TimeDiff` is `RuntimeReplaceable` (timeExpressions.scala), so its
     // nullability comes from the replacement, not from `TernaryExpression`. The replacement
     // is a `StaticInvoke` with the default `returnNullable = true`, so the result is always
     // nullable.

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::encoding::expr_fn::decode;
 use datafusion::functions::encoding::inner::DecodeFunc;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -12,6 +12,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::math::spark_unhex::SparkUnHex;
 use crate::scalar::string::spark_base64::SparkUnbase64;
+use crate::udf_utils::any_arg_nullable;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToBinary {
@@ -44,15 +45,10 @@ impl ScalarUDFImpl for SparkToBinary {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ToBinary` is `RuntimeReplaceable` and its nullability comes from the
-    // format-dependent replacement (stringExpressions.scala:3249): `hex` and the
+    // format-dependent replacement (stringExpressions.scala): `hex` and the
     // single-argument form resolve to `Unhex` and `utf-8` to `Encode`, both nullable, while
     // `base64` resolves to `UnBase64`, a null-intolerant `UnaryExpression` with no `nullable`
     // override, so that branch follows the input.
@@ -70,7 +66,7 @@ impl ScalarUDFImpl for SparkToBinary {
             .flatten()
             .map(|format| format.trim().to_lowercase());
         let nullable = match format.as_deref() {
-            Some("base64") => args.arg_fields.iter().any(|field| field.is_nullable()),
+            Some("base64") => any_arg_nullable(&args),
             _ => true,
         };
         Ok(Arc::new(Field::new(
@@ -235,15 +231,10 @@ impl ScalarUDFImpl for SparkTryToBinary {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // `try_*` swallows the failure and yields NULL, so the output is always nullable
-    // (TryEval.scala:51).
+    // (TryEval.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }

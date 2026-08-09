@@ -14,9 +14,10 @@ use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValu
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_common::internal_err;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
+
+use crate::udf_utils::any_arg_nullable;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkArrayPosition {
@@ -46,20 +47,15 @@ impl ScalarUDFImpl for SparkArrayPosition {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `ArrayPosition` is a null-intolerant `BinaryExpression` with no `nullable`
-    // override (collectionOperations.scala:2481).
+    // override (collectionOperations.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> DataFusionResult<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Int64,
-            args.arg_fields.iter().any(|field| field.is_nullable()),
+            any_arg_nullable(&args),
         )))
     }
 

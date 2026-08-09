@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::scalar::datetime::spark_timestamp::SparkTimestamp;
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToTimestamp {
@@ -59,23 +60,12 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // `try_*` swallows the failure and yields NULL, so the output is always nullable
-    // (TryEval.scala:51).
+    // (TryEval.scala).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

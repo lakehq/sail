@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::scalar::math::xorshift::SparkXorShiftRandom;
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Randstr {
@@ -41,22 +42,12 @@ impl ScalarUDFImpl for Randstr {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Arc::new(Field::new(
             self.name(),
-            self.output_type(&data_types)?,
+            self.output_type(&arg_data_types(&args))?,
             false,
         )))
     }

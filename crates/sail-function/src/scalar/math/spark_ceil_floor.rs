@@ -256,12 +256,7 @@ impl ScalarUDFImpl for SparkCeil {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Err(generic_internal_err(
-            "ceil",
-            "`return_type` should not be called, call `return_type_from_args` instead",
-        ))
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("ceil", args)
@@ -318,12 +313,7 @@ impl ScalarUDFImpl for SparkFloor {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Err(generic_internal_err(
-            "floor",
-            "`return_type` should not be called, call `return_type_from_args` instead",
-        ))
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("floor", args)

@@ -19,6 +19,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSequence {
@@ -59,27 +60,16 @@ impl ScalarUDFImpl for SparkSequence {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Sequence` derives from its children, but the children include the implicit cast
     // that `coerce_types` below also performs, and `Cast.forceNullable` is true for
-    // `String -> Date` (Cast.scala:465). DataFusion keeps `nullable = false` through that
+    // `String -> Date` (Cast.scala). DataFusion keeps `nullable = false` through that
     // coercion and the original type is gone by the time this hook runs, so
     // `sequence(DATE '2020-01-01', '2020-01-03')` would be reported non-nullable while Spark
     // reports true.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

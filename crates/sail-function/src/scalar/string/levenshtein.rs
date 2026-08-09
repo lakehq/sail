@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_int32_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -13,6 +13,7 @@ use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureCl
 use datafusion_expr_common::type_coercion::binary::{binary_to_string_coercion, string_coercion};
 
 use crate::functions_utils::make_scalar_function;
+use crate::udf_utils::{any_arg_nullable, arg_data_types};
 
 /// Spark-compatible `levenshtein` function.
 ///
@@ -86,23 +87,13 @@ impl ScalarUDFImpl for Levenshtein {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Arc::new(Field::new(
             self.name(),
-            self.output_type(&data_types)?,
-            args.arg_fields.iter().any(|f| f.is_nullable()),
+            self.output_type(&arg_data_types(&args))?,
+            any_arg_nullable(&args),
         )))
     }
 

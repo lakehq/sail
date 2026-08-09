@@ -6,7 +6,7 @@ use datafusion::arrow::compute::kernels::cast_utils::IntervalUnit;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion::arrow::temporal_conversions::MICROSECONDS;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -110,12 +110,7 @@ impl ScalarUDFImpl for SparkDatePart {
         self.inner.signature()
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;

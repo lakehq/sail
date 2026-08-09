@@ -7,7 +7,7 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
@@ -15,6 +15,8 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::time_unit_to_multiplier;
+
+use crate::udf_utils::arg_data_types;
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -61,12 +63,7 @@ impl ScalarUDFImpl for ConvertTz {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark's `ConvertTimezone` alone would be `children.exists(_.nullable)`, but this UDF
     // also backs `to_utc_timestamp`/`from_utc_timestamp`, where Spark's child is an implicit
@@ -74,13 +71,7 @@ impl ScalarUDFImpl for ConvertTz {
     // non-nullable value, so deriving from the inputs would report `false` where Spark
     // reports `true` — the unsound direction.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

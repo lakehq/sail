@@ -9,7 +9,7 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
     TimestampMicrosecondType,
 };
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -20,6 +20,7 @@ use crate::scalar::math::utils::try_op::{
     try_binary_op_primitive, try_op_date32_interval_yearmonth, try_op_date32_monthdaynano,
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTrySubtract {
@@ -81,23 +82,12 @@ impl ScalarUDFImpl for SparkTrySubtract {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `BinaryArithmetic.nullable` is `.. || evalMode == EvalMode.TRY`
-    // (arithmetic.scala:236), so every `try_*` arithmetic is always nullable.
+    // (arithmetic.scala), so every `try_*` arithmetic is always nullable.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

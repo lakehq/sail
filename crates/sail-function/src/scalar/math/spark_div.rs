@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType,
 };
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -43,15 +43,10 @@ impl ScalarUDFImpl for SparkIntervalDiv {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `DivideInterval` inherits `nullable = true` from `IntervalNumOperation`
-    // (intervalExpressions.scala:214).
+    // (intervalExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }

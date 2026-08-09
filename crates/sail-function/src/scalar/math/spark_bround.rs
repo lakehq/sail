@@ -5,7 +5,7 @@ use datafusion::arrow::compute::binary;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Float32Type, Float64Type, Int32Type, Int64Type,
 };
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -13,6 +13,7 @@ use datafusion_expr::{
 use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
+use crate::udf_utils::arg_data_types;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBRound {
@@ -66,23 +67,12 @@ impl ScalarUDFImpl for SparkBRound {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `RoundBase` declares `override def nullable: Boolean = true`
-    // (mathExpressions.scala:1498) — same reason `ceil`/`floor` stay nullable.
+    // (mathExpressions.scala) — same reason `ceil`/`floor` stay nullable.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let arg_types = arg_types.as_slice();
-        let data_type = self.output_type(arg_types)?;
+        let data_type = self.output_type(&arg_data_types(&args))?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

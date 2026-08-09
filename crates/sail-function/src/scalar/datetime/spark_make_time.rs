@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Time64MicrosecondType, TimeUnit};
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -50,15 +50,10 @@ impl ScalarUDFImpl for SparkMakeTime {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `MakeTime` rewrites to `StaticInvoke(..)` with the default
-    // `returnNullable = true` (timeExpressions.scala:571).
+    // `returnNullable = true` (timeExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),

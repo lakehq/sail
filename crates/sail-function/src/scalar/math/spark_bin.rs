@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type, Int64Type};
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -49,15 +49,10 @@ impl ScalarUDFImpl for SparkBin {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
-    // Spark: `Bin` casts its input to LONG. Both `String -> Long` (Cast.scala:458) and
-    // fractional-to-integral (Cast.scala:471) are force-nullable, so `bin('13')` and
+    // Spark: `Bin` casts its input to LONG. Both `String -> Long` (Cast.scala) and
+    // fractional-to-integral (Cast.scala) are force-nullable, so `bin('13')` and
     // `bin(13.3)` are nullable in Spark. Sail keeps those inputs and converts inside the
     // UDF, so the coercion-induced nullability is not visible here.
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

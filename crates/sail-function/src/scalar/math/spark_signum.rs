@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit, UInt8Type, UInt16Type,
     UInt32Type, UInt64Type,
 };
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -55,15 +55,10 @@ impl ScalarUDFImpl for SparkSignum {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `Signum` inherits `nullable = true` from `UnaryMathExpression`
-    // (mathExpressions.scala:771).
+    // (mathExpressions.scala).
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Float64, true)))
     }

@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -92,12 +92,7 @@ impl ScalarUDFImpl for XpathTyped {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
-            self.name()
-        )
-    }
+    crate::unused_return_type!();
 
     // Spark: `XPathExtract` declares `override def nullable: Boolean = true`
     // (xml/xpath.scala) — a non-matching expression yields NULL.
