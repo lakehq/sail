@@ -6,7 +6,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use sail_iceberg::spec::{apply_table_updates, TableMetadata, TableUpdate};
+use sail_iceberg::spec::{TableMetadata, TableUpdate};
 use serde_json::{Value, json};
 
 const MIB: usize = 1024 * 1024;
@@ -50,31 +50,6 @@ fn measure(name: &str, iterations: usize, bytes_per_iteration: usize, mut run: i
         nanos.push(started.elapsed().as_nanos() as f64 / iterations as f64);
     }
     report(name, iterations, bytes_per_iteration, nanos);
-}
-
-fn measure_batched<T>(
-    name: &str,
-    iterations: usize,
-    mut prepare: impl FnMut() -> T,
-    mut run: impl FnMut(T) -> T,
-) {
-    if !selected(name) {
-        return;
-    }
-    black_box(run(prepare()));
-
-    let mut nanos = Vec::with_capacity(SAMPLES);
-    for _ in 0..SAMPLES {
-        let inputs = (0..iterations).map(|_| prepare()).collect::<Vec<_>>();
-        let mut outputs = Vec::with_capacity(iterations);
-        let started = Instant::now();
-        for input in inputs {
-            outputs.push(run(input));
-        }
-        nanos.push(started.elapsed().as_nanos() as f64 / iterations as f64);
-        black_box(&outputs);
-    }
-    report(name, iterations, 0, nanos);
 }
 
 fn snapshot_value(snapshot_id: i64) -> Value {
@@ -184,8 +159,6 @@ fn main() {
     for (snapshot_count, iterations) in [(0, 5_000), (100, 500), (1_000, 50)] {
         let bytes = metadata_json(snapshot_count);
         let metadata = TableMetadata::from_json(&bytes).expect("parse benchmark metadata");
-        let updates = append_updates(snapshot_count as i64 + 1);
-
         measure(
             &format!("metadata_current_snapshot_{snapshot_count}"),
             100_000,
@@ -212,30 +185,13 @@ fn main() {
                 black_box(serde_json::to_value(black_box(&metadata)).expect("serialize metadata"));
             },
         );
-        measure_batched(
-            &format!("metadata_apply_append_{snapshot_count}"),
-            iterations,
-            || {
-                let mut input = metadata.clone();
-                input.snapshots.reserve(1);
-                input.snapshot_log.reserve(1);
-                input
-            },
-            |mut input| {
-                apply_table_updates(&mut input, &updates, 1_800_000_000_000)
-                    .expect("apply append updates");
-                black_box(input)
-            },
-        );
         measure(
-            &format!("metadata_full_commit_{snapshot_count}"),
+            &format!("metadata_roundtrip_{snapshot_count}"),
             iterations,
             bytes.len(),
             || {
-                let mut input =
+                let input =
                     TableMetadata::from_json(black_box(&bytes)).expect("parse table metadata");
-                apply_table_updates(&mut input, &updates, 1_800_000_000_000)
-                    .expect("apply append updates");
                 black_box(serde_json::to_value(&input).expect("serialize updated metadata"));
             },
         );
