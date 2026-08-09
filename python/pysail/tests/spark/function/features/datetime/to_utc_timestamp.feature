@@ -44,7 +44,6 @@ Feature: to_utc_timestamp
         | '2025-03-09 10:30:00' | 2025-03-09 18:30:00 |
         | '2025-03-09 11:30:00' | 2025-03-09 18:30:00 |
 
-  @function(nullability)
   Rule: Zone ID parsing
 
   Background:
@@ -59,6 +58,7 @@ Feature: to_utc_timestamp
         | result              |
         | 2024-01-01 03:30:00 |
 
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to to_utc_timestamp yields the schema Spark declares
