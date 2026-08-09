@@ -54,11 +54,12 @@ pub fn decode_remote_partitioning(
     schema: &Schema,
 ) -> Result<Partitioning> {
     let partitioning = try_decode_message::<ProtoPartitioning>(buf)?;
+    let converter = RemotePhysicalProtoConverter::default();
     parse_protobuf_partitioning(
         Some(&partitioning),
         &PhysicalPlanDecodeContext::new(ctx, codec),
         schema,
-        &RemotePhysicalProtoConverter {},
+        &converter,
     )?
     .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
 }
@@ -92,12 +93,32 @@ pub(super) fn try_decode_physical_plan(
     proto_to_physical_plan(ctx, codec, &plan)
 }
 
+pub(super) fn try_decode_physical_plan_with_converter(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    buf: &[u8],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let plan = try_decode_message::<PhysicalPlanNode>(buf)?;
+    proto_to_physical_plan_with_converter(ctx, codec, proto_converter, &plan)
+}
+
 pub(super) fn proto_to_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     plan: &PhysicalPlanNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.try_into_physical_plan_with_converter(ctx, codec, &RemotePhysicalProtoConverter {})
+    let converter = RemotePhysicalProtoConverter::default();
+    proto_to_physical_plan_with_converter(ctx, codec, &converter, plan)
+}
+
+pub(super) fn proto_to_physical_plan_with_converter(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    plan: &PhysicalPlanNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.try_into_physical_plan_with_converter(ctx, codec, proto_converter)
 }
 
 pub(super) fn try_decode_physical_expr(
@@ -110,14 +131,39 @@ pub(super) fn try_decode_physical_expr(
     proto_to_physical_expr(ctx, codec, &expr, schema)
 }
 
+pub(super) fn try_decode_physical_expr_with_converter(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    buf: &[u8],
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr = try_decode_message::<PhysicalExprNode>(buf)?;
+    proto_to_physical_expr_with_converter(ctx, codec, proto_converter, &expr, schema)
+}
+
 pub(super) fn proto_to_physical_expr(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     expr: &PhysicalExprNode,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let converter = RemotePhysicalProtoConverter;
-    converter.proto_to_physical_expr(expr, schema, &PhysicalPlanDecodeContext::new(ctx, codec))
+    let converter = RemotePhysicalProtoConverter::default();
+    proto_to_physical_expr_with_converter(ctx, codec, &converter, expr, schema)
+}
+
+pub(super) fn proto_to_physical_expr_with_converter(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+    expr: &PhysicalExprNode,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    proto_converter.proto_to_physical_expr(
+        expr,
+        schema,
+        &PhysicalPlanDecodeContext::new(ctx, codec),
+    )
 }
 
 pub(super) fn try_decode_higher_order_udf(
