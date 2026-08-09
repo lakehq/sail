@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use sail_common::telemetry::SpanAssociation;
+use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 
 use crate::error::ExecutionError;
@@ -27,7 +27,16 @@ impl SpanAssociation for WorkerMessage {
     }
 
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
-        Vec::new()
+        let mut properties: Vec<(&'static str, String)> = vec![];
+        match self {
+            Self::ServerReady { port, signal: _ } => {
+                properties.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
+            }
+            Self::StartHeartbeat | Self::Shutdown => {}
+        }
+        properties
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
     }
 }
 
