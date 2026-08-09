@@ -1,4 +1,3 @@
-@year
 Feature: year
 
   Rule: Basic year extraction
@@ -310,7 +309,7 @@ Feature: year
         """
       Then query plan matches snapshot
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

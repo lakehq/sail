@@ -1,4 +1,3 @@
-@to_xml
 Feature: to_xml converts a struct value to an XML string
 
   Rule: Basic serialization
@@ -712,7 +711,7 @@ Feature: to_xml converts a struct value to an XML string
         | r                                                                         |
         | <ROW>~    <m>~        <val>10</val>~        <val>20</val>~    </m>~</ROW> |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null struct literal is nullable (to_xml is inherently nullable in Spark)

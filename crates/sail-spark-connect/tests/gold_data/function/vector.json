@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_avg"
+        "failure": "not implemented: function: vector_avg"
       }
     },
     {
@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_cosine_similarity"
+        "failure": "not implemented: function: vector_cosine_similarity"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_inner_product"
+        "success": "ok"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_l2_distance"
+        "failure": "not implemented: function: vector_l2_distance"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_norm"
+        "failure": "not implemented: function: vector_norm"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_norm"
+        "failure": "not implemented: function: vector_norm"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_norm"
+        "failure": "not implemented: function: vector_norm"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_normalize"
+        "failure": "not implemented: function: vector_normalize"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_normalize"
+        "failure": "not implemented: function: vector_normalize"
       }
     },
     {
@@ -233,7 +233,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_normalize"
+        "failure": "not implemented: function: vector_normalize"
       }
     },
     {
@@ -259,7 +259,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: vector_sum"
+        "failure": "not implemented: function: vector_sum"
       }
     }
   ]

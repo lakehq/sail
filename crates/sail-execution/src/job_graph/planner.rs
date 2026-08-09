@@ -35,17 +35,22 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
-    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, Stage, StageInput,
+    TaskPlacement,
 };
 use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
-    pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
+    pub fn try_new(
+        plan: Arc<dyn ExecutionPlan>,
+        options: JobGraphOptions,
+    ) -> ExecutionResult<Self> {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
+            options,
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
@@ -54,7 +59,7 @@ impl JobGraph {
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -750,8 +755,9 @@ fn create_merge_input(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
+        OutputMode::Pipelined,
     )?;
     Ok(stage_input_exec(stage, InputMode::Merge, properties))
 }
@@ -763,8 +769,9 @@ fn create_scalar_subquery_input(
     let stage = push_stage(
         Arc::clone(plan),
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
+        OutputMode::Pipelined,
     )?;
     // ScalarSubqueryExec reads the link as a scalar value on every output
     // partition, so the materialized stage is exposed as one broadcast input.
@@ -782,8 +789,9 @@ fn create_rescale_input(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
+        OutputMode::Pipelined,
     )?;
     let properties = stage_properties_with_unknown_partitioning(graph, stage, output_partitions);
     Ok(stage_input_exec(stage, InputMode::Rescale, properties))
@@ -800,17 +808,23 @@ fn create_shuffle(
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
-            OutputDistribution::RoundRobin { channels }
+            OutputDistribution::RoundRobinBatch { channels }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
     let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
-    let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker)?;
+    let stage = push_stage(
+        plan,
+        graph,
+        distribution,
+        TaskPlacement::Worker,
+        OutputMode::Pipelined,
+    )?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
-    Ok(stage_input_exec(stage, mode, properties))
+    create_shuffle_input(stage, mode, properties, graph)
 }
 
 /// Creates a shuffle stage with row-level round-robin distribution.
@@ -826,12 +840,42 @@ fn create_row_shuffle(
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = OutputDistribution::RoundRobinRow { channels };
     let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
-    let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker)?;
+    let stage = push_stage(
+        plan,
+        graph,
+        distribution,
+        TaskPlacement::Worker,
+        OutputMode::Pipelined,
+    )?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
-    Ok(stage_input_exec(stage, mode, properties))
+    create_shuffle_input(stage, mode, properties, graph)
+}
+
+/// In storage shuffle mode, collect each logical shuffle partition in a separate
+/// blocking stage. This turns the many task/channel streams produced by the upstream
+/// stage into one (or a few size-bounded) object-storage files per output partition.
+fn create_shuffle_input(
+    stage: usize,
+    mode: InputMode,
+    properties: Arc<PlanProperties>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if !graph.options.use_blocking_shuffle {
+        return Ok(stage_input_exec(stage, mode, properties));
+    }
+
+    let merge = stage_input_exec(stage, mode, properties.clone());
+    let stage = push_stage(
+        merge,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::Blocking,
+    )?;
+    Ok(stage_input_exec(stage, InputMode::Forward, properties))
 }
 
 fn rewrite_inputs(
@@ -856,13 +900,14 @@ fn push_stage(
     graph: &mut JobGraph,
     distribution: OutputDistribution,
     placement: TaskPlacement,
+    mode: OutputMode,
 ) -> ExecutionResult<usize> {
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
         inputs,
         plan,
         group: String::new(),
-        mode: OutputMode::Pipelined,
+        mode,
         distribution,
         placement,
     };
@@ -902,8 +947,9 @@ fn create_driver_stage(
     let stage = push_stage(
         plan,
         graph,
-        OutputDistribution::RoundRobin { channels: 1 },
+        OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Driver,
+        OutputMode::Pipelined,
     )?;
     let properties = graph.stages[stage].plan.properties().clone();
     Ok(stage_input_exec(stage, InputMode::Forward, properties))
@@ -938,8 +984,9 @@ mod tests {
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
-    use super::JobGraph;
-    use crate::job_graph::{InputMode, OutputDistribution, StageInput, TaskPlacement};
+    use super::{JobGraph, JobGraphOptions};
+    use crate::error::ExecutionResult;
+    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
 
     fn schema() -> SchemaRef {
@@ -950,13 +997,28 @@ mod tests {
         Arc::new(EmptyExec::new(schema()))
     }
 
+    fn job_graph(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<JobGraph> {
+        JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )
+    }
+
+    fn blocking_shuffle_options() -> JobGraphOptions {
+        JobGraphOptions {
+            use_blocking_shuffle: true,
+        }
+    }
+
     #[test]
     fn test_job_graph_distinguishes_batch_and_explicit_round_robin_shuffle() {
-        let generic_graph = JobGraph::try_new(Arc::new(
+        let generic_graph = job_graph(Arc::new(
             RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
         ))
         .unwrap();
-        let explicit_graph = JobGraph::try_new(Arc::new(ExplicitRepartitionExec::new(
+        let explicit_graph = job_graph(Arc::new(ExplicitRepartitionExec::new(
             empty_plan(),
             Partitioning::RoundRobinBatch(4),
         )))
@@ -965,7 +1027,7 @@ mod tests {
         assert_eq!(generic_graph.stages().len(), 2);
         assert!(matches!(
             &generic_graph.stages()[0].distribution,
-            OutputDistribution::RoundRobin { channels: 4 }
+            OutputDistribution::RoundRobinBatch { channels: 4 }
         ));
         assert!(matches!(
             generic_graph.stages()[1].inputs.as_slice(),
@@ -990,11 +1052,40 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_shuffle_inserts_a_blocking_merge_stage() {
+        let graph = JobGraph::try_new(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            ),
+            blocking_shuffle_options(),
+        )
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert!(matches!(graph.stages()[0].mode, OutputMode::Pipelined));
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert!(matches!(graph.stages()[1].mode, OutputMode::Blocking));
+        assert!(matches!(
+            graph.stages()[2].inputs.as_slice(),
+            [StageInput {
+                stage: 1,
+                mode: InputMode::Forward,
+            }]
+        ));
+    }
+
+    #[test]
     fn test_job_graph_uses_rescale_input_for_coalesce_exec() {
         let input =
             UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
                 .unwrap();
-        let graph = JobGraph::try_new(Arc::new(CoalesceExec::new(input, 2))).unwrap();
+        let graph = job_graph(Arc::new(CoalesceExec::new(input, 2))).unwrap();
 
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(
@@ -1027,7 +1118,13 @@ mod tests {
             None,
         ));
 
-        let graph = JobGraph::try_new(commit).unwrap();
+        let graph = JobGraph::try_new(
+            commit,
+            JobGraphOptions {
+                use_blocking_shuffle: false,
+            },
+        )
+        .unwrap();
 
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
@@ -1051,8 +1148,7 @@ mod tests {
             schema(),
         ));
         let command = Arc::new(CooperativeExec::new(command));
-        let graph =
-            JobGraph::try_new(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
+        let graph = job_graph(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
 
         assert_eq!(graph.stages().len(), 3);
         assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
@@ -1104,7 +1200,7 @@ mod tests {
             results,
         ));
 
-        let graph = JobGraph::try_new(plan).unwrap();
+        let graph = job_graph(plan).unwrap();
 
         assert!(graph.stages().len() >= 3);
         let stage = graph
@@ -1182,7 +1278,7 @@ mod tests {
             results,
         ));
 
-        let graph = JobGraph::try_new(plan).unwrap();
+        let graph = job_graph(plan).unwrap();
 
         let stage = graph
             .stages()
@@ -1217,7 +1313,7 @@ mod tests {
             results,
         ));
 
-        let graph = JobGraph::try_new(plan).unwrap();
+        let graph = job_graph(plan).unwrap();
         let stage = graph
             .stages()
             .iter()

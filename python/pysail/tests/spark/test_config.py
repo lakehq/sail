@@ -5,8 +5,15 @@ import pytest
 from pysail.spark import SparkConnectServer
 
 
+@pytest.fixture(scope="module", autouse=True)
+def server():
+    # The tests below need the global state to be initialized while the environment variables
+    # are still pristine. This fixture ensures this even when running the tests against a server from `SPARK_REMOTE`.
+    _ = SparkConnectServer()
+
+
 def test_warning_on_static_config_addition(monkeypatch):
-    key = "SAIL_TELEMETRY__OTLP_ENDPOINT"
+    key = "SAIL_TELEMETRY__EXPORTER__OTLP__ENDPOINT"
     assert key not in os.environ
     monkeypatch.setenv(key, "http://localhost:4317")
     with pytest.warns(RuntimeWarning, match=f"ignored.*{key}"):

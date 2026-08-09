@@ -1,7 +1,6 @@
-@version
 Feature: version output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to version yields the schema Spark declares

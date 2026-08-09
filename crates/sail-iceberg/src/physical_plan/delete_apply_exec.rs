@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, RecordBatch};
+use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
@@ -13,13 +13,15 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
+use parquet::arrow::ProjectionMask;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::schema::types::SchemaDescriptor;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -142,6 +144,18 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         vec![&self.input]
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -180,41 +194,45 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         let output_schema = self.schema();
         let child = self.input.execute(0, Arc::clone(&context))?;
         let data_file_path = self.data_file_path.clone();
-        let positional = self.positional_deletes.clone();
-        let equality = self.equality_deletes.clone();
+        let positional_deletes = self.positional_deletes.clone();
+        let equality_deletes = self.equality_deletes.clone();
         let table_url = self.table_url.clone();
         let iceberg_schema = self.iceberg_schema.clone();
         let schema_for_adapter = output_schema.clone();
 
         let stream = try_stream! {
-            let table_url_parsed = Url::parse(&table_url)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let parsed_table_url = Url::parse(&table_url)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let base_store = context
                 .runtime_env()
                 .object_store_registry
-                .get_store(&table_url_parsed)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let store_ctx = StoreContext::new(base_store, &table_url_parsed)?;
+                .get_store(&parsed_table_url)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            let store_ctx = StoreContext::new(base_store, &parsed_table_url)?;
 
-            // Phase 1: load positional deletes (all files; filter by target path).
-            let positions = load_positions(&store_ctx, &positional, &data_file_path).await?;
+            let deleted_positions =
+                load_deleted_positions(&store_ctx, &positional_deletes, &data_file_path).await?;
 
-            // Phase 2: load equality-delete sets. Each entry is an independent set
-            // because the `equality_ids` may differ per delete file, and each set
-            // is applied disjunctively ("any match deletes").
-            let eq_sets = load_equality_sets(&store_ctx, &equality, &iceberg_schema).await?;
+            // Equality field IDs may differ between delete files, so each file is
+            // loaded and matched independently.
+            let loaded_equality_deletes =
+                load_equality_deletes(&store_ctx, &equality_deletes, &iceberg_schema).await?;
 
-            // Phase 3: stream the child and filter each batch.
             let mut row_offset: u64 = 0;
             let mut stream = child;
             while let Some(batch) = stream.try_next().await? {
-                let n = batch.num_rows() as u64;
-                let mask = compute_delete_mask(&batch, row_offset, &positions, &eq_sets)?;
-                row_offset += n;
-                let kept = filter_record_batch(&batch, &mask)
-                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-                if kept.num_rows() > 0 {
-                    yield kept;
+                let batch_row_count = batch.num_rows() as u64;
+                let mask = compute_delete_mask(
+                    &batch,
+                    row_offset,
+                    &deleted_positions,
+                    &loaded_equality_deletes,
+                )?;
+                row_offset += batch_row_count;
+                let filtered_batch = filter_record_batch(&batch, &mask)
+                    .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+                if filtered_batch.num_rows() > 0 {
+                    yield filtered_batch;
                 }
             }
         };
@@ -227,27 +245,27 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 }
 
 /// Load all applicable position-delete rows for the target data file.
-async fn load_positions(
+async fn load_deleted_positions(
     store_ctx: &StoreContext,
-    delete_refs: &[DeleteFileRef],
+    delete_files: &[DeleteFileRef],
     data_file_path: &str,
 ) -> Result<Vec<u64>> {
-    if delete_refs.is_empty() {
+    if delete_files.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut all_positions: Vec<u64> = Vec::new();
-    for r in delete_refs {
-        let (store, path) = store_ctx.resolve(&r.data_file.file_path)?;
-        let size = r.data_file.file_size_in_bytes;
-        let batches = read_parquet_all(store.clone(), &path, size).await?;
-        for batch in batches {
-            let path_col = batch
+    let mut deleted_positions = Vec::new();
+    for delete_file in delete_files {
+        let (store, path) = store_ctx.resolve(&delete_file.data_file.file_path)?;
+        let file_size = delete_file.data_file.file_size_in_bytes;
+        let delete_batches = read_parquet_all(store.clone(), &path, file_size).await?;
+        for batch in delete_batches {
+            let file_paths = batch
                 .column_by_name(POS_DELETE_FILE_PATH_COL)
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} missing '{}' column",
-                        r.data_file.file_path, POS_DELETE_FILE_PATH_COL
+                        delete_file.data_file.file_path, POS_DELETE_FILE_PATH_COL
                     ))
                 })?
                 .as_any()
@@ -255,16 +273,16 @@ async fn load_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} '{}' column is not Utf8",
-                        r.data_file.file_path, POS_DELETE_FILE_PATH_COL
+                        delete_file.data_file.file_path, POS_DELETE_FILE_PATH_COL
                     ))
                 })?
                 .clone();
-            let pos_col = batch
+            let positions = batch
                 .column_by_name(POS_DELETE_POS_COL)
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} missing '{}' column",
-                        r.data_file.file_path, POS_DELETE_POS_COL
+                        delete_file.data_file.file_path, POS_DELETE_POS_COL
                     ))
                 })?
                 .as_any()
@@ -272,142 +290,267 @@ async fn load_positions(
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "position-delete file {} '{}' column is not Int64",
-                        r.data_file.file_path, POS_DELETE_POS_COL
+                        delete_file.data_file.file_path, POS_DELETE_POS_COL
                     ))
                 })?
                 .clone();
-            for i in 0..path_col.len() {
-                if path_col.is_null(i) || pos_col.is_null(i) {
+            for row_index in 0..file_paths.len() {
+                if file_paths.is_null(row_index) || positions.is_null(row_index) {
                     continue;
                 }
-                let matched = path_col.value(i) == data_file_path;
-                if !matched {
-                    // Per spec, position-delete rows reference a single data file each;
-                    // most production writers group all rows for one data file into one
-                    // delete file, but a delete file MAY reference multiple paths. Filter
-                    // by exact string match.
+                if file_paths.value(row_index) != data_file_path {
+                    // A delete file may reference multiple data files.
                     continue;
                 }
-                let pos = pos_col.value(i);
-                if pos >= 0 {
-                    all_positions.push(pos as u64);
+                let position = positions.value(row_index);
+                if position >= 0 {
+                    deleted_positions.push(position as u64);
                 }
             }
         }
     }
 
-    all_positions.sort_unstable();
-    all_positions.dedup();
-    Ok(all_positions)
+    deleted_positions.sort_unstable();
+    deleted_positions.dedup();
+    Ok(deleted_positions)
 }
 
 /// A fully-loaded equality-delete set for one delete file.
-struct EqualityDeleteSet {
-    /// Ordered (name, arrow type) tuples forming the equality key projection.
-    key_spec: Vec<(String, DataType)>,
+struct LoadedEqualityDelete {
+    /// Ordered fields forming the equality key projection.
+    key_fields: Vec<EqualityKeyField>,
     /// Converter used to encode rows into sortable byte representations; NULLs
     /// compare equal to NULLs (IS NOT DISTINCT FROM semantics).
     converter: RowConverter,
     /// Encoded rows from the equality-delete file.
-    rows: HashSet<OwnedRow>,
+    deleted_rows: HashSet<OwnedRow>,
 }
 
-/// Resolve an Iceberg schema field name + Arrow data type for each `field_id`.
-fn resolve_equality_key_spec(
+struct EqualityKeyField {
+    field_id: i32,
+    data_column_name: String,
+    data_type: DataType,
+}
+
+/// Resolve the current data-column name and Arrow type for each equality field id.
+fn resolve_equality_key_fields(
     iceberg_schema: &IcebergSchema,
     equality_ids: &[i32],
-) -> Result<Vec<(String, DataType)>> {
-    let mut spec = Vec::with_capacity(equality_ids.len());
-    for fid in equality_ids {
-        let field = iceberg_schema.field_by_id(*fid).ok_or_else(|| {
-            DataFusionError::Plan(format!("equality delete references unknown field id {fid}"))
+) -> Result<Vec<EqualityKeyField>> {
+    let mut key_fields = Vec::with_capacity(equality_ids.len());
+    for field_id in equality_ids {
+        let field = iceberg_schema.field_by_id(*field_id).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "equality delete references unknown field id {field_id}"
+            ))
         })?;
         let arrow_type = crate::datasource::type_converter::iceberg_type_to_arrow(
             &field.field_type,
         )
-        .map_err(|e| {
+        .map_err(|error| {
             DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "failed to translate equality field '{}' to Arrow: {e}",
+                "failed to translate equality field '{}' to Arrow: {error}",
                 field.name
             ))))
         })?;
-        spec.push((field.name.clone(), arrow_type));
+        key_fields.push(EqualityKeyField {
+            field_id: *field_id,
+            data_column_name: field.name.clone(),
+            data_type: arrow_type,
+        });
     }
-    Ok(spec)
+    Ok(key_fields)
 }
 
-async fn load_equality_sets(
+async fn load_equality_deletes(
     store_ctx: &StoreContext,
-    delete_refs: &[DeleteFileRef],
+    delete_files: &[DeleteFileRef],
     iceberg_schema: &IcebergSchema,
-) -> Result<Vec<EqualityDeleteSet>> {
-    if delete_refs.is_empty() {
+) -> Result<Vec<LoadedEqualityDelete>> {
+    if delete_files.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut sets = Vec::with_capacity(delete_refs.len());
-    for r in delete_refs {
-        if r.data_file.equality_ids.is_empty() {
+    let mut equality_deletes = Vec::with_capacity(delete_files.len());
+    for delete_file in delete_files {
+        if delete_file.data_file.equality_ids.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "equality delete file {} has empty equality_ids",
-                r.data_file.file_path
+                delete_file.data_file.file_path
             )));
         }
-        let key_spec = resolve_equality_key_spec(iceberg_schema, &r.data_file.equality_ids)?;
-        let sort_fields: Vec<SortField> = key_spec
+        let key_fields =
+            resolve_equality_key_fields(iceberg_schema, &delete_file.data_file.equality_ids)?;
+        let sort_fields: Vec<SortField> = key_fields
             .iter()
-            .map(|(_, dt)| SortField::new(dt.clone()))
+            .map(|field| SortField::new(field.data_type.clone()))
             .collect();
         let converter = RowConverter::new(sort_fields)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
 
-        let (store, path) = store_ctx.resolve(&r.data_file.file_path)?;
-        let size = r.data_file.file_size_in_bytes;
-        let batches = read_parquet_all(store.clone(), &path, size).await?;
-        let mut rows_set: HashSet<OwnedRow> = HashSet::new();
-        for batch in batches {
-            let cols = project_columns(&batch, &key_spec).map_err(|e| {
-                DataFusionError::Internal(format!(
-                    "equality delete file {}: {e}",
-                    r.data_file.file_path
-                ))
-            })?;
+        let (store, path) = store_ctx.resolve(&delete_file.data_file.file_path)?;
+        let size = delete_file.data_file.file_size_in_bytes;
+        let key_batches = read_equality_delete_keys(
+            store.clone(),
+            &path,
+            size,
+            &key_fields,
+            &delete_file.data_file.file_path,
+        )
+        .await?;
+        let mut deleted_rows = HashSet::new();
+        for key_columns in key_batches {
             let rows = converter
-                .convert_columns(&cols)
-                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-            for i in 0..rows.num_rows() {
-                rows_set.insert(rows.row(i).owned());
+                .convert_columns(&key_columns)
+                .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+            for row_index in 0..rows.num_rows() {
+                deleted_rows.insert(rows.row(row_index).owned());
             }
         }
-        sets.push(EqualityDeleteSet {
-            key_spec,
+        equality_deletes.push(LoadedEqualityDelete {
+            key_fields,
             converter,
-            rows: rows_set,
+            deleted_rows,
         });
     }
 
-    Ok(sets)
+    Ok(equality_deletes)
 }
 
-fn project_columns(
+fn project_equality_key_columns(
     batch: &RecordBatch,
-    key_spec: &[(String, DataType)],
+    key_fields: &[EqualityKeyField],
 ) -> std::result::Result<Vec<datafusion::arrow::array::ArrayRef>, String> {
-    let mut out = Vec::with_capacity(key_spec.len());
-    for (name, expected_ty) in key_spec {
-        let col = batch
-            .column_by_name(name)
-            .ok_or_else(|| format!("missing column '{name}'"))?;
-        if col.data_type() != expected_ty {
+    let mut key_columns = Vec::with_capacity(key_fields.len());
+    for field in key_fields {
+        let column = batch
+            .column_by_name(&field.data_column_name)
+            .ok_or_else(|| format!("missing column '{}'", field.data_column_name))?;
+        if column.data_type() != &field.data_type {
             return Err(format!(
                 "column '{name}' has type {:?}, expected {:?}",
-                col.data_type(),
-                expected_ty
+                column.data_type(),
+                field.data_type,
+                name = field.data_column_name,
             ));
         }
-        out.push(col.clone());
+        key_columns.push(column.clone());
     }
-    Ok(out)
+    Ok(key_columns)
+}
+
+struct EqualityDeleteProjection {
+    mask: ProjectionMask,
+    key_column_indices: Vec<usize>,
+}
+
+impl EqualityDeleteProjection {
+    fn try_new(
+        parquet_schema: &SchemaDescriptor,
+        key_fields: &[EqualityKeyField],
+    ) -> std::result::Result<Self, String> {
+        let root_fields = parquet_schema.root_schema().get_fields();
+        let mut root_indices = Vec::with_capacity(key_fields.len());
+        for key_field in key_fields {
+            let mut matching_roots = root_fields.iter().enumerate().filter_map(|(index, field)| {
+                let basic_info = field.get_basic_info();
+                (basic_info.has_id() && basic_info.id() == key_field.field_id).then_some(index)
+            });
+            let root_index = matching_roots.next().ok_or_else(|| {
+                format!(
+                    "missing column with Iceberg field id {}",
+                    key_field.field_id
+                )
+            })?;
+            if matching_roots.next().is_some() {
+                return Err(format!(
+                    "multiple columns have Iceberg field id {}",
+                    key_field.field_id
+                ));
+            }
+            root_indices.push(root_index);
+        }
+
+        let mut projected_roots = root_indices.clone();
+        projected_roots.sort_unstable();
+        projected_roots.dedup();
+        let key_column_indices = root_indices
+            .iter()
+            .map(|root_index| {
+                projected_roots
+                    .binary_search(root_index)
+                    .map_err(|_| "failed to map projected equality-delete column".to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(Self {
+            mask: ProjectionMask::roots(parquet_schema, projected_roots),
+            key_column_indices,
+        })
+    }
+
+    fn project_key_columns(
+        &self,
+        batch: &RecordBatch,
+        key_fields: &[EqualityKeyField],
+    ) -> std::result::Result<Vec<ArrayRef>, String> {
+        let mut columns = Vec::with_capacity(key_fields.len());
+        for (column_index, key_field) in self.key_column_indices.iter().zip(key_fields) {
+            let column = batch.columns().get(*column_index).ok_or_else(|| {
+                format!(
+                    "missing projected column with Iceberg field id {}",
+                    key_field.field_id
+                )
+            })?;
+            if column.data_type() != &key_field.data_type {
+                return Err(format!(
+                    "column with Iceberg field id {} has type {:?}, expected {:?}",
+                    key_field.field_id,
+                    column.data_type(),
+                    key_field.data_type
+                ));
+            }
+            columns.push(column.clone());
+        }
+        Ok(columns)
+    }
+}
+
+async fn read_equality_delete_keys(
+    store: Arc<dyn object_store::ObjectStore>,
+    path: &ObjectPath,
+    size: u64,
+    key_fields: &[EqualityKeyField],
+    display_path: &str,
+) -> Result<Vec<Vec<ArrayRef>>> {
+    let reader = ParquetObjectReader::new(store, path.clone()).with_file_size(size);
+    let builder = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let projection = EqualityDeleteProjection::try_new(builder.parquet_schema(), key_fields)
+        .map_err(|error| {
+            DataFusionError::Internal(format!("equality delete file {display_path}: {error}"))
+        })?;
+    let mut stream = builder
+        .with_projection(projection.mask.clone())
+        .build()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut key_batches = Vec::new();
+    while let Some(batch) = stream
+        .try_next()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+    {
+        key_batches.push(
+            projection
+                .project_key_columns(&batch, key_fields)
+                .map_err(|error| {
+                    DataFusionError::Internal(format!(
+                        "equality delete file {display_path}: {error}"
+                    ))
+                })?,
+        );
+    }
+    Ok(key_batches)
 }
 
 /// Read all RecordBatches from a Parquet file on the given store.
@@ -435,46 +578,48 @@ fn compute_delete_mask(
     batch: &RecordBatch,
     row_offset: u64,
     sorted_positions: &[u64],
-    eq_sets: &[EqualityDeleteSet],
+    equality_deletes: &[LoadedEqualityDelete],
 ) -> Result<datafusion::arrow::array::BooleanArray> {
-    let n = batch.num_rows();
-    let mut keep: Vec<bool> = vec![true; n];
+    let row_count = batch.num_rows();
+    let mut keep_rows = vec![true; row_count];
 
-    // Positional deletes: look up positions in [row_offset, row_offset + n).
+    // Positional deletes: look up positions in this batch's row range.
     if !sorted_positions.is_empty() {
-        let lo = row_offset;
-        let hi = row_offset + n as u64;
-        // Binary-search the range of positions that fall in [lo, hi).
-        let start = sorted_positions.partition_point(|&p| p < lo);
-        let end = sorted_positions.partition_point(|&p| p < hi);
-        for &p in &sorted_positions[start..end] {
-            let idx = (p - lo) as usize;
-            if idx < n {
-                keep[idx] = false;
+        let end_offset = row_offset + row_count as u64;
+        let first_position = sorted_positions.partition_point(|&position| position < row_offset);
+        let last_position = sorted_positions.partition_point(|&position| position < end_offset);
+        for &position in &sorted_positions[first_position..last_position] {
+            let row_index = (position - row_offset) as usize;
+            if row_index < row_count {
+                keep_rows[row_index] = false;
             }
         }
     }
 
-    // Equality deletes: convert data-batch rows once per eq set and probe the set.
-    for eq in eq_sets {
-        let cols = project_columns(batch, &eq.key_spec)
-            .map_err(|e| DataFusionError::Internal(format!("equality-delete apply: {e}")))?;
-        let rows = eq
+    // Equality deletes: convert data-batch rows once per key set and probe the set.
+    for equality_delete in equality_deletes {
+        let key_columns = project_equality_key_columns(batch, &equality_delete.key_fields)
+            .map_err(|error| {
+                DataFusionError::Internal(format!("equality-delete apply: {error}"))
+            })?;
+        let rows = equality_delete
             .converter
-            .convert_columns(&cols)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let owned_rows: Vec<OwnedRow> = (0..n).map(|i| rows.row(i).owned()).collect();
-        for (i, keep_slot) in keep.iter_mut().enumerate().take(n) {
-            if !*keep_slot {
+            .convert_columns(&key_columns)
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+        let key_rows = (0..row_count)
+            .map(|row_index| rows.row(row_index).owned())
+            .collect::<Vec<OwnedRow>>();
+        for (row_index, keep_row) in keep_rows.iter_mut().enumerate() {
+            if !*keep_row {
                 continue;
             }
-            if eq.rows.contains(&owned_rows[i]) {
-                *keep_slot = false;
+            if equality_delete.deleted_rows.contains(&key_rows[row_index]) {
+                *keep_row = false;
             }
         }
     }
 
-    Ok(datafusion::arrow::array::BooleanArray::from(keep))
+    Ok(datafusion::arrow::array::BooleanArray::from(keep_rows))
 }
 
 #[cfg(test)]
@@ -485,6 +630,7 @@ mod tests {
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
+    use parquet::schema::parser::parse_message_type;
 
     use super::*;
 
@@ -504,13 +650,73 @@ mod tests {
     }
 
     #[test]
+    fn equality_projection_reads_only_key_fields_and_restores_key_order() {
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type(
+                "message test {
+                    REQUIRED INT64 extra = 9;
+                    REQUIRED BINARY second (UTF8) = 2;
+                    REQUIRED INT64 first = 1;
+                }",
+            )
+            .unwrap(),
+        ));
+        let key_fields = vec![
+            EqualityKeyField {
+                field_id: 1,
+                data_column_name: "first".to_string(),
+                data_type: DataType::Int64,
+            },
+            EqualityKeyField {
+                field_id: 2,
+                data_column_name: "second".to_string(),
+                data_type: DataType::Utf8,
+            },
+        ];
+
+        let projection = EqualityDeleteProjection::try_new(&parquet_schema, &key_fields).unwrap();
+
+        assert_eq!(
+            projection.mask,
+            ProjectionMask::roots(&parquet_schema, [1, 2])
+        );
+        assert_eq!(projection.key_column_indices, vec![1, 0]);
+    }
+
+    #[test]
+    fn equality_projection_rejects_duplicate_field_ids() {
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type(
+                "message test {
+                    REQUIRED INT64 first = 1;
+                    REQUIRED INT64 duplicate = 1;
+                }",
+            )
+            .unwrap(),
+        ));
+        let key_fields = vec![EqualityKeyField {
+            field_id: 1,
+            data_column_name: "first".to_string(),
+            data_type: DataType::Int64,
+        }];
+
+        let error = EqualityDeleteProjection::try_new(&parquet_schema, &key_fields)
+            .err()
+            .unwrap();
+
+        assert!(error.contains("multiple columns have Iceberg field id 1"));
+    }
+
+    #[test]
     fn mask_drops_positions_within_range() {
         let batch = make_batch();
         let positions = vec![1u64, 3, 100];
         let mask = compute_delete_mask(&batch, 0, &positions, &[]).unwrap();
         // Rows 1 and 3 dropped.
-        let vals: Vec<bool> = (0..mask.len()).map(|i| mask.value(i)).collect();
-        assert_eq!(vals, vec![true, false, true, false, true]);
+        let values = (0..mask.len())
+            .map(|index| mask.value(index))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![true, false, true, false, true]);
     }
 
     #[test]
@@ -519,34 +725,41 @@ mod tests {
         // Upstream row offset 10 means this batch spans rows [10, 15).
         let positions = vec![9u64, 11, 14, 20];
         let mask = compute_delete_mask(&batch, 10, &positions, &[]).unwrap();
-        // 9 < 10 → out; 11 → drop idx 1; 14 → drop idx 4; 20 → out.
-        let vals: Vec<bool> = (0..mask.len()).map(|i| mask.value(i)).collect();
-        assert_eq!(vals, vec![true, false, true, true, false]);
+        // Positions 11 and 14 drop rows 1 and 4; the other positions are outside the batch.
+        let values = (0..mask.len())
+            .map(|index| mask.value(index))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![true, false, true, true, false]);
     }
 
     #[test]
-    fn mask_applies_equality_sets() {
+    fn mask_applies_equality_deletes() {
         let batch = make_batch();
-        // Build an eq set keyed by ("id" Int64): delete id=2 and id=4.
-        let key_spec = vec![("id".to_string(), DataType::Int64)];
+        let key_fields = vec![EqualityKeyField {
+            field_id: 1,
+            data_column_name: "id".to_string(),
+            data_type: DataType::Int64,
+        }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
         let delete_rows = converter
             .convert_columns(&[Arc::new(Int64Array::from(vec![2i64, 4])) as _])
             .unwrap();
-        let mut set = HashSet::new();
-        for i in 0..delete_rows.num_rows() {
-            set.insert(delete_rows.row(i).owned());
+        let mut deleted_rows = HashSet::new();
+        for row_index in 0..delete_rows.num_rows() {
+            deleted_rows.insert(delete_rows.row(row_index).owned());
         }
-        let eq_sets = vec![EqualityDeleteSet {
-            key_spec,
+        let equality_deletes = vec![LoadedEqualityDelete {
+            key_fields,
             converter,
-            rows: set,
+            deleted_rows,
         }];
 
-        let mask = compute_delete_mask(&batch, 0, &[], &eq_sets).unwrap();
-        let vals: Vec<bool> = (0..mask.len()).map(|i| mask.value(i)).collect();
+        let mask = compute_delete_mask(&batch, 0, &[], &equality_deletes).unwrap();
+        let values = (0..mask.len())
+            .map(|index| mask.value(index))
+            .collect::<Vec<_>>();
         // id 0,1,2,3,4 → keep 0,1,3; drop 2 and 4.
-        assert_eq!(vals, vec![true, true, false, true, false]);
+        assert_eq!(values, vec![true, true, false, true, false]);
     }
 
     #[test]
@@ -554,22 +767,28 @@ mod tests {
         let batch = make_batch();
         let positions = vec![0u64]; // drops row 0
 
-        let key_spec = vec![("id".to_string(), DataType::Int64)];
+        let key_fields = vec![EqualityKeyField {
+            field_id: 1,
+            data_column_name: "id".to_string(),
+            data_type: DataType::Int64,
+        }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
         let delete_rows = converter
             .convert_columns(&[Arc::new(Int64Array::from(vec![4i64])) as _])
             .unwrap();
-        let mut set = HashSet::new();
-        set.insert(delete_rows.row(0).owned());
-        let eq_sets = vec![EqualityDeleteSet {
-            key_spec,
+        let mut deleted_rows = HashSet::new();
+        deleted_rows.insert(delete_rows.row(0).owned());
+        let equality_deletes = vec![LoadedEqualityDelete {
+            key_fields,
             converter,
-            rows: set,
+            deleted_rows,
         }];
 
-        let mask = compute_delete_mask(&batch, 0, &positions, &eq_sets).unwrap();
-        let vals: Vec<bool> = (0..mask.len()).map(|i| mask.value(i)).collect();
-        assert_eq!(vals, vec![false, true, true, true, false]);
+        let mask = compute_delete_mask(&batch, 0, &positions, &equality_deletes).unwrap();
+        let values = (0..mask.len())
+            .map(|index| mask.value(index))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![false, true, true, true, false]);
     }
 
     #[test]

@@ -1,5 +1,4 @@
 @spark-4
-@to_variant_object
 Feature: to_variant_object
 
   Rule: Struct input
@@ -184,7 +183,7 @@ Feature: to_variant_object
         | to_variant_object rejects empty array | array() |
         | to_variant_object rejects empty map   | map()   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

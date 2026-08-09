@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -25,6 +26,7 @@ use url::Url;
 const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
 const METADATA_COMPRESSION_NONE: &str = "none";
 const METADATA_COMPRESSION_GZIP: &str = "gzip";
+const VERSION_HINT_PATH: &str = "metadata/version-hint.text";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MetadataFileCodec {
@@ -136,6 +138,26 @@ pub(crate) fn metadata_file_extension_from_properties(
         .map(String::as_str)
         .unwrap_or(METADATA_COMPRESSION_NONE);
     Ok(MetadataFileCodec::from_property_value(codec)?.file_extension())
+}
+
+/// Writes the non-authoritative Iceberg metadata version hint.
+///
+/// This is best-effort: failures are logged because the hint is only an optional
+/// lookup optimization.
+pub(crate) async fn write_version_hint(
+    object_store: &Arc<dyn object_store::ObjectStore>,
+    version_hint: &str,
+) {
+    let hint_path = ObjectPath::from(VERSION_HINT_PATH);
+    if let Err(error) = object_store
+        .put(
+            &hint_path,
+            object_store::PutPayload::from(Bytes::copy_from_slice(version_hint.as_bytes())),
+        )
+        .await
+    {
+        log::warn!("Failed to update Iceberg version hint: {error}");
+    }
 }
 
 pub(crate) async fn load_metadata_file_bytes(

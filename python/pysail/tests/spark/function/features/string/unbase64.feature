@@ -1,7 +1,6 @@
-@unbase64
 Feature: unbase64 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to unbase64 yields the schema Spark declares

@@ -1,4 +1,3 @@
-@negative
 Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the minimum integral value overflows
@@ -176,7 +175,7 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | negate the maximum DECIMAL(38,0) errors under ANSI on       | true  |
         | negate the maximum DECIMAL(38,0) also errors under ANSI off | false |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null integer literal yields a non-nullable integer

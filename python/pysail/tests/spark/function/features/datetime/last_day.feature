@@ -1,4 +1,3 @@
-@last_day
 Feature: last_day comprehensive tests
 
   Rule: Argument count validation
@@ -530,7 +529,7 @@ Feature: last_day comprehensive tests
         """
       Then query plan matches snapshot
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

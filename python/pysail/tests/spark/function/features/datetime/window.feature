@@ -1,4 +1,3 @@
-@window
 Feature: window() time-based windowing function
 
   Rule: Tumbling window
@@ -177,6 +176,9 @@ Feature: window() time-based windowing function
   Background:
       Given config spark.sql.session.timeZone = America/Los_Angeles
 
+    # The grouping struct is non-nullable in Spark; Sail widens it.
+    @sail-bug
+    @function(nullability)
     Scenario: a date is cast to a session time zone timestamp, not timestamp_ntz
       When query
         """
@@ -186,7 +188,7 @@ Feature: window() time-based windowing function
       Then query schema
         """
         root
-         |-- w: struct (nullable = true)
+         |-- w: struct (nullable = false)
          |    |-- start: timestamp (nullable = true)
          |    |-- end: timestamp (nullable = true)
         """
@@ -205,6 +207,9 @@ Feature: window() time-based windowing function
 
   Rule: Interval literal durations
 
+    # Spark only accepts an integer, long or string literal as the window duration; an INTERVAL
+    # literal is rejected during analysis. Sail accepts it.
+    @sail-bug
     Scenario: a day-time interval literal is used as the window duration
       When query
         """
@@ -213,10 +218,9 @@ Feature: window() time-based windowing function
         GROUP BY window(b, INTERVAL '5' MINUTE)
         ORDER BY start
         """
-      Then query result
-        | start               | end                 | cnt |
-        | 2021-01-01 00:00:00 | 2021-01-01 00:05:00 | 1   |
+      Then query error The duration and time inputs to window must be an integer, long or string literal
 
+    @sail-bug
     Scenario: a calendar interval literal is used as the window duration
       When query
         """
@@ -225,12 +229,13 @@ Feature: window() time-based windowing function
         GROUP BY window(b, INTERVAL '5 minutes')
         ORDER BY start
         """
-      Then query result
-        | start               | end                 | cnt |
-        | 2021-01-01 00:00:00 | 2021-01-01 00:05:00 | 1   |
+      Then query error The duration and time inputs to window must be an integer, long or string literal
 
   Rule: Argument validation
 
+    # Spark reports these through WRONG_NUM_ARGS and DATATYPE_MISMATCH error classes; Sail uses
+    # its own wording for every one of them.
+    @sail-bug
     Scenario Outline: Argument validation: <case>
       When query
         """
@@ -241,13 +246,13 @@ Feature: window() time-based windowing function
 
       Examples:
         | case                                                             | values                                       | cols | args                         | error                                                                |
-        | window rejects a single argument                                 | TIMESTAMP '2021-01-01 00:00:00'              | b    | b                            | .*window requires 2 to 4 arguments.*                                 |
-        | window rejects a non-literal duration                            | TIMESTAMP '2021-01-01 00:00:00', '5 minutes' | b, d | b, d                         | .*must be literal strings, intervals, or integers.*                  |
-        | window rejects a zero window duration                            | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '0 seconds'               | .*the window duration must be greater than 0.*                       |
-        | window rejects a zero slide duration                             | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '10 minutes', '0 seconds' | .*the slide duration must be greater than 0.*                        |
-        | window rejects a slide duration greater than the window duration | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '5 minutes', '10 minutes' | .*slide duration must be less than or equal to the window duration.* |
-        | window rejects a non-timestamp time column                       | true                                         | b    | b, '5 minutes'               | .*window requires a timestamp time column.*                          |
-        | window rejects a month-based duration (non-constant length)      | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '1 month'                 | .*must not contain months or years.*                                 |
+        | window rejects a single argument                                 | TIMESTAMP '2021-01-01 00:00:00'              | b    | b                            | WRONG_NUM_ARGS.*window. requires .2, 3, 4. parameters but the actual number is 1 |
+        | window rejects a non-literal duration                            | TIMESTAMP '2021-01-01 00:00:00', '5 minutes' | b, d | b, d                         | The duration and time inputs to window must be an integer, long or string literal            |
+        | window rejects a zero window duration                            | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '0 seconds'               | DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*window_duration. must be between            |
+        | window rejects a zero slide duration                             | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '10 minutes', '0 seconds' | DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*slide_duration. must be between             |
+        | window rejects a slide duration greater than the window duration | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '5 minutes', '10 minutes' | DATATYPE_MISMATCH.PARAMETER_CONSTRAINT_VIOLATION.*must be <= the                       |
+        | window rejects a non-timestamp time column                       | true                                         | b    | b, '5 minutes'               | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.*The first parameter requires the              |
+        | window rejects a month-based duration (non-constant length)      | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '1 month'                 | Intervals greater than a month is not supported                                             |
 
     # The expected error regex contains `\(` escape sequences, and pytest-bdd doubles a
     # backslash inside an Examples cell, so this scenario cannot be parameterised.
@@ -261,6 +266,10 @@ Feature: window() time-based windowing function
 
   Rule: Bounded plan size
 
+    # Spark does not reject this: it tries to materialise 86_400_000_000 overlapping windows and
+    # dies with `Java heap space`, taking the JVM session down with it. Sail rejects it up front,
+    # so the scenario can only run against Sail.
+    @sail-only
     Scenario: window rejects pathological window/slide ratios
       When query
         """

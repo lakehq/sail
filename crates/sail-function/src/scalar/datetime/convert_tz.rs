@@ -14,7 +14,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::time_unit_to_multiplier;
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone

@@ -40,9 +40,10 @@ from pysail.spark import SparkConnectServer
 
 # authenticate with Kerberos
 subprocess.run([
-    "kinit", "-kt",
+    "kinit",
+    "-kt",
     "/path/to/user.keytab",
-    "username@YOUR.REALM"
+    "username@YOUR.REALM",
 ], check=True)
 
 # start the Sail server

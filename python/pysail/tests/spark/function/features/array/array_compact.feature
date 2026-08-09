@@ -1,4 +1,3 @@
-@array_compact
 Feature: array_compact() removes null values from an array
 
   Rule: Basic usage
@@ -86,7 +85,7 @@ Feature: array_compact() removes null values from an array
         | double  | array(1.1, NULL, 2.2, NULL) | [1.1, 2.2]    |
         | boolean | array(true, NULL, false)    | [true, false] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

@@ -660,9 +660,10 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_command_optimizer_coalesces_writer_before_commit()
     -> datafusion_common::Result<()> {
-        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
-            "memory:///checkpoint".to_string(),
-        )));
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
         let config = SessionConfig::new().with_extension(registry);
         let runtime_env = Arc::new(RuntimeEnv::default());
         let object_store_url =
@@ -706,9 +707,10 @@ mod tests {
     #[tokio::test]
     async fn zero_column_checkpoint_scan_preserves_partition_rows() -> datafusion_common::Result<()>
     {
-        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
-            "memory:///checkpoint".to_string(),
-        )));
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
         registry.insert(sail_cache::remote_checkpoint::RemoteCheckpointDescriptor {
             relation_id: "zero-columns".to_string(),
             object_store_url: datafusion::execution::object_store::ObjectStoreUrl::parse(
@@ -767,9 +769,10 @@ mod tests {
         let logical_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let storage_schema = checkpoint_storage_schema(&logical_schema);
         let storage_key = Arc::new(Column::new("_c0", 0)) as Arc<dyn PhysicalExpr>;
-        let registry = Arc::new(RemoteCheckpointRegistry::new(Some(
-            "memory:///checkpoint".to_string(),
-        )));
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
         registry.insert(sail_cache::remote_checkpoint::RemoteCheckpointDescriptor {
             relation_id: "relation".to_string(),
             object_store_url: datafusion::execution::object_store::ObjectStoreUrl::parse(

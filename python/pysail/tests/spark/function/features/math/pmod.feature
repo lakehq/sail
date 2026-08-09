@@ -1,4 +1,3 @@
-@pmod
 Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
 
   # Spark `pmod(a, b)` returns the positive remainder of `a / b` (always in
@@ -119,7 +118,7 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         | double pmod decimal returns a double                  | CAST(5.5 AS DOUBLE), 2.0        | 1.5    |
         | infinity double pmod decimal returns NaN not an error | CAST('Infinity' AS DOUBLE), 2.0 | NaN    |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null integer literal is nullable (inherently nullable in Spark)

@@ -1,7 +1,6 @@
-@array_position
 Feature: array_position output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to array_position yields the schema Spark declares

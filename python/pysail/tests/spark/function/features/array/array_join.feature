@@ -1,7 +1,6 @@
-@array_join
 Feature: array_join output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

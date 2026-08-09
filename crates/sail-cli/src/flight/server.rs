@@ -33,7 +33,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
 
         info!("Starting the Flight SQL server on {}...", local_addr);
 
-        sail_flight::serve(
+        sail_flight::entrypoint::serve(
             listener,
             shutdown(),
             config,

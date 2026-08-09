@@ -1,7 +1,6 @@
-@nullifzero
 Feature: nullifzero output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to nullifzero yields the schema Spark declares
@@ -62,15 +61,28 @@ Feature: nullifzero output schema
         | nullifzero doctest #10 (result) | CAST(2.5 AS DOUBLE)         | 2.5   | double        |
         | nullifzero doctest #11 (result) | CAST(0.00 AS DECIMAL(10,2)) | NULL  | decimal(10,2) |
         | nullifzero doctest #12 (result) | CAST(5.25 AS DECIMAL(10,2)) | 5.25  | decimal(10,2) |
-        | nullifzero doctest #14 (result) | NULL                        | NULL  | int           |
 
-    # Kept separate: Spark derives the column name as `nullifzero((- 1))`, not
-    # `nullifzero(-1)`, so the SQL argument and the header cannot share one slot.
+    # An untyped NULL literal keeps the NullType through `nullifzero`, so Spark reports `void`.
+    # Sail resolves the literal to INT first.
+    @sail-bug
+    Scenario: nullifzero doctest #14 (result)
+      When query
+        """
+        SELECT nullifzero(NULL), typeof(nullifzero(NULL))
+        """
+      Then query result
+        | nullifzero(NULL) | typeof(nullifzero(NULL)) |
+        | NULL             | void                     |
+
+    # Kept separate because the derived column name repeats the SQL argument, so the two
+    # cannot share one Examples slot.
+    # Spark derives the name from the literal as written (`-1`); Sail renders it `(- 1)`.
+    @sail-bug
     Scenario: nullifzero doctest #13 (result)
       When query
         """
         SELECT nullifzero(-1), typeof(nullifzero(-1))
         """
       Then query result
-        | nullifzero((- 1)) | typeof(nullifzero((- 1))) |
-        | -1                | int                       |
+        | nullifzero(-1) | typeof(nullifzero(-1)) |
+        | -1             | int                    |

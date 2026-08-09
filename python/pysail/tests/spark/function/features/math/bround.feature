@@ -1,4 +1,3 @@
-@bround
 Feature: bround comprehensive tests
   # bround = banker's rounding (round-half-to-even). The scenarios below use
   # explicit CAST to DOUBLE/FLOAT/INT/BIGINT so they exercise the vectorized
@@ -249,7 +248,7 @@ Feature: bround comprehensive tests
 
   Rule: bround — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: bround with the argument as a literal
       When query
         """
@@ -261,7 +260,7 @@ Feature: bround comprehensive tests
 
     # Spark requires a foldable argument here; Sail accepts a column and returns
     # a value per row instead of raising.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Bround: <case>
       When query
         """
@@ -274,7 +273,7 @@ Feature: bround comprehensive tests
         | bround takes argument 2 from a column holding two different values | 0  |
         | bround takes argument 2 from a column                              | -1 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

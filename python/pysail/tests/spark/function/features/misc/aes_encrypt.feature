@@ -1,4 +1,3 @@
-@aes_encrypt
 Feature: aes_encrypt with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: aes_encrypt with an argument coming from a column
 
   Rule: aes_encrypt — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: aes_encrypt with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: Expr requires a single value, got StringArray [ "Spark", "Spark SQL",...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 1 from a column holding two different values
       When query
         """
@@ -29,7 +28,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAAFfH3r/2mb/RDzBWeYjUD7c= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: Expr requires a single value, got StringArray [ "Spark", "Spark", ]
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 1 from a column
       When query
         """
@@ -41,7 +40,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: Key requires a single value, got StringArray [ "abcdefghijklmnop12345...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 2 from a column holding two different values
       When query
         """
@@ -53,7 +52,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAADSP83694Ft4gLozkGj72l4= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: Key requires a single value, got StringArray [ "abcdefghijklmnop12345...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 2 from a column
       When query
         """
@@ -65,7 +64,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: Mode requires a single value, got StringArray [ "CBC", "CBC", ]
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 3 from a column
       When query
         """
@@ -77,7 +76,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg= |
 
     # Sail rejects the column: Sail errors: Spark `aes_encrypt`: AAD requires a single value, got StringArray [ "This is an AAD mixed...
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: aes_encrypt takes argument 6 from a column
       When query
         """
@@ -88,7 +87,7 @@ Feature: aes_encrypt with an argument coming from a column
         | AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4 |
         | AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal yields binary

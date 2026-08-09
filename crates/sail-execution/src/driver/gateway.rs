@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use prost::Message;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
-use sail_server::ServerBuilder;
+use sail_common::server::ServerBuilder;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -12,12 +12,12 @@ use tonic::{Status, async_trait};
 
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
-use crate::driver::{DriverEvent, DriverRegistryAccessor};
+use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
+use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
 
 enum DriverGatewayState {
     Pending {
@@ -78,7 +78,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
         self.registry
             .get(key.driver_id)
             .await?
-            .send(DriverEvent::FetchDriverStream {
+            .send(DriverMessage::FetchDriverStream {
                 key: key.stream,
                 result: sender,
             })

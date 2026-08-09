@@ -1,4 +1,3 @@
-@get_json_object
 Feature: get_json_object extracts values via a Spark JSONPath
 
   # Spark `get_json_object(json, path)` walks a JSONPath subset: a leading `$`,
@@ -118,7 +117,7 @@ Feature: get_json_object extracts values via a Spark JSONPath
 
   Rule: get_json_object — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: get_json_object with the argument as a literal
       When query
         """
@@ -129,7 +128,7 @@ Feature: get_json_object extracts values via a Spark JSONPath
         | b      |
 
     # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Get_json_object: <case>
       When query
         """
@@ -146,7 +145,7 @@ Feature: get_json_object extracts values via a Spark JSONPath
         | get_json_object takes argument 2 from a column containing NULL              | NULL     | NULL |
         | get_json_object takes argument 2 from a column                              | '$[0].a' | b    |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null json literal yields a string

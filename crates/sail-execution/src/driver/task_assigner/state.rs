@@ -11,10 +11,10 @@ pub struct DriverResource {
     task_slots: Vec<TaskSlot>,
     /// The active local task streams that the driver owns.
     local_streams: IndexSet<TaskKey>,
-    /// The active remote task streams.
-    /// Remote task streams are tracked by the driver
+    /// The active storage task streams.
+    /// Storage task streams are tracked by the driver
     /// regardless of whether they are created by the driver or workers.
-    remote_streams: IndexSet<TaskKey>,
+    storage_streams: IndexSet<TaskKey>,
 }
 
 impl DriverResource {
@@ -44,8 +44,8 @@ impl DriverResource {
         self.local_streams.extend(set.local_streams().cloned());
     }
 
-    pub fn track_remote_streams(&mut self, set: &TaskSet) {
-        self.remote_streams.extend(set.remote_streams().cloned());
+    pub fn track_storage_streams(&mut self, set: &TaskSet) {
+        self.storage_streams.extend(set.storage_streams().cloned());
     }
 
     pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
@@ -59,15 +59,15 @@ impl DriverResource {
         count != self.local_streams.len()
     }
 
-    pub fn untrack_remote_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
-        let count = self.remote_streams.len();
+    pub fn untrack_storage_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        let count = self.storage_streams.len();
         if let Some(stage) = stage {
-            self.remote_streams
+            self.storage_streams
                 .retain(|x| x.job_id != job_id || x.stage != stage);
         } else {
-            self.remote_streams.retain(|x| x.job_id != job_id);
+            self.storage_streams.retain(|x| x.job_id != job_id);
         }
-        count != self.remote_streams.len()
+        count != self.storage_streams.len()
     }
 }
 
@@ -89,7 +89,7 @@ pub enum WorkerResource {
         ///
         /// The worker needs to be running if there are active local task streams, even if
         /// no tasks are currently assigned to it. But the worker can be stopped if there are
-        /// active remote task streams stored in object storage.
+        /// active storage task streams.
         local_streams: IndexSet<TaskKey>,
     },
     Inactive,

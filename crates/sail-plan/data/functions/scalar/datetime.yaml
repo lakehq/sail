@@ -1148,6 +1148,40 @@
       
   since: "3.2.0"
 
+- name: "time_bucket"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeBucketExpressionBuilder"
+  signatures:
+    - "time_bucket(bucketSize, ts[, origin])"
+  usage: |2-
+    
+        time_bucket(bucketSize, ts[, origin]) - Returns the start of the bucket that `ts` falls into,
+          where buckets are defined by the given `bucketSize` interval aligned to optional `origin`.
+          For `TIMESTAMP_NTZ`, bucketing is performed in UTC. For `TIMESTAMP`, year-month
+          interval buckets and calendar-day components of day-time interval buckets align
+          to the session time zone.
+      
+  arguments: |2-
+    
+        Arguments:
+          * bucketSize - A day-time or year-month interval defining the bucket size. Must be positive and foldable.
+          * ts - A TIMESTAMP or TIMESTAMP_NTZ value to bucket.
+          * origin - Optional TIMESTAMP or TIMESTAMP_NTZ alignment anchor. Defaults to 1970-01-01 00:00:00. Must be the same type as ts and must be foldable.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_bucket(INTERVAL '15' MINUTE, TIMESTAMP '2024-01-01 11:27:00', TIMESTAMP '1970-01-01 00:00:00');
+           2024-01-01 11:15:00
+          > SELECT time_bucket(INTERVAL '1' HOUR, TIMESTAMP '2024-01-01 11:27:00');
+           2024-01-01 11:00:00
+          > SELECT time_bucket(INTERVAL '1' MONTH, TIMESTAMP '2024-07-20 14:30:00', TIMESTAMP '2024-06-15 09:00:00');
+           2024-07-15 09:00:00
+      
+  since: "4.2.0"
+
 - name: "time_diff"
   scope: "sql_builtin"
   group: "datetime_funcs"
@@ -1182,6 +1216,169 @@
            -8
       
   since: "4.1.0"
+
+- name: "time_from_micros"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeFromMicros"
+  signatures:
+    - "time_from_micros(micros)"
+  usage: "time_from_micros(micros) - Creates a TIME value from microseconds since midnight."
+  arguments: |2-
+    
+        Arguments:
+          * micros - microseconds since midnight (0 to 86399999999)
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_from_micros(0);
+           00:00:00
+          > SELECT time_from_micros(52200000000);
+           14:30:00
+          > SELECT time_from_micros(52200500000);
+           14:30:00.5
+          > SELECT time_from_micros(86399999999);
+           23:59:59.999999
+      
+  since: "4.2.0"
+
+- name: "time_from_millis"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeFromMillis"
+  signatures:
+    - "time_from_millis(millis)"
+  usage: "time_from_millis(millis) - Creates a TIME value from milliseconds since midnight."
+  arguments: |2-
+    
+        Arguments:
+          * millis - milliseconds since midnight (0 to 86399999)
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_from_millis(0);
+           00:00:00
+          > SELECT time_from_millis(52200000);
+           14:30:00
+          > SELECT time_from_millis(52200500);
+           14:30:00.5
+          > SELECT time_from_millis(86399999);
+           23:59:59.999
+      
+  since: "4.2.0"
+
+- name: "time_from_seconds"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeFromSeconds"
+  signatures:
+    - "time_from_seconds(seconds)"
+  usage: "time_from_seconds(seconds) - Creates a TIME value from seconds since midnight."
+  arguments: |2-
+    
+        Arguments:
+          * seconds - seconds since midnight (0 to 86399.999999).
+                      Supports decimals for fractional seconds.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_from_seconds(0);
+           00:00:00
+          > SELECT time_from_seconds(52200);
+           14:30:00
+          > SELECT time_from_seconds(52200.5);
+           14:30:00.5
+          > SELECT time_from_seconds(86399.999999);
+           23:59:59.999999
+      
+  since: "4.2.0"
+
+- name: "time_to_micros"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeToMicros"
+  signatures:
+    - "time_to_micros(time)"
+  usage: "time_to_micros(time) - Returns the number of microseconds since midnight for the given TIME value."
+  arguments: |2-
+    
+        Arguments:
+          * time - TIME value to convert
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_to_micros(TIME'00:00:00');
+           0
+          > SELECT time_to_micros(TIME'14:30:00');
+           52200000000
+          > SELECT time_to_micros(TIME'14:30:00.5');
+           52200500000
+          > SELECT time_to_micros(TIME'23:59:59.999999');
+           86399999999
+      
+  since: "4.2.0"
+
+- name: "time_to_millis"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeToMillis"
+  signatures:
+    - "time_to_millis(time)"
+  usage: "time_to_millis(time) - Returns the number of milliseconds since midnight for the given TIME value."
+  arguments: |2-
+    
+        Arguments:
+          * time - TIME value to convert
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_to_millis(TIME'00:00:00');
+           0
+          > SELECT time_to_millis(TIME'14:30:00');
+           52200000
+          > SELECT time_to_millis(TIME'14:30:00.5');
+           52200500
+          > SELECT time_to_millis(TIME'23:59:59.999');
+           86399999
+      
+  since: "4.2.0"
+
+- name: "time_to_seconds"
+  scope: "sql_builtin"
+  group: "datetime_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeToSeconds"
+  signatures:
+    - "time_to_seconds(time)"
+  usage: "time_to_seconds(time) - Returns the number of seconds since midnight for the given TIME value."
+  arguments: |2-
+    
+        Arguments:
+          * time - TIME value to convert
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT time_to_seconds(TIME'00:00:00');
+           0.000000
+          > SELECT time_to_seconds(TIME'14:30:00');
+           52200.000000
+          > SELECT time_to_seconds(TIME'14:30:00.5');
+           52200.500000
+          > SELECT time_to_seconds(TIME'23:59:59.999999');
+           86399.999999
+      
+  since: "4.2.0"
 
 - name: "time_trunc"
   scope: "sql_builtin"
@@ -1979,4 +2176,3 @@
   signatures:
     - "years(date)"
   usage: "years(date) - Returns the year component of the date/timestamp."
-

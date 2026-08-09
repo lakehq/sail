@@ -1,7 +1,6 @@
-@current_timezone
 Feature: current_timezone output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to current_timezone yields the schema Spark declares

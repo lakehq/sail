@@ -1,7 +1,6 @@
-@elt
 Feature: elt output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to elt yields the schema Spark declares
@@ -52,8 +51,28 @@ Feature: elt output schema
         | case                    | args                                             | name                                      | result |
         | elt doctest #2 (result) | 1, 10, 20                                        | elt(1, 10, 20)                            | 10     |
         | elt doctest #3 (result) | 1, 'scala', 'java'                               | elt(1, scala, java)                       | scala  |
-        | elt doctest #4 (result) | 11, 10, 20                                       | elt(11, 10, 20)                           | NULL   |
         | elt doctest #5 (result) | 6, 'scala', 'java', 'c', 'c++', 'python', 'rust' | elt(6, scala, java, c, c++, python, rust) | rust   |
+
+    Scenario: elt doctest #4 (result) — out-of-range index with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT elt(11, 10, 20)
+        """
+      Then query result
+        | elt(11, 10, 20) |
+        | NULL            |
+
+    # `elt` honours ANSI: an out-of-range index raises instead of returning NULL.
+    # Sail returns NULL in both modes.
+    @sail-bug
+    Scenario: elt doctest #4 (result) — out-of-range index with ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT elt(11, 10, 20)
+        """
+      Then query error \[INVALID_ARRAY_INDEX\] The index 11 is out of bounds. The array has 2 elements.
 
   Rule: Output schema (migrated from test_elt.txt printSchema doctests)
 

@@ -45,7 +45,7 @@
       "input": "a",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 1)\n\n== SQL ==\na\n-^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found > at 8:9 expected ':', or data type"
       }
     },
     {
@@ -67,28 +67,28 @@
       "input": "a INT b long",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\na INT b long\n------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found b at 13:14 expected 'NOT', 'COMMENT', ',', or '>'"
       }
     },
     {
       "input": "a INT, b long, c int,",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 21)\n\n== SQL ==\na INT, b long, c int,\n---------------------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found > at 28:29 expected identifier"
       }
     },
     {
       "input": "a INT, b long,,",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601 (line 1, pos 14)\n\n== SQL ==\na INT, b long,,\n--------------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found , at 21:22 expected identifier"
       }
     },
     {
       "input": "a INT,, b long",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\na INT,, b long\n------^^^\n",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "failure": "parse error: error in SQL parser: found , at 13:14 expected identifier"
       }
     },
     {

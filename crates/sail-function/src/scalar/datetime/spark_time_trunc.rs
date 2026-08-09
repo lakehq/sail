@@ -9,6 +9,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+use crate::scalar::datetime::utils::invalid_time_unit_err;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimeTrunc {
     signature: Signature,
@@ -103,10 +105,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
                         let divisor = match truncation_divisor(unit) {
                             Some(d) => d,
                             None => {
-                                return exec_err!(
-                                    "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                                    unit
-                                );
+                                return invalid_time_unit_err("time_trunc", unit);
                             }
                         };
                         Some(time - (time % divisor))
@@ -137,10 +136,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
                         let divisor = match truncation_divisor(unit) {
                             Some(d) => d,
                             None => {
-                                return exec_err!(
-                                    "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                                    unit
-                                );
+                                return invalid_time_unit_err("time_trunc", unit);
                             }
                         };
                         let times = time_array.as_primitive::<Time64MicrosecondType>();
@@ -214,10 +210,7 @@ where
             (Some(unit), Some(val)) => match truncation_divisor(unit) {
                 Some(divisor) => builder.append_value(val - (val % divisor)),
                 None => {
-                    return exec_err!(
-                        "time_trunc: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                        unit
-                    );
+                    return invalid_time_unit_err("time_trunc", unit);
                 }
             },
         }

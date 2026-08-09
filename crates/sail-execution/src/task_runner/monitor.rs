@@ -1,8 +1,8 @@
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
+use sail_common::actor::{Actor, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
@@ -44,13 +44,13 @@ where
             stream,
             signal,
         } = self;
-        let event = Self::running(key.clone());
-        let _ = handle.send(event).await;
-        let event = tokio::select! {
+        let message = Self::running(key.clone());
+        let _ = handle.send(message).await;
+        let message = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
-        let _ = handle.send(event).await;
+        let _ = handle.send(message).await;
     }
 
     /// Builds a "task is running" status message.

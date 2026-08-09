@@ -1,7 +1,7 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
+use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_server::ServerBuilder;
-use sail_server::actor::ActorHandle;
+use sail_common::server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
@@ -10,12 +10,11 @@ use tonic::codec::CompressionEncoding;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer};
-use crate::worker::WorkerEvent;
+use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
 use crate::worker::actor::WorkerActor;
-use crate::worker::event::WorkerStreamOwner;
 use crate::worker::r#gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
+use crate::worker::{WorkerMessage, WorkerStreamOwner};
 
 struct WorkerTaskStreamFetcher {
     handle: ActorHandle<WorkerActor>,
@@ -28,12 +27,15 @@ impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
         key: TaskStreamKey,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let event = WorkerEvent::FetchWorkerStream {
+        let message = WorkerMessage::FetchWorkerStream {
             owner: WorkerStreamOwner::This,
             key,
             result: sender,
         };
-        self.handle.send(event).await.map_err(ExecutionError::from)
+        self.handle
+            .send(message)
+            .await
+            .map_err(ExecutionError::from)
     }
 }
 
@@ -66,7 +68,7 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Zstd);
 
         handle
-            .send(WorkerEvent::ServerReady { port, signal: tx })
+            .send(WorkerMessage::ServerReady { port, signal: tx })
             .await?;
 
         ServerBuilder::new("sail_worker", Default::default())

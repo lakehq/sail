@@ -7,23 +7,25 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::debug;
+use sail_common::actor::{Actor, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
-use crate::error::{ExecutionError, ExecutionResult};
+use crate::error::ExecutionResult;
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::{RemoteExecutionCodec, decode_remote_physical_plan};
-use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
+use crate::stream::accessor::{
+    LocalStreamAccessorMessage, StorageStreamAccessorMessage, TaskStreamFactory,
+};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
@@ -43,18 +45,18 @@ impl TaskRunner {
         definition: TaskDefinition,
         context: Arc<TaskContext>,
     ) where
-        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+        T::Message: TaskRunnerMessage + LocalStreamAccessorMessage + StorageStreamAccessorMessage,
     {
         let stream = match self.execute_plan(ctx, &key, definition, context) {
             Ok(x) => x,
             Err(e) => {
-                let event = T::Message::report_task_status(
+                let message = T::Message::report_task_status(
                     key,
                     TaskStatus::Failed,
                     Some(format!("failed to execute plan: {e}")),
                     Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
                 );
-                ctx.send(event);
+                ctx.send(message);
                 return;
             }
         };
@@ -80,7 +82,7 @@ impl TaskRunner {
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream>
     where
-        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+        T::Message: TaskRunnerMessage + LocalStreamAccessorMessage + StorageStreamAccessorMessage,
     {
         let plan =
             decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
@@ -91,7 +93,7 @@ impl TaskRunner {
             &definition.inputs,
             &definition.output,
             plan,
-            &context,
+            context.clone(),
         )?;
         debug!(
             "{} execution plan\n{}",
@@ -126,7 +128,9 @@ impl TaskRunner {
                 // work sharing and keeps each task on its own file group.
                 let mut builder =
                     FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                if ds.downcast_to_file_source::<ParquetSource>().is_some()
+                    && base_config.expr_adapter_factory.is_none()
+                {
                     let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
                         Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                     builder = builder.with_expr_adapter(Some(adapter_factory));
@@ -146,50 +150,41 @@ impl TaskRunner {
         inputs: &[TaskInput],
         output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
-        context: &TaskContext,
+        context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
-        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+        T::Message: TaskRunnerMessage + LocalStreamAccessorMessage + StorageStreamAccessorMessage,
     {
-        let handle = ctx.handle();
-        let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
-                let Some(input) = inputs.get(*placeholder.input()) else {
-                    return internal_err!(
-                        "stage input index {} out of bounds for {}",
-                        placeholder.input(),
-                        TaskKeyDisplay(key)
+        let streams = TaskStreamFactory::new(ctx.handle().clone(), context.clone());
+        let result = {
+            let streams = streams.clone();
+            plan.transform(move |node| {
+                if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
+                    let Some(input) = inputs.get(*placeholder.input()) else {
+                        return internal_err!(
+                            "stage input index {} out of bounds for {}",
+                            placeholder.input(),
+                            TaskKeyDisplay(key)
+                        );
+                    };
+                    let shuffle = ShuffleReadExec::new(
+                        streams.reader(key.clone(), input.clone(), placeholder.schema()),
+                        placeholder.properties().clone(),
                     );
-                };
-                let locations = input.locations(key.job_id);
-                let accessor = StreamAccessor::new(handle.clone());
-                let shuffle = ShuffleReadExec::new(
-                    locations,
-                    Arc::new(accessor),
-                    placeholder.properties().clone(),
-                );
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else {
-                Ok(Transformed::no(node))
-            }
-        });
+                    Ok(Transformed::yes(Arc::new(shuffle)))
+                } else {
+                    Ok(Transformed::no(node))
+                }
+            })
+        };
         let plan = result.data()?;
         let schema = plan.schema();
-        let accessor = StreamAccessor::new(handle.clone());
-        let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
-        match locations.get_mut(key.partition) {
-            Some(x) => x.extend(output.locations(key)),
-            None => {
-                return Err(ExecutionError::InternalError(format!(
-                    "invalid partition: {}",
-                    TaskKeyDisplay(key)
-                )));
-            }
-        };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
-        let row_based = output.row_based();
-        let shuffle =
-            ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);
+        let partitioning = output.shuffle_partitioning(&context, &schema, self.codec.as_ref())?;
+        let shuffle = ShuffleWriteExec::new(
+            plan,
+            streams.writer(key.clone(), output.clone(), schema),
+            partitioning,
+        );
         Ok(Arc::new(shuffle))
     }
 }

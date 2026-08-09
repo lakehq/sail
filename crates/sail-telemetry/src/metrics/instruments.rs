@@ -4,8 +4,7 @@ use std::sync::Arc;
 use datafusion::physical_plan::metrics::{Count, Time};
 use num_traits::ToPrimitive;
 use opentelemetry::metrics::{HistogramBuilder, InstrumentBuilder};
-
-use crate::common::KeyValue;
+use sail_common::telemetry::KeyValue;
 
 /// A trait for instruments that can emit measurements with attributes.
 pub trait InstrumentEmittable<T> {

@@ -1,4 +1,3 @@
-@json_tuple
 Feature: json_tuple with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: json_tuple with an argument coming from a column
 
   Rule: json_tuple — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: json_tuple with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: json_tuple with an argument coming from a column
         | 1  | 2  |
 
     # Sail rejects the column: Sail errors: invalid argument: json_tuple field names must be string literals
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Json_tuple: <case>
       When query
         """
@@ -35,7 +34,7 @@ Feature: json_tuple with an argument coming from a column
         | json_tuple takes argument 3 from a column containing NULL | 'a' | c   | 'b' | NULL | 1    | NULL |
         | json_tuple takes argument 3 from a column                 | 'a' | c   | 'b' | 'b'  | 1    | 2    |
 
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: json_tuple takes argument 2 from a column holding two different values
       When query
         """

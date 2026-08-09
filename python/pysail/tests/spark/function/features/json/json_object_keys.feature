@@ -1,7 +1,6 @@
-@json_object_keys
 Feature: json_object_keys output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to json_object_keys yields the schema Spark declares

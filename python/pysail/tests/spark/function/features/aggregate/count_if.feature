@@ -1,4 +1,3 @@
-@count_if
 Feature: count_if function
 
   Rule: count_if as window function

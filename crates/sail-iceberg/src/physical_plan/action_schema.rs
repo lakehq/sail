@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
-    DataContentType, DataFile, DataFileFormat, Operation, PartitionSpec, Schema as IcebergSchema,
+    DataContentType, DataFile, DataFileFormat, PartitionSpec, Schema as IcebergSchema,
     TableRequirement,
 };
 
@@ -34,7 +34,6 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub table_uri: String,
     pub row_count: u64,
-    pub operation: Operation,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
@@ -46,7 +45,6 @@ pub struct CommitMeta {
 pub struct CommitMetaAction {
     pub table_uri: String,
     pub row_count: u64,
-    pub operation: String,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
@@ -71,6 +69,8 @@ pub enum PartitionValue {
     /// Stored as decimal string because `serde_arrow` does not support `u128` natively.
     UInt128(String),
     Binary(Vec<u8>),
+    /// The marker payload is required because `serde_arrow` cannot serialize a unit union variant.
+    Null(bool),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,19 +78,25 @@ pub struct AddFileAction {
     pub content: String,
     pub file_path: String,
     pub file_format: String,
-    pub partition: Vec<Option<PartitionValue>>,
+    pub partition: Vec<PartitionValue>,
     pub record_count: u64,
     pub file_size_in_bytes: u64,
     pub column_sizes: BTreeMap<i32, u64>,
     pub value_counts: BTreeMap<i32, u64>,
     pub null_value_counts: BTreeMap<i32, u64>,
     pub split_offsets: Vec<i64>,
+    pub equality_ids: Vec<i32>,
+    pub sort_order_id: Option<i32>,
+    pub first_row_id: Option<i64>,
     pub partition_spec_id: i32,
+    pub referenced_data_file: Option<String>,
+    pub content_offset: Option<i64>,
+    pub content_size_in_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteFileAction {
-    pub file_path: String,
+    pub data_file: AddFileAction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +122,7 @@ fn partition_value_union_type() -> DataType {
         reason = "partition_value_union_type is a process-global constant."
     )]
     let union_fields = UnionFields::try_new(
-        [0i8, 1, 2, 3, 4, 5, 6, 7, 8],
+        [0i8, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         [
             Arc::new(Field::new("Boolean", DataType::Boolean, false)),
             Arc::new(Field::new("Int", DataType::Int32, false)),
@@ -131,6 +137,7 @@ fn partition_value_union_type() -> DataType {
                 DataType::List(Arc::new(Field::new("element", DataType::UInt8, false))),
                 false,
             )),
+            Arc::new(Field::new("Null", DataType::Boolean, false)),
         ],
     )
     .unwrap();
@@ -186,6 +193,14 @@ fn iceberg_action_tracing_options()
                 Field::new("partition", DataType::List(partition_item), false),
             )
         })
+        .and_then(|opts| {
+            let partition_item =
+                Arc::new(Field::new("element", partition_value_union_type(), false));
+            opts.overwrite(
+                "action.delete.data_file.partition",
+                Field::new("partition", DataType::List(partition_item), false),
+            )
+        })
         .map_err(|e| format!("failed to build serde_arrow tracing options: {e}"))
 }
 
@@ -202,18 +217,6 @@ fn iceberg_action_fields() -> Result<&'static Vec<FieldRef>> {
 
 pub fn iceberg_action_schema() -> Result<SchemaRef> {
     Ok(Arc::clone(&*ACTION_SCHEMA))
-}
-
-fn parse_operation(s: &str) -> Result<Operation> {
-    match s {
-        "append" => Ok(Operation::Append),
-        "replace" => Ok(Operation::Replace),
-        "overwrite" => Ok(Operation::Overwrite),
-        "delete" => Ok(Operation::Delete),
-        other => Err(DataFusionError::Plan(format!(
-            "unknown iceberg operation '{other}'"
-        ))),
-    }
 }
 
 impl From<PrimitiveLiteral> for PartitionValue {
@@ -264,6 +267,9 @@ impl TryFrom<PartitionValue> for PrimitiveLiteral {
                     })
             }
             PartitionValue::Binary(x) => Ok(PrimitiveLiteral::Binary(x)),
+            PartitionValue::Null(_) => Err(DataFusionError::Internal(
+                "null partition marker cannot be converted to a primitive literal".to_string(),
+            )),
         }
     }
 }
@@ -276,8 +282,8 @@ impl TryFrom<DataFile> for AddFileAction {
             .partition
             .into_iter()
             .map(|opt| match opt {
-                None => Ok(None),
-                Some(Literal::Primitive(p)) => Ok(Some(p.into())),
+                None => Ok(PartitionValue::Null(false)),
+                Some(Literal::Primitive(p)) => Ok(p.into()),
                 Some(other) => Err(DataFusionError::Internal(format!(
                     "unsupported non-primitive partition literal in DataFile: {other:?}"
                 ))),
@@ -295,7 +301,13 @@ impl TryFrom<DataFile> for AddFileAction {
             value_counts: df.value_counts.into_iter().collect(),
             null_value_counts: df.null_value_counts.into_iter().collect(),
             split_offsets: df.split_offsets,
+            equality_ids: df.equality_ids,
+            sort_order_id: df.sort_order_id,
+            first_row_id: df.first_row_id,
             partition_spec_id: df.partition_spec_id,
+            referenced_data_file: df.referenced_data_file,
+            content_offset: df.content_offset,
+            content_size_in_bytes: df.content_size_in_bytes,
         })
     }
 }
@@ -329,9 +341,9 @@ impl TryFrom<AddFileAction> for DataFile {
         let partition = a
             .partition
             .into_iter()
-            .map(|opt| match opt {
-                None => Ok(None),
-                Some(pv) => Ok(Some(Literal::Primitive(pv.try_into()?))),
+            .map(|value| match value {
+                PartitionValue::Null(_) => Ok(None),
+                value => Ok(Some(Literal::Primitive(value.try_into()?))),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -351,13 +363,13 @@ impl TryFrom<AddFileAction> for DataFile {
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: a.split_offsets,
-            equality_ids: Vec::new(),
-            sort_order_id: None,
-            first_row_id: None,
+            equality_ids: a.equality_ids,
+            sort_order_id: a.sort_order_id,
+            first_row_id: a.first_row_id,
             partition_spec_id: a.partition_spec_id,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
+            referenced_data_file: a.referenced_data_file,
+            content_offset: a.content_offset,
+            content_size_in_bytes: a.content_size_in_bytes,
         })
     }
 }
@@ -380,6 +392,23 @@ pub fn encode_add_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
         .map(|df| {
             Ok(ActionRow {
                 action: ExecAction::Add(df.try_into()?),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    encode_actions(rows)
+}
+
+pub fn encode_delete_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
+    if data_files.is_empty() {
+        return Ok(RecordBatch::new_empty(iceberg_action_schema()?));
+    }
+    let rows = data_files
+        .into_iter()
+        .map(|df| {
+            Ok(ActionRow {
+                action: ExecAction::Delete(DeleteFileAction {
+                    data_file: df.try_into()?,
+                }),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -414,7 +443,6 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         action: ExecAction::CommitMeta(CommitMetaAction {
             table_uri: meta.table_uri,
             row_count: meta.row_count,
-            operation: meta.operation.as_str().to_string(),
             requirements_json,
             table_properties_json,
             lakehouse_table_json,
@@ -432,18 +460,13 @@ pub fn decode_actions_and_meta_from_batch(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut adds: Vec<DataFile> = Vec::new();
-    let deletes: Vec<DataFile> = Vec::new();
+    let mut deletes: Vec<DataFile> = Vec::new();
     let mut meta: Option<CommitMeta> = None;
 
     for row in rows {
         match row.action {
             ExecAction::Add(a) => adds.push(a.try_into()?),
-            ExecAction::Delete(_d) => {
-                // Delete files are not implemented in local commits yet; plumb through later.
-                return Err(DataFusionError::NotImplemented(
-                    "Iceberg delete file actions are not implemented".to_string(),
-                ));
-            }
+            ExecAction::Delete(d) => deletes.push(d.data_file.try_into()?),
             ExecAction::CommitMeta(m) => {
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
@@ -472,7 +495,6 @@ pub fn decode_actions_and_meta_from_batch(
                 meta = Some(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
-                    operation: parse_operation(&m.operation)?,
                     requirements,
                     table_properties,
                     lakehouse_table,
@@ -500,7 +522,7 @@ mod tests {
             content: DataContentType::Data,
             file_path: "s3://bucket/a.parquet".to_string(),
             file_format: DataFileFormat::Parquet,
-            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(1)))],
+            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(1))), None],
             record_count: 10,
             file_size_in_bytes: 123,
             column_sizes: HashMap::from([(1, 10u64)]),
@@ -524,7 +546,6 @@ mod tests {
         let meta = CommitMeta {
             table_uri: "s3://bucket/table".to_string(),
             row_count: 10,
-            operation: Operation::Append,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
             lakehouse_table: None,
@@ -535,15 +556,28 @@ mod tests {
         let schema = iceberg_action_schema()?;
         let batches = vec![
             encode_add_data_files(vec![df.clone()])?,
+            encode_delete_data_files(vec![DataFile {
+                content: DataContentType::PositionDeletes,
+                referenced_data_file: Some(df.file_path.clone()),
+                ..df.clone()
+            }])?,
             encode_commit_meta(meta)?,
         ];
         let merged = concat_batches(&schema, &batches)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let (adds, _deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
+        let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
         assert_eq!(adds.len(), 1);
+        assert_eq!(deletes.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
         assert_eq!(adds[0].record_count, df.record_count);
+        assert_eq!(adds[0].partition, df.partition);
+        assert_eq!(deletes[0].content, DataContentType::PositionDeletes);
+        assert_eq!(deletes[0].partition, df.partition);
+        assert_eq!(
+            deletes[0].referenced_data_file.as_deref(),
+            Some(df.file_path.as_str())
+        );
         assert!(meta.is_some());
         Ok(())
     }

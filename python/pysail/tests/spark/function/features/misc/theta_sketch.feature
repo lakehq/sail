@@ -1,4 +1,4 @@
-@datasketches
+@function(sketch)
 Feature: Theta sketch functions
 
   Rule: theta_sketch_agg builds compact theta sketches
@@ -248,12 +248,16 @@ Feature: Theta sketch functions
         | lo | hi |
         | 1  | 1  |
 
+    # Spark: [SKETCH_INVALID_LG_NOM_ENTRIES] Invalid call to `theta_sketch_agg`; the
+    # `lgNomEntries` value must be between 4 and 26, inclusive: <n>. Sail rejects it too but
+    # with its own wording.
+    @sail-bug
     Scenario Outline: lgNomEntries bound: <case>
       When query
         """
         SELECT theta_sketch_agg(col, <n>) FROM VALUES (1) AS tab(col)
         """
-      Then query error (THETA_INVALID_LG_NOM_ENTRIES|lgNomEntries between 4 and 26)
+      Then query error \[SKETCH_INVALID_LG_NOM_ENTRIES\].*must be between 4 and 26, inclusive: <n>
 
       Examples:
         | case                                                        | n  |

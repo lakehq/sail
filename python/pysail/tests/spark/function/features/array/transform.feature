@@ -1,5 +1,4 @@
-@lambda_hof
-@transform
+@function(lambda)
 Feature: transform higher-order function
 
   Rule: Basic 1-param transform — integer arithmetic
