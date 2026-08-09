@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone};
@@ -25,19 +26,30 @@ pub struct ConvertTz {
     /// while the "non-classic" algorithm is used by the `from_utc_timestamp` and
     /// `to_utc_timestamp` functions in Spark.
     classic: bool,
+    /// Whether conversion failures should produce null instead of an error.
+    safe: bool,
     signature: Signature,
 }
 
 impl ConvertTz {
     pub fn new(classic: bool) -> Self {
+        Self::new_with_safe(classic, false)
+    }
+
+    pub fn new_with_safe(classic: bool, safe: bool) -> Self {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
             classic,
+            safe,
         }
     }
 
     pub fn classic(&self) -> bool {
         self.classic
+    }
+
+    pub fn safe(&self) -> bool {
+        self.safe
     }
 }
 
@@ -67,37 +79,44 @@ impl ScalarUDFImpl for ConvertTz {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let data_type = self.return_type(&arg_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        let nullable = self.safe || args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(
-            |args| convert_tz_inner(args, self.classic),
+            |args| convert_tz_inner(args, self.classic, self.safe),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
 }
 
-fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
-    let parse_tz = |input: Option<&str>| input.map(parse_spark_timezone).transpose();
-
+pub(super) fn convert_tz_inner(args: &[ArrayRef], classic: bool, safe: bool) -> Result<ArrayRef> {
     let convert = if classic {
         convert_tz_classic
     } else {
         convert_tz_non_classic
     };
 
-    let from_to_utc_timestamp_func = |inputs: (
-        Option<i64>,
-        Result<Option<SparkTimeZone>>,
-        Result<Option<SparkTimeZone>>,
-    )| match inputs {
-        (Some(ts_micros), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
-            convert(ts_micros, &from_tz, &to_tz)
+    let mut timezone_cache = HashMap::<String, SparkTimeZone>::new();
+    let mut parse_tz = |value: &str| -> Result<SparkTimeZone> {
+        if let Some(timezone) = timezone_cache.get(value) {
+            return Ok(*timezone);
         }
-        (_, Err(e), _) | (_, _, Err(e)) => Err(e),
-        _ => Ok(None),
+        let timezone = parse_spark_timezone(value)?;
+        timezone_cache.insert(value.to_string(), timezone);
+        Ok(timezone)
+    };
+    let mut convert_row = |ts_micros: Option<i64>, from_tz: Option<&str>, to_tz: Option<&str>| {
+        let (Some(ts_micros), Some(from_tz), Some(to_tz)) = (ts_micros, from_tz, to_tz) else {
+            return Ok(None);
+        };
+        let from_tz = parse_tz(from_tz)?;
+        let to_tz = parse_tz(to_tz)?;
+        match convert(ts_micros, &from_tz, &to_tz) {
+            Err(_) if safe => Ok(None),
+            result => result,
+        }
     };
 
     let from_tz_strs_arr = cast::cast(&args[0], &DataType::Utf8)?;
@@ -134,45 +153,35 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
 
         let micros_arr = timestamp_to_microseconds(ts_arr.as_ref())?;
 
-        let first = |iter: &mut dyn Iterator<Item = Result<Option<SparkTimeZone>>>| {
-            iter.next().transpose().map(|opt| opt.flatten())
-        };
-        // lazy evaluated iterators
-        let mut from_tzs = from_tz_strs.iter().map(parse_tz);
-        let mut to_tzs = to_tz_strs.iter().map(parse_tz);
-
         match (arr_lens[0] == 1, arr_lens[1] == 1) {
             (true, true) => {
-                let from_tz = first(&mut from_tzs)?;
-                let to_tz = first(&mut to_tzs)?;
-
+                let from_tz = from_tz_strs.iter().next().flatten();
+                let to_tz = to_tz_strs.iter().next().flatten();
                 micros_arr
                     .iter()
-                    .map(|ts| from_to_utc_timestamp_func((ts, Ok(from_tz), Ok(to_tz))))
+                    .map(|ts| convert_row(ts, from_tz, to_tz))
                     .collect::<Result<Int64Array>>()
             }
             (true, false) => {
-                let from_tz = first(&mut from_tzs)?;
+                let from_tz = from_tz_strs.iter().next().flatten();
                 micros_arr
                     .iter()
-                    .zip(to_tzs)
-                    .map(|(ts, to_tz)| from_to_utc_timestamp_func((ts, Ok(from_tz), to_tz)))
+                    .zip(to_tz_strs.iter())
+                    .map(|(ts, to_tz)| convert_row(ts, from_tz, to_tz))
                     .collect::<Result<Int64Array>>()
             }
             (false, true) => {
-                let to_tz = first(&mut to_tzs)?;
-
+                let to_tz = to_tz_strs.iter().next().flatten();
                 micros_arr
                     .iter()
-                    .zip(from_tzs)
-                    .map(|(ts, from_tz)| from_to_utc_timestamp_func((ts, from_tz, Ok(to_tz))))
+                    .zip(from_tz_strs.iter())
+                    .map(|(ts, from_tz)| convert_row(ts, from_tz, to_tz))
                     .collect::<Result<Int64Array>>()
             }
             (false, false) => micros_arr
                 .iter()
-                .zip(from_tzs.zip(to_tzs))
-                .map(|(a, (b, c))| (a, b, c))
-                .map(|(ts, from_tz, to_tz)| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
+                .zip(from_tz_strs.iter().zip(to_tz_strs.iter()))
+                .map(|(ts, (from_tz, to_tz))| convert_row(ts, from_tz, to_tz))
                 .collect::<Result<Int64Array>>(),
         }
     }?;
@@ -289,8 +298,10 @@ fn microseconds_to_timestamp(array: Int64Array, time_unit: TimeUnit) -> Result<A
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::TimestampNanosecondArray;
-    use datafusion::arrow::datatypes::TimestampNanosecondType;
+    use datafusion::arrow::array::{
+        StringArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    };
+    use datafusion::arrow::datatypes::{TimestampMicrosecondType, TimestampNanosecondType};
 
     use super::*;
 
@@ -304,6 +315,23 @@ mod tests {
         assert_eq!(
             output.as_primitive::<TimestampNanosecondType>(),
             &TimestampNanosecondArray::from(vec![Some(-1_000), Some(0), None]),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn safe_conversion_returns_null_on_overflow() -> Result<()> {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["UTC"])),
+            Arc::new(StringArray::from(vec!["+01:00"])),
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(i64::MAX)])),
+        ];
+
+        assert!(convert_tz_inner(&args, false, false).is_err());
+        let output = convert_tz_inner(&args, false, true)?;
+        assert_eq!(
+            output.as_primitive::<TimestampMicrosecondType>(),
+            &TimestampMicrosecondArray::from(vec![None]),
         );
         Ok(())
     }

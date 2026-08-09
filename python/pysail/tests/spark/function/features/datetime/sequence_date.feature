@@ -137,6 +137,57 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
+    Scenario: timestamp_ntz sequence supports Spark's full microsecond domain
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT transform(
+          sequence(
+            CAST(timestamp_micros(CAST(-9223372036854775808 AS BIGINT)) AS TIMESTAMP_NTZ),
+            CAST(timestamp_micros(CAST(-9223371864054775808 AS BIGINT)) AS TIMESTAMP_NTZ),
+            INTERVAL 1 DAY
+          ),
+          value -> unix_micros(CAST(value AS TIMESTAMP))
+        ) AS result
+        """
+      Then query result
+        | result                                                             |
+        | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
+
+    Scenario: timestamp sequence supports Spark's full microsecond domain in a fixed zone
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT transform(
+          sequence(
+            timestamp_micros(9000000000000000000),
+            timestamp_micros(9000000172800000000),
+            INTERVAL 1 DAY
+          ),
+          value -> unix_micros(value)
+        ) AS result
+        """
+      Then query result
+        | result                                                          |
+        | [9000000000000000000, 9000000086400000000, 9000000172800000000] |
+
+    Scenario: date sequence supports Spark dates outside Chrono's range in a fixed zone
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT transform(
+          sequence(
+            date_from_unix_date(100000000),
+            date_from_unix_date(100000061),
+            INTERVAL 1 MONTH
+          ),
+          value -> unix_date(value)
+        ) AS result
+        """
+      Then query result
+        | result                            |
+        | [100000000, 100000030, 100000061] |
+
     Scenario: ANSI temporal sequence coercion trims Spark control whitespace
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -157,6 +208,75 @@ Feature: sequence() over DATE returns expected arrays
       Then query result
         | dates                                | timestamps                                                        |
         | [2024-01-01, 2024-01-02, 2024-01-03] | [2024-01-01 00:00:00, 2024-01-01 00:00:01, 2024-01-01 00:00:02] |
+
+    Scenario: ANSI temporal sequence coercion accepts a leading positive year sign
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            DATE '1970-01-01',
+            '+1970-01-03',
+            INTERVAL 1 DAY
+          ) AS STRING) AS dates,
+          CAST(sequence(
+            TIMESTAMP_NTZ '1970-01-01 00:00:00',
+            '+1970-01-03 00:00:00',
+            INTERVAL 1 DAY
+          ) AS STRING) AS timestamps
+        """
+      Then query result
+        | dates                                | timestamps                                                     |
+        | [1970-01-01, 1970-01-02, 1970-01-03] | [1970-01-01 00:00:00, 1970-01-02 00:00:00, 1970-01-03 00:00:00] |
+
+    Scenario: ANSI temporal sequence coercion recognizes literal special datetime values
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST(sequence(DATE '1970-01-01', 'epoch', INTERVAL 1 DAY) AS STRING) AS dates,
+          CAST(sequence(
+            TIMESTAMP_NTZ '1970-01-01 00:00:00',
+            'epoch',
+            INTERVAL 1 DAY
+          ) AS STRING) AS timestamps
+        """
+      Then query result
+        | dates        | timestamps            |
+        | [1970-01-01] | [1970-01-01 00:00:00] |
+
+    Scenario: ANSI temporal sequence coercion recognizes foldable special datetime expressions
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            DATE '1970-01-01',
+            concat('ep', 'och'),
+            INTERVAL 1 DAY
+          ) AS STRING) AS dates,
+          CAST(sequence(
+            TIMESTAMP_NTZ '1970-01-01 00:00:00',
+            concat('ep', 'och'),
+            INTERVAL 1 DAY
+          ) AS STRING) AS timestamps
+        """
+      Then query result
+        | dates        | timestamps            |
+        | [1970-01-01] | [1970-01-01 00:00:00] |
+
+    Scenario: ANSI temporal sequence coercion rejects non-foldable special datetime values
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(DATE '1970-01-01', stop, INTERVAL 1 DAY)
+        FROM VALUES ('epoch') AS t(stop)
+        """
+      Then query error CAST_INVALID_INPUT
 
     Scenario: timestamp sequence crosses daylight-saving transitions
       Given config spark.sql.session.timeZone = Europe/Prague

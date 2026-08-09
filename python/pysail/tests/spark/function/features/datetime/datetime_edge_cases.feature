@@ -389,3 +389,63 @@ Feature: datetime edge cases
       Then query result
         | rendered            | micros           |
         | 2024-04-07 01:45:00 | 1712414700000000 |
+
+    Scenario Outline: UTC conversion functions resolve TIMESTAMP_NTZ in the session zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT unix_micros(<function>(TIMESTAMP_NTZ '<timestamp>', 'UTC')) AS result
+        """
+      Then query result
+        | result   |
+        | <micros> |
+
+      Examples:
+        | function           | timestamp           | micros           |
+        | from_utc_timestamp | 2025-03-09 02:30:00 | 1741516200000000 |
+        | to_utc_timestamp   | 2025-03-09 02:30:00 | 1741516200000000 |
+        | from_utc_timestamp | 2025-11-02 01:30:00 | 1762072200000000 |
+        | to_utc_timestamp   | 2025-11-02 01:30:00 | 1762072200000000 |
+
+    Scenario: UTC conversion functions coerce NTZ with a second-precision session offset
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(from_utc_timestamp(TIMESTAMP_NTZ '1970-01-01 00:00:00', 'UTC')) AS from_result,
+          unix_micros(to_utc_timestamp(TIMESTAMP_NTZ '1970-01-01 00:00:00', 'UTC')) AS to_result
+        """
+      Then query result
+        | from_result | to_result   |
+        | -3723000000 | -3723000000 |
+
+    Scenario: CAST and TRY_CAST use Spark gap and overlap resolution
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          unix_micros(CAST(TIMESTAMP_NTZ '2025-03-09 02:30:00' AS TIMESTAMP)) AS cast_gap,
+          unix_micros(TRY_CAST(TIMESTAMP_NTZ '2025-03-09 02:30:00' AS TIMESTAMP)) AS try_gap,
+          unix_micros(CAST(TIMESTAMP_NTZ '2025-11-02 01:30:00' AS TIMESTAMP)) AS cast_overlap,
+          unix_micros(TRY_CAST(TIMESTAMP_NTZ '2025-11-02 01:30:00' AS TIMESTAMP)) AS try_overlap
+        """
+      Then query result
+        | cast_gap         | try_gap          | cast_overlap     | try_overlap      |
+        | 1741516200000000 | 1741516200000000 | 1762072200000000 | 1762072200000000 |
+
+    Scenario: time-zone-sensitive casts support Spark IDs and nested types
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(CAST(TIMESTAMP_NTZ '1970-01-01 00:00:00' AS TIMESTAMP)) AS ntz_cast,
+          unix_micros(TRY_CAST(TIMESTAMP_NTZ '1970-01-01 00:00:00' AS TIMESTAMP)) AS ntz_try,
+          unix_micros(CAST(DATE '1970-01-01' AS TIMESTAMP)) AS date_cast,
+          CAST(TIMESTAMP '1970-01-01 00:00:00Z' AS TIMESTAMP_NTZ) AS reverse_cast,
+          transform(CAST(array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ARRAY<TIMESTAMP>), x -> unix_micros(x)) AS nested_array,
+          unix_micros(element_at(CAST(map('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS MAP<STRING,TIMESTAMP>), 'x')) AS nested_map,
+          unix_micros(CAST(named_struct('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS STRUCT<x:TIMESTAMP>).x) AS nested_struct
+        """
+      Then query result
+        | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_array   | nested_map  | nested_struct |
+        | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [-3723000000] | -3723000000 | -3723000000   |

@@ -13,9 +13,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::{concat, take_arrays};
 use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int8Type,
-    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
+    DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    TimeUnit, TimestampMicrosecondType,
 };
 use datafusion::arrow::temporal_conversions::as_datetime;
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
@@ -195,7 +195,10 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
         let output = if output.is_empty() {
             new_empty_array(args.return_type())
         } else {
-            let arrays = output.iter().map(|array| array.as_ref()).collect::<Vec<_>>();
+            let arrays = output
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>();
             concat(&arrays)?
         };
         Ok(ColumnarValue::Array(output))
@@ -892,6 +895,28 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
+fn add_wide_calendar_interval(start: i128, months: i32, days: i32, micros: i64) -> Result<i128> {
+    let epoch_day = i64::try_from(start.div_euclid(i128::from(MICROS_PER_DAY)))
+        .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
+    let micros_of_day = start.rem_euclid(i128::from(MICROS_PER_DAY));
+    let (year, month, day) = civil_from_days(epoch_day);
+
+    let month_index = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(i64::from(month - 1)))
+        .and_then(|value| value.checked_add(i64::from(months)))
+        .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+    let year = month_index.div_euclid(12);
+    let month = u32::try_from(month_index.rem_euclid(12) + 1)
+        .map_err(|_| exec_datafusion_err!("cannot add {months} months to {start}"))?;
+    let day = day.min(days_in_month(year, month));
+    let epoch_day = days_from_civil(year, month, day)
+        .checked_add(i64::from(days))
+        .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
+
+    Ok(i128::from(epoch_day) * i128::from(MICROS_PER_DAY) + micros_of_day + i128::from(micros))
+}
+
 fn add_calendar_interval_wide(
     datetime: NaiveDateTime,
     months: i32,
@@ -941,6 +966,15 @@ fn add_ltz_interval(
     micros: i64,
     timezone: SparkTimeZone,
 ) -> Result<i64> {
+    if let SparkTimeZone::Fixed(offset) = timezone {
+        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
+        let local_start = i128::from(start) + offset_micros;
+        let local_result =
+            add_wide_calendar_interval(local_start, months, days, micros)? - offset_micros;
+        return i64::try_from(local_result)
+            .map_err(|_| exec_datafusion_err!("cannot add interval to {start}"));
+    }
+
     let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
         .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
@@ -979,19 +1013,8 @@ fn add_ltz_interval(
 }
 
 fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
-    let datetime = as_datetime::<TimestampMicrosecondType>(start)
-        .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-    let mut datetime = checked_add_months(datetime, months)
-        .and_then(|value| checked_add_days(value, days))
-        .or_else(|| add_calendar_interval_wide(datetime, months, days))
-        .ok_or_else(|| {
-            exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
-        })?;
-    datetime = datetime
-        .checked_add_signed(TimeDelta::microseconds(micros))
-        .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))?;
-    TimestampMicrosecondType::from_naive_datetime(datetime, None)
-        .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {datetime}"))
+    let result = add_wide_calendar_interval(i128::from(start), months, days, micros)?;
+    i64::try_from(result).map_err(|_| exec_datafusion_err!("cannot add interval to {start}"))
 }
 
 fn add_temporal_interval(
@@ -1057,6 +1080,13 @@ fn temporal_timestamp_row(
 }
 
 fn date_to_micros(date: i32, timezone: SparkTimeZone) -> Result<i64> {
+    if let SparkTimeZone::Fixed(offset) = timezone {
+        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
+        let result = i128::from(date) * i128::from(MICROS_PER_DAY) - offset_micros;
+        return i64::try_from(result)
+            .map_err(|_| exec_datafusion_err!("cannot convert sequence date {date}"));
+    }
+
     let datetime = Date32Type::to_naive_date_opt(date)
         .and_then(|date| date.and_hms_opt(0, 0, 0))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence date {date}"))?;
@@ -1064,6 +1094,13 @@ fn date_to_micros(date: i32, timezone: SparkTimeZone) -> Result<i64> {
 }
 
 fn micros_to_date(micros: i64, timezone: SparkTimeZone) -> Result<i32> {
+    if let SparkTimeZone::Fixed(offset) = timezone {
+        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
+        let local_micros = i128::from(micros) + offset_micros;
+        return i32::try_from(local_micros.div_euclid(i128::from(MICROS_PER_DAY)))
+            .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
+    }
+
     let date = as_datetime::<TimestampMicrosecondType>(micros)
         .map(|value| {
             Utc.from_utc_datetime(&value)

@@ -780,12 +780,13 @@ fn utc_ntz_timestamp_and_unit(
     let (ts, unit) = match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => (ts, unit),
         DataType::Timestamp(unit, None) => {
-            let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
+            let ts = convert_tz(lit(session_tz.to_string()), lit("UTC"), ts, true);
             (ts, unit)
         }
         DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
-            let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
+            let ts = cast(ts, DataType::Timestamp(unit, None));
+            let ts = convert_tz(lit(session_tz.to_string()), lit("UTC"), ts, true);
             (ts, unit)
         }
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {

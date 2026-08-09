@@ -227,6 +227,7 @@ message ExtendedScalarUdf {
     SparkTryToTimestampUdf spark_try_to_timestamp = 35;
     SparkDateFormatUdf spark_date_format = 36;
     SparkSequenceUdf spark_sequence = 37;
+    SparkTimezoneCastUdf spark_timezone_cast = 38;
   }
 }
 
@@ -419,6 +420,13 @@ message SparkMakeTimestampNtzUdf {
 
 message ConvertTzUdf {
   bool classic = 1;
+  bool safe = 2;
+}
+
+message SparkTimezoneCastUdf {
+  bytes target_type = 1;
+  string session_timezone = 2;
+  bool safe = 3;
 }
 
 message StandardUdaf {}

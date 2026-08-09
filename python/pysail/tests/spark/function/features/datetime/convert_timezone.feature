@@ -213,6 +213,29 @@ Feature: convert_timezone
         """
       Then query error \[INVALID_TIMEZONE\] The timezone: Foo/Bar is invalid\.
 
+  Rule: NULL short-circuiting
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: invalid zones are not evaluated when another argument is NULL
+      When query
+        """
+        SELECT
+          convert_timezone('Bad/Zone', 'UTC', ts) AS scalar_bad_zone,
+          convert_timezone(bad_zone, 'UTC', ts) AS column_bad_zone,
+          convert_timezone(null_zone, bad_zone, TIMESTAMP_NTZ '2024-01-01 00:00:00') AS null_source_zone,
+          from_utc_timestamp(CAST(ts AS TIMESTAMP), 'Bad/Zone') AS scalar_from_utc,
+          from_utc_timestamp(CAST(ts AS TIMESTAMP), bad_zone) AS column_from_utc,
+          to_utc_timestamp(CAST(ts AS TIMESTAMP), bad_zone) AS column_to_utc
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRING), 'Bad/Zone')
+        AS t(ts, null_zone, bad_zone)
+        """
+      Then query result
+        | scalar_bad_zone | column_bad_zone | null_source_zone | scalar_from_utc | column_from_utc | column_to_utc |
+        | NULL            | NULL            | NULL             | NULL            | NULL            | NULL          |
+
   @function(nullability)
   Rule: Output schema
 

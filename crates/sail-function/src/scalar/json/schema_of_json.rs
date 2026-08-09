@@ -741,7 +741,7 @@ fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
 
 /// Validates a timezone string the way Spark's `getZoneId` does.
 fn is_valid_timezone(tz: &str) -> bool {
-    parse_spark_timezone(tz.trim()).is_ok()
+    parse_spark_timezone(tz.trim_matches(|character| character <= '\u{20}')).is_ok()
 }
 
 /// Returns true if the string matches a timestamp/date that Spark's
@@ -1057,6 +1057,8 @@ mod tests {
             ("2024-01-02 03:04:05+02:00", true),
             ("2024-01-02 03:04:05-0800", true),
             ("2024-01-02 03:04:05 America/Los_Angeles", true),
+            ("2024-01-02 03:04:05 UTC ", true),
+            ("2024-01-02 03:04:05 UTC\u{a0}", false),
             ("03:04:05", true),
             ("03:04", true),
             ("3:4:5", true),

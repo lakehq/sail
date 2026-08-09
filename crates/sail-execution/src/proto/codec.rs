@@ -166,6 +166,7 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -2707,8 +2708,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     is_try,
                 ))));
             }
-            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic }) => {
-                return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
+            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(ConvertTz::new_with_safe(
+                    classic, safe,
+                ))));
+            }
+            UdfKind::SparkTimezoneCast(r#gen::SparkTimezoneCastUdf {
+                target_type,
+                session_timezone,
+                safe,
+            }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(SparkTimezoneCast::new(
+                    target_type,
+                    Arc::from(session_timezone),
+                    safe,
+                ))));
             }
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
@@ -3197,7 +3212,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try })
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
-            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic })
+            let safe = func.safe();
+            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic, safe })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkTimezoneCast>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkTimezoneCast(r#gen::SparkTimezoneCastUdf {
+                target_type,
+                session_timezone: func.session_timezone().to_string(),
+                safe: func.safe(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
@@ -6157,6 +6180,37 @@ mod tests {
         let decoded = downcast_udf::<SparkTimestamp>(&decoded, "SparkTimestamp")?;
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_convert_tz_preserves_safe_mode() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(ConvertTz::new_with_safe(true, true)))?;
+
+        let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
+        assert!(decoded.classic());
+        assert!(decoded.safe());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_timezone_cast_preserves_options() -> Result<()> {
+        let target_type = DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from("America/Los_Angeles")),
+        );
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimezoneCast::new(
+            target_type.clone(),
+            Arc::from("+01:02:03"),
+            true,
+        )))?;
+
+        let decoded = downcast_udf::<SparkTimezoneCast>(&decoded, "SparkTimezoneCast")?;
+        assert_eq!(decoded.target_type(), &target_type);
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+        assert!(decoded.safe());
 
         Ok(())
     }

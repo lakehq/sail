@@ -27,6 +27,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::special_datetime::foldable_special_datetime_cast;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
@@ -331,9 +332,19 @@ fn sequence_cast(
     source_type: &DataType,
     target_type: &DataType,
     ansi_mode: bool,
+    session_timezone: &Arc<str>,
 ) -> PlanResult<expr::Expr> {
     if source_type == target_type {
         return Ok(argument);
+    }
+
+    if matches!(
+        source_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) && let Some(special) =
+        foldable_special_datetime_cast(&argument, target_type, session_timezone)
+    {
+        return Ok(special);
     }
 
     Ok(match (source_type, target_type) {
@@ -391,7 +402,13 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .zip(argument_types)
         .zip(target_types)
         .map(|((argument, source_type), target_type)| {
-            sequence_cast(argument, &source_type, &target_type, config.ansi_mode)
+            sequence_cast(
+                argument,
+                &source_type,
+                &target_type,
+                config.ansi_mode,
+                &config.session_timezone,
+            )
         })
         .collect::<PlanResult<Vec<_>>>()?;
 
