@@ -36,7 +36,8 @@ dashmap = { workspace = true }
 hf-hub = { workspace = true }
 fastrace = { workspace = true }
 fastrace-futures = { workspace = true }
-foyer = { workspace = true }
+foyer-common = { workspace = true }
+foyer-memory = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

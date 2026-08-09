@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::future::try_join_all;
@@ -88,6 +88,7 @@ fn main() {
             page_size: PAGE_SIZE,
             memory_capacity_bytes: 32 * MIB,
             metadata_capacity_bytes: MIB,
+            metadata_ttl: Duration::from_secs(60),
             parallelism: 8,
         },
     );

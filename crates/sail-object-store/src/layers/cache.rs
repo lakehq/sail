@@ -6,11 +6,11 @@
 // lancedb/ocra (Apache-2.0), <https://github.com/lancedb/ocra>, specifically
 // its `src/read_through.rs` (the `ReadThroughCache` object-store wrapper) and
 // `src/memory.rs` (the `InMemoryCache` page backend). The original code uses
-// the Moka cache; here it is reimplemented against Foyer's in-memory
-// `Cache` (which additionally supports disk tiering, so the working set may
-// exceed RAM) and updated for `object_store` 0.13.2 (whose ergonomic methods
-// such as `get_range`/`head` live in the blanket `ObjectStoreExt` trait and so
-// are intercepted here at `get_opts`). Per-site `// Adapted from ocra ...`
+// the Moka cache; here it is reimplemented against Foyer's in-memory `Cache`.
+// The Foyer ecosystem's `HybridCache` disk tier remains a possible follow-up.
+// This is updated for `object_store` 0.13.2 (whose ergonomic methods such as
+// `get_range`/`head` live in the blanket `ObjectStoreExt` trait and so are
+// intercepted here at `get_opts`). Per-site `// Adapted from ocra ...`
 // comments mark the blocks that are direct ports. Sail-specific wiring (the
 // `CacheConfig`, env-gated construction, the `ObjectStore` trait surface for
 // 0.13.2, and the tests) is original.
@@ -21,19 +21,20 @@
 
 use std::fmt;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use dashmap::DashMap;
-use foyer::{Cache, CacheBuilder};
+use foyer_common::error::Error as FoyerError;
+use foyer_memory::{Cache, CacheBuilder};
 use futures::stream::BoxStream;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{
-    Attributes, CopyOptions, Error, GetOptions, GetResult, GetResultPayload, ListResult,
+    Attributes, CopyOptions, Error, GetOptions, GetRange, GetResult, GetResultPayload, ListResult,
     MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
-    PutPayload, PutResult, RenameOptions, Result,
+    PutPayload, PutResult, RenameOptions, Result, UploadPart,
 };
 
 /// Environment variable that enables the object-store cache when set to a
@@ -45,6 +46,8 @@ pub const ENV_CACHE_PAGE_SIZE: &str = "SAIL_OBJECT_STORE_CACHE_PAGE_SIZE";
 pub const ENV_CACHE_MEMORY: &str = "SAIL_OBJECT_STORE_CACHE_MEMORY";
 /// Environment variable overriding the metadata (head) capacity, in bytes.
 pub const ENV_CACHE_METADATA: &str = "SAIL_OBJECT_STORE_CACHE_METADATA";
+/// Environment variable overriding metadata revalidation time, in seconds.
+pub const ENV_CACHE_METADATA_TTL_SECS: &str = "SAIL_OBJECT_STORE_CACHE_METADATA_TTL_SECS";
 
 /// Default page size: 1 MiB. A larger page favors remote stores (fewer, larger
 /// range requests); a smaller page reduces read amplification for tiny reads.
@@ -53,6 +56,8 @@ pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
 pub const DEFAULT_MEMORY_CAPACITY_BYTES: usize = 1024 * 1024 * 1024;
 /// Default metadata (head) capacity: 64 MiB worth of `ObjectMeta` entries.
 pub const DEFAULT_METADATA_CAPACITY_BYTES: usize = 64 * 1024 * 1024;
+/// Default metadata revalidation interval: 60 seconds.
+pub const DEFAULT_METADATA_TTL: Duration = Duration::from_secs(60);
 
 /// Configuration for [`CachingObjectStore`].
 #[derive(Debug, Clone)]
@@ -61,8 +66,12 @@ pub struct CacheConfig {
     pub page_size: usize,
     /// Total in-memory capacity for data pages, in bytes.
     pub memory_capacity_bytes: usize,
-    /// Total in-memory capacity for cached object metadata, in bytes.
+    /// Total in-memory capacity for cached object metadata and compact path
+    /// identities, in bytes.
     pub metadata_capacity_bytes: usize,
+    /// Maximum time cached metadata and its associated pages remain valid
+    /// without revalidation against the inner object store.
+    pub metadata_ttl: Duration,
     /// Maximum number of pages fetched concurrently for a single read.
     pub parallelism: usize,
 }
@@ -76,6 +85,7 @@ impl Default for CacheConfig {
             page_size: DEFAULT_PAGE_SIZE,
             memory_capacity_bytes: DEFAULT_MEMORY_CAPACITY_BYTES,
             metadata_capacity_bytes: DEFAULT_METADATA_CAPACITY_BYTES,
+            metadata_ttl: DEFAULT_METADATA_TTL,
             parallelism,
         }
     }
@@ -83,8 +93,9 @@ impl Default for CacheConfig {
 
 impl CacheConfig {
     /// Build a [`CacheConfig`] from the defaults, overlaying any
-    /// `SAIL_OBJECT_STORE_CACHE_*` environment overrides that are set and parse
-    /// as positive integers.
+    /// `SAIL_OBJECT_STORE_CACHE_*` environment overrides that are set and
+    /// valid. Byte capacities and page sizes must be positive; the metadata TTL
+    /// may be zero to request revalidation on every read.
     pub fn from_env() -> Self {
         let mut config = Self::default();
         if let Some(value) = env_usize(ENV_CACHE_PAGE_SIZE) {
@@ -95,6 +106,9 @@ impl CacheConfig {
         }
         if let Some(value) = env_usize(ENV_CACHE_METADATA) {
             config.metadata_capacity_bytes = value;
+        }
+        if let Some(value) = env_u64(ENV_CACHE_METADATA_TTL_SECS) {
+            config.metadata_ttl = Duration::from_secs(value);
         }
         config
     }
@@ -130,13 +144,19 @@ fn env_usize(key: &str) -> Option<usize> {
         .filter(|value| *value > 0)
 }
 
+fn env_u64(key: &str) -> Option<u64> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
 /// A read-through, page-aligned cache that wraps an inner [`ObjectStore`].
 ///
 /// Range reads are split into fixed-size pages; each missing page is fetched
 /// once from the inner store (concurrent misses for the same page are
 /// deduplicated by Foyer) and cached. Object metadata (`head`) is cached
-/// separately. Mutations to a location invalidate its cached pages and
-/// metadata before delegating to the inner store.
+/// separately. Mutations to a location rotate its compact identity so stale
+/// pages become unreachable, including when reads overlap writes.
 #[derive(Clone)]
 pub struct CachingObjectStore {
     state: Arc<CacheState>,
@@ -153,23 +173,34 @@ impl CachingObjectStore {
         // length so the byte capacity is respected; metadata is weighed by an
         // estimate of each `ObjectMeta`'s footprint. (Moka's `weigher` ->
         // Foyer's `with_weighter`.)
-        let pages: Cache<(u64, u32), Bytes> =
+        let pages: Cache<(u64, u64), Bytes> =
             CacheBuilder::new(config.memory_capacity_bytes.max(1))
                 .with_weighter(|_key, value: &Bytes| value.len())
                 .build();
-        let metas: Cache<u64, ObjectMeta> =
-            CacheBuilder::new(config.metadata_capacity_bytes.max(1))
-                .with_weighter(|_key, value: &ObjectMeta| estimate_meta_weight(value))
-                .build();
+        // Split the configured metadata budget between compact path identities
+        // and object metadata. Bounding both caches prevents one-pass scans of
+        // unique paths from growing an unbounded path-to-id map.
+        let metadata_capacity = config.metadata_capacity_bytes.max(2);
+        let location_capacity = metadata_capacity / 2;
+        let meta_capacity = metadata_capacity - location_capacity;
+        let location_ids: Cache<Path, u64> = CacheBuilder::new(location_capacity)
+            .with_weighter(|key: &Path, _value: &u64| key.as_ref().len() + 64)
+            .build();
+        let metas: Cache<u64, CachedMetadata> = CacheBuilder::new(meta_capacity)
+            .with_weighter(|_key, value: &CachedMetadata| {
+                estimate_meta_weight(&value.meta) + value.attributes.len() * 64
+            })
+            .build();
 
         let state = CacheState {
             store: inner,
             pages,
             metas,
-            location_ids: DashMap::new(),
+            location_ids,
             next_location_id: AtomicU64::new(0),
             page_size,
             parallelism,
+            metadata_ttl: config.metadata_ttl,
         };
         Self {
             state: Arc::new(state),
@@ -195,22 +226,23 @@ impl fmt::Debug for CachingObjectStore {
 struct CacheState {
     store: Arc<dyn ObjectStore>,
     /// Page cache keyed by `(location id, page id)`, valued by page bytes.
-    pages: Cache<(u64, u32), Bytes>,
+    pages: Cache<(u64, u64), Bytes>,
     /// Metadata cache keyed by `location id`.
-    metas: Cache<u64, ObjectMeta>,
+    metas: Cache<u64, CachedMetadata>,
     /// Map of path to a small integer id, keeping cache keys compact and
     /// enabling O(1) invalidation (drop the id; orphaned entries age out).
     /// Adapted from ocra `memory.rs` (`location_lookup`).
-    location_ids: DashMap<Path, u64>,
+    location_ids: Cache<Path, u64>,
     next_location_id: AtomicU64,
     page_size: u64,
     parallelism: usize,
+    metadata_ttl: Duration,
 }
 
 /// A unit of work for fetching one (slice of a) page.
 #[derive(Clone)]
 struct PagePlan {
-    page_id: u32,
+    page_id: u64,
     /// Absolute byte offset of the page start within the object.
     offset: u64,
     /// Absolute byte offset of the page end (clamped to the object size).
@@ -222,21 +254,32 @@ struct PagePlan {
 struct CachedHead {
     location_id: u64,
     meta: ObjectMeta,
+    attributes: Attributes,
+}
+
+#[derive(Clone)]
+struct CachedMetadata {
+    meta: ObjectMeta,
+    attributes: Attributes,
+    validated_at: Instant,
 }
 
 impl CacheState {
     /// Resolve (or assign) the compact id for a location.
     /// Adapted from ocra `memory.rs` `location_id`.
-    fn location_id(&self, location: &Path) -> u64 {
-        {
-            if let Some(id) = self.location_ids.get(location) {
-                return *id;
-            }
+    fn location_id(&self, location: &Path) -> (u64, bool) {
+        if let Some(id) = self.location_ids.get(location) {
+            return (*id.value(), false);
         }
-        *self
-            .location_ids
-            .entry(location.clone())
-            .or_insert_with(|| self.next_location_id.fetch_add(1, Ordering::Relaxed))
+        (self.assign_location_id(location), true)
+    }
+
+    /// Assign a fresh identity, making pages associated with any previous
+    /// identity unreachable without scanning the page cache.
+    fn assign_location_id(&self, location: &Path) -> u64 {
+        let id = self.next_location_id.fetch_add(1, Ordering::Relaxed);
+        self.location_ids.insert(location.clone(), id);
+        id
     }
 
     /// Drop a location's cache identity so its pages and metadata become
@@ -249,24 +292,78 @@ impl CacheState {
     /// Return cached object metadata, fetching from the inner store on a miss.
     /// Adapted from ocra `read_through.rs`/`memory.rs` `head`.
     async fn cached_head(&self, location: &Path) -> Result<CachedHead> {
-        let id = self.location_id(location);
+        let (mut id, fresh_location) = self.location_id(location);
         if let Some(entry) = self.metas.get(&id) {
+            let cached = entry.value();
+            if cached.validated_at.elapsed() < self.metadata_ttl {
+                return Ok(CachedHead {
+                    location_id: id,
+                    meta: cached.meta.clone(),
+                    attributes: cached.attributes.clone(),
+                });
+            }
+
+            let previous = cached.meta.clone();
+            drop(entry);
+            self.metas.remove(&id);
+            let refreshed = self.fetch_metadata(id, location).await?;
+            if refreshed.meta != previous {
+                // Changing the compact location id makes every page cached under
+                // the old object identity unreachable in O(1).
+                let new_id = self.assign_location_id(location);
+                self.metas.remove(&id);
+                self.metas.insert(new_id, refreshed.clone());
+                return Ok(CachedHead {
+                    location_id: new_id,
+                    meta: refreshed.meta,
+                    attributes: refreshed.attributes,
+                });
+            }
             return Ok(CachedHead {
                 location_id: id,
-                meta: entry.value().clone(),
+                meta: refreshed.meta,
+                attributes: refreshed.attributes,
             });
         }
+
+        // If the path identity outlived its metadata entry, rotate it before
+        // fetching metadata. Reusing it could expose pages belonging to an
+        // object version whose identifying metadata has already been evicted.
+        if !fresh_location {
+            id = self.assign_location_id(location);
+        }
+        let cached = self.fetch_metadata(id, location).await?;
+        Ok(CachedHead {
+            location_id: id,
+            meta: cached.meta,
+            attributes: cached.attributes,
+        })
+    }
+
+    async fn fetch_metadata(&self, id: u64, location: &Path) -> Result<CachedMetadata> {
         let store = self.store.clone();
         let loc = location.clone();
         let entry = self
             .metas
-            .get_or_fetch(&id, move || async move { store.head(&loc).await })
+            .get_or_fetch(&id, move || async move {
+                store
+                    .get_opts(
+                        &loc,
+                        GetOptions {
+                            head: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map(|result| CachedMetadata {
+                        meta: result.meta,
+                        attributes: result.attributes,
+                        validated_at: Instant::now(),
+                    })
+            })
             .await
             .map_err(|err| map_cache_error(location, err))?;
-        Ok(CachedHead {
-            location_id: id,
-            meta: entry.value().clone(),
-        })
+        Ok(entry.value().clone())
     }
 
     /// Compute the per-page fetch plan covering the absolute byte range `range`.
@@ -282,19 +379,20 @@ impl CacheState {
         let mut plans = Vec::with_capacity(page_count);
         let mut offset = start;
         while offset < range.end {
-            let page_id = (offset / page_size) as u32;
+            let page_id = offset / page_size;
+            let next_offset = offset.saturating_add(page_size);
             let intersection_start = offset.max(range.start);
-            let intersection_end = (offset + page_size).min(range.end);
+            let intersection_end = next_offset.min(range.end);
             let in_page =
                 (intersection_start - offset) as usize..(intersection_end - offset) as usize;
-            let page_end = (offset + page_size).min(size);
+            let page_end = next_offset.min(size);
             plans.push(PagePlan {
                 page_id,
                 offset,
                 page_end,
                 in_page,
             });
-            offset += page_size;
+            offset = next_offset;
         }
         plans
     }
@@ -379,6 +477,7 @@ impl CacheState {
         location_id: u64,
         location: Arc<Path>,
         meta: ObjectMeta,
+        attributes: Attributes,
         range: Range<u64>,
     ) -> GetResult {
         let mut plans = self.page_plan(range.clone(), meta.size);
@@ -399,7 +498,7 @@ impl CacheState {
             payload: GetResultPayload::Stream(stream),
             meta,
             range,
-            attributes: Attributes::default(),
+            attributes,
         }
     }
 }
@@ -419,7 +518,7 @@ fn estimate_meta_weight(meta: &ObjectMeta) -> usize {
 /// Map a Foyer cache error back to an [`object_store::Error`], preserving the
 /// `NotFound` variant (which callers such as DataFusion rely on) when the
 /// underlying loader produced one.
-fn map_cache_error(location: &Path, err: foyer::Error) -> Error {
+fn map_cache_error(location: &Path, err: FoyerError) -> Error {
     if let Some(Error::NotFound { path, .. }) = err.downcast_ref::<Error>() {
         return Error::NotFound {
             path: path.clone(),
@@ -432,6 +531,40 @@ fn map_cache_error(location: &Path, err: foyer::Error) -> Error {
     }
 }
 
+struct InvalidatingMultipartUpload {
+    inner: Box<dyn MultipartUpload>,
+    state: Arc<CacheState>,
+    location: Path,
+}
+
+impl fmt::Debug for InvalidatingMultipartUpload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InvalidatingMultipartUpload")
+            .field("inner", &self.inner)
+            .field("location", &self.location)
+            .finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for InvalidatingMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.inner.put_part(data)
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        let result = self.inner.complete().await;
+        // Completion is the visibility boundary. Invalidate even on an error,
+        // since stores differ in whether a failed completion may have committed.
+        self.state.invalidate(&self.location);
+        result
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        self.inner.abort().await
+    }
+}
+
 #[async_trait::async_trait]
 #[warn(clippy::missing_trait_methods)]
 impl ObjectStore for CachingObjectStore {
@@ -441,9 +574,13 @@ impl ObjectStore for CachingObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        // Adapted from ocra `read_through.rs` `put_opts`: invalidate then write.
+        // Invalidate on both sides of the write. The second invalidation closes
+        // the race where a concurrent reader repopulates the old value while
+        // the write is in flight.
         self.state.invalidate(location);
-        self.state.store.put_opts(location, payload, opts).await
+        let result = self.state.store.put_opts(location, payload, opts).await;
+        self.state.invalidate(location);
+        result
     }
 
     async fn put_multipart_opts(
@@ -451,8 +588,12 @@ impl ObjectStore for CachingObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        self.state.invalidate(location);
-        self.state.store.put_multipart_opts(location, opts).await
+        let inner = self.state.store.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(InvalidatingMultipartUpload {
+            inner,
+            state: Arc::clone(&self.state),
+            location: location.clone(),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -463,21 +604,28 @@ impl ObjectStore for CachingObjectStore {
             || options.if_none_match.is_some()
             || options.if_modified_since.is_some()
             || options.if_unmodified_since.is_some()
+            || !options.extensions.is_empty()
         {
             return self.state.store.get_opts(location, options).await;
         }
 
         if options.head {
-            let CachedHead { meta, .. } = self.state.cached_head(location).await?;
+            let CachedHead {
+                meta, attributes, ..
+            } = self.state.cached_head(location).await?;
             return Ok(GetResult {
                 payload: GetResultPayload::Stream(stream::empty().boxed()),
                 meta,
                 range: 0..0,
-                attributes: Attributes::default(),
+                attributes,
             });
         }
 
-        let CachedHead { location_id, meta } = self.state.cached_head(location).await?;
+        let CachedHead {
+            location_id,
+            meta,
+            attributes,
+        } = self.state.cached_head(location).await?;
         let range = match &options.range {
             Some(get_range) => get_range
                 .as_range(meta.size)
@@ -491,18 +639,35 @@ impl ObjectStore for CachingObjectStore {
             location_id,
             Arc::new(location.clone()),
             meta,
+            attributes,
             range,
         ))
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        if ranges.is_empty() {
+            return Ok(Vec::new());
+        }
         // Serve each range through the page cache (rather than the default,
         // which would still route through our cached `get_opts`, but this keeps
         // a single `head` lookup and bounds concurrency explicitly).
-        let CachedHead { location_id, meta } = self.state.cached_head(location).await?;
+        let CachedHead {
+            location_id, meta, ..
+        } = self.state.cached_head(location).await?;
+        let ranges = ranges
+            .iter()
+            .map(|range| {
+                GetRange::Bounded(range.clone())
+                    .as_range(meta.size)
+                    .map_err(|err| Error::Generic {
+                        store: "CachingObjectStore",
+                        source: Box::new(err),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let state = self.state.clone();
         let location = Arc::new(location.clone());
-        stream::iter(ranges.iter().cloned())
+        stream::iter(ranges)
             .map(|range| {
                 let state = state.clone();
                 let location = Arc::clone(&location);
@@ -547,15 +712,19 @@ impl ObjectStore for CachingObjectStore {
     }
 
     async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
-        // Adapted from ocra `read_through.rs` `copy`: invalidate destination.
         self.state.invalidate(to);
-        self.state.store.copy_opts(from, to, options).await
+        let result = self.state.store.copy_opts(from, to, options).await;
+        self.state.invalidate(to);
+        result
     }
 
     async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         self.state.invalidate(from);
         self.state.invalidate(to);
-        self.state.store.rename_opts(from, to, options).await
+        let result = self.state.store.rename_opts(from, to, options).await;
+        self.state.invalidate(from);
+        self.state.invalidate(to);
+        result
     }
 }
 
@@ -564,8 +733,8 @@ impl ObjectStore for CachingObjectStore {
 mod tests {
     use std::sync::atomic::AtomicUsize;
 
-    use object_store::local::LocalFileSystem;
     use object_store::ObjectStoreExt;
+    use object_store::local::LocalFileSystem;
     use tempfile::tempdir;
 
     use super::*;
@@ -646,6 +815,7 @@ mod tests {
             page_size,
             memory_capacity_bytes: 8 * 1024 * 1024,
             metadata_capacity_bytes: 1024 * 1024,
+            metadata_ttl: Duration::from_secs(60),
             parallelism: 4,
         }
     }
@@ -769,6 +939,100 @@ mod tests {
             .unwrap();
         let v2 = cache.get_range(&path, 0..10).await.unwrap();
         assert_eq!(&v2[..], &[2u8; 10]);
+    }
+
+    #[tokio::test]
+    async fn metadata_revalidation_detects_external_overwrite() {
+        let (_dir, counting, _cache, path) = setup(&pattern(1000), 1024);
+        let cache = CachingObjectStore::new(
+            counting.clone(),
+            CacheConfig {
+                metadata_ttl: Duration::ZERO,
+                ..test_config(1024)
+            },
+        );
+
+        let first = cache.get_range(&path, 0..10).await.unwrap();
+        assert_eq!(&first[..], &pattern(1000)[..10]);
+
+        counting
+            .inner
+            .put(&path, PutPayload::from(Bytes::from(vec![42_u8; 2000])))
+            .await
+            .unwrap();
+
+        let second = cache.get_range(&path, 0..10).await.unwrap();
+        assert_eq!(&second[..], &[42_u8; 10]);
+    }
+
+    #[tokio::test]
+    async fn metadata_eviction_rotates_cached_page_identity() {
+        let (_dir, counting, cache, path) = setup(&pattern(1000), 1024);
+        let first = cache.get_range(&path, 0..10).await.unwrap();
+        assert_eq!(&first[..], &pattern(1000)[..10]);
+
+        let original_id = *cache.state.location_ids.get(&path).unwrap().value();
+        cache.state.metas.remove(&original_id);
+        counting
+            .inner
+            .put(&path, PutPayload::from(Bytes::from(vec![9_u8; 1000])))
+            .await
+            .unwrap();
+
+        let second = cache.get_range(&path, 0..10).await.unwrap();
+        let refreshed_id = *cache.state.location_ids.get(&path).unwrap().value();
+        assert_ne!(original_id, refreshed_id);
+        assert_eq!(&second[..], &[9_u8; 10]);
+    }
+
+    #[test]
+    fn page_identity_does_not_wrap_after_u32_max() {
+        let (_dir, _counting, cache, _path) = setup(&[], 1);
+        let start = u32::MAX as u64 + 1;
+        let plans = cache.state.page_plan(start..start + 1, start + 1);
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].page_id, start);
+    }
+
+    #[tokio::test]
+    async fn multipart_completion_invalidates_cached_pages() {
+        let (_dir, _counting, cache, path) = setup(&pattern(1000), 1024);
+        let _ = cache.get_range(&path, 0..10).await.unwrap();
+
+        let mut upload = cache.put_multipart(&path).await.unwrap();
+        upload
+            .put_part(PutPayload::from(Bytes::from(vec![7_u8; 2000])))
+            .await
+            .unwrap();
+        upload.complete().await.unwrap();
+
+        let updated = cache.get_range(&path, 0..10).await.unwrap();
+        assert_eq!(&updated[..], &[7_u8; 10]);
+    }
+
+    #[tokio::test]
+    async fn get_ranges_validates_ranges_before_fetching() {
+        let (_dir, _counting, cache, path) = setup(&pattern(1000), 1024);
+        let out_of_bounds = 1000..1001;
+        let reversed = Range { start: 20, end: 10 };
+
+        assert!(
+            cache
+                .get_ranges(&path, std::slice::from_ref(&out_of_bounds))
+                .await
+                .is_err()
+        );
+        assert!(
+            cache
+                .get_ranges(&path, std::slice::from_ref(&reversed))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            cache.get_ranges(&path, &[]).await.unwrap(),
+            Vec::<Bytes>::new()
+        );
     }
 
     #[tokio::test]
