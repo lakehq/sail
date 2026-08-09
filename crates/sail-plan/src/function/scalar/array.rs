@@ -313,12 +313,8 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
         lit("UTC"),
         timestamp_ntz,
     ]);
-    let timestamp_utc = cast(
-        instant,
-        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
-    );
     cast(
-        timestamp_utc,
+        cast(instant, DataType::Int64),
         DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
     )
 }

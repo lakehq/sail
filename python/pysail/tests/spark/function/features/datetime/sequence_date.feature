@@ -120,6 +120,23 @@ Feature: sequence() over DATE returns expected arrays
         | mixed_timestamp_types                                                                                                                 | string_stop                                                          |
         | [2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 02:00:00] | [2021-11-07 00:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00] |
 
+    Scenario: mixed timestamp sequence coercion preserves the full microsecond range
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT transform(
+          sequence(
+            CAST(timestamp_micros(-9223372036854775808L) AS TIMESTAMP_NTZ),
+            timestamp_micros(-9223371864054775808L),
+            INTERVAL 1 DAY
+          ),
+          value -> unix_micros(value)
+        ) AS result
+        """
+      Then query result
+        | result                                                             |
+        | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
+
     Scenario: ANSI temporal sequence coercion trims Spark control whitespace
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true

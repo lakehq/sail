@@ -8,9 +8,10 @@ use chrono::{
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
     ListArray, NullArray, NullBufferBuilder, TimestampMicrosecondArray, UInt64Array,
+    new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::{take, take_arrays};
+use datafusion::arrow::compute::{concat, take_arrays};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int8Type,
     Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
@@ -157,43 +158,47 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
 
         let row_count = u64::try_from(args.number_rows)
             .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
-        let mut rows = (0..row_count).collect::<Vec<_>>();
-        let mut values = Vec::with_capacity(lambdas.len());
+        let mut output = Vec::with_capacity(args.number_rows);
 
-        for lambda in lambdas {
-            if rows.is_empty() {
-                return Ok(ColumnarValue::Array(
-                    datafusion::arrow::array::new_null_array(args.return_type(), args.number_rows),
-                ));
+        for row in 0..row_count {
+            let row = [row];
+            let mut values = Vec::with_capacity(lambdas.len());
+            let mut is_null = false;
+
+            for lambda in &lambdas {
+                let value = evaluate_sequence_lambda(lambda, &row)?;
+                if value.is_null(0) {
+                    is_null = true;
+                    break;
+                }
+                values.push(ColumnarValue::Array(value));
             }
 
-            let value = evaluate_sequence_lambda(lambda, &rows)?;
-            let value = retain_non_null_sequence_rows(&mut rows, &mut values, value)?;
-            values.push(value);
+            let value = if is_null {
+                new_null_array(args.return_type(), 1)
+            } else {
+                ScalarUDFImpl::invoke_with_args(
+                    &self.sequence,
+                    ScalarFunctionArgs {
+                        args: values,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: 1,
+                        return_field: Arc::clone(&args.return_field),
+                        config_options: Arc::clone(&args.config_options),
+                    },
+                )?
+                .into_array(1)?
+            };
+            output.push(value);
         }
 
-        let value = ScalarUDFImpl::invoke_with_args(
-            &self.sequence,
-            ScalarFunctionArgs {
-                args: values.into_iter().map(ColumnarValue::Array).collect(),
-                arg_fields,
-                number_rows: rows.len(),
-                return_field: Arc::clone(&args.return_field),
-                config_options: Arc::clone(&args.config_options),
-            },
-        )?
-        .into_array(rows.len())?;
-
-        let mut scatter = vec![None; args.number_rows];
-        for (position, row) in rows.into_iter().enumerate() {
-            scatter[row as usize] = Some(position as u64);
-        }
-
-        Ok(ColumnarValue::Array(take(
-            value.as_ref(),
-            &UInt64Array::from(scatter),
-            None,
-        )?))
+        let output = if output.is_empty() {
+            new_empty_array(args.return_type())
+        } else {
+            let arrays = output.iter().map(|array| array.as_ref()).collect::<Vec<_>>();
+            concat(&arrays)?
+        };
+        Ok(ColumnarValue::Array(output))
     }
 }
 
@@ -217,34 +222,6 @@ fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[u64]) -> Result<Arr
     lambda
         .evaluate(&[&dummy], |arrays| Ok(take_arrays(arrays, &indices, None)?))?
         .into_array(rows.len())
-}
-
-fn retain_non_null_sequence_rows(
-    rows: &mut Vec<u64>,
-    previous: &mut [ArrayRef],
-    current: ArrayRef,
-) -> Result<ArrayRef> {
-    if current.null_count() == 0 {
-        return Ok(current);
-    }
-
-    let positions = UInt64Array::from_iter_values(
-        (0..current.len())
-            .filter(|&index| current.is_valid(index))
-            .map(|index| index as u64),
-    );
-    let retained_rows = positions
-        .values()
-        .iter()
-        .map(|&position| rows[position as usize])
-        .collect();
-
-    for value in previous {
-        *value = take(value.as_ref(), &positions, None)?;
-    }
-
-    *rows = retained_rows;
-    Ok(take(current.as_ref(), &positions, None)?)
 }
 
 impl ScalarUDFImpl for SparkSequence {

@@ -249,6 +249,21 @@ Feature: sequence output schema
         | 2  | NULL      |
         | 3  | [1, 2, 3] |
 
+    Scenario: sequence reports an earlier row's boundary error before evaluating later rows
+      When query
+        """
+        SELECT sequence(
+          1L,
+          2L,
+          CASE
+            WHEN id = 1 THEN 0L
+            ELSE CAST(raise_error('later-row') AS BIGINT)
+          END
+        ) AS result
+        FROM VALUES (1), (2) AS t(id)
+        """
+      Then query error Illegal sequence boundaries: 1 to 2 by 0
+
     Scenario Outline: sequence rejects illegal integral boundaries
       When query
         """
