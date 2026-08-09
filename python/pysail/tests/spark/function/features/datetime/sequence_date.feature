@@ -120,6 +120,27 @@ Feature: sequence() over DATE returns expected arrays
         | mixed_timestamp_types                                                                                                                 | string_stop                                                          |
         | [2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 02:00:00] | [2021-11-07 00:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00] |
 
+    Scenario: ANSI temporal sequence coercion trims Spark control whitespace
+      Given config spark.sql.session.timeZone = UTC
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST(sequence(
+            DATE '2024-01-01',
+            concat(chr(9), '2024-01-03', chr(10)),
+            INTERVAL 1 DAY
+          ) AS STRING) AS dates,
+          CAST(sequence(
+            TIMESTAMP_NTZ '2024-01-01 00:00:00',
+            concat(chr(9), '2024-01-01 00:00:02', chr(10)),
+            INTERVAL 1 SECOND
+          ) AS STRING) AS timestamps
+        """
+      Then query result
+        | dates                                | timestamps                                                        |
+        | [2024-01-01, 2024-01-02, 2024-01-03] | [2024-01-01 00:00:00, 2024-01-01 00:00:01, 2024-01-01 00:00:02] |
+
     Scenario: timestamp sequence crosses daylight-saving transitions
       Given config spark.sql.session.timeZone = Europe/Prague
       When query

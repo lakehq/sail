@@ -323,6 +323,13 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
     )
 }
 
+fn sequence_trim_string(argument: expr::Expr) -> expr::Expr {
+    btrim(vec![
+        argument,
+        lit(SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS),
+    ])
+}
+
 fn sequence_cast(
     argument: expr::Expr,
     source_type: &DataType,
@@ -334,21 +341,25 @@ fn sequence_cast(
     }
 
     Ok(match (source_type, target_type) {
-        (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Int64) => cast(
-            btrim(vec![
-                argument,
-                lit(SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS),
-            ]),
-            target_type.clone(),
-        ),
+        (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64,
+        ) => cast(sequence_trim_string(argument), DataType::Int64),
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
-            ScalarUDF::from(SparkDate::new(false)).call(vec![argument])
+            ScalarUDF::from(SparkDate::new(false)).call(vec![sequence_trim_string(argument)])
         }
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
         ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![argument]),
+            .call(vec![sequence_trim_string(argument)]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
