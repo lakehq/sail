@@ -12,8 +12,8 @@ use sail_common_datafusion::formatter::{
     Time32SecondFormatter, Time64MicrosecondFormatter, Time64NanosecondFormatter,
 };
 use sail_common_datafusion::session::plan::PlanFormatter;
+use sail_common_datafusion::utils::datetime::format_timestamp_literal;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::format_timestamp_literal;
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SparkPlanFormatter;

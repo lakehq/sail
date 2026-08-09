@@ -1,9 +1,5 @@
 use std::str::FromStr;
 
-use crate::formatter::{
-    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
-    TimestampSecondFormatter,
-};
 use chrono::{
     DateTime, Days, FixedOffset, MappedLocalTime, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
 };
@@ -13,6 +9,11 @@ use datafusion_common::error::DataFusionError;
 use datafusion_common::{Result, exec_datafusion_err};
 use sail_common::error::CommonError;
 use sail_common::utils::datetime::parse_spark_timezone_id;
+
+use crate::formatter::{
+    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
+    TimestampSecondFormatter,
+};
 
 /// Localize the naive datetime to the time zone.
 /// 1. If the datatime is mapped to exactly one datetime in the time zone, the local datetime
@@ -46,6 +47,12 @@ pub enum SparkTimeZone {
 pub struct SparkTimeZoneOffset {
     timezone: SparkTimeZone,
     offset: FixedOffset,
+}
+
+impl std::fmt::Display for SparkTimeZoneOffset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.offset, f)
+    }
 }
 
 impl Offset for SparkTimeZoneOffset {

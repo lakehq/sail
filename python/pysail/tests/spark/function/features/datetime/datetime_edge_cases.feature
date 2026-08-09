@@ -290,3 +290,21 @@ Feature: datetime edge cases
       Then query result
         | result      |
         | -3723000000 |
+
+    Scenario Outline: timestamp results remain usable with Spark session zone IDs
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          CAST(to_timestamp('1970-01-01 00:00:00') AS STRING) AS rendered,
+          unix_micros(to_timestamp('1970-01-01 00:00:00')) AS micros
+        """
+      Then query result
+        | rendered            | micros   |
+        | 1970-01-01 00:00:00 | <micros> |
+
+      Examples:
+        | zone      | micros       |
+        | +8        | -28800000000 |
+        | GMT+8:30  | -30600000000 |
+        | +01:02:03 | -3723000000  |

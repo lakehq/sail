@@ -10,7 +10,7 @@ use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
@@ -33,7 +33,6 @@ fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -
 }
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::datetime::timezone::parse_spark_timezone;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {

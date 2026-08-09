@@ -8,8 +8,7 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-
-use crate::scalar::datetime::timezone::{SparkTimeZone, parse_spark_timezone};
+use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone

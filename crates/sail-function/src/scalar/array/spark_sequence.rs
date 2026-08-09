@@ -24,10 +24,11 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+};
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::datetime::timezone::{SparkTimeZone, parse_spark_timezone};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_DAY: i64 = 86_400_000_000;

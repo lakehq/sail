@@ -4,7 +4,7 @@ use datafusion_expr::expr;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
-use sail_function::scalar::datetime::{local_datetime_to_micros, validate_spark_timezone};
+use sail_common_datafusion::utils::datetime::{local_datetime_to_micros, validate_spark_timezone};
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
