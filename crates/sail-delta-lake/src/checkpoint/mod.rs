@@ -27,10 +27,10 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
 use log::debug;
+use object_store::buffered::BufWriter;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::async_writer::ParquetObjectWriter;
 use uuid::Uuid;
 
 use crate::checkpoint::action_fields::{
@@ -649,7 +649,7 @@ impl<'a> CheckpointManager<'a> {
             .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
         let cp_path = checkpoint_path(version);
-        let object_store_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
+        let object_store_writer = BufWriter::new(store.clone(), cp_path.clone());
         let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
             .map_err(DeltaTableError::generic_err)?;
         writer
@@ -721,7 +721,7 @@ impl<'a> CheckpointManager<'a> {
         let sidecar_descriptor = match sidecar_batches.next_batch()? {
             Some(first_batch) => {
                 ensure_schema_supported_for_parquet(&first_batch)?;
-                let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
+                let sidecar_writer = BufWriter::new(store.clone(), sidecar_path.clone());
                 let mut writer =
                     AsyncArrowWriter::try_new(sidecar_writer, first_batch.schema(), None)
                         .map_err(DeltaTableError::generic_err)?;
@@ -798,7 +798,7 @@ impl<'a> CheckpointManager<'a> {
         // Write the UUID-named V2 checkpoint file.
         let checkpoint_uuid = Uuid::new_v4();
         let cp_path = uuid_checkpoint_path(version, &checkpoint_uuid);
-        let cp_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
+        let cp_writer = BufWriter::new(store.clone(), cp_path.clone());
         let mut writer = AsyncArrowWriter::try_new(cp_writer, main_batch.schema(), None)
             .map_err(DeltaTableError::generic_err)?;
         writer
@@ -1383,11 +1383,11 @@ mod tests {
         DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
     };
     use datafusion::arrow::record_batch::RecordBatch;
+    use object_store::buffered::BufWriter;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use parquet::arrow::AsyncArrowWriter;
-    use parquet::arrow::async_writer::ParquetObjectWriter;
 
     use super::{
         ReconciledCheckpointState, ReconciledHeaderState, checkpoint_fields,
@@ -1551,7 +1551,7 @@ mod tests {
         path: Path,
         batch: RecordBatch,
     ) -> DeltaResult<()> {
-        let writer = ParquetObjectWriter::new(store, path);
+        let writer = BufWriter::new(store, path);
         let mut writer = AsyncArrowWriter::try_new(writer, batch.schema(), None)
             .map_err(DeltaTableError::generic_err)?;
         writer

@@ -52,8 +52,7 @@ use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::convert::FromProto;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
-    parse_protobuf_partitioning, parse_table_schema_from_proto,
+    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
@@ -547,7 +546,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -564,7 +563,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let options = try_decode_message::<gen_datafusion_common::CsvOptions>(&options)?;
                 let csv_options: CsvOptions = (&options).try_into()?;
                 let file_compression_type: FileCompressionType = csv_options.compression.into();
@@ -589,8 +588,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 timezone_mode,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
-                let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
+                let predicate_schema = Arc::clone(table_schema.table_schema());
                 let options =
                     try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
                 let options: TableParquetOptions = (&options).try_into()?;
@@ -651,7 +650,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::Arrow(r#gen::ArrowExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -679,7 +678,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     }
                 };
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -693,7 +692,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::BinarySource(r#gen::BinarySourceExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -705,7 +704,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::Avro(r#gen::AvroExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -5780,6 +5779,7 @@ mod tests {
     fn test_range_output_partitioning_round_trip() -> Result<()> {
         use datafusion::physical_expr::{RangePartitioning, SplitPoint};
 
+        use crate::plan::ShufflePartitioning;
         use crate::proto::encode_remote_partitioning;
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
         use crate::task::r#gen as task_gen;
@@ -5788,15 +5788,15 @@ mod tests {
         let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
         let ordering = LexOrdering::new([PhysicalSortExpr::new_default(key)])
             .ok_or_else(|| plan_datafusion_err!("expected non-empty range ordering"))?;
-        let expected = Partitioning::Range(RangePartitioning::try_new(
+        let expected = RangePartitioning::try_new(
             ordering,
             vec![
                 SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
                 SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
             ],
-        )?);
+        )?;
         let codec = RemoteExecutionCodec;
-        let encoded = encode_remote_partitioning(&codec, &expected)?;
+        let encoded = encode_remote_partitioning(&codec, &Partitioning::Range(expected.clone()))?;
         let wire: task_gen::TaskOutputDistribution = TaskOutputDistribution::Range {
             partitioning: Arc::from(encoded),
             channels: 3,
@@ -5807,14 +5807,17 @@ mod tests {
             .map_err(|error| plan_datafusion_err!("failed to decode task output: {error}"))?;
         let output = TaskOutput {
             distribution,
-            locator: TaskOutputLocator::Local { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined { replicas: 1 },
         };
 
         let actual = output
-            .partitioning(&TaskContext::default(), &schema, &codec)
+            .shuffle_partitioning(&TaskContext::default(), &schema, &codec)
             .map_err(|error| {
                 plan_datafusion_err!("failed to decode range partitioning: {error}")
             })?;
+        let ShufflePartitioning::Range(actual) = actual else {
+            return plan_err!("expected range partitioning, got {actual}");
+        };
 
         assert_eq!(actual, expected);
         Ok(())

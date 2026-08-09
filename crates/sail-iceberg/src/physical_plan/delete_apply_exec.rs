@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 use std::fmt;
+use std::ops::Range;
 use std::sync::Arc;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -15,10 +17,15 @@ use datafusion::physical_plan::{
     Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
+use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::ProjectionMask;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
+use parquet::errors::{ParquetError, Result as ParquetResult};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::SchemaDescriptor;
 use url::Url;
 
@@ -30,6 +37,60 @@ use crate::spec::delete_index::DeleteFileRef;
 const POS_DELETE_FILE_PATH_COL: &str = "file_path";
 /// Column name used in Iceberg position-delete files for the row position.
 const POS_DELETE_POS_COL: &str = "pos";
+
+#[derive(Clone)]
+struct ObjectStoreParquetReader {
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    size: u64,
+}
+
+impl ObjectStoreParquetReader {
+    fn new(store: Arc<dyn ObjectStore>, path: ObjectPath, size: u64) -> Self {
+        Self { store, path, size }
+    }
+}
+
+impl AsyncFileReader for ObjectStoreParquetReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        Box::pin(async move {
+            self.store
+                .get_range(&self.path, range)
+                .await
+                .map_err(parquet_object_store_error)
+        })
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
+        Box::pin(async move {
+            self.store
+                .get_ranges(&self.path, &ranges)
+                .await
+                .map_err(parquet_object_store_error)
+        })
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
+        let size = self.size;
+        Box::pin(async move {
+            let metadata = ParquetMetaDataReader::new()
+                .with_arrow_reader_options(options)
+                .load_and_finish(self, size)
+                .await?;
+            Ok(Arc::new(metadata))
+        })
+    }
+}
+
+fn parquet_object_store_error(error: object_store::Error) -> ParquetError {
+    ParquetError::External(Box::new(error))
+}
 
 #[derive(Debug, Clone)]
 pub struct IcebergDeleteApplyExec {
@@ -518,7 +579,7 @@ async fn read_equality_delete_keys(
     key_fields: &[EqualityKeyField],
     display_path: &str,
 ) -> Result<Vec<Vec<ArrayRef>>> {
-    let reader = ParquetObjectReader::new(store, path.clone()).with_file_size(size);
+    let reader = ObjectStoreParquetReader::new(store, path.clone(), size);
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -555,7 +616,7 @@ async fn read_parquet_all(
     path: &ObjectPath,
     size: u64,
 ) -> Result<Vec<RecordBatch>> {
-    let reader = ParquetObjectReader::new(store, path.clone()).with_file_size(size);
+    let reader = ObjectStoreParquetReader::new(store, path.clone(), size);
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;

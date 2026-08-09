@@ -26,7 +26,7 @@ use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
@@ -79,7 +79,9 @@ pub async fn prune_files(
             all_files.clone(),
             referenced_columns,
         )?;
-        let pruning_predicate = PruningPredicate::try_new(physical_predicate, logical_schema)?;
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(logical_schema)
+            .try_build(physical_predicate)?;
         pruning_predicate.prune(&stats)?
     } else {
         vec![true; num_containers]
@@ -139,7 +141,9 @@ pub(crate) fn prune_adds_by_physical_predicate(
     let referenced_columns = crate::datasource::collect_physical_columns(&predicate);
     let stats = AddStatsPruningStatistics::try_new(table_schema.clone(), adds, referenced_columns)?;
 
-    let pruning_predicate = PruningPredicate::try_new(predicate, table_schema)?;
+    let pruning_predicate = PruningPredicateBuilder::new()
+        .with_file_schema(table_schema)
+        .try_build(predicate)?;
     pruning_predicate.prune(&stats)
 }
 

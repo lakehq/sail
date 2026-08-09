@@ -129,6 +129,10 @@ impl ExecutionPlan for TracingExec {
         check_default_invariants(self, check)
     }
 
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        Vec::new()
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
     }

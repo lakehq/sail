@@ -151,7 +151,7 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.9"
-datafusion = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111", default-features = false, features = [
+datafusion = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -165,31 +165,31 @@ datafusion = { git = "https://github.com/apache/datafusion", rev = "24483dbeed78
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111", features = ["object_store"] }
-datafusion-datasource = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-datasource-avro = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-datasource-json = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111", default-features = false }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-functions = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111", default-features = false }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-session = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111" }
-datafusion-spark = { git = "https://github.com/apache/datafusion", rev = "24483dbeed7811a21480f307efd7becd87ce3111", features = ["core"] }
+datafusion-common = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7", features = ["object_store"] }
+datafusion-datasource = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-datasource-avro = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-datasource-json = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7", default-features = false }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-functions = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7", default-features = false }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-session = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7" }
+datafusion-spark = { git = "https://github.com/apache/datafusion", rev = "da9920649f00f40adba08039d47c0f8371139dd7", features = ["core"] }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.15.0", default-features = false }
-arrow = { version = "=59.1.0", features = ["chrono-tz"] }
-arrow-array = { version = "=59.1.0", features = ["ffi"] }
-arrow-buffer = { version = "=59.1.0" }
-arrow-data = { version = "=59.1.0" }
-arrow-schema = { version = "=59.1.0", features = ["serde"] }
-arrow-flight = { version = "=59.1.0", features = ["flight-sql-experimental"] }
-parquet = { version = "=59.1.0" }
-parquet-variant = { version = "=59.1.0" }
-parquet-variant-compute = { version = "=59.1.0" }
-parquet-variant-json = { version = "=59.1.0" }
+arrow = { version = "=59.2.0", features = ["chrono-tz"] }
+arrow-array = { version = "=59.2.0", features = ["ffi"] }
+arrow-buffer = { version = "=59.2.0" }
+arrow-data = { version = "=59.2.0" }
+arrow-schema = { version = "=59.2.0", features = ["serde"] }
+arrow-flight = { version = "=59.2.0", features = ["flight-sql-experimental"] }
+parquet = { version = "=59.2.0" }
+parquet-variant = { version = "=59.2.0" }
+parquet-variant-compute = { version = "=59.2.0" }
+parquet-variant-json = { version = "=59.2.0" }
 serde_arrow = { version = "0.14.2", features = ["arrow-59"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
