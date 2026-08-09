@@ -523,7 +523,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
     # Spark's `inferTimestamp` uses a lenient timestamp parser that also accepts
     # fractional seconds, a trailing `Z`, timezone offsets, partial time
-    # (no seconds), and time-only values. JVM-verified: all expect TIMESTAMP.
+    # (no seconds), and time-only values. JVM-verified valid forms expect TIMESTAMP;
+    # an invalid timezone keeps the value as STRING.
     Scenario Outline: inferTimestamp lenient parser: <case>
       When query
         """

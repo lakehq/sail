@@ -340,10 +340,10 @@ Feature: datetime edge cases
 
       Examples:
         | case        | expression                                                                                                                                 |
-        | date_format | date_format(timestamp_micros(0), 'yyyy-MM-dd HH:mm:ss')                                                                                 |
-        | CSV writer  | to_csv(named_struct('ts', timestamp_micros(0)), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss'))                                          |
-        | JSON writer | get_json_object(to_json(named_struct('ts', timestamp_micros(0)), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '$.ts')                 |
-        | XML writer  | xpath_string(to_xml(named_struct('ts', timestamp_micros(0)), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '/ROW/ts')                  |
+        | date_format | date_format(to_timestamp('1970-01-01 00:00:00Z'), 'yyyy-MM-dd HH:mm:ss')                                                                |
+        | CSV writer  | to_csv(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss'))                         |
+        | JSON writer | get_json_object(to_json(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '$.ts') |
+        | XML writer  | xpath_string(to_xml(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '/ROW/ts') |
 
   Rule: Local timestamp resolution across time-zone transitions
 
