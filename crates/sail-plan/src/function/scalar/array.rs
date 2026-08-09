@@ -5,7 +5,8 @@ use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, is_null, lit, not, or, when,
+    ExprSchemable, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, cast, expr, is_null, lit, not, or,
+    when,
 };
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
@@ -18,7 +19,7 @@ use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -387,7 +388,19 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         })
         .collect::<PlanResult<Vec<_>>>()?;
 
-    Ok(ScalarUDF::from(udf).call(arguments))
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| {
+            expr::Expr::Lambda(expr::Lambda::new(vec!["_sequence".to_owned()], argument))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(expr::Expr::HigherOrderFunction(
+        expr::HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(udf))),
+            arguments,
+        ),
+    ))
 }
 
 fn array_update_output_type(

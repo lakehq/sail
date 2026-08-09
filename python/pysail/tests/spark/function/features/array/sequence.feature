@@ -212,6 +212,37 @@ Feature: sequence output schema
         | null-step  | NULL      |
         | null-stop  | NULL      |
 
+    Scenario: sequence stops evaluating arguments after a NULL boundary
+      When query
+        """
+        SELECT
+          id,
+          sequence(
+            start,
+            CASE
+              WHEN start IS NULL
+                THEN CAST(raise_error(CAST(id AS STRING)) AS BIGINT)
+              ELSE stop
+            END,
+            CASE
+              WHEN stop IS NULL
+                THEN CAST(raise_error(CAST(id AS STRING)) AS BIGINT)
+              ELSE 1L
+            END
+          ) AS result
+        FROM VALUES
+          (1, CAST(NULL AS BIGINT), 3L),
+          (2, 1L, CAST(NULL AS BIGINT)),
+          (3, 1L, 3L)
+          AS t(id, start, stop)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result    |
+        | 1  | NULL      |
+        | 2  | NULL      |
+        | 3  | [1, 2, 3] |
+
     Scenario Outline: sequence rejects illegal integral boundaries
       When query
         """
