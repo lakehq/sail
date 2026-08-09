@@ -10,7 +10,7 @@ use tonic::codec::CompressionEncoding;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer};
+use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
 use crate::worker::actor::WorkerActor;
 use crate::worker::r#gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;

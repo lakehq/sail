@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use log::{error, info};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
+use crate::driver::actor::extensions::DriverExtensions;
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
-use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
 
 #[tonic::async_trait]
@@ -28,7 +28,7 @@ impl Actor for DriverActor {
         let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
+        let extensions = DriverExtensions::new(&options);
         Self {
             options,
             history_reporter,
@@ -36,7 +36,7 @@ impl Actor for DriverActor {
             job_scheduler,
             task_assigner,
             task_runner: TaskRunner::new(),
-            stream_manager,
+            extensions,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
@@ -86,16 +86,16 @@ impl Actor for DriverActor {
             }
             DriverMessage::CreateLocalStream {
                 key,
-                storage,
+                replicas,
                 schema,
                 result,
-            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
-            DriverMessage::CreateRemoteStream {
+            } => self.handle_create_local_stream(ctx, key, replicas, schema, result),
+            DriverMessage::CreateStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
+            } => self.handle_create_storage_stream(ctx, key, schema, context, result),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
@@ -105,12 +105,12 @@ impl Actor for DriverActor {
                 schema,
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            DriverMessage::FetchRemoteStream {
+            DriverMessage::FetchStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
+            } => self.handle_fetch_storage_stream(ctx, key, schema, context, result),
             DriverMessage::ObserveState { observer } => self.handle_observe_state(ctx, observer),
             DriverMessage::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
@@ -118,7 +118,6 @@ impl Actor for DriverActor {
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         self.job_scheduler.stop();
-        self.stream_manager.stop().await;
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }
