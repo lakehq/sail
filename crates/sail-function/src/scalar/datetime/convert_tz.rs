@@ -1,5 +1,4 @@
-use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone};
-use chrono_tz::GapInfo;
+use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
 use datafusion::arrow::compute::kernels::{cast, take};
 use datafusion::arrow::datatypes::{DataType, Int64Type, TimeUnit};
@@ -8,7 +7,9 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+};
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -169,27 +170,6 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
     microseconds_to_timestamp(results, time_unit)
 }
 
-fn disambiguate_local_datetime(
-    local: NaiveDateTime,
-    timezone: &SparkTimeZone,
-) -> Option<DateTime<SparkTimeZone>> {
-    match local.and_local_timezone(*timezone) {
-        MappedLocalTime::Single(value) => Some(value),
-        MappedLocalTime::Ambiguous(earliest, _latest) => Some(earliest),
-        MappedLocalTime::None => match timezone {
-            SparkTimeZone::Named(named) => GapInfo::new(&local, named).and_then(|gap| {
-                if let (Some((start, _)), Some(end)) = (gap.begin, gap.end) {
-                    end.checked_add_signed(local - start)
-                        .map(|value| value.with_timezone(timezone))
-                } else {
-                    None
-                }
-            }),
-            SparkTimeZone::Fixed(_) => None,
-        },
-    }
-}
-
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(
@@ -198,7 +178,7 @@ fn convert_tz_classic(
     to_zone: &SparkTimeZone,
 ) -> Option<i64> {
     let local = DateTime::from_timestamp_micros(ts_micros)?.naive_utc();
-    let datetime = disambiguate_local_datetime(local, from_zone)?;
+    let datetime = localize_with_fallback(from_zone, &local).ok()?;
     Some(
         datetime
             .with_timezone(to_zone)
@@ -216,7 +196,7 @@ fn convert_tz_non_classic(
     to_zone: &SparkTimeZone,
 ) -> Option<i64> {
     let local = to_zone.timestamp_micros(ts_micros).single()?.naive_local();
-    let datetime = disambiguate_local_datetime(local, from_zone)?;
+    let datetime = localize_with_fallback(from_zone, &local).ok()?;
     Some(datetime.timestamp_micros())
 }
 

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
@@ -13,7 +12,7 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME,
 };
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
@@ -895,9 +894,7 @@ fn parsed_timestamp_to_micros(
     }
 
     let timezone_name = parsed.timezone.as_deref().unwrap_or(session_timezone);
-    let timezone: Tz = timezone_name.parse().map_err(|e| {
-        DataFusionError::Execution(format!("Invalid timezone '{timezone_name}': {e}"))
-    })?;
+    let timezone = parse_spark_timezone(timezone_name)?;
     Ok(localize_with_fallback(&timezone, &parsed.datetime)?.timestamp_micros())
 }
 

@@ -110,11 +110,8 @@ fn sail_literal_from_str(
     value: &str,
     data_type: &crate::spec::types::Type,
 ) -> Result<sail_spec::Literal, String> {
-    use std::str::FromStr;
-
     use chrono::{NaiveDate, NaiveTime, Timelike};
-    use datafusion::arrow::array::timezone::Tz;
-    use sail_common_datafusion::utils::datetime::localize_with_fallback;
+    use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
     use sail_sql_analyzer::expression::from_ast_expression;
     use sail_sql_analyzer::literal::numeric::{
         parse_decimal_128_string, parse_f32_string, parse_f64_string, parse_i32_string,
@@ -211,7 +208,7 @@ fn sail_literal_from_str(
             let timestamp = if timezone.is_empty() {
                 timestamp.and_utc()
             } else {
-                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                let timezone = parse_spark_timezone(timezone).map_err(parse_error)?;
                 localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
             };
             Ok(sail_spec::Literal::TimestampMicrosecond {
@@ -242,7 +239,7 @@ fn sail_literal_from_str(
             let timestamp = if timezone.is_empty() {
                 timestamp.and_utc()
             } else {
-                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                let timezone = parse_spark_timezone(timezone).map_err(parse_error)?;
                 localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
             };
             Ok(sail_spec::Literal::TimestampNanosecond {
@@ -934,6 +931,22 @@ mod tests {
             Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
         );
         assert!(Literal::try_from_str("not_bool", &data_type).is_err());
+    }
+
+    #[test]
+    fn test_timestamp_with_timezone_defaults_accept_second_precision_offsets() {
+        for (data_type, expected) in [
+            (PrimitiveType::Timestamptz, -3_723_000_000),
+            (PrimitiveType::TimestamptzNs, -3_723_000_000_000),
+        ] {
+            assert_eq!(
+                Literal::try_from_str(
+                    "1970-01-01T00:00:00+01:02:03",
+                    &Type::Primitive(data_type),
+                ),
+                Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(expected))))
+            );
+        }
     }
 
     #[test]

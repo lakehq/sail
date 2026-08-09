@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
@@ -15,7 +14,7 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME,
 };
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 use serde_json::Value;
@@ -959,9 +958,7 @@ fn parse_timestamp(
             .map(|x| x.to_utc())
             .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
     } else {
-        let tz: Tz = timezone.as_ref().parse().map_err(|e| {
-            DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}"))
-        })?;
+        let tz = parse_spark_timezone(timezone.as_ref())?;
         localize_with_fallback(&tz, &parsed.datetime)?
     };
 

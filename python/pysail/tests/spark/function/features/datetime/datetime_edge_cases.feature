@@ -308,3 +308,54 @@ Feature: datetime edge cases
         | +8        | -28800000000 |
         | GMT+8:30  | -30600000000 |
         | +01:02:03 | -3723000000  |
+
+    Scenario Outline: timestamp reader accepts a Spark-only time zone ID: <case>
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT unix_micros(
+          <function>(<input>, 'ts TIMESTAMP', <options>).ts
+        ) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case              | function  | input                                         | options                                       | result       |
+        | CSV option zone   | from_csv  | '1970-01-01 00:00:00'                        | map('timeZone', 'GMT+8:30')                   | -30600000000 |
+        | CSV session zone  | from_csv  | '1970-01-01 00:00:00'                        | map('timestampFormat', 'yyyy-MM-dd HH:mm:ss') | -3723000000  |
+        | JSON session zone | from_json | '{"ts":"1970-01-01 00:00:00"}'               | map('timestampFormat', 'yyyy-MM-dd HH:mm:ss') | -3723000000  |
+        | XML session zone  | from_xml  | '<p><ts>1970-01-01 00:00:00</ts></p>'        | map('timestampFormat', 'yyyy-MM-dd HH:mm:ss') | -3723000000  |
+
+  Rule: Local timestamp resolution across time-zone transitions
+
+    Scenario Outline: nonexistent local timestamp moves forward: <case>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          CAST(to_timestamp('<input>') AS STRING) AS rendered,
+          unix_micros(to_timestamp('<input>')) AS micros
+        """
+      Then query result
+        | rendered   | micros   |
+        | <rendered> | <micros> |
+
+      Examples:
+        | case                    | zone                | input               | rendered            | micros           |
+        | 30-minute gap           | Australia/Lord_Howe | 2024-10-06 02:15:00 | 2024-10-06 02:45:00 | 1728143100000000 |
+        | 44-minute-30-second gap | Africa/Monrovia     | 1972-01-07 00:15:00 | 1972-01-07 00:59:30 | 63593970000000   |
+        | full skipped local date | Pacific/Apia        | 2011-12-30 12:00:00 | 2011-12-31 12:00:00 | 1325282400000000 |
+
+    Scenario: an ambiguous local timestamp uses the earlier offset
+      Given config spark.sql.session.timeZone = Australia/Lord_Howe
+      When query
+        """
+        SELECT
+          CAST(to_timestamp('2024-04-07 01:45:00') AS STRING) AS rendered,
+          unix_micros(to_timestamp('2024-04-07 01:45:00')) AS micros
+        """
+      Then query result
+        | rendered            | micros           |
+        | 2024-04-07 01:45:00 | 1712414700000000 |

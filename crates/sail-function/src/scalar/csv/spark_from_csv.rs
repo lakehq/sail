@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
@@ -14,7 +13,7 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME,
 };
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 
@@ -413,16 +412,11 @@ fn parse_timestamp(
             .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
     } else if let Some(ref tz_str) = options.timezone {
         // Use user-provided timezone from options
-        let tz: Tz = tz_str
-            .parse()
-            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}")))?;
+        let tz = parse_spark_timezone(tz_str)?;
         localize_with_fallback(&tz, &naive_datetime)?
     } else if let Some(tz) = timezone.as_ref() {
         // Use timezone from the schema (session timezone)
-        let tz: Tz = tz
-            .as_ref()
-            .parse()
-            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz}': {e}")))?;
+        let tz = parse_spark_timezone(tz.as_ref())?;
         localize_with_fallback(&tz, &naive_datetime)?
     } else {
         // No timezone, treat as UTC
