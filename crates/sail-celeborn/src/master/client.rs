@@ -10,7 +10,7 @@ use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::MessageType;
 use crate::protocol::proto::{
     PbRegisterApplicationInfo, PbRequestSlots, PbRequestSlotsResponse, PbUnregisterShuffle,
-    PbUnregisterShuffleResponse, PbUserIdentifier,
+    PbUnregisterShuffleResponse,
 };
 use crate::protocol::transport::{
     NATIVE_TRANSPORT_MARKER, RPC_FAILURE, RPC_HEADER_LENGTH, RPC_REQUEST, RPC_RESPONSE,
@@ -18,6 +18,8 @@ use crate::protocol::transport::{
 };
 
 const MASTER_ENDPOINT_NAME: &str = "MasterEndpoint";
+
+use super::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 
 /// The master endpoint and timeout used by a [`MasterClient`].
 #[derive(Debug, Clone)]
@@ -37,13 +39,6 @@ impl MasterClientOptions {
     }
 }
 
-/// Slots reserved by the Celeborn master for a shuffle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotReservation {
-    /// Celeborn worker unique IDs that received slots.
-    pub worker_ids: Vec<String>,
-}
-
 /// A small async client for Celeborn's Netty master RPC protocol.
 ///
 /// Each request uses an independent TCP connection. This keeps the client stateless and makes it
@@ -61,11 +56,11 @@ impl MasterClient {
     pub async fn register_application(
         &self,
         application_id: String,
-        user_identifier: PbUserIdentifier,
+        user_identifier: UserIdentifier,
     ) -> CelebornResult<()> {
         let request = PbRegisterApplicationInfo {
             app_id: application_id,
-            user_identifier: Some(user_identifier),
+            user_identifier: Some(user_identifier.into()),
             extra_info: HashMap::new(),
             request_id: request_id(),
         };
@@ -93,7 +88,7 @@ impl MasterClient {
         hostname: String,
         should_replicate: bool,
         max_workers: i32,
-        user_identifier: PbUserIdentifier,
+        user_identifier: UserIdentifier,
     ) -> CelebornResult<SlotReservation> {
         let request = PbRequestSlots {
             application_id,
@@ -103,12 +98,13 @@ impl MasterClient {
             should_replicate,
             request_id: request_id(),
             storage_type: 0,
-            user_identifier: Some(user_identifier),
+            user_identifier: Some(user_identifier.into()),
             should_rack_aware: false,
             max_workers,
             available_storage_types: 0,
             excluded_worker_set: Vec::new(),
-            packed: true,
+            // Keep locations unpacked so the native client can address the selected worker.
+            packed: false,
             tags_expr: String::new(),
         };
         let response = self
@@ -127,13 +123,40 @@ impl MasterClient {
                 status: response.status,
             });
         }
-        let mut worker_ids = response
-            .packed_worker_resource
-            .into_keys()
-            .chain(response.worker_resource.into_keys())
-            .collect::<Vec<_>>();
+        let mut worker_ids = response.worker_resource.keys().cloned().collect::<Vec<_>>();
         worker_ids.sort();
-        Ok(SlotReservation { worker_ids })
+        let mut primary_locations = std::collections::HashMap::new();
+        let mut worker_locations = std::collections::HashMap::new();
+        for (worker_id, resource) in response.worker_resource {
+            let primary = resource
+                .primary_partitions
+                .into_iter()
+                .map(PartitionLocation::try_from)
+                .collect::<CelebornResult<Vec<_>>>()?;
+            let replica = resource
+                .replica_partitions
+                .into_iter()
+                .map(PartitionLocation::try_from)
+                .collect::<CelebornResult<Vec<_>>>()?;
+            primary_locations.extend(
+                primary
+                    .iter()
+                    .cloned()
+                    .map(|location| (location.id, location)),
+            );
+            worker_locations.insert(
+                worker_id,
+                WorkerSlotLocations {
+                    primary_locations: primary,
+                    replica_locations: replica,
+                },
+            );
+        }
+        Ok(SlotReservation {
+            worker_ids,
+            primary_locations,
+            worker_locations,
+        })
     }
 
     pub async fn unregister_shuffle(
@@ -170,10 +193,20 @@ impl MasterClient {
         message_type: i32,
         payload: Vec<u8>,
     ) -> CelebornResult<TransportResponse> {
+        self.request_endpoint(MASTER_ENDPOINT_NAME, message_type, payload)
+            .await
+    }
+
+    pub(crate) async fn request_endpoint(
+        &self,
+        endpoint: &str,
+        message_type: i32,
+        payload: Vec<u8>,
+    ) -> CelebornResult<TransportResponse> {
         tokio::time::timeout(self.options.timeout, async {
             let mut stream = TcpStream::connect((&*self.options.host, self.options.port)).await?;
             let request_id = 0_i64;
-            let payload = self.rpc_envelope(message_type, payload)?;
+            let payload = self.rpc_envelope(endpoint, message_type, payload)?;
             let body_length = i32::try_from(payload.len())
                 .map_err(|_| CelebornError::Protocol("request body is too large".to_string()))?;
 
@@ -245,9 +278,14 @@ impl MasterClient {
         .map_err(|_| CelebornError::Timeout)?
     }
 
-    fn rpc_envelope(&self, message_type: i32, payload: Vec<u8>) -> CelebornResult<Vec<u8>> {
+    fn rpc_envelope(
+        &self,
+        endpoint: &str,
+        message_type: i32,
+        payload: Vec<u8>,
+    ) -> CelebornResult<Vec<u8>> {
         let host = self.options.host.as_bytes();
-        let endpoint = MASTER_ENDPOINT_NAME.as_bytes();
+        let endpoint = endpoint.as_bytes();
         let host_length = u16::try_from(host.len())
             .map_err(|_| CelebornError::Protocol("master host is too long".to_string()))?;
         let endpoint_length = u16::try_from(endpoint.len())

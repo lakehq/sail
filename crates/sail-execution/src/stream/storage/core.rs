@@ -17,22 +17,23 @@ use url::Url;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey};
 use crate::shuffle::ShuffleCompression;
-use crate::stream::error::{TaskStreamError, TaskStreamResult};
+use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
 
 /// Object-storage implementation for a blocking shuffle stream. Every task attempt owns a
 /// directory, allowing retries to be selected by the task scheduler without overwriting an
 /// earlier attempt.
-pub(super) struct RemoteStreamManager {
+#[derive(Clone)]
+pub(crate) struct StorageStreamManager {
     path: Option<String>,
     session_id: String,
     max_file_size: usize,
     compression: ShuffleCompression,
 }
 
-impl RemoteStreamManager {
-    pub(super) fn new(
+impl StorageStreamManager {
+    pub(crate) fn new(
         path: Option<String>,
         session_id: String,
         max_file_size: usize,
@@ -46,12 +47,12 @@ impl RemoteStreamManager {
         }
     }
 
-    pub(super) fn create_stream(
+    pub(crate) fn create_stream(
         &self,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: &TaskContext,
-    ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         if self.max_file_size == 0 {
             return Err(ExecutionError::InvalidArgument(
                 "cluster.shuffle_backend.storage.max_file_size must be greater than zero"
@@ -66,7 +67,7 @@ impl RemoteStreamManager {
                 ShuffleCompression::Zstd => Some(CompressionType::ZSTD),
             })
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Box::new(RemoteStreamSink::new(
+        Ok(Box::new(StorageStreamSink::new(
             store,
             prefix,
             schema,
@@ -75,7 +76,7 @@ impl RemoteStreamManager {
         )?))
     }
 
-    pub(super) fn fetch_stream(
+    pub(crate) fn fetch_stream(
         &self,
         key: TaskStreamKey,
         _schema: SchemaRef,
@@ -98,7 +99,7 @@ impl RemoteStreamManager {
         .flat_map(move |result| -> TaskStreamSource {
             match result {
                 Ok(locations) => Box::pin(futures::stream::try_unfold(
-                    RemoteReadState {
+                    StorageReadState {
                         store: Arc::clone(&store),
                         locations: locations.into_iter(),
                         reader: None,
@@ -137,7 +138,7 @@ impl RemoteStreamManager {
         Ok(Box::pin(output))
     }
 
-    pub(super) async fn remove_streams(
+    pub(crate) async fn remove_streams(
         &self,
         job_id: JobId,
         stage: Option<usize>,
@@ -200,16 +201,16 @@ impl RemoteStreamManager {
     }
 }
 
-struct RemoteReadState {
+struct StorageReadState {
     store: Arc<dyn ObjectStore>,
     locations: std::vec::IntoIter<Path>,
-    reader: Option<RemoteBatchReader>,
+    reader: Option<StorageBatchReader>,
 }
 
-type RemoteBatchReader =
+type StorageBatchReader =
     Box<dyn Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send>;
 
-struct RemoteStreamSink {
+struct StorageStreamSink {
     store: Arc<dyn ObjectStore>,
     prefix: Path,
     schema: SchemaRef,
@@ -220,7 +221,7 @@ struct RemoteStreamSink {
     has_batches: bool,
 }
 
-impl RemoteStreamSink {
+impl StorageStreamSink {
     fn new(
         store: Arc<dyn ObjectStore>,
         prefix: Path,
@@ -253,7 +254,7 @@ impl RemoteStreamSink {
             return Ok(());
         }
         let mut writer = self.writer.take().ok_or_else(|| {
-            DataFusionError::Internal("remote shuffle writer is not present".to_string())
+            DataFusionError::Internal("storage shuffle writer is not present".to_string())
         })?;
         writer
             .finish()
@@ -277,17 +278,11 @@ impl RemoteStreamSink {
 }
 
 #[tonic::async_trait]
-impl TaskStreamSink for RemoteStreamSink {
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState {
-        let batch = match batch {
-            Ok(batch) => batch,
-            Err(error) => {
-                return TaskStreamSinkState::Error(DataFusionError::External(Box::new(error)));
-            }
-        };
+impl TaskStreamChannelSink for StorageStreamSink {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
         let result = (|| -> Result<bool> {
             let writer = self.writer.as_mut().ok_or_else(|| {
-                DataFusionError::Internal("remote shuffle writer is not present".to_string())
+                DataFusionError::Internal("storage shuffle writer is not present".to_string())
             })?;
             writer
                 .write(&batch)
@@ -295,18 +290,28 @@ impl TaskStreamSink for RemoteStreamSink {
             self.has_batches = true;
             Ok(writer.get_ref().len() >= self.max_file_size)
         })();
-        match result {
-            Ok(true) => match self.flush_file().await {
-                Ok(()) => TaskStreamSinkState::Ok,
-                Err(e) => TaskStreamSinkState::Error(e),
-            },
-            Ok(false) => TaskStreamSinkState::Ok,
-            Err(e) => TaskStreamSinkState::Error(e),
+        if result? {
+            self.flush_file().await?;
         }
+        Ok(TaskStreamWriteState::Active)
     }
 
-    async fn close(mut self: Box<Self>) -> Result<()> {
+    async fn commit(mut self: Box<Self>) -> Result<()> {
         self.flush_file().await
+    }
+
+    async fn abort(self: Box<Self>) -> Result<()> {
+        let locations = self
+            .store
+            .list(Some(&self.prefix))
+            .map_ok(|meta| meta.location)
+            .boxed();
+        self.store
+            .delete_stream(locations)
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(())
     }
 }
 
@@ -369,7 +374,7 @@ mod tests {
     #[test]
     fn missing_storage_path_is_invalid() {
         let manager =
-            RemoteStreamManager::new(None, "session-1".to_string(), 1, ShuffleCompression::None);
+            StorageStreamManager::new(None, "session-1".to_string(), 1, ShuffleCompression::None);
         let key = TaskStreamKey {
             job_id: JobId::from(1),
             stage: 2,

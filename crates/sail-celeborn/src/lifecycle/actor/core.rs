@@ -2,13 +2,12 @@ use log::warn;
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::lifecycle::actor::{ApplicationRegistration, LifecycleManagerActor};
-use crate::lifecycle::event::LifecycleManagerEvent;
-use crate::lifecycle::options::LifecycleManagerOptions;
+use crate::lifecycle::{LifecycleManagerMessage, LifecycleManagerOptions};
 use crate::master::MasterClient;
 
 #[tonic::async_trait]
 impl Actor for LifecycleManagerActor {
-    type Message = LifecycleManagerEvent;
+    type Message = LifecycleManagerMessage;
     type Options = LifecycleManagerOptions;
 
     fn name() -> &'static str {
@@ -21,6 +20,9 @@ impl Actor for LifecycleManagerActor {
             options,
             client,
             registered_shuffles: Default::default(),
+            mapper_attempts: Default::default(),
+            committing_shuffles: Default::default(),
+            committed_shuffles: Default::default(),
             application_registration: ApplicationRegistration::Pending,
         }
     }
@@ -42,7 +44,7 @@ impl Actor for LifecycleManagerActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            LifecycleManagerEvent::RequestSlotsBegin {
+            LifecycleManagerMessage::RequestSlotsBegin {
                 shuffle_id,
                 partition_ids,
                 should_replicate,
@@ -56,20 +58,39 @@ impl Actor for LifecycleManagerActor {
                 max_workers,
                 result,
             ),
-            LifecycleManagerEvent::RequestSlotsEnd {
+            LifecycleManagerMessage::RequestSlotsEnd {
                 shuffle_id,
                 result,
                 reply,
             } => self.handle_request_slots_end(shuffle_id, result, reply),
-            LifecycleManagerEvent::UnregisterShuffleBegin { shuffle_id, result } => {
+            LifecycleManagerMessage::MapperEndBegin {
+                shuffle_id,
+                map_id,
+                attempt_id,
+                num_mappers,
+                result,
+            } => self.handle_mapper_end_begin(
+                ctx,
+                shuffle_id,
+                map_id,
+                attempt_id,
+                num_mappers,
+                result,
+            ),
+            LifecycleManagerMessage::MapperEndCommitEnd {
+                shuffle_id,
+                result,
+                reply,
+            } => self.handle_mapper_end_commit_end(shuffle_id, result, reply),
+            LifecycleManagerMessage::UnregisterShuffleBegin { shuffle_id, result } => {
                 self.handle_unregister_shuffle_begin(ctx, shuffle_id, result)
             }
-            LifecycleManagerEvent::UnregisterShuffleEnd {
+            LifecycleManagerMessage::UnregisterShuffleEnd {
                 shuffle_id,
                 result,
                 reply,
             } => self.handle_unregister_shuffle_end(shuffle_id, result, reply),
-            LifecycleManagerEvent::Stop { result } => {
+            LifecycleManagerMessage::Stop { result } => {
                 // TODO: unregister shuffles before stopping to release slots early
                 let _ = result.send(());
                 ActorAction::Stop

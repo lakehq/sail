@@ -9,14 +9,13 @@ use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::stream::writer::TaskStreamChannelSink;
 use crate::task::definition::TaskDefinition;
-use crate::worker::WorkerEvent;
 use crate::worker::actor::WorkerActor;
-use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
+use crate::worker::{WorkerLocation, WorkerMessage, WorkerStreamOwner};
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -54,11 +53,11 @@ impl WorkerActor {
                 .await
             {
                 error!("failed to register worker with retries: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
-            if let Err(e) = handle.send(WorkerEvent::StartHeartbeat).await {
+            if let Err(e) = handle.send(WorkerMessage::StartHeartbeat).await {
                 error!("failed to start worker heartbeat: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
         });
         ActorAction::Continue
@@ -160,7 +159,7 @@ impl WorkerActor {
                 // missing worker heartbeats and mark all the task attempts
                 // on this worker as failed.
                 error!("failed to report task status with retries: {e}");
-                let _ = handle.send(WorkerEvent::Shutdown).await;
+                let _ = handle.send(WorkerMessage::Shutdown).await;
             }
         });
         ActorAction::Continue
@@ -171,7 +170,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
     ) -> ActorAction {
-        self.stream_manager.fail_local_stream_if_pending(&key);
+        self.extensions.local_streams.fail_stream_if_pending(&key);
         ActorAction::Continue
     }
 
@@ -179,29 +178,37 @@ impl WorkerActor {
         &mut self,
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
         let _ = result.send(
-            self.stream_manager
-                .create_local_stream(key, storage, schema),
+            self.extensions
+                .local_streams
+                .create_stream(key, replicas, schema),
         );
         ActorAction::Continue
     }
 
-    pub(super) fn handle_create_remote_stream(
+    pub(super) fn handle_create_storage_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .create_remote_stream(key, schema, &context),
-        );
+        let output = self
+            .extensions
+            .storage_streams
+            .as_ref()
+            .ok_or_else(|| {
+                ExecutionError::InternalError(
+                    "storage stream requested without a storage shuffle backend".to_string(),
+                )
+            })
+            .and_then(|streams| streams.create_stream(key, schema, &context));
+        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -229,13 +236,13 @@ impl WorkerActor {
     ) -> ActorAction {
         match owner {
             WorkerStreamOwner::This => {
-                let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
+                let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
             }
             WorkerStreamOwner::Worker {
                 worker_id,
                 schema: _,
             } if worker_id == self.options.worker_id => {
-                let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
+                let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
             }
             WorkerStreamOwner::Worker { worker_id, schema } => {
                 let client = match self.peer_tracker.get_client_set(worker_id) {
@@ -254,18 +261,25 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_remote_stream(
+    pub(super) fn handle_fetch_storage_stream(
         &mut self,
-        ctx: &mut ActorContext<Self>,
+        _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .fetch_remote_stream(ctx, &key, schema, &context),
-        );
+        let output = self
+            .extensions
+            .storage_streams
+            .as_ref()
+            .ok_or_else(|| {
+                ExecutionError::InternalError(
+                    "storage stream requested without a storage shuffle backend".to_string(),
+                )
+            })
+            .and_then(|streams| streams.fetch_stream(key, schema, &context));
+        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -275,7 +289,7 @@ impl WorkerActor {
         job_id: JobId,
         stage: Option<usize>,
     ) -> ActorAction {
-        self.stream_manager.remove_local_streams(job_id, stage);
+        self.extensions.local_streams.remove_streams(job_id, stage);
         ActorAction::Continue
     }
 }

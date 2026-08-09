@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_inner_product"
+        "success": "ok"
       }
     },
     {

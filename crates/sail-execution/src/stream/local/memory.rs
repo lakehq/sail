@@ -9,12 +9,7 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::stream::error::TaskStreamResult;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
-
-pub trait LocalStream: Send {
-    fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamSink>>;
-    fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource>;
-}
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
 
 /// A memory stream that can be read multiple times.
 /// It maintains multiple replicas of the stream internally.
@@ -47,17 +42,15 @@ impl MemoryStream {
             receivers,
         }
     }
-}
 
-impl LocalStream for MemoryStream {
-    fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamSink>> {
+    pub(crate) fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         let sender = self.sender.take().ok_or_else(|| {
             ExecutionError::InternalError("memory stream can only be written once".to_string())
         })?;
         Ok(Box::new(sender))
     }
 
-    fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
+    pub(crate) fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
         let rx = self.receivers.pop().ok_or_else(|| {
             ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
         })?;
@@ -75,8 +68,8 @@ struct MemoryStreamReplicaSender {
 }
 
 #[tonic::async_trait]
-impl TaskStreamSink for MemoryStreamReplicaSender {
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState {
+impl TaskStreamChannelSink for MemoryStreamReplicaSender {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
         let mut active = false;
         for (i, sender) in self.senders.iter_mut().enumerate() {
             if sender.is_none() {
@@ -115,7 +108,7 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
 
             if let Some(tx) = sender.as_ref() {
                 if overflow.is_empty() {
-                    match tx.try_send(batch.clone()) {
+                    match tx.try_send(Ok(batch.clone())) {
                         Ok(_) => {}
                         Err(mpsc::error::TrySendError::Full(x)) => {
                             overflow.push_back(x);
@@ -125,7 +118,7 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
                         }
                     }
                 } else {
-                    overflow.push_back(batch.clone());
+                    overflow.push_back(Ok(batch.clone()));
                 }
             }
 
@@ -137,14 +130,14 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
                 active = true;
             }
         }
-        if active {
-            TaskStreamSinkState::Ok
+        Ok(if active {
+            TaskStreamWriteState::Active
         } else {
-            TaskStreamSinkState::Closed
-        }
+            TaskStreamWriteState::Closed
+        })
     }
 
-    async fn close(mut self: Box<Self>) -> Result<()> {
+    async fn commit(mut self: Box<Self>) -> Result<()> {
         for (i, sender) in self.senders.iter_mut().enumerate() {
             if sender.is_none() {
                 continue;
@@ -168,6 +161,10 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
                 overflow.clear();
             }
         }
+        Ok(())
+    }
+
+    async fn abort(self: Box<Self>) -> Result<()> {
         Ok(())
     }
 }

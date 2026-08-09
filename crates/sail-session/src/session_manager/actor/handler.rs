@@ -24,8 +24,8 @@ use tokio::time::Instant;
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::actor::SessionManagerActor;
-use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
+use crate::session_manager::{SessionHistory, SessionManagerMessage};
 
 struct SessionJobRunnerHistoryReporter {
     session_id: String,
@@ -37,7 +37,7 @@ impl JobRunnerHistoryReporter for SessionJobRunnerHistoryReporter {
     async fn report(self: Box<Self>, history: JobRunnerHistory) {
         let _ = self
             .session_manager
-            .send(SessionManagerEvent::SetSessionHistory {
+            .send(SessionManagerMessage::SetSessionHistory {
                 session_id: self.session_id,
                 history: SessionHistory {
                     job_runner: history,
@@ -186,7 +186,7 @@ impl SessionManagerActor {
                 .and_then(|tracker| tracker.track_activity())
         {
             ctx.send_with_delay(
-                SessionManagerEvent::ProbeIdleSession {
+                SessionManagerMessage::ProbeIdleSession {
                     session_id,
                     instant: active_at,
                 },

@@ -1,172 +1,108 @@
 use std::borrow::Cow;
-use std::fmt;
-use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::execution::TaskContext;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::system::observable::JobRunnerObserver;
 use tokio::sync::oneshot;
-use tokio::time::Instant;
 
-use crate::driver::r#gen;
-use crate::error::ExecutionResult;
+use crate::driver::TaskStatus;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::stream::writer::TaskStreamChannelSink;
+use crate::task::definition::TaskDefinition;
+use crate::worker::r#gen;
 
-pub enum DriverEvent {
-    Activate,
-    RegisterWorker {
-        worker_id: WorkerId,
-        host: String,
+pub enum WorkerMessage {
+    ServerReady {
+        /// The local port that the worker server listens on.
+        /// This may be different from the port accessible from other nodes.
         port: u16,
-        result: oneshot::Sender<ExecutionResult<()>>,
+        signal: oneshot::Sender<()>,
     },
-    WorkerHeartbeat {
-        worker_id: WorkerId,
-    },
-    WorkerKnownPeers {
-        worker_id: WorkerId,
+    StartHeartbeat,
+    ReportKnownPeers {
         peer_worker_ids: Vec<WorkerId>,
     },
-    ProbePendingWorker {
-        worker_id: WorkerId,
+    RunTask {
+        key: TaskKey,
+        definition: TaskDefinition,
+        peers: Vec<WorkerLocation>,
     },
-    ProbeIdleWorker {
-        worker_id: WorkerId,
-        instant: Instant,
+    StopTask {
+        key: TaskKey,
     },
-    ProbeLostWorker {
-        worker_id: WorkerId,
-        instant: Instant,
-    },
-    ExecuteJob {
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
-    },
-    CleanUpJob {
-        job_id: JobId,
-    },
-    UpdateTask {
+    ReportTaskStatus {
         key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
-        /// The sequence number from the worker,
-        /// or [None] if it is a forced update within the driver.
-        sequence: Option<u64>,
-    },
-    ProbePendingTask {
-        key: TaskKey,
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
     },
     CreateLocalStream {
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
-    CreateRemoteStream {
+    CreateStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    },
-    FetchWorkerStream {
-        worker_id: WorkerId,
-        key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchRemoteStream {
+    FetchWorkerStream {
+        owner: WorkerStreamOwner,
+        key: TaskStreamKey,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    FetchStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    ObserveState {
-        observer: JobRunnerObserver,
+    CleanUpJob {
+        job_id: JobId,
+        stage: Option<usize>,
     },
-    Shutdown {
-        result: Option<oneshot::Sender<()>>,
+    Shutdown,
+}
+
+pub enum WorkerStreamOwner {
+    This,
+    Worker {
+        worker_id: WorkerId,
+        schema: SchemaRef,
     },
 }
 
-/// The observed task status that drives the task state transition.
-#[derive(Debug, Clone, Copy)]
-pub enum TaskStatus {
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-}
-
-impl fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            TaskStatus::Running => write!(f, "RUNNING"),
-            TaskStatus::Succeeded => write!(f, "SUCCEEDED"),
-            TaskStatus::Failed => write!(f, "FAILED"),
-            TaskStatus::Canceled => write!(f, "CANCELED"),
-        }
-    }
-}
-
-impl From<r#gen::TaskStatus> for TaskStatus {
-    fn from(value: r#gen::TaskStatus) -> Self {
-        match value {
-            r#gen::TaskStatus::Running => Self::Running,
-            r#gen::TaskStatus::Succeeded => Self::Succeeded,
-            r#gen::TaskStatus::Failed => Self::Failed,
-            r#gen::TaskStatus::Canceled => Self::Canceled,
-        }
-    }
-}
-
-impl From<TaskStatus> for r#gen::TaskStatus {
-    fn from(value: TaskStatus) -> Self {
-        match value {
-            TaskStatus::Running => r#gen::TaskStatus::Running,
-            TaskStatus::Succeeded => r#gen::TaskStatus::Succeeded,
-            TaskStatus::Failed => r#gen::TaskStatus::Failed,
-            TaskStatus::Canceled => r#gen::TaskStatus::Canceled,
-        }
-    }
-}
-
-impl SpanAssociation for DriverEvent {
+impl SpanAssociation for WorkerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            DriverEvent::Activate => "Activate",
-            DriverEvent::RegisterWorker { .. } => "RegisterWorker",
-            DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
-            DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
-            DriverEvent::ProbePendingWorker { .. } => "ProbePendingWorker",
-            DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
-            DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
-            DriverEvent::ExecuteJob { .. } => "ExecuteJob",
-            DriverEvent::CleanUpJob { .. } => "CleanUpJob",
-            DriverEvent::UpdateTask { .. } => "UpdateTask",
-            DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
-            DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
-            DriverEvent::CreateLocalStream { .. } => "CreateLocalStream",
-            DriverEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
-            DriverEvent::FetchDriverStream { .. } => "FetchDriverStream",
-            DriverEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
-            DriverEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            DriverEvent::ObserveState { .. } => "ObserveState",
-            DriverEvent::Shutdown { .. } => "Shutdown",
+            WorkerMessage::ServerReady { .. } => "ServerReady",
+            WorkerMessage::StartHeartbeat => "StartHeartbeat",
+            WorkerMessage::ReportKnownPeers { .. } => "ReportKnownPeers",
+            WorkerMessage::RunTask { .. } => "RunTask",
+            WorkerMessage::StopTask { .. } => "StopTask",
+            WorkerMessage::ReportTaskStatus { .. } => "ReportTaskStatus",
+            WorkerMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
+            WorkerMessage::CreateLocalStream { .. } => "CreateLocalStream",
+            WorkerMessage::CreateStorageStream { .. } => "CreateStorageStream",
+            WorkerMessage::FetchDriverStream { .. } => "FetchDriverStream",
+            WorkerMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            WorkerMessage::FetchStorageStream { .. } => "FetchStorageStream",
+            WorkerMessage::CleanUpJob { .. } => "CleanUpJob",
+            WorkerMessage::Shutdown => "Shutdown",
         };
         name.into()
     }
@@ -174,42 +110,42 @@ impl SpanAssociation for DriverEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            DriverEvent::Activate => {}
-            DriverEvent::RegisterWorker {
-                worker_id,
-                host,
-                port,
-                result: _,
-            } => {
-                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_WORKER_HOST, host.clone()));
+            WorkerMessage::ServerReady { port, signal: _ } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
-            DriverEvent::WorkerHeartbeat { worker_id }
-            | DriverEvent::WorkerKnownPeers {
-                worker_id,
-                peer_worker_ids: _,
-            }
-            | DriverEvent::ProbePendingWorker { worker_id }
-            | DriverEvent::ProbeIdleWorker {
-                worker_id,
-                instant: _,
-            }
-            | DriverEvent::ProbeLostWorker {
-                worker_id,
-                instant: _,
+            WorkerMessage::StartHeartbeat => {}
+            WorkerMessage::ReportKnownPeers { peer_worker_ids: _ } => {}
+            WorkerMessage::RunTask {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+                definition: _,
+                peers: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-            }
-            DriverEvent::ExecuteJob {
-                plan: _,
-                context: _,
-                result: _,
-            } => {}
-            DriverEvent::CleanUpJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            DriverEvent::UpdateTask {
+            WorkerMessage::StopTask {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
+            WorkerMessage::ReportTaskStatus {
                 key:
                     TaskKey {
                         job_id,
@@ -220,15 +156,14 @@ impl SpanAssociation for DriverEvent {
                 status,
                 message,
                 cause,
-                sequence: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_TASK_STATUS, status.to_string()));
-                if let Some(message) = message {
-                    p.push((SpanAttribute::EXECUTION_TASK_MESSAGE, message.clone()));
+                if let Some(msg) = message {
+                    p.push((SpanAttribute::EXECUTION_TASK_MESSAGE, msg.clone()));
                 }
                 if let Some(cause) = cause {
                     p.push((
@@ -237,21 +172,7 @@ impl SpanAssociation for DriverEvent {
                     ));
                 }
             }
-            DriverEvent::ProbePendingTask {
-                key:
-                    TaskKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                    },
-            } => {
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-            }
-            DriverEvent::ProbePendingLocalStream {
+            WorkerMessage::ProbePendingLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -267,7 +188,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::CreateLocalStream {
+            WorkerMessage::CreateLocalStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -276,7 +197,7 @@ impl SpanAssociation for DriverEvent {
                         attempt,
                         channel,
                     },
-                storage,
+                replicas: _,
                 schema: _,
                 result: _,
             } => {
@@ -285,12 +206,8 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-                p.push((
-                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
-                    storage.to_string(),
-                ));
             }
-            DriverEvent::CreateRemoteStream {
+            WorkerMessage::CreateStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -309,25 +226,7 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::FetchDriverStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
-                result: _,
-            } => {
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-            }
-            DriverEvent::FetchWorkerStream {
-                worker_id,
+            WorkerMessage::FetchDriverStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -339,14 +238,34 @@ impl SpanAssociation for DriverEvent {
                 schema: _,
                 result: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::FetchRemoteStream {
+            WorkerMessage::FetchWorkerStream {
+                owner,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                result: _,
+            } => {
+                if let WorkerStreamOwner::Worker { worker_id, .. } = owner {
+                    p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                }
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            WorkerMessage::FetchStorageStream {
                 key:
                     TaskStreamKey {
                         job_id,
@@ -365,9 +284,45 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverEvent::ObserveState { observer: _ } => {}
-            DriverEvent::Shutdown { .. } => {}
+            WorkerMessage::CleanUpJob { job_id, stage } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                if let Some(stage) = stage {
+                    p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                }
+            }
+            WorkerMessage::Shutdown => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
+    }
+}
+
+pub struct WorkerLocation {
+    pub worker_id: WorkerId,
+    pub host: String,
+    pub port: u16,
+}
+
+impl From<WorkerLocation> for r#gen::WorkerLocation {
+    fn from(value: WorkerLocation) -> Self {
+        Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port: value.port as u32,
+        }
+    }
+}
+
+impl TryFrom<r#gen::WorkerLocation> for WorkerLocation {
+    type Error = ExecutionError;
+
+    fn try_from(value: r#gen::WorkerLocation) -> Result<Self, Self::Error> {
+        let port = u16::try_from(value.port).map_err(|_| {
+            ExecutionError::InvalidArgument(format!("invalid port: {}", value.port))
+        })?;
+        Ok(Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port,
+        })
     }
 }

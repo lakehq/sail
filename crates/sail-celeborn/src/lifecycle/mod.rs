@@ -1,12 +1,8 @@
 mod access;
 mod actor;
-mod event;
-mod options;
 
 pub use access::LocalLifecycleManager;
-pub use actor::LifecycleManagerActor;
-pub use event::LifecycleManagerEvent;
-pub use options::LifecycleManagerOptions;
+pub use actor::{LifecycleManagerActor, LifecycleManagerMessage, LifecycleManagerOptions};
 
 use crate::error::CelebornResult;
 use crate::master::SlotReservation;
@@ -21,6 +17,14 @@ pub trait LifecycleManager: Send + Sync + 'static {
         should_replicate: bool,
         max_workers: i32,
     ) -> CelebornResult<SlotReservation>;
+
+    async fn mapper_end(
+        &self,
+        shuffle_id: i32,
+        map_id: i32,
+        attempt_id: i32,
+        num_mappers: i32,
+    ) -> CelebornResult<()>;
 
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()>;
 

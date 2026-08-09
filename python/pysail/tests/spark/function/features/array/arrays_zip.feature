@@ -402,6 +402,10 @@ Feature: arrays_zip comprehensive tests
 
   Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
 
+    # All three inline-table arrays are non-nullable, so Spark keeps the zipped array
+    # non-nullable. Sail widens it.
+    @sail-bug
+    @function(nullability)
     Scenario: arrays_zip doctest #2 (schema)
       When query
         """
@@ -410,7 +414,7 @@ Feature: arrays_zip comprehensive tests
       Then query schema
         """
         root
-         |-- zipped: array (nullable = true)
+         |-- zipped: array (nullable = false)
          |    |-- element: struct (containsNull = false)
          |    |    |-- vals1: long (nullable = true)
          |    |    |-- vals2: long (nullable = true)

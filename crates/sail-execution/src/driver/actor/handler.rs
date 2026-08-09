@@ -18,12 +18,12 @@ use tokio::time::Instant;
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
-use crate::driver::{DriverEvent, TaskStatus};
-use crate::error::ExecutionResult;
+use crate::driver::{DriverMessage, TaskStatus};
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::stream::writer::TaskStreamChannelSink;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
@@ -260,11 +260,11 @@ impl DriverActor {
                     .options
                     .worker_launch_timeout
                     .min(self.options.task_launch_timeout);
-                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
+                ctx.send_with_delay(DriverMessage::ProbePendingTask { key }, delay);
             } else {
                 let message = "task scheduling timeout".to_string();
                 let cause = CommonErrorCause::Execution(message.clone());
-                ctx.send(DriverEvent::UpdateTask {
+                ctx.send(DriverMessage::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
@@ -281,7 +281,7 @@ impl DriverActor {
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
     ) -> ActorAction {
-        self.stream_manager.fail_local_stream_if_pending(&key);
+        self.extensions.local_streams.fail_stream_if_pending(&key);
         ActorAction::Continue
     }
 
@@ -289,29 +289,37 @@ impl DriverActor {
         &mut self,
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
         let _ = result.send(
-            self.stream_manager
-                .create_local_stream(key, storage, schema),
+            self.extensions
+                .local_streams
+                .create_stream(key, replicas, schema),
         );
         ActorAction::Continue
     }
 
-    pub(super) fn handle_create_remote_stream(
+    pub(super) fn handle_create_storage_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .create_remote_stream(key, schema, &context),
-        );
+        let output = self
+            .extensions
+            .storage_streams
+            .as_ref()
+            .ok_or_else(|| {
+                ExecutionError::InternalError(
+                    "storage stream requested without a storage shuffle backend".to_string(),
+                )
+            })
+            .and_then(|streams| streams.create_stream(key, schema, &context));
+        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -321,7 +329,7 @@ impl DriverActor {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
+        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
         ActorAction::Continue
     }
 
@@ -340,18 +348,25 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_remote_stream(
+    pub(super) fn handle_fetch_storage_stream(
         &mut self,
-        ctx: &mut ActorContext<Self>,
+        _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .fetch_remote_stream(ctx, &key, schema, &context),
-        );
+        let output = self
+            .extensions
+            .storage_streams
+            .as_ref()
+            .ok_or_else(|| {
+                ExecutionError::InternalError(
+                    "storage stream requested without a storage shuffle backend".to_string(),
+                )
+            })
+            .and_then(|streams| streams.fetch_stream(key, schema, &context));
+        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -440,7 +455,7 @@ impl DriverActor {
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
-                            DriverEvent::ProbePendingTask {
+                            DriverMessage::ProbePendingTask {
                                 key: entry.key.clone(),
                             },
                             self.options.task_launch_timeout,
@@ -476,7 +491,7 @@ impl DriverActor {
                         return;
                     }
                     Some(TaskAssignment::Driver) => {
-                        self.stream_manager.fetch_local_stream(ctx, &key)
+                        self.extensions.local_streams.fetch_stream(ctx, &key)
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
                         .worker_pool
@@ -505,14 +520,22 @@ impl DriverActor {
                 stage,
                 context,
             } => {
-                if self.task_assigner.untrack_remote_streams(job_id, stage) {
-                    self.stream_manager
-                        .remove_remote_streams(ctx, job_id, stage, context);
+                if self.task_assigner.untrack_storage_streams(job_id, stage)
+                    && let Some(storage_streams) = self.extensions.storage_streams.clone()
+                {
+                    ctx.spawn(async move {
+                        if let Err(e) = storage_streams
+                            .remove_streams(job_id, stage, &context)
+                            .await
+                        {
+                            warn!("failed to remove storage shuffle data for job {job_id}: {e}");
+                        }
+                    });
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {
                         TaskStreamAssignment::Driver => {
-                            self.stream_manager.remove_local_streams(job_id, stage);
+                            self.extensions.local_streams.remove_streams(job_id, stage);
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
                             self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage)
@@ -539,9 +562,9 @@ impl DriverActor {
                 {
                     Ok(x) => x,
                     Err(e) => {
-                        // The task failure will be handled as a separate event
+                        // The task failure will be handled as a separate message
                         // after processing the current assignments.
-                        ctx.send(DriverEvent::UpdateTask {
+                        ctx.send(DriverMessage::UpdateTask {
                             key: entry.key,
                             status: TaskStatus::Failed,
                             message: Some(e.to_string()),
