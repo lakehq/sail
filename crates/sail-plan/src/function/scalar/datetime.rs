@@ -775,6 +775,7 @@ fn utc_ntz_timestamp_and_unit(
     ts: Expr,
     schema: &DFSchemaRef,
     session_tz: &Arc<str>,
+    ansi_mode: bool,
 ) -> PlanResult<(Expr, TimeUnit)> {
     let (ts, unit) = match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => (ts, unit),
@@ -782,13 +783,19 @@ fn utc_ntz_timestamp_and_unit(
             let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
             (ts, unit)
         }
-        DataType::Date32
-        | DataType::Date64
-        | DataType::Utf8
-        | DataType::LargeUtf8
-        | DataType::Utf8View => {
+        DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
             let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
+            (ts, unit)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let unit = TimeUnit::Microsecond;
+            let ts = ScalarUDF::from(SparkTimestamp::try_new(
+                Some(session_tz.clone()),
+                ansi_mode,
+                false,
+            )?)
+            .call(vec![ts]);
             (ts, unit)
         }
         x => {
@@ -804,7 +811,12 @@ fn utc_ntz_timestamp_and_unit(
 fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, to_tz) = input.arguments.two()?;
-    let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
+    let (ts, unit) = utc_ntz_timestamp_and_unit(
+        ts,
+        input.function_context.schema,
+        &session_tz,
+        input.function_context.plan_config.ansi_mode,
+    )?;
     let ts = convert_tz(lit("UTC"), to_tz, ts, false);
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
@@ -813,7 +825,12 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, from_tz) = input.arguments.two()?;
-    let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
+    let (ts, unit) = utc_ntz_timestamp_and_unit(
+        ts,
+        input.function_context.schema,
+        &session_tz,
+        input.function_context.plan_config.ansi_mode,
+    )?;
     let ts = convert_tz(from_tz, lit("UTC"), ts, false);
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
