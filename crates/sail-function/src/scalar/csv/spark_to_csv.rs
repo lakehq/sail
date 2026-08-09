@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
@@ -9,6 +8,7 @@ use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
+use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
@@ -407,11 +407,7 @@ fn format_timestamp_field(
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
-        let tz: Tz = session_timezone.parse().map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Invalid session timezone '{session_timezone}': {e}"
-            ))
-        })?;
+        let tz = parse_spark_timezone(session_timezone)?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;

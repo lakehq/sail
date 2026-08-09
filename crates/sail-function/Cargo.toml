@@ -12,7 +12,7 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 arrow = { workspace = true }
-arrow-schema ={ workspace = true }
+arrow-schema = { workspace = true }
 chumsky = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -23,10 +23,8 @@ datafusion-functions-nested = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 ordered-float = { workspace = true }
 lazy_static = { workspace = true }

@@ -940,10 +940,7 @@ mod tests {
             (PrimitiveType::TimestamptzNs, -3_723_000_000_000),
         ] {
             assert_eq!(
-                Literal::try_from_str(
-                    "1970-01-01T00:00:00+01:02:03",
-                    &Type::Primitive(data_type),
-                ),
+                Literal::try_from_str("1970-01-01T00:00:00+01:02:03", &Type::Primitive(data_type),),
                 Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(expected))))
             );
         }

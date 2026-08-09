@@ -538,6 +538,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | inferTimestamp infers TIMESTAMP from datetime with fractional seconds | '{"a": "2021-01-01 00:00:00.123"}'   | STRUCT<a: TIMESTAMP> |
         | inferTimestamp infers TIMESTAMP from ISO datetime with trailing Z     | '{"a": "2021-01-01T00:00:00Z"}'      | STRUCT<a: TIMESTAMP> |
         | inferTimestamp infers TIMESTAMP from datetime with timezone offset    | '{"a": "2021-01-01 00:00:00+02:00"}' | STRUCT<a: TIMESTAMP> |
+        | inferTimestamp accepts a Spark-prefixed timezone                      | '{"a": "2021-01-01 00:00:00GMT+8:30"}' | STRUCT<a: TIMESTAMP> |
+        | inferTimestamp rejects invalid second-precision timezone              | '{"a": "2021-01-01 00:00:00+01:02:99"}' | STRUCT<a: STRING>    |
         | inferTimestamp infers TIMESTAMP from datetime without seconds         | '{"a": "2021-01-01 00:00"}'          | STRUCT<a: TIMESTAMP> |
         | inferTimestamp infers TIMESTAMP from a time-only string               | '{"a": "03:04:05"}'                  | STRUCT<a: TIMESTAMP> |
         | inferTimestamp keeps slash-separated date as STRING                   | '{"a": "2024/01/02"}'                | STRUCT<a: STRING>    |
