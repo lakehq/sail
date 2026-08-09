@@ -10,6 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -121,6 +122,22 @@ impl PlanResolver<'_> {
                     lit("$"),
                     lit(data_type_string),
                 ])
+            }
+            (
+                DataType::Timestamp(_, None),
+                DataType::Timestamp(time_unit, Some(timezone)),
+                false,
+            ) => {
+                let timestamp_ntz = cast(expr, DataType::Timestamp(time_unit, None));
+                let timestamp = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+                    lit(timezone.to_string()),
+                    lit("UTC"),
+                    timestamp_ntz,
+                ]);
+                cast(
+                    cast(timestamp, DataType::Int64),
+                    DataType::Timestamp(time_unit, Some(timezone)),
+                )
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>

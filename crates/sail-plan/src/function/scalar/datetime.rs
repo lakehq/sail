@@ -818,8 +818,10 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.plan_config.ansi_mode,
     )?;
     let ts = convert_tz(lit("UTC"), to_tz, ts, false);
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
-    Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
+    Ok(cast(
+        cast(ts, DataType::Int64),
+        DataType::Timestamp(unit, Some(session_tz)),
+    ))
 }
 
 fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -832,8 +834,10 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.plan_config.ansi_mode,
     )?;
     let ts = convert_tz(from_tz, lit("UTC"), ts, false);
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
-    Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
+    Ok(cast(
+        cast(ts, DataType::Int64),
+        DataType::Timestamp(unit, Some(session_tz)),
+    ))
 }
 
 fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> PlanResult<Expr> {
