@@ -7,16 +7,14 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
-use crate::worker::WorkerActor;
-use crate::worker::event::WorkerEvent;
-use crate::worker::options::WorkerOptions;
+use crate::worker::actor::extensions::WorkerExtensions;
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
+use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
 #[tonic::async_trait]
 impl Actor for WorkerActor {
-    type Message = WorkerEvent;
+    type Message = WorkerMessage;
     type Options = WorkerOptions;
 
     fn name() -> &'static str {
@@ -33,14 +31,14 @@ impl Actor for WorkerActor {
             },
         );
         let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
+        let extensions = WorkerExtensions::new(&options);
         Self {
             options,
             server: ServerMonitor::new(),
             driver_client_set,
             peer_tracker,
             task_runner: TaskRunner::new(),
-            stream_manager,
+            extensions,
             sequence: 42,
         }
     }
@@ -59,58 +57,58 @@ impl Actor for WorkerActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            WorkerEvent::ServerReady { port, signal } => {
+            WorkerMessage::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
-            WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
-            WorkerEvent::ReportKnownPeers { peer_worker_ids } => {
+            WorkerMessage::StartHeartbeat => self.handle_start_heartbeat(ctx),
+            WorkerMessage::ReportKnownPeers { peer_worker_ids } => {
                 self.handle_report_known_peers(ctx, peer_worker_ids)
             }
-            WorkerEvent::RunTask {
+            WorkerMessage::RunTask {
                 key,
                 definition,
                 peers,
             } => self.handle_run_task(ctx, key, definition, peers),
-            WorkerEvent::StopTask { key } => self.handle_stop_task(ctx, key),
-            WorkerEvent::ReportTaskStatus {
+            WorkerMessage::StopTask { key } => self.handle_stop_task(ctx, key),
+            WorkerMessage::ReportTaskStatus {
                 key,
                 status,
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
-            WorkerEvent::ProbePendingLocalStream { key } => {
+            WorkerMessage::ProbePendingLocalStream { key } => {
                 self.handle_probe_pending_local_stream(ctx, key)
             }
-            WorkerEvent::CreateLocalStream {
+            WorkerMessage::CreateLocalStream {
                 key,
-                storage,
+                replicas,
                 schema,
                 result,
-            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
-            WorkerEvent::CreateRemoteStream {
+            } => self.handle_create_local_stream(ctx, key, replicas, schema, result),
+            WorkerMessage::CreateStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
-            WorkerEvent::FetchDriverStream {
+            } => self.handle_create_storage_stream(ctx, key, schema, context, result),
+            WorkerMessage::FetchDriverStream {
                 key,
                 schema,
                 result,
             } => self.handle_fetch_driver_stream(ctx, key, schema, result),
-            WorkerEvent::FetchWorkerStream { owner, key, result } => {
+            WorkerMessage::FetchWorkerStream { owner, key, result } => {
                 self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
-            WorkerEvent::FetchRemoteStream {
+            WorkerMessage::FetchStorageStream {
                 key,
                 schema,
                 context,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
-            WorkerEvent::CleanUpJob { job_id, stage } => {
+            } => self.handle_fetch_storage_stream(ctx, key, schema, context, result),
+            WorkerMessage::CleanUpJob { job_id, stage } => {
                 self.handle_clean_up_job(ctx, job_id, stage)
             }
-            WorkerEvent::Shutdown => ActorAction::Stop,
+            WorkerMessage::Shutdown => ActorAction::Stop,
         }
     }
 

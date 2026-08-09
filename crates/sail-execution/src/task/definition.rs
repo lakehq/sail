@@ -6,10 +6,9 @@ use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::WorkerId;
+use crate::plan::ShufflePartitioning;
 use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
-use crate::stream::reader::TaskReadLocation;
-use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::r#gen;
 
 #[derive(Debug, Clone)]
@@ -21,21 +20,19 @@ pub struct TaskDefinition {
 
 #[derive(Debug, Clone)]
 pub struct TaskInput {
+    pub stage: usize,
     pub locator: TaskInputLocator,
 }
 
 #[derive(Debug, Clone)]
 pub enum TaskInputLocator {
     Driver {
-        stage: usize,
         keys: Vec<Vec<TaskInputKey>>,
     },
     Worker {
-        stage: usize,
         keys: Vec<Vec<(WorkerId, TaskInputKey)>>,
     },
-    Remote {
-        stage: usize,
+    Storage {
         keys: Vec<Vec<TaskInputKey>>,
     },
 }
@@ -63,7 +60,7 @@ pub enum TaskOutputDistribution {
         partitioning: Arc<[u8]>,
         channels: usize,
     },
-    RoundRobin {
+    RoundRobinBatch {
         channels: usize,
     },
     RoundRobinRow {
@@ -73,8 +70,8 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Local { replicas: usize },
-    Remote,
+    Pipelined { replicas: usize },
+    Blocking,
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -119,8 +116,9 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { locator } = value;
+        let TaskInput { stage, locator } = value;
         r#gen::TaskInput {
+            stage: stage as u64,
             locator: Some(locator.into()),
         }
     }
@@ -138,28 +136,28 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
                 ));
             }
         };
-        Ok(TaskInput { locator })
+        Ok(TaskInput {
+            stage: value.stage as usize,
+            locator,
+        })
     }
 }
 
 impl From<TaskInputLocator> for r#gen::TaskInputLocator {
     fn from(value: TaskInputLocator) -> Self {
         let kind = match value {
-            TaskInputLocator::Driver { stage, keys } => {
+            TaskInputLocator::Driver { keys } => {
                 r#gen::task_input_locator::Kind::Driver(r#gen::TaskInputDriverLocator {
-                    stage: stage as u64,
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
-            TaskInputLocator::Worker { stage, keys } => {
+            TaskInputLocator::Worker { keys } => {
                 r#gen::task_input_locator::Kind::Worker(r#gen::TaskInputWorkerLocator {
-                    stage: stage as u64,
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
-            TaskInputLocator::Remote { stage, keys } => {
-                r#gen::task_input_locator::Kind::Remote(r#gen::TaskInputRemoteLocator {
-                    stage: stage as u64,
+            TaskInputLocator::Storage { keys } => {
+                r#gen::task_input_locator::Kind::Storage(r#gen::TaskInputStorageLocator {
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
@@ -174,43 +172,31 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
     fn try_from(value: r#gen::TaskInputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_input_locator::Kind::Driver(r#gen::TaskInputDriverLocator {
-                stage,
                 keys,
             })) => {
                 let keys = keys
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                Ok(TaskInputLocator::Driver {
-                    stage: stage as usize,
-                    keys,
-                })
+                Ok(TaskInputLocator::Driver { keys })
             }
             Some(r#gen::task_input_locator::Kind::Worker(r#gen::TaskInputWorkerLocator {
-                stage,
                 keys,
             })) => {
                 let keys = keys
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                Ok(TaskInputLocator::Worker {
-                    stage: stage as usize,
-                    keys,
-                })
+                Ok(TaskInputLocator::Worker { keys })
             }
-            Some(r#gen::task_input_locator::Kind::Remote(r#gen::TaskInputRemoteLocator {
-                stage,
+            Some(r#gen::task_input_locator::Kind::Storage(r#gen::TaskInputStorageLocator {
                 keys,
             })) => {
                 let keys = keys
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                Ok(TaskInputLocator::Remote {
-                    stage: stage as usize,
-                    keys,
-                })
+                Ok(TaskInputLocator::Storage { keys })
             }
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task input locator".to_string(),
@@ -423,7 +409,7 @@ impl From<TaskOutputDistribution> for r#gen::TaskOutputDistribution {
                 partitioning: partitioning.to_vec(),
                 channels: channels as u64,
             }),
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobinBatch { channels } => {
                 r#gen::task_output_distribution::Kind::RoundRobin(
                     r#gen::TaskOutputRoundRobinDistribution {
                         channels: channels as u64,
@@ -464,7 +450,7 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobin(
                 r#gen::TaskOutputRoundRobinDistribution { channels },
-            )) => Ok(TaskOutputDistribution::RoundRobin {
+            )) => Ok(TaskOutputDistribution::RoundRobinBatch {
                 channels: channels as usize,
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobinRow(
@@ -482,13 +468,13 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Local { replicas } => {
-                r#gen::task_output_locator::Kind::Local(r#gen::TaskOutputLocalLocator {
+            TaskOutputLocator::Pipelined { replicas } => {
+                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
                     replicas: replicas as u64,
                 })
             }
-            TaskOutputLocator::Remote => {
-                r#gen::task_output_locator::Kind::Remote(r#gen::TaskOutputRemoteLocator {})
+            TaskOutputLocator::Blocking => {
+                r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
@@ -500,71 +486,15 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
 
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
-            Some(r#gen::task_output_locator::Kind::Local(r#gen::TaskOutputLocalLocator {
-                replicas,
-            })) => Ok(TaskOutputLocator::Local {
+            Some(r#gen::task_output_locator::Kind::Pipelined(
+                r#gen::TaskOutputPipelinedLocator { replicas },
+            )) => Ok(TaskOutputLocator::Pipelined {
                 replicas: replicas as usize,
             }),
-            Some(r#gen::task_output_locator::Kind::Remote(_)) => Ok(TaskOutputLocator::Remote),
+            Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
-        }
-    }
-}
-
-impl TaskInput {
-    pub fn locations(&self, job_id: JobId) -> Vec<Vec<TaskReadLocation>> {
-        match &self.locator {
-            TaskInputLocator::Driver { stage, keys } => keys
-                .iter()
-                .map(|keys| {
-                    keys.iter()
-                        .map(|key| TaskReadLocation::Driver {
-                            key: TaskStreamKey {
-                                job_id,
-                                stage: *stage,
-                                partition: key.partition,
-                                attempt: key.attempt,
-                                channel: key.channel,
-                            },
-                        })
-                        .collect()
-                })
-                .collect(),
-            TaskInputLocator::Worker { stage, keys } => keys
-                .iter()
-                .map(|keys| {
-                    keys.iter()
-                        .map(|(worker_id, key)| TaskReadLocation::Worker {
-                            worker_id: *worker_id,
-                            key: TaskStreamKey {
-                                job_id,
-                                stage: *stage,
-                                partition: key.partition,
-                                attempt: key.attempt,
-                                channel: key.channel,
-                            },
-                        })
-                        .collect()
-                })
-                .collect(),
-            TaskInputLocator::Remote { stage, keys } => keys
-                .iter()
-                .map(|keys| {
-                    keys.iter()
-                        .map(|key| TaskReadLocation::Remote {
-                            key: TaskStreamKey {
-                                job_id,
-                                stage: *stage,
-                                partition: key.partition,
-                                attempt: key.attempt,
-                                channel: key.channel,
-                            },
-                        })
-                        .collect()
-                })
-                .collect(),
         }
     }
 }
@@ -574,48 +504,17 @@ impl TaskOutput {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
             TaskOutputDistribution::Range { channels, .. } => channels,
-            TaskOutputDistribution::RoundRobin { channels, .. } => channels,
+            TaskOutputDistribution::RoundRobinBatch { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
     }
 
-    pub fn locations(&self, key: &TaskKey) -> Vec<TaskWriteLocation> {
-        let channels = self.channels();
-        match &self.locator {
-            TaskOutputLocator::Local { replicas } => (0..channels)
-                .map(|channel| TaskWriteLocation::Local {
-                    storage: LocalStreamStorage::Memory {
-                        replicas: *replicas,
-                    },
-                    key: TaskStreamKey {
-                        job_id: key.job_id,
-                        stage: key.stage,
-                        partition: key.partition,
-                        attempt: key.attempt,
-                        channel,
-                    },
-                })
-                .collect(),
-            TaskOutputLocator::Remote => (0..channels)
-                .map(|channel| TaskWriteLocation::Remote {
-                    key: TaskStreamKey {
-                        job_id: key.job_id,
-                        stage: key.stage,
-                        partition: key.partition,
-                        attempt: key.attempt,
-                        channel,
-                    },
-                })
-                .collect(),
-        }
-    }
-
-    pub fn partitioning(
+    pub fn shuffle_partitioning(
         &self,
         ctx: &TaskContext,
         schema: &Schema,
         codec: &dyn PhysicalExtensionCodec,
-    ) -> ExecutionResult<Partitioning> {
+    ) -> ExecutionResult<ShufflePartitioning> {
         match &self.distribution {
             TaskOutputDistribution::Hash { keys, channels } => {
                 let keys = keys
@@ -625,34 +524,37 @@ impl TaskOutput {
                             .map_err(|e| e.into())
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                Ok(Partitioning::Hash(keys, *channels))
+                Ok(ShufflePartitioning::Hash(keys, *channels))
             }
             TaskOutputDistribution::Range {
                 partitioning,
                 channels,
             } => {
                 let partitioning =
-                    decode_remote_partitioning(ctx, codec, partitioning.as_ref(), schema)
-                        .map_err(ExecutionError::from)?;
+                    match decode_remote_partitioning(ctx, codec, partitioning.as_ref(), schema)
+                        .map_err(ExecutionError::from)?
+                    {
+                        Partitioning::Range(partitioning) => partitioning,
+                        partitioning => {
+                            return Err(ExecutionError::InvalidArgument(format!(
+                                "expected range partitioning, got {partitioning}"
+                            )));
+                        }
+                    };
                 if partitioning.partition_count() != *channels {
                     return Err(ExecutionError::InvalidArgument(format!(
                         "range partition count {} does not match task output channel count {channels}",
                         partitioning.partition_count()
                     )));
                 }
-                Ok(partitioning)
+                Ok(ShufflePartitioning::Range(partitioning))
             }
-            TaskOutputDistribution::RoundRobin { channels }
-            | TaskOutputDistribution::RoundRobinRow { channels } => {
-                Ok(Partitioning::RoundRobinBatch(*channels))
+            TaskOutputDistribution::RoundRobinBatch { channels } => {
+                Ok(ShufflePartitioning::RoundRobinBatch(*channels))
+            }
+            TaskOutputDistribution::RoundRobinRow { channels } => {
+                Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
-    }
-
-    pub fn row_based(&self) -> bool {
-        matches!(
-            &self.distribution,
-            TaskOutputDistribution::RoundRobinRow { .. }
-        )
     }
 }

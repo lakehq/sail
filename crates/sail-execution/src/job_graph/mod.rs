@@ -192,11 +192,11 @@ pub enum OutputDistribution {
     Range {
         partitioning: RangePartitioning,
     },
-    RoundRobin {
+    RoundRobinBatch {
         channels: usize,
     },
     /// Row-level round-robin distribution for explicit user repartition calls.
-    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// Unlike `RoundRobinBatch`, this distributes individual rows across
     /// output partitions to ensure even data distribution.
     RoundRobinRow {
         channels: usize,
@@ -208,7 +208,7 @@ impl OutputDistribution {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
             OutputDistribution::Range { partitioning } => partitioning.partition_count(),
-            OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
@@ -222,8 +222,8 @@ impl fmt::Display for OutputDistribution {
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
             OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
-            OutputDistribution::RoundRobin { channels } => {
-                write!(f, "RoundRobin(channels={})", channels)
+            OutputDistribution::RoundRobinBatch { channels } => {
+                write!(f, "RoundRobinBatch(channels={})", channels)
             }
             OutputDistribution::RoundRobinRow { channels } => {
                 write!(f, "RoundRobinRow(channels={})", channels)

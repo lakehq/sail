@@ -51,6 +51,11 @@ def test_pandas_udf_first_arrival_stable_coalesce(spark):
     assert [tuple(r) for r in result] == [(10,)]
 
 
+# All three rows share the key "a", so `orderBy("k")` leaves them tied and Spark makes no
+# guarantee about which one `first` sees -- after `repartition(3)` it returns 2. Sail keeps the
+# original input order and returns 1, which is a stronger guarantee than Spark offers rather
+# than a divergence from it, so the assertion only holds on Sail.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not order tied keys deterministically")
 def test_repartition_then_order_preserved(spark):
     dft = spark.createDataFrame([(1, "a"), (2, "a"), (3, "a")], ("v", "k")).repartition(3)
     result = dft.orderBy("k").groupBy().agg(F.first("v")).collect()

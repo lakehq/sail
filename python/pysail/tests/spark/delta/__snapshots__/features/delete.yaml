@@ -409,7 +409,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=2
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   
@@ -426,7 +426,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=2
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   
@@ -443,7 +443,7 @@ data:
     inputs=[StageInput(stage=3, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
       FilterExec: (get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Engineering AND get_field(stats_parsed@7, maxValues, department) >= Engineering OR get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Marketing AND get_field(stats_parsed@7, maxValues, department) >= Marketing) AND (get_field(stats_parsed@7, nullCount, active) IS NULL OR get_field(stats_parsed@7, numRecords) IS NULL OR get_field(stats_parsed@7, nullCount, active) < get_field(stats_parsed@7, numRecords))
@@ -456,7 +456,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=4, mode=Shuffle)]
     mode=Pipelined
     partitions=5
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -475,7 +475,7 @@ data:
     inputs=[StageInput(stage=5, mode=Shuffle)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Driver
     DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -484,7 +484,7 @@ data:
     inputs=[StageInput(stage=6, mode=Forward)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---

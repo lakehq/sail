@@ -354,7 +354,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
       RangeExec
@@ -363,7 +363,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Driver
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -372,7 +372,7 @@ data:
     inputs=[StageInput(stage=1, mode=Forward)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
@@ -711,7 +711,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       RangeExec
@@ -720,7 +720,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Driver
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -729,6 +729,6 @@ data:
     inputs=[StageInput(stage=1, mode=Forward)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)

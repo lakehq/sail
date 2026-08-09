@@ -7558,6 +7558,7 @@ version = "0.7.0"
 dependencies = [
  "log",
  "prost",
+ "readonly",
  "sail-common",
  "thiserror 2.0.19",
  "tokio",

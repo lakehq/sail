@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use crate::error::SessionResult;
 
-pub enum SessionManagerEvent {
+pub enum SessionManagerMessage {
     GetOrCreateSession {
         session_id: String,
         user_id: String,
@@ -50,17 +50,17 @@ pub struct SessionHistory {
     pub job_runner: JobRunnerHistory,
 }
 
-impl SpanAssociation for SessionManagerEvent {
+impl SpanAssociation for SessionManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
-            SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
-            SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
-            SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
-            SessionManagerEvent::SetSessionHistory { .. } => "SetSessionHistory",
-            SessionManagerEvent::SetSessionFailure { .. } => "SetSessionFailure",
-            SessionManagerEvent::ObserveState { .. } => "ObserveState",
-            SessionManagerEvent::GetDriver { .. } => "GetDriver",
-            SessionManagerEvent::Shutdown { .. } => "Shutdown",
+            SessionManagerMessage::GetOrCreateSession { .. } => "GetOrCreateSession",
+            SessionManagerMessage::ProbeIdleSession { .. } => "ProbeIdleSession",
+            SessionManagerMessage::DeleteSession { .. } => "DeleteSession",
+            SessionManagerMessage::SetSessionHistory { .. } => "SetSessionHistory",
+            SessionManagerMessage::SetSessionFailure { .. } => "SetSessionFailure",
+            SessionManagerMessage::ObserveState { .. } => "ObserveState",
+            SessionManagerMessage::GetDriver { .. } => "GetDriver",
+            SessionManagerMessage::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -68,34 +68,34 @@ impl SpanAssociation for SessionManagerEvent {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            SessionManagerEvent::GetOrCreateSession {
+            SessionManagerMessage::GetOrCreateSession {
                 session_id,
                 user_id: _,
                 result: _,
             }
-            | SessionManagerEvent::ProbeIdleSession {
+            | SessionManagerMessage::ProbeIdleSession {
                 session_id,
                 instant: _,
             }
-            | SessionManagerEvent::DeleteSession {
+            | SessionManagerMessage::DeleteSession {
                 session_id,
                 result: _,
             }
-            | SessionManagerEvent::SetSessionHistory {
+            | SessionManagerMessage::SetSessionHistory {
                 session_id,
                 history: _,
             }
-            | SessionManagerEvent::SetSessionFailure { session_id } => {
+            | SessionManagerMessage::SetSessionFailure { session_id } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
             }
-            SessionManagerEvent::GetDriver {
+            SessionManagerMessage::GetDriver {
                 driver_id,
                 result: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_DRIVER_ID, driver_id.to_string()));
             }
-            SessionManagerEvent::ObserveState { observer: _ }
-            | SessionManagerEvent::Shutdown { .. } => {}
+            SessionManagerMessage::ObserveState { observer: _ }
+            | SessionManagerMessage::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }
