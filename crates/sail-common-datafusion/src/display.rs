@@ -559,6 +559,11 @@ macro_rules! timestamp_display {
             type State = (Option<SparkTimeZone>, TimeFormat<'a>);
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                // FIXME: ArrayFormatter accepts Spark-only zone IDs here, but Arrow temporal
+                // kernels still parse timestamp metadata with Arrow's `Tz`, which rejects
+                // second-precision offsets. Route all LTZ consumers through `SparkTimeZone`
+                // or adopt an internal timestamp representation that does not rely on Arrow's
+                // timezone parser.
                 match self.data_type() {
                     DataType::Timestamp(_, Some(timezone)) => Ok((
                         Some(

@@ -309,6 +309,19 @@ Feature: datetime edge cases
         | GMT+8:30  | -30600000000 |
         | +01:02:03 | -3723000000  |
 
+    @sail-bug
+    Scenario: temporal kernels accept second-precision session offsets
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          hour(to_timestamp('1970-01-01 00:00:00')) AS local_hour,
+          CAST(to_timestamp('1970-01-01 00:00:00') AS DATE) AS local_date
+        """
+      Then query result
+        | local_hour | local_date |
+        | 0          | 1970-01-01 |
+
     Scenario Outline: timestamp reader accepts a Spark-only time zone ID: <case>
       Given config spark.sql.session.timeZone = +01:02:03
       When query
