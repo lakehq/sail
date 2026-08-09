@@ -94,7 +94,7 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
         Result<Option<SparkTimeZone>>,
     )| match inputs {
         (Some(ts_micros), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
-            Ok(convert(ts_micros, &from_tz, &to_tz))
+            convert(ts_micros, &from_tz, &to_tz)
         }
         (_, Err(e), _) | (_, _, Err(e)) => Err(e),
         _ => Ok(None),
@@ -185,22 +185,49 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
     microseconds_to_timestamp(results, time_unit)
 }
 
+fn convert_fixed_offsets(
+    ts_micros: i64,
+    from_zone: &chrono::FixedOffset,
+    to_zone: &chrono::FixedOffset,
+) -> Result<Option<i64>> {
+    let offset_micros =
+        i64::from(to_zone.local_minus_utc() - from_zone.local_minus_utc()) * 1_000_000;
+    let Some(value) = ts_micros.checked_add(offset_micros) else {
+        return exec_err!("long overflow");
+    };
+    Ok(Some(value))
+}
+
+// FIXME: Named zones still use Chrono's bounded civil datetime and chrono-tz's finite
+// transition table. Supporting Spark's full i64 microsecond domain requires a wide
+// proleptic-Gregorian conversion and deterministic IANA rules that preserve recurring
+// transitions, gap/overlap resolution, and initial local-mean-time offsets. Intermediate
+// values must remain wide enough that only the final Spark timestamp is narrowed to i64.
+
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(
     ts_micros: i64,
     from_zone: &SparkTimeZone,
     to_zone: &SparkTimeZone,
-) -> Option<i64> {
-    let local = DateTime::from_timestamp_micros(ts_micros)?.naive_utc();
-    let datetime = localize_with_fallback(from_zone, &local).ok()?;
-    Some(
+) -> Result<Option<i64>> {
+    if let (SparkTimeZone::Fixed(from), SparkTimeZone::Fixed(to)) = (from_zone, to_zone) {
+        return convert_fixed_offsets(ts_micros, from, to);
+    }
+    let Some(local) = DateTime::from_timestamp_micros(ts_micros).map(|value| value.naive_utc())
+    else {
+        return Ok(None);
+    };
+    let Some(datetime) = localize_with_fallback(from_zone, &local).ok() else {
+        return Ok(None);
+    };
+    Ok(Some(
         datetime
             .with_timezone(to_zone)
             .naive_local()
             .and_utc()
             .timestamp_micros(),
-    )
+    ))
 }
 
 /// Reference:
@@ -209,10 +236,21 @@ fn convert_tz_non_classic(
     ts_micros: i64,
     from_zone: &SparkTimeZone,
     to_zone: &SparkTimeZone,
-) -> Option<i64> {
-    let local = to_zone.timestamp_micros(ts_micros).single()?.naive_local();
-    let datetime = localize_with_fallback(from_zone, &local).ok()?;
-    Some(datetime.timestamp_micros())
+) -> Result<Option<i64>> {
+    if let (SparkTimeZone::Fixed(from), SparkTimeZone::Fixed(to)) = (from_zone, to_zone) {
+        return convert_fixed_offsets(ts_micros, from, to);
+    }
+    let Some(local) = to_zone
+        .timestamp_micros(ts_micros)
+        .single()
+        .map(|value| value.naive_local())
+    else {
+        return Ok(None);
+    };
+    let Some(datetime) = localize_with_fallback(from_zone, &local).ok() else {
+        return Ok(None);
+    };
+    Ok(Some(datetime.timestamp_micros()))
 }
 
 fn timestamp_to_microseconds(array: &dyn Array) -> Result<Int64Array> {

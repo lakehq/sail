@@ -162,6 +162,32 @@ Feature: convert_timezone
         | UTC+8     | 2024-01-01 04:00:00 |
         | EST       | 2024-01-01 17:00:00 |
 
+    Scenario: fixed-offset conversions preserve Spark's full microsecond domain
+      When query
+        """
+        SELECT
+          unix_micros(CAST(convert_timezone('UTC', 'UTC', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS convert_max,
+          unix_micros(CAST(convert_timezone('+01:00', 'UTC', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS shifted_max,
+          unix_micros(from_utc_timestamp(timestamp_micros(9223372036854775807), 'UTC')) AS from_utc_max,
+          unix_micros(to_utc_timestamp(timestamp_micros(-9223372036854775808), 'UTC')) AS to_utc_min
+        """
+      Then query result
+        | convert_max         | shifted_max         | from_utc_max        | to_utc_min           |
+        | 9223372036854775807 | 9223372033254775807 | 9223372036854775807 | -9223372036854775808 |
+
+    @sail-bug
+    Scenario: named-zone conversions preserve Spark's full microsecond domain
+      When query
+        """
+        SELECT
+          unix_micros(CAST(convert_timezone('UTC', 'America/Los_Angeles', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS convert_max,
+          unix_micros(from_utc_timestamp(timestamp_micros(9223372036854775807), 'America/Los_Angeles')) AS from_utc_max,
+          unix_micros(to_utc_timestamp(timestamp_micros(-9223372036854775808), 'America/Los_Angeles')) AS to_utc_min
+        """
+      Then query result
+        | convert_max         | from_utc_max        | to_utc_min           |
+        | 9223372008054775807 | 9223372008054775807 | -9223372008476775808 |
+
     Scenario Outline: `convert_timezone` rejects the zone IDs Java rejects
       When query
         """
