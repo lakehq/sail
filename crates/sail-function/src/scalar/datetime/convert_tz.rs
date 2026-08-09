@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
 use datafusion::arrow::compute::kernels::{cast, take};
-use datafusion::arrow::datatypes::{DataType, Int64Type, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type, TimeUnit};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+};
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::{
@@ -54,6 +58,17 @@ impl ScalarUDFImpl for ConvertTz {
             DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
             _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = self.return_type(&arg_types)?;
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

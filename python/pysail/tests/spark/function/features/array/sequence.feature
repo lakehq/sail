@@ -48,7 +48,11 @@ Feature: sequence output schema
           sequence(
             TIMESTAMP_NTZ '2018-01-01 00:00:00',
             TIMESTAMP_NTZ '2018-01-02 00:00:00'
-          ) AS timestamps
+          ) AS timestamps,
+          sequence(
+            TIMESTAMP_NTZ '2018-01-01 00:00:00',
+            TIMESTAMP '2018-01-02 00:00:00'
+          ) AS mixed_timestamps
         """
       Then query schema
         """
@@ -57,6 +61,8 @@ Feature: sequence output schema
          |    |-- element: date (containsNull = false)
          |-- timestamps: array (nullable = false)
          |    |-- element: timestamp_ntz (containsNull = false)
+         |-- mixed_timestamps: array (nullable = false)
+         |    |-- element: timestamp (containsNull = false)
         """
 
   Rule: Integral type coercion
@@ -280,8 +286,7 @@ Feature: sequence output schema
         | sequence(-2147483648, 2147483647, 1)                                                  | 4294967296          |
         | sequence(CAST(9223372036854775807 AS BIGINT), CAST(-1 AS BIGINT), CAST(-1 AS BIGINT)) | 9223372036854775809 |
 
-    @sail-only
-    Scenario: sequence returns exact results where Spark reports an internal error
+    Scenario: sequence preserves Spark's internal error after arithmetic overflow
       When query
         """
         SELECT sequence(
@@ -290,6 +295,4 @@ Feature: sequence output schema
           CAST(9223372036854775807 AS BIGINT)
         ) AS result
         """
-      Then query result
-        | result                                          |
-        | [-9223372036854775808, -1, 9223372036854775806] |
+      Then query error \[INTERNAL_ERROR\] Unreachable code reached\.

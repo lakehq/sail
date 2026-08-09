@@ -513,13 +513,22 @@ fn sequence_length_with_display_step(
         return Ok(1);
     }
 
-    let length = match stop.checked_sub(start) {
-        Some(delta) if !(delta == i64::MIN && step == -1) => 1_i128 + i128::from(delta / step),
-        _ => 1_i128 + (i128::from(stop) - i128::from(start)) / i128::from(step),
+    let (length, overflowed) = match stop.checked_sub(start) {
+        Some(delta) if !(delta == i64::MIN && step == -1) => {
+            (1_i128 + i128::from(delta / step), false)
+        }
+        _ => (
+            1_i128 + (i128::from(stop) - i128::from(start)) / i128::from(step),
+            true,
+        ),
     };
 
     if length > i128::from(MAX_ROUNDED_ARRAY_LENGTH) {
         return collection_size_limit_error(length);
+    }
+
+    if overflowed {
+        return exec_err!("[INTERNAL_ERROR] Unreachable code reached.");
     }
 
     usize::try_from(length)
@@ -1250,12 +1259,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sequence_length_uses_wide_arithmetic_and_checked_limits() -> Result<()> {
-        assert_eq!(sequence_length(i64::MIN, i64::MAX, i64::MAX)?, 3);
-        assert_eq!(
-            integral_row(i64::MIN, i64::MAX, i64::MAX, usize::MAX)?,
-            vec![i64::MIN, -1, i64::MAX - 1]
-        );
+    fn sequence_length_matches_spark_overflow_and_checked_limits() -> Result<()> {
+        assert!(sequence_length(i64::MIN, i64::MAX, i64::MAX).is_err());
+        assert!(integral_row(i64::MIN, i64::MAX, i64::MAX, usize::MAX).is_err());
         assert_eq!(
             sequence_length(0, MAX_ROUNDED_ARRAY_LENGTH - 1, 1)?,
             MAX_ROUNDED_ARRAY_LENGTH as usize
