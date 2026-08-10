@@ -478,18 +478,20 @@ Feature: datetime edge cases
         | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_timestamps     | nested_array   | nested_map  | nested_struct |
         | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [1970-01-01 00:00:00] | [-3723000000] | -3723000000 | -3723000000   |
 
-    Scenario Outline: relative special datetime values use the session-local date
+    Scenario Outline: current date expressions use the session-local date
       Given config spark.sql.session.timeZone = <zone>
       When query
         """
         SELECT
+          current_date() = CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE) AS current_date_result,
+          curdate() = CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE) AS curdate_result,
           CAST('today' AS DATE) = CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE) AS today,
           CAST('tomorrow' AS DATE) = date_add(CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE), 1) AS tomorrow,
           CAST('yesterday' AS DATE) = date_add(CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE), -1) AS yesterday
         """
       Then query result
-        | today | tomorrow | yesterday |
-        | true  | true     | true      |
+        | current_date_result | curdate_result | today | tomorrow | yesterday |
+        | true                | true           | true  | true     | true      |
 
       Examples:
         | zone               |
@@ -516,6 +518,181 @@ Feature: datetime edge cases
         | +013045   |
         | IST       |
         | America/Los_Angeles |
+
+    Scenario: to_date converts LTZ inputs in the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          to_date(TIMESTAMP_LTZ '1969-12-31 23:30:00Z') AS unformatted,
+          to_date(
+            TIMESTAMP_LTZ '1969-12-31 23:30:00Z',
+            'yyyy-MM-dd'
+          ) AS formatted
+        """
+      Then query result
+        | unformatted | formatted  |
+        | 1970-01-01  | 1970-01-01 |
+
+    Scenario Outline: no-format timestamp conversion supports typed inputs: <case>
+      Given config spark.sql.session.timeZone = +01:02:03
+      And config spark.sql.timestampType = <timestamp_type>
+      When query
+        """
+        SELECT
+          CAST(<function>(TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS STRING) AS from_ltz,
+          CAST(<function>(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS STRING) AS from_ntz,
+          CAST(<function>(DATE '1970-01-01') AS STRING) AS from_date
+        """
+      Then query result
+        | from_ltz            | from_ntz            | from_date           |
+        | 1970-01-01 01:02:03 | 1970-01-01 00:00:00 | 1970-01-01 00:00:00 |
+
+      Examples:
+        | case                                  | function         | timestamp_type |
+        | to_timestamp with the LTZ default     | to_timestamp     | TIMESTAMP_LTZ  |
+        | to_timestamp with the NTZ default     | to_timestamp     | TIMESTAMP_NTZ  |
+        | to_timestamp_ltz                      | to_timestamp_ltz | TIMESTAMP_LTZ  |
+        | to_timestamp_ntz                      | to_timestamp_ntz | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the LTZ default | try_to_timestamp | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the NTZ default | try_to_timestamp | TIMESTAMP_NTZ  |
+
+    Scenario Outline: LTZ-to-LTZ timestamp conversion preserves the instant: <function>
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT unix_micros(
+          <function>(timestamp_micros(1762075800000000))
+        ) AS result
+        """
+      Then query result
+        | result           |
+        | 1762075800000000 |
+
+      Examples:
+        | function         |
+        | to_timestamp     |
+        | to_timestamp_ltz |
+        | try_to_timestamp |
+
+    Scenario: convert_timezone converts LTZ inputs to session-local NTZ first
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          CAST(convert_timezone('UTC', 'UTC', TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS STRING) AS explicit_source,
+          CAST(convert_timezone('UTC', TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS STRING) AS implicit_source
+        """
+      Then query result
+        | explicit_source     | implicit_source     |
+        | 1970-01-01 01:02:03 | 1970-01-01 00:00:00 |
+
+    Scenario Outline: no-format datetime functions accept special values: <case>
+      Given config spark.sql.session.timeZone = +01:02:03
+      And config spark.sql.timestampType = <timestamp_type>
+      When query
+        """
+        SELECT
+          <function>('epoch') = CAST('epoch' AS <target_type>) AS epoch,
+          <function>('now') IS NOT NULL AS now,
+          <function>('today') = CAST('today' AS <target_type>) AS today,
+          <function>('tomorrow') = CAST('tomorrow' AS <target_type>) AS tomorrow,
+          <function>('yesterday') = CAST('yesterday' AS <target_type>) AS yesterday
+        """
+      Then query result
+        | epoch | now  | today | tomorrow | yesterday |
+        | true  | true | true  | true     | true      |
+
+      Examples:
+        | case                                  | function         | target_type   | timestamp_type |
+        | to_date                               | to_date          | DATE          | TIMESTAMP_LTZ  |
+        | to_timestamp with the LTZ default     | to_timestamp     | TIMESTAMP_LTZ | TIMESTAMP_LTZ  |
+        | to_timestamp with the NTZ default     | to_timestamp     | TIMESTAMP_NTZ | TIMESTAMP_NTZ  |
+        | to_timestamp_ltz                      | to_timestamp_ltz | TIMESTAMP_LTZ | TIMESTAMP_LTZ  |
+        | to_timestamp_ntz                      | to_timestamp_ntz | TIMESTAMP_NTZ | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the LTZ default | try_to_timestamp | TIMESTAMP_LTZ | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the NTZ default | try_to_timestamp | TIMESTAMP_NTZ | TIMESTAMP_NTZ  |
+
+    Scenario: timestampadd preserves the input timestamp type and session semantics
+      Given config spark.sql.session.timeZone = +01:02:03
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT
+          timestampadd(SECOND, 1, TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ntz_result,
+          timestampadd(SECOND, 1, TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS ltz_result,
+          timestampadd(SECOND, -1, DATE '1970-01-01') AS date_result
+        """
+      Then query result
+        | ntz_result          | ltz_result          | date_result         |
+        | 1970-01-01 00:00:01 | 1970-01-01 01:02:04 | 1969-12-31 23:59:59 |
+      And query schema
+        """
+        root
+         |-- ntz_result: timestamp_ntz (nullable = false)
+         |-- ltz_result: timestamp (nullable = false)
+         |-- date_result: timestamp (nullable = false)
+        """
+
+    Scenario: timestampadd uses session-zone calendar arithmetic across DST
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT unix_micros(
+          timestampadd(
+            HOUR,
+            1,
+            TIMESTAMP_LTZ '2025-03-09 01:30:00 America/Los_Angeles'
+          )
+        ) AS result
+        """
+      Then query result
+        | result           |
+        | 1741516200000000 |
+
+    Scenario: unix time-unit functions coerce NTZ in the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS micros,
+          unix_millis(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS millis,
+          unix_seconds(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS seconds
+        """
+      Then query result
+        | micros      | millis   | seconds |
+        | -3723000000 | -3723000 | -3723   |
+
+    Scenario: make_timestamp_ltz supports a second-precision session offset
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(make_timestamp_ltz(DATE '1970-01-01', TIME '00:00:00')) AS implicit_zone,
+          unix_micros(make_timestamp_ltz(DATE '1970-01-01', TIME '00:00:00', 'UTC')) AS explicit_zone,
+          unix_micros(try_make_timestamp_ltz(DATE '1970-01-01', TIME '00:00:00')) AS try_implicit_zone,
+          unix_micros(try_make_timestamp_ltz(DATE '1970-01-01', TIME '00:00:00', 'UTC')) AS try_explicit_zone
+        """
+      Then query result
+        | implicit_zone | explicit_zone | try_implicit_zone | try_explicit_zone |
+        | -3723000000   | 0             | -3723000000       | 0                 |
+
+    Scenario Outline: window coerces <type> input in the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT unix_micros(window(value, '1 day').start) AS result
+        FROM VALUES (<input>) AS t(value)
+        """
+      Then query result
+        | result       |
+        | -86400000000 |
+
+      Examples:
+        | type   | input             |
+        | DATE   | DATE '1970-01-01' |
+        | STRING | '1970-01-01'      |
 
     Scenario: lossless TRY_CAST timezone conversions preserve non-nullability
       Given config spark.sql.session.timeZone = America/Los_Angeles
