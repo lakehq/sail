@@ -358,6 +358,33 @@ Feature: datetime edge cases
         | JSON writer | get_json_object(to_json(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '$.ts') |
         | XML writer  | xpath_string(to_xml(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'yyyy-MM-dd HH:mm:ss')), '/ROW/ts') |
 
+    Scenario Outline: timestamp formatters emit Spark's canonical zone ID
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          date_format(to_timestamp('1970-01-01 00:00:00Z'), 'VV') AS formatted,
+          to_csv(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'VV')) AS csv,
+          get_json_object(to_json(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'VV')), '$.ts') AS json,
+          xpath_string(to_xml(named_struct('ts', to_timestamp('1970-01-01 00:00:00Z')), map('timestampFormat', 'VV')), '/ROW/ts') AS xml
+        """
+      Then query result
+        | formatted | csv        | json       | xml        |
+        | <expected> | <expected> | <expected> | <expected> |
+
+      Examples:
+        | zone      | expected                     |
+        | EST       | America/Panama               |
+        | HST       | Pacific/Honolulu             |
+        | IET       | America/Indiana/Indianapolis |
+        | IST       | Asia/Kolkata                 |
+        | MST       | America/Phoenix              |
+        | PST       | America/Los_Angeles          |
+        | VST       | Asia/Ho_Chi_Minh             |
+        | GMT+8:30  | GMT+08:30                    |
+        | +8        | +08:00                       |
+        | UTC+0     | UTC                          |
+
   Rule: Local timestamp resolution across time-zone transitions
 
     Scenario Outline: nonexistent local timestamp moves forward: <case>

@@ -231,6 +231,31 @@ pub fn parse_spark_timezone(value: &str) -> Result<SparkTimeZone> {
     })
 }
 
+pub fn canonical_spark_timezone_id(value: &str) -> Result<String> {
+    let normalized = normalize_spark_zone_id(value);
+    let timezone = parse_spark_timezone(value)?;
+    for prefix in ["UTC", "GMT", "UT"] {
+        if normalized == prefix {
+            return Ok(prefix.to_string());
+        }
+        if normalized.starts_with(prefix) {
+            let SparkTimeZone::Fixed(offset) = timezone else {
+                break;
+            };
+            return Ok(if offset.local_minus_utc() == 0 {
+                prefix.to_string()
+            } else {
+                format!("{prefix}{offset}")
+            });
+        }
+    }
+    Ok(match timezone {
+        SparkTimeZone::Named(timezone) => timezone.name().to_string(),
+        SparkTimeZone::Fixed(offset) if offset.local_minus_utc() == 0 => "Z".to_string(),
+        SparkTimeZone::Fixed(offset) => offset.to_string(),
+    })
+}
+
 pub fn validate_spark_timezone(value: &str) -> Result<()> {
     parse_spark_timezone(value).map(|_| ())
 }
