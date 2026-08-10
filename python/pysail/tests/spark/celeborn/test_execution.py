@@ -18,7 +18,7 @@ _SLEEP_SECONDS = 5
 
 
 def _master_shuffle_ids(master: MasterService) -> list[str]:
-    with urlopen(f"http://{master.host}:{master.http_port}/api/v1/shuffles", timeout=5) as response:  # noqa: S310
+    with urlopen(f"http://{master.host}:{master.http_port}/api/v1/shuffles", timeout=5) as response:
         return json.load(response)["shuffleIds"]
 
 
@@ -57,12 +57,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(
-            lambda: spark.range(2)
-            .repartition(2)
-            .groupBy()
-            .count()
-            .select(identity("count").alias("count"))
-            .collect()
+            lambda: spark.range(2).repartition(2).groupBy().count().select(identity("count").alias("count")).collect()
         )
         deadline = time.monotonic() + _SLEEP_SECONDS
         while not (shuffle_ids := _application_shuffle_ids(celeborn_master, session_id)):
