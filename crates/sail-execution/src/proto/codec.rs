@@ -45,6 +45,7 @@ use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -324,7 +325,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
+        inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
@@ -800,6 +801,45 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     join_type,
                     sort_options,
                     null_equality,
+                )?))
+            }
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+            }) => {
+                let [input] = inputs else {
+                    return plan_err!(
+                        "PartitionedTopKExec requires exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                let expr = expr.ok_or_else(|| {
+                    plan_datafusion_err!("PartitionedTopKExec is missing its sort ordering")
+                })?;
+                let expr = self.try_decode_lex_ordering(&expr, input.schema().as_ref(), ctx)?;
+                let partition_prefix_len = usize::try_from(partition_prefix_len).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {partition_prefix_len}"
+                    )
+                })?;
+                let fetch = usize::try_from(fetch).map_err(|_| {
+                    plan_datafusion_err!("PartitionedTopKExec fetch is too large: {fetch}")
+                })?;
+                if fetch == 0 {
+                    return plan_err!("PartitionedTopKExec fetch must be greater than zero");
+                }
+                if partition_prefix_len == 0 || partition_prefix_len >= expr.len() {
+                    return plan_err!(
+                        "PartitionedTopKExec partition prefix length must be between 1 and {}, got {partition_prefix_len}",
+                        expr.len().saturating_sub(1)
+                    );
+                }
+                Ok(Arc::new(PartitionedTopKExec::try_new(
+                    Arc::clone(input),
+                    expr,
+                    partition_prefix_len,
+                    fetch,
                 )?))
             }
             NodeKind::DeltaWriter(delta_writer) => {
@@ -1796,6 +1836,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 expr,
                 input,
                 common_prefix_length,
+            })
+        } else if let Some(top_k) = node.downcast_ref::<PartitionedTopKExec>() {
+            let expr = Some(self.try_encode_lex_ordering(top_k.expr())?);
+            let partition_prefix_len =
+                u64::try_from(top_k.partition_prefix_len()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {}",
+                        top_k.partition_prefix_len()
+                    )
+                })?;
+            let fetch = u64::try_from(top_k.fetch()).map_err(|_| {
+                plan_datafusion_err!("PartitionedTopKExec fetch is too large: {}", top_k.fetch())
+            })?;
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();

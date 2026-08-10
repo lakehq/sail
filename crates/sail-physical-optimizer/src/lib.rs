@@ -55,6 +55,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(EnforceSorting::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
+    // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
+    // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
+    // Revisit the opt-in default when that trade-off is addressed.
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));

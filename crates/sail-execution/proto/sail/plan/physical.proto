@@ -70,6 +70,7 @@ message ExtendedPhysicalPlanNode {
     RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
+    PartitionedTopKExecNode partitioned_top_k = 58;
   }
 }
 
@@ -727,6 +728,12 @@ message PartialSortExecNode {
   LexOrdering expr = 1;
   bytes input = 2;
   uint64 common_prefix_length = 3;
+}
+
+message PartitionedTopKExecNode {
+  LexOrdering expr = 1;
+  uint64 partition_prefix_len = 2;
+  uint64 fetch = 3;
 }
 
 message AppendMode {}
