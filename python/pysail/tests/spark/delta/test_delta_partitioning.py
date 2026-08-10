@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -77,6 +79,44 @@ def test_delta_partitioning_creates_correct_directory_structure(spark, delta_tes
     expected_data = expected_data.sort_values("id").reset_index(drop=True)
 
     assert_frame_equal(result_pandas, expected_data, check_dtype=False)
+
+
+@pytest.mark.parametrize(
+    ("column_mapping_mode", "schema_partition_name", "requested_partition_name"),
+    [
+        pytest.param("none", "EventDate", "eventdate", id="ascii-none"),
+        pytest.param("name", "EventDate", "eventdate", id="ascii-name"),
+        pytest.param("none", "ÄDate", "ädate", id="unicode-none"),
+        pytest.param("none", "ΣDate", "ςdate", id="unicode-final-sigma-none"),
+    ],
+)
+def test_delta_partition_name_resolution_canonicalizes_case(
+    spark,
+    tmp_path,
+    column_mapping_mode,
+    schema_partition_name,
+    requested_partition_name,
+):
+    delta_path = tmp_path / "case_insensitive_partition_name"
+    source = spark.createDataFrame([(1, "2026-08-06")], ["id", schema_partition_name])
+
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", column_mapping_mode)
+        .partitionBy(requested_partition_name)
+        .save(str(delta_path))
+    )
+
+    rows = spark.read.format("delta").load(str(delta_path)).collect()
+    assert [row.asDict() for row in rows] == [{"id": 1, schema_partition_name: "2026-08-06"}]
+
+    first_commit = delta_path / "_delta_log" / "00000000000000000000.json"
+    actions = [json.loads(line) for line in first_commit.read_text(encoding="utf-8").splitlines()]
+    first_metadata = next(action["metaData"] for action in actions if "metaData" in action)
+    assert first_metadata["partitionColumns"] == [schema_partition_name]
+    if column_mapping_mode == "name":
+        assert first_metadata["configuration"]["delta.columnMapping.mode"] == "name"
 
 
 def test_delta_partitioning_by_multiple_columns(spark, tmp_path):
