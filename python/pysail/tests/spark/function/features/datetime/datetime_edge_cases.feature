@@ -442,10 +442,11 @@ Feature: datetime edge cases
           unix_micros(TRY_CAST(TIMESTAMP_NTZ '1970-01-01 00:00:00' AS TIMESTAMP)) AS ntz_try,
           unix_micros(CAST(DATE '1970-01-01' AS TIMESTAMP)) AS date_cast,
           CAST(TIMESTAMP '1970-01-01 00:00:00Z' AS TIMESTAMP_NTZ) AS reverse_cast,
+          CAST(array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ARRAY<TIMESTAMP>) AS nested_timestamps,
           transform(CAST(array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ARRAY<TIMESTAMP>), x -> unix_micros(x)) AS nested_array,
           unix_micros(element_at(CAST(map('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS MAP<STRING,TIMESTAMP>), 'x')) AS nested_map,
           unix_micros(CAST(named_struct('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS STRUCT<x:TIMESTAMP>).x) AS nested_struct
         """
       Then query result
-        | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_array   | nested_map  | nested_struct |
-        | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [-3723000000] | -3723000000 | -3723000000   |
+        | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_timestamps     | nested_array   | nested_map  | nested_struct |
+        | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [1970-01-01 00:00:00] | [-3723000000] | -3723000000 | -3723000000   |

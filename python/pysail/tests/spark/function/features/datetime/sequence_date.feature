@@ -137,6 +137,23 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
+    Scenario: mixed timestamp sequence coercion preserves the full microsecond range
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT transform(
+          sequence(
+            CAST(timestamp_micros(CAST(-9223372036854775808 AS BIGINT)) AS TIMESTAMP_NTZ),
+            timestamp_micros(-9223371864054775808L),
+            INTERVAL 1 DAY
+          ),
+          value -> unix_micros(value)
+        ) AS result
+        """
+      Then query result
+        | result                                                             |
+        | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
+
     Scenario: timestamp_ntz sequence supports Spark's full microsecond domain
       Given config spark.sql.session.timeZone = UTC
       When query
