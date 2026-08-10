@@ -69,7 +69,7 @@ impl ScalarUDFImpl for SparkTimezoneCast {
         Ok(Arc::new(Field::new(
             self.name(),
             self.target_type.clone(),
-            self.safe || input.is_nullable(),
+            input.is_nullable(),
         )))
     }
 

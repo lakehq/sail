@@ -489,3 +489,20 @@ Feature: datetime edge cases
         | +013045   |
         | IST       |
         | America/Los_Angeles |
+
+    Scenario: lossless TRY_CAST timezone conversions preserve non-nullability
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          TRY_CAST(TIMESTAMP_NTZ '2025-01-01 00:00:00' AS TIMESTAMP) AS ntz_to_ltz,
+          TRY_CAST(DATE '2025-01-01' AS TIMESTAMP) AS date_to_ltz,
+          TRY_CAST(TIMESTAMP '2025-01-01 00:00:00Z' AS TIMESTAMP_NTZ) AS ltz_to_ntz
+        """
+      Then query schema
+        """
+        root
+         |-- ntz_to_ltz: timestamp (nullable = false)
+         |-- date_to_ltz: timestamp (nullable = false)
+         |-- ltz_to_ntz: timestamp_ntz (nullable = false)
+        """
