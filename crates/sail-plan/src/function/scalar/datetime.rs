@@ -700,10 +700,29 @@ fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult
     ))
 }
 
+pub(crate) fn current_timestamp(session_timezone: &Arc<str>) -> Expr {
+    ScalarUDF::from(TimestampNow::new(
+        Arc::clone(session_timezone),
+        TimeUnit::Microsecond,
+    ))
+    .call(vec![])
+}
+
+pub(crate) fn to_session_local_timestamp(timestamp: Expr, session_timezone: &Arc<str>) -> Expr {
+    let timestamp = cast(timestamp, DataType::Timestamp(TimeUnit::Microsecond, None));
+    convert_tz(
+        lit("UTC"),
+        lit(session_timezone.to_string()),
+        timestamp,
+        false,
+    )
+}
+
 fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.is_empty() {
-        let timezone = input.function_context.plan_config.session_timezone.clone();
-        Ok(ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Microsecond)).call(vec![]))
+        Ok(current_timestamp(
+            &input.function_context.plan_config.session_timezone,
+        ))
     } else {
         Err(PlanError::invalid(format!(
             "current_timestamp takes 0 arguments, got {:?}",
@@ -713,8 +732,9 @@ fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr
 }
 
 fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let expr = current_timestamp_microseconds(input)?;
-    Ok(expr_fn::to_local_time(vec![expr]))
+    let session_timezone = input.function_context.plan_config.session_timezone.clone();
+    let timestamp = current_timestamp_microseconds(input)?;
+    Ok(to_session_local_timestamp(timestamp, &session_timezone))
 }
 
 fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr, classic: bool) -> Expr {

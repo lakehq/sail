@@ -468,3 +468,24 @@ Feature: datetime edge cases
         | zone               |
         | Pacific/Kiritimati |
         | Etc/GMT+12         |
+
+    Scenario Outline: localtimestamp supports Spark session time-zone IDs: <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT localtimestamp() = CAST(current_timestamp() AS TIMESTAMP_NTZ) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | zone      |
+        | +01:02:03 |
+        | GMT+8:30  |
+        | +8        |
+        | PST       |
+        | UTC+8     |
+        | +013045   |
+        | IST       |
+        | America/Los_Angeles |

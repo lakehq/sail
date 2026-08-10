@@ -6,7 +6,8 @@ use datafusion_expr::{BinaryExpr, Expr, Operator, ScalarUDF, cast, lit};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::timestamp_now::TimestampNow;
+
+use crate::function::scalar::{current_timestamp, to_session_local_timestamp};
 
 #[derive(Clone, Copy)]
 enum SpecialDatetime {
@@ -61,7 +62,10 @@ fn special_datetime(expr: &Expr) -> Option<SpecialDatetime> {
 }
 
 fn relative_current_date(days: i32, session_timezone: &Arc<str>) -> Expr {
-    let date = cast(current_local_timestamp(session_timezone), DataType::Date32);
+    let date = cast(
+        to_session_local_timestamp(current_timestamp(session_timezone), session_timezone),
+        DataType::Date32,
+    );
     if days == 0 {
         date
     } else {
@@ -73,27 +77,6 @@ fn relative_current_date(days: i32, session_timezone: &Arc<str>) -> Expr {
             )))),
         ))
     }
-}
-
-fn current_timestamp(session_timezone: &Arc<str>) -> Expr {
-    ScalarUDF::from(TimestampNow::new(
-        Arc::clone(session_timezone),
-        TimeUnit::Microsecond,
-    ))
-    .call(vec![])
-}
-
-fn current_local_timestamp(session_timezone: &Arc<str>) -> Expr {
-    let timestamp = current_timestamp(session_timezone);
-    let timestamp = cast(
-        cast(timestamp, DataType::Int64),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    );
-    ScalarUDF::from(ConvertTz::new(false)).call(vec![
-        lit("UTC"),
-        lit(session_timezone.to_string()),
-        timestamp,
-    ])
 }
 
 fn date_to_timestamp(date: Expr, target_type: &DataType, session_timezone: &Arc<str>) -> Expr {
@@ -136,7 +119,7 @@ pub(crate) fn foldable_special_datetime_cast(
                 if timezone.is_some() {
                     cast(cast(now, DataType::Int64), target_type.clone())
                 } else {
-                    current_local_timestamp(session_timezone)
+                    to_session_local_timestamp(now, session_timezone)
                 }
             }
             SpecialDatetime::Today => {
