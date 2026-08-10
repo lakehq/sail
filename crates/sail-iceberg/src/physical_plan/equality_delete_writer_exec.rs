@@ -183,7 +183,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                         .to_string(),
                 ));
             }
-            let current_schema = &base_table_context.current_schema;
+            let current_schema = &write_context.writer_schema;
             let default_spec = base_table_context
                 .default_partition_spec()
                 .cloned()

@@ -24,7 +24,6 @@ use crate::utils::partition_transform::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IcebergBaseWriteContext {
     pub format_version: FormatVersion,
-    pub current_schema: IcebergSchema,
     pub partition_specs: Vec<PartitionSpec>,
     pub default_spec_id: i32,
     pub properties: HashMap<String, String>,
@@ -35,13 +34,9 @@ pub struct IcebergBaseWriteContext {
 }
 
 impl IcebergBaseWriteContext {
-    fn from_metadata(metadata: &TableMetadata) -> Result<Self> {
-        let current_schema = metadata.current_schema().cloned().ok_or_else(|| {
-            DataFusionError::Plan("No current schema in Iceberg table metadata".to_string())
-        })?;
-        Ok(Self {
+    fn from_metadata(metadata: &TableMetadata) -> Self {
+        Self {
             format_version: metadata.format_version,
-            current_schema,
             partition_specs: metadata.partition_specs.clone(),
             default_spec_id: metadata.default_spec_id,
             properties: metadata.properties.clone(),
@@ -49,7 +44,7 @@ impl IcebergBaseWriteContext {
             current_schema_id: metadata.current_schema_id,
             last_partition_id: metadata.last_partition_id,
             current_snapshot_id: metadata.current_snapshot_id,
-        })
+        }
     }
 
     pub fn default_partition_spec(&self) -> Option<&PartitionSpec> {
@@ -66,8 +61,8 @@ pub struct IcebergWriteContext {
     pub writer_schema: IcebergSchema,
     pub writer_partition_spec: Option<PartitionSpec>,
     pub data_location: String,
-    pub schema_update: Option<IcebergSchema>,
-    pub partition_spec_update: Option<PartitionSpec>,
+    pub commit_writer_schema: bool,
+    pub commit_writer_partition_spec: bool,
     pub requirements: Vec<TableRequirement>,
     pub variant_shredding: VariantShreddingConfig,
 }
@@ -80,6 +75,11 @@ impl IcebergWriteContext {
                  base_present={}",
                 self.base_table.is_some()
             )));
+        }
+        if self.commit_writer_partition_spec && self.writer_partition_spec.is_none() {
+            return Err(DataFusionError::Plan(
+                "Iceberg write context cannot commit a missing writer partition spec".to_string(),
+            ));
         }
         self.data_location()?;
         Ok(())
@@ -168,8 +168,8 @@ pub fn prepare_iceberg_write_context(
         writer_schema,
         writer_partition_spec,
         data_location,
-        schema_update,
-        partition_spec_update,
+        commit_writer_schema,
+        commit_writer_partition_spec,
         requirements,
         variant_shredding,
     ) = if let Some(table_metadata) = base_metadata {
@@ -226,12 +226,9 @@ pub fn prepare_iceberg_write_context(
             }
         }
 
-        let schema_update = schema_outcome
-            .changed
-            .then(|| schema_outcome.iceberg_schema.clone());
-        let partition_spec_update = matches!(schema_mode, Some(SchemaMode::Overwrite))
-            .then(|| partition_spec.clone())
-            .flatten();
+        let commit_writer_schema = schema_outcome.changed;
+        let commit_writer_partition_spec =
+            matches!(schema_mode, Some(SchemaMode::Overwrite)) && partition_spec.is_some();
         let requirements = vec![
             TableRequirement::LastAssignedFieldIdMatch {
                 last_assigned_field_id: table_metadata.last_column_id,
@@ -244,8 +241,8 @@ pub fn prepare_iceberg_write_context(
             schema_outcome.iceberg_schema,
             partition_spec,
             data_location,
-            schema_update,
-            partition_spec_update,
+            commit_writer_schema,
+            commit_writer_partition_spec,
             requirements,
             variant_shredding,
         )
@@ -288,25 +285,23 @@ pub fn prepare_iceberg_write_context(
             table_url,
         )?;
         (
-            writer_schema.clone(),
-            partition_spec.clone(),
-            data_location,
-            Some(writer_schema),
+            writer_schema,
             partition_spec,
+            data_location,
+            true,
+            true,
             Vec::new(),
             variant_shredding,
         )
     };
 
     Ok(IcebergWriteContext {
-        base_table: base_metadata
-            .map(IcebergBaseWriteContext::from_metadata)
-            .transpose()?,
+        base_table: base_metadata.map(IcebergBaseWriteContext::from_metadata),
         writer_schema,
         writer_partition_spec,
         data_location: data_location.to_string(),
-        schema_update,
-        partition_spec_update,
+        commit_writer_schema,
+        commit_writer_partition_spec,
         requirements,
         variant_shredding,
     })

@@ -4956,6 +4956,8 @@ mod tests {
 
         assert!(writer.write_context().base_table.is_none());
         assert_eq!(writer.write_context().data_location, expected_data_location);
+        assert!(writer.write_context().commit_writer_schema);
+        assert!(writer.write_context().commit_writer_partition_spec);
         assert!(
             writer
                 .write_context()
@@ -4991,7 +4993,6 @@ mod tests {
             .ok_or_else(|| plan_datafusion_err!("missing writer partition spec"))?;
         write_context.base_table = Some(IcebergBaseWriteContext {
             format_version: FormatVersion::V2,
-            current_schema: write_context.writer_schema.clone(),
             partition_specs: vec![writer_partition_spec],
             default_spec_id: 0,
             properties: HashMap::new(),
@@ -5000,8 +5001,8 @@ mod tests {
             last_partition_id: 999,
             current_snapshot_id: Some(7),
         });
-        write_context.schema_update = None;
-        write_context.partition_spec_update = None;
+        write_context.commit_writer_schema = false;
+        write_context.commit_writer_partition_spec = false;
         let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergEqualityDeleteWriterExec::new(
             Arc::new(EmptyExec::new(input_schema)),
             table_url,
@@ -5027,6 +5028,8 @@ mod tests {
             .as_ref()
             .ok_or_else(|| plan_datafusion_err!("missing decoded base table context"))?;
         assert_eq!(base_table.current_snapshot_id, Some(7));
+        assert!(!writer.write_context().commit_writer_schema);
+        assert!(!writer.write_context().commit_writer_partition_spec);
         assert_eq!(
             writer.write_context().data_location,
             "file:///tmp/iceberg-equality-codec-context/data/"

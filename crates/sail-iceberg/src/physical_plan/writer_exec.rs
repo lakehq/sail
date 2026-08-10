@@ -462,8 +462,13 @@ impl ExecutionPlan for IcebergWriterExec {
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,
-                schema: write_context.schema_update.clone(),
-                partition_spec: write_context.partition_spec_update.clone(),
+                schema: write_context
+                    .commit_writer_schema
+                    .then(|| write_context.writer_schema.clone()),
+                partition_spec: write_context
+                    .commit_writer_partition_spec
+                    .then(|| write_context.writer_partition_spec.clone())
+                    .flatten(),
             };
 
             let schema = iceberg_action_schema()?;
