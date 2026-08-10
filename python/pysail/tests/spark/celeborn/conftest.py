@@ -13,18 +13,25 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 _IMAGE = "apache/celeborn:0.6.3"
 _MASTER_PORT = 12097
+_MASTER_HTTP_PORT = 12098
 _CONFIG_PATH = Path(__file__).with_name("celeborn-defaults.conf")
+
+pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
 @dataclass(frozen=True)
 class MasterService:
     host: str
     port: int
+    http_port: int
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,32 @@ class WorkerService:
     push_port: int
     fetch_port: int
     replicate_port: int
+
+
+@pytest.fixture(scope="package")
+def remote(celeborn_master: MasterService, celeborn_worker: WorkerService) -> Generator[str, None, None]:
+    """Run Spark Connect with a Celeborn shuffle backend."""
+    endpoint_overrides = "[{}]".format(
+        ", ".join(
+            f'{{ advertised_host = "celeborn-worker", advertised_port = {port}, '
+            f'host = "{celeborn_worker.host}", port = {mapped_port} }}'
+            for port, mapped_port in [
+                (12000, celeborn_worker.rpc_port),
+                (12001, celeborn_worker.push_port),
+                (12002, celeborn_worker.fetch_port),
+                (12003, celeborn_worker.replicate_port),
+            ]
+        )
+    )
+    envs = {
+        "SAIL_MODE": "local-cluster",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_HOST": celeborn_master.host,
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_PORT": str(celeborn_master.port),
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
+    }
+    with spark_connect_server(envs=envs) as server:
+        yield server.remote
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 60) -> None:
@@ -68,7 +101,7 @@ def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None,
         .with_env("CELEBORN_NO_DAEMONIZE", "1")
         .with_command(["start-master.sh", "--host", "celeborn-master", "--port", str(_MASTER_PORT)])
         .with_volume_mapping(str(_CONFIG_PATH), "/opt/celeborn/conf/celeborn-defaults.conf", "ro")
-        .with_exposed_ports(_MASTER_PORT)
+        .with_exposed_ports(_MASTER_PORT, _MASTER_HTTP_PORT)
         .with_network(celeborn_network)
         .with_network_aliases("celeborn-master")
     )
@@ -76,8 +109,10 @@ def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None,
         master.start()
         host = master.get_container_host_ip()
         port = int(master.get_exposed_port(_MASTER_PORT))
+        http_port = int(master.get_exposed_port(_MASTER_HTTP_PORT))
         _wait_for_port(host, port)
-        yield MasterService(host, port)
+        _wait_for_port(host, http_port)
+        yield MasterService(host, port, http_port)
     finally:
         master.stop()
 

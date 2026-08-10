@@ -1,0 +1,212 @@
+use std::io::Cursor;
+
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::ipc::reader::StreamReader;
+use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::common::{DataFusionError, Result};
+use sail_celeborn::shuffle::ShuffleClient;
+
+use crate::id::{JobId, TaskStreamKey};
+use crate::stream::error::TaskStreamError;
+use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
+
+#[derive(Clone)]
+pub(crate) struct CelebornStreamManager {
+    client: ShuffleClient,
+}
+
+impl CelebornStreamManager {
+    pub(crate) fn new(client: ShuffleClient) -> Self {
+        Self { client }
+    }
+
+    pub(crate) async fn stop(&self) {
+        let _ = self.client.stop().await;
+    }
+
+    pub(crate) async fn remove_stream(&self, job_id: JobId, stage: usize) -> Result<()> {
+        let shuffle_id = self
+            .client
+            .create_shuffle_id(format!("{job_id}:{stage}"))
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        self.client
+            .unregister_shuffle(shuffle_id)
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    pub(crate) async fn create_stream(
+        &self,
+        key: TaskStreamKey,
+        num_mappers: usize,
+        channels: usize,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        // A Celeborn shuffle spans every map task and reduce channel in one producer stage.
+        let shuffle_key = format!("{}:{}", key.job_id, key.stage);
+        let shuffle_id = self
+            .client
+            .create_shuffle_id(shuffle_key)
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        self.client
+            .register_shuffle(
+                shuffle_id,
+                (0..channels)
+                    .map(|channel| {
+                        i32::try_from(channel)
+                            .map_err(|error| DataFusionError::External(Box::new(error)))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                false,
+                0,
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        Ok(Box::new(CelebornStreamSink {
+            client: self.client.clone(),
+            shuffle_id,
+            partition_id: i32::try_from(key.channel)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            map_id: i32::try_from(key.partition)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            attempt_id: i32::try_from(key.attempt)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            num_mappers: i32::try_from(num_mappers)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            schema,
+        }))
+    }
+
+    pub(crate) async fn fetch_stream(
+        &self,
+        job_id: JobId,
+        stage: usize,
+        channels: Vec<usize>,
+        schema: SchemaRef,
+    ) -> Result<TaskStreamSource> {
+        let shuffle_id = self
+            .client
+            .create_shuffle_id(format!("{job_id}:{stage}"))
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let partition_ids = channels
+            .iter()
+            .map(|channel| {
+                i32::try_from(*channel).map_err(|error| DataFusionError::External(Box::new(error)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // This initializes routing information in this task runner's client. The
+        // lifecycle manager returns the existing reservation for this shuffle.
+        self.client
+            .register_shuffle(shuffle_id, partition_ids, false, 0)
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let mut batches = vec![];
+        for channel in channels {
+            let data = self
+                .client
+                .read_partition(
+                    shuffle_id,
+                    i32::try_from(channel)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?,
+                )
+                .await
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            batches.extend(decode_batches(data, &schema)?);
+        }
+        Ok(Box::pin(futures::stream::iter(
+            batches.into_iter().map(Ok::<_, TaskStreamError>),
+        )))
+    }
+}
+
+struct CelebornStreamSink {
+    client: ShuffleClient,
+    shuffle_id: i32,
+    partition_id: i32,
+    map_id: i32,
+    attempt_id: i32,
+    num_mappers: i32,
+    schema: SchemaRef,
+}
+
+#[tonic::async_trait]
+impl TaskStreamChannelSink for CelebornStreamSink {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
+        let mut writer = StreamWriter::try_new(Vec::new(), self.schema.as_ref())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        writer
+            .write(&batch)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        writer
+            .finish()
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let payload = writer
+            .into_inner()
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let length = u32::try_from(payload.len())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let mut data = length.to_le_bytes().to_vec();
+        data.extend_from_slice(&payload);
+        self.client
+            .push_data(
+                self.shuffle_id,
+                self.partition_id,
+                self.map_id,
+                self.attempt_id,
+                data,
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        Ok(TaskStreamWriteState::Active)
+    }
+
+    async fn commit(self: Box<Self>) -> Result<()> {
+        self.client
+            .mapper_end(
+                self.shuffle_id,
+                self.map_id,
+                self.attempt_id,
+                self.num_mappers,
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    async fn abort(self: Box<Self>) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn decode_batches(data: Vec<u8>, _schema: &SchemaRef) -> Result<Vec<RecordBatch>> {
+    let mut offset = 0;
+    let mut batches = vec![];
+    while offset < data.len() {
+        let Some(header) = data.get(offset..offset + size_of::<u32>()) else {
+            return Err(DataFusionError::Execution(
+                "truncated Celeborn shuffle frame header".to_string(),
+            ));
+        };
+        let length =
+            u32::from_le_bytes(header.try_into().map_err(|_| {
+                DataFusionError::Execution("invalid Celeborn frame header".to_string())
+            })?) as usize;
+        offset += size_of::<u32>();
+        let Some(frame) = data.get(offset..offset + length) else {
+            return Err(DataFusionError::Execution(
+                "truncated Celeborn shuffle frame".to_string(),
+            ));
+        };
+        let reader = StreamReader::try_new(Cursor::new(frame), None)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        for batch in reader {
+            batches.push(batch.map_err(|error| DataFusionError::External(Box::new(error)))?);
+        }
+        offset += length;
+    }
+    Ok(batches)
+}

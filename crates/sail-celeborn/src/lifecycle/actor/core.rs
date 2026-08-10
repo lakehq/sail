@@ -20,9 +20,13 @@ impl Actor for LifecycleManagerActor {
             options,
             client,
             registered_shuffles: Default::default(),
+            reservations: Default::default(),
+            pending_slot_requests: Default::default(),
             mapper_attempts: Default::default(),
             committing_shuffles: Default::default(),
             committed_shuffles: Default::default(),
+            shuffle_ids: Default::default(),
+            next_shuffle_id: 0,
             application_registration: ApplicationRegistration::Pending,
         }
     }
@@ -44,6 +48,9 @@ impl Actor for LifecycleManagerActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
+            LifecycleManagerMessage::CreateShuffleId { task_key, result } => {
+                self.handle_create_shuffle_id(task_key, result)
+            }
             LifecycleManagerMessage::RequestSlotsBegin {
                 shuffle_id,
                 partition_ids,
@@ -58,11 +65,9 @@ impl Actor for LifecycleManagerActor {
                 max_workers,
                 result,
             ),
-            LifecycleManagerMessage::RequestSlotsEnd {
-                shuffle_id,
-                result,
-                reply,
-            } => self.handle_request_slots_end(shuffle_id, result, reply),
+            LifecycleManagerMessage::RequestSlotsEnd { shuffle_id, result } => {
+                self.handle_request_slots_end(shuffle_id, result)
+            }
             LifecycleManagerMessage::MapperEndBegin {
                 shuffle_id,
                 map_id,
@@ -90,8 +95,8 @@ impl Actor for LifecycleManagerActor {
                 result,
                 reply,
             } => self.handle_unregister_shuffle_end(shuffle_id, result, reply),
-            LifecycleManagerMessage::Stop { result } => {
-                // TODO: unregister shuffles before stopping to release slots early
+            LifecycleManagerMessage::Stop { result } => self.handle_stop(ctx, result),
+            LifecycleManagerMessage::StopEnd { result } => {
                 let _ = result.send(());
                 ActorAction::Stop
             }

@@ -10,6 +10,19 @@ use crate::shuffle::actor::ShuffleClientActor;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl ShuffleClientActor {
+    pub(super) fn handle_create_shuffle_id(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_key: String,
+        reply: oneshot::Sender<CelebornResult<i32>>,
+    ) -> ActorAction {
+        let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        ctx.spawn(async move {
+            let _ = reply.send(lifecycle_manager.create_shuffle_id(task_key).await);
+        });
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_register_shuffle(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -107,6 +120,19 @@ impl ShuffleClientActor {
                     .mapper_end(shuffle_id, map_id, attempt_id, num_mappers)
                     .await,
             );
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_unregister_shuffle(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        shuffle_id: i32,
+        reply: oneshot::Sender<CelebornResult<()>>,
+    ) -> ActorAction {
+        let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        ctx.spawn(async move {
+            let _ = reply.send(lifecycle_manager.unregister_shuffle(shuffle_id).await);
         });
         ActorAction::Continue
     }

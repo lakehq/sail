@@ -10,7 +10,7 @@ use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::ExecutionResult;
-use crate::id::{TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
@@ -65,6 +65,23 @@ impl TaskStreamFactory {
             key,
             output,
             schema,
+        ))
+    }
+
+    pub fn celeborn_writer(
+        &self,
+        key: TaskKey,
+        output: TaskOutput,
+        schema: SchemaRef,
+        mappers: usize,
+    ) -> Arc<dyn TaskStreamWriter> {
+        Arc::new(CelebornTaskStreamWriter::new(
+            self.handle.clone(),
+            self.context.clone(),
+            key,
+            output.channels(),
+            schema,
+            mappers,
         ))
     }
 }
@@ -129,6 +146,27 @@ impl TaskStreamAccessor {
         .await
     }
 
+    async fn create_celeborn_stream(
+        &self,
+        key: TaskStreamKey,
+        num_mappers: usize,
+        channels: usize,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateCelebornStream {
+                key,
+                num_mappers,
+                channels,
+                schema,
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
     async fn fetch_driver_stream(
         &self,
         key: TaskStreamKey,
@@ -176,6 +214,27 @@ impl TaskStreamAccessor {
                 key,
                 schema,
                 context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
+    async fn fetch_celeborn_stream(
+        &self,
+        job_id: JobId,
+        stage: usize,
+        channels: Vec<usize>,
+        schema: SchemaRef,
+    ) -> Result<TaskStreamSource> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::FetchCelebornStream {
+                job_id,
+                stage,
+                channels,
+                schema,
                 result,
             },
             rx,
@@ -255,6 +314,21 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 }))
                 .await?
             }
+            TaskInputLocator::ShuffleService { channels } => {
+                let channels = channels.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                vec![
+                    self.streams
+                        .fetch_celeborn_stream(
+                            self.key.job_id,
+                            self.input.stage,
+                            channels.clone(),
+                            self.schema.clone(),
+                        )
+                        .await?,
+                ]
+            }
         };
         Ok(merged_stream(self.schema.clone(), streams))
     }
@@ -321,6 +395,63 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
                 .await?
             }
         };
+        Ok(Box::new(MultiChannelTaskStreamSink {
+            sinks: sinks.into_iter().map(Some).collect(),
+        }))
+    }
+}
+
+pub(crate) struct CelebornTaskStreamWriter {
+    streams: TaskStreamAccessor,
+    key: TaskKey,
+    channels: usize,
+    schema: SchemaRef,
+    mappers: usize,
+}
+
+impl CelebornTaskStreamWriter {
+    fn new(
+        handle: ActorHandle<TaskRunnerActor>,
+        context: Arc<TaskContext>,
+        key: TaskKey,
+        channels: usize,
+        schema: SchemaRef,
+        mappers: usize,
+    ) -> Self {
+        Self {
+            streams: TaskStreamAccessor::new(handle, context),
+            key,
+            channels,
+            schema,
+            mappers,
+        }
+    }
+}
+
+impl fmt::Debug for CelebornTaskStreamWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CelebornTaskStreamWriter").finish()
+    }
+}
+
+#[tonic::async_trait]
+impl TaskStreamWriter for CelebornTaskStreamWriter {
+    async fn open(&self, partition: usize) -> Result<Box<dyn TaskStreamSink>> {
+        if partition != self.key.partition {
+            return Err(DataFusionError::Execution(format!(
+                "task stream writer for partition {} cannot open partition {partition}",
+                self.key.partition
+            )));
+        }
+        let sinks = try_join_all((0..self.channels).map(|channel| {
+            self.streams.create_celeborn_stream(
+                self.key.task_stream_key(channel),
+                self.mappers,
+                self.channels,
+                self.schema.clone(),
+            )
+        }))
+        .await?;
         Ok(Box::new(MultiChannelTaskStreamSink {
             sinks: sinks.into_iter().map(Some).collect(),
         }))

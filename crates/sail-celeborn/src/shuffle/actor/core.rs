@@ -22,6 +22,9 @@ impl Actor for ShuffleClientActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
+            ShuffleClientMessage::CreateShuffleId { task_key, result } => {
+                self.handle_create_shuffle_id(ctx, task_key, result)
+            }
             ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,
@@ -64,6 +67,9 @@ impl Actor for ShuffleClientActor {
                 num_mappers,
                 result,
             } => self.handle_mapper_end(ctx, shuffle_id, map_id, attempt_id, num_mappers, result),
+            ShuffleClientMessage::UnregisterShuffle { shuffle_id, result } => {
+                self.handle_unregister_shuffle(ctx, shuffle_id, result)
+            }
             ShuffleClientMessage::ReadPartition {
                 shuffle_id,
                 partition_id,

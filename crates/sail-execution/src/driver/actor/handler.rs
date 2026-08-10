@@ -6,7 +6,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, info, warn};
-use sail_common::actor::{ActorAction, ActorContext};
+use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
+use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -27,6 +28,19 @@ use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAs
 use crate::task_runner::TaskRunnerMessage;
 
 impl DriverActor {
+    pub(super) fn handle_celeborn_get_lifecycle_manager(
+        &mut self,
+        result: oneshot::Sender<Option<ActorHandle<LifecycleManagerActor>>>,
+    ) -> ActorAction {
+        let _ = result.send(
+            self.extensions
+                .lifecycle_manager
+                .as_ref()
+                .map(LocalLifecycleManager::handle),
+        );
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
         info!("activating driver {}", self.options.driver_id);
         for _ in 0..self.options.worker_initial_count {
@@ -507,6 +521,17 @@ impl DriverActor {
                             })
                             .await;
                     });
+                }
+                for stage in self.task_assigner.untrack_external_streams(job_id, stage) {
+                    if let Some(streams) = self.extensions.celeborn_streams.clone() {
+                        ctx.spawn(async move {
+                            if let Err(error) = streams.remove_stream(job_id, stage).await {
+                                warn!(
+                                    "failed to remove Celeborn shuffle data for job {job_id} stage {stage}: {error}"
+                                );
+                            }
+                        });
+                    }
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {

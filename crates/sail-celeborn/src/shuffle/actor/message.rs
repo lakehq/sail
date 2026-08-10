@@ -7,6 +7,10 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum ShuffleClientMessage {
+    CreateShuffleId {
+        task_key: String,
+        result: oneshot::Sender<CelebornResult<i32>>,
+    },
     RegisterShuffle {
         shuffle_id: i32,
         partition_ids: Vec<i32>,
@@ -34,6 +38,10 @@ pub enum ShuffleClientMessage {
         num_mappers: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
+    UnregisterShuffle {
+        shuffle_id: i32,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
     ReadPartition {
         shuffle_id: i32,
         partition_id: i32,
@@ -47,10 +55,12 @@ pub enum ShuffleClientMessage {
 impl SpanAssociation for ShuffleClientMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
+            Self::CreateShuffleId { .. } => "CreateShuffleId",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleEnd { .. } => "RegisterShuffleEnd",
             Self::PushData { .. } => "PushData",
             Self::MapperEnd { .. } => "MapperEnd",
+            Self::UnregisterShuffle { .. } => "UnregisterShuffle",
             Self::ReadPartition { .. } => "ReadPartition",
             Self::Stop { .. } => "Stop",
         }

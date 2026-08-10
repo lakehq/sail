@@ -1,12 +1,16 @@
 use std::mem;
+use std::sync::Arc;
 
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use log::info;
+use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
+use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
+use crate::stream::celeborn::{CelebornStreamManager, RemoteLifecycleManager};
 use crate::task_runner::{
     TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement,
 };
@@ -41,12 +45,30 @@ impl Actor for WorkerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let worker = ctx.handle().clone();
+        let celeborn_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Celeborn { .. } => {
+                let application_id = celeborn_application_id(&self.options.session_id);
+                let lifecycle_manager = Arc::new(RemoteLifecycleManager::new(
+                    self.driver_client_set.celeborn.clone(),
+                ));
+                let client = ShuffleClient::new(ctx.children_mut().spawn::<ShuffleClientActor>(
+                    ShuffleClientOptions::new(
+                        application_id,
+                        lifecycle_manager,
+                        self.options.shuffle_backend.celeborn_endpoint_resolver(),
+                    ),
+                ));
+                Some(CelebornStreamManager::new(client))
+            }
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+        };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
                 extensions: TaskRunnerExtensions::new(
                     (&self.options).into(),
                     &self.options.shuffle_backend,
                     self.options.session_id.clone(),
+                    celeborn_streams,
                 ),
                 placement: TaskRunnerPlacement::Worker {
                     worker_id: self.options.worker_id,

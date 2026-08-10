@@ -305,6 +305,7 @@ mod retry_strategy {
 pub enum ShuffleBackend {
     Flight,
     Storage(StorageShuffleBackend),
+    Celeborn(CelebornShuffleBackend),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +318,23 @@ pub struct StorageShuffleBackend {
     pub path: Option<String>,
     pub max_file_size: usize,
     pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornShuffleBackend {
+    pub master_host: String,
+    pub master_port: u16,
+    pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornEndpointOverride {
+    pub advertised_host: String,
+    pub advertised_port: u16,
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +353,7 @@ mod shuffle_backend {
     pub enum Type {
         Flight,
         Storage,
+        Celeborn,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +361,7 @@ mod shuffle_backend {
     pub struct ShuffleBackend {
         pub r#type: Type,
         pub storage: super::StorageShuffleBackend,
+        pub celeborn: super::CelebornShuffleBackend,
     }
 
     impl From<ShuffleBackend> for super::ShuffleBackend {
@@ -349,6 +369,7 @@ mod shuffle_backend {
             match value.r#type {
                 Type::Flight => super::ShuffleBackend::Flight,
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
+                Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
             }
         }
     }
@@ -363,10 +384,29 @@ mod shuffle_backend {
                         max_file_size: 0,
                         compression: super::ShuffleCompression::None,
                     },
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        endpoint_overrides: vec![],
+                    },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
                     storage,
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        endpoint_overrides: vec![],
+                    },
+                },
+                super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
+                    r#type: Type::Celeborn,
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn,
                 },
             }
         }
@@ -796,5 +836,8 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
     }
 }

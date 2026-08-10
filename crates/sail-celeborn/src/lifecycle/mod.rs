@@ -10,6 +10,9 @@ use crate::master::SlotReservation;
 /// Operations supported by a Celeborn shuffle lifecycle manager.
 #[tonic::async_trait]
 pub trait LifecycleManager: Send + Sync + 'static {
+    /// Get the stable shuffle ID associated with a Sail task stream.
+    async fn create_shuffle_id(&self, task_key: String) -> CelebornResult<i32>;
+
     async fn request_slots(
         &self,
         shuffle_id: i32,

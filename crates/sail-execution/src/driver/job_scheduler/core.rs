@@ -25,6 +25,7 @@ use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
 use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::shuffle::ShuffleBackendKind;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -53,7 +54,7 @@ impl JobScheduler {
         let graph = JobGraph::try_new(
             plan,
             crate::job_graph::JobGraphOptions {
-                use_blocking_shuffle: self.options.use_blocking_shuffle,
+                shuffle_backend: self.options.shuffle_backend.clone(),
             },
         )?;
         debug!("job {job_id} job graph \n{graph}");
@@ -356,7 +357,11 @@ impl JobScheduler {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
                     OutputMode::Pipelined => TaskOutputKind::Local,
-                    OutputMode::Blocking => TaskOutputKind::Storage,
+                    OutputMode::Blocking => match job.graph.shuffle_backend() {
+                        ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
+                        ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
+                        ShuffleBackendKind::Flight => TaskOutputKind::Local,
+                    },
                 };
                 let key = StageGroupKey {
                     placement: stage.placement,
@@ -628,7 +633,11 @@ impl<'a> TaskInputBuilder<'a> {
                 TaskPlacement::Driver => self.build_driver_locator()?,
                 TaskPlacement::Worker => self.build_worker_locator()?,
             },
-            OutputMode::Blocking => self.build_storage_locator()?,
+            OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+                ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
+                ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
+                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+            },
         };
         Ok(TaskInput {
             stage: self.input.stage,
@@ -680,6 +689,26 @@ impl<'a> TaskInputBuilder<'a> {
         Ok(TaskInputLocator::Storage {
             keys: self.build_task_input_keys()?,
         })
+    }
+
+    fn build_shuffle_service_locator(&self) -> ExecutionResult<TaskInputLocator> {
+        let input_channels = self.producer.distribution.channels();
+        let output_partitions = self.consumer.plan.output_partitioning().partition_count();
+        let channels = match self.input.mode {
+            InputMode::Shuffle => (0..output_partitions)
+                .map(|partition| vec![partition])
+                .collect(),
+            InputMode::Broadcast => {
+                let channels = (0..input_channels).collect::<Vec<_>>();
+                vec![channels; output_partitions]
+            }
+            mode => {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "Celeborn shuffle service does not support {mode} input"
+                )));
+            }
+        };
+        Ok(TaskInputLocator::ShuffleService { channels })
     }
 
     fn assignment(&self, key: &TaskInputKey) -> Option<&TaskAssignment> {

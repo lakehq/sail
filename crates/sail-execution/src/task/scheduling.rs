@@ -42,8 +42,7 @@ pub struct TaskSetEntry {
 pub enum TaskOutputKind {
     Local,
     Storage,
-    /// An externally managed shuffle service owns this stream, so the driver does not track it.
-    #[expect(dead_code, reason = "reserved for external shuffle services")]
+    /// An externally managed shuffle service owns this stream.
     External,
 }
 
@@ -69,6 +68,13 @@ impl TaskSet {
         self.entries
             .iter()
             .filter(|entry| matches!(entry.output, TaskOutputKind::Storage))
+            .map(|entry| &entry.key)
+    }
+
+    pub fn external_streams(&self) -> impl Iterator<Item = &TaskKey> {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.output, TaskOutputKind::External))
             .map(|entry| &entry.key)
     }
 

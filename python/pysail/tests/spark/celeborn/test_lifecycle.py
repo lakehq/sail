@@ -11,7 +11,7 @@ from pysail import _native
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from pysail.tests.celeborn.conftest import MasterService, WorkerService
+    from pysail.tests.spark.celeborn.conftest import MasterService, WorkerService
 
 
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001

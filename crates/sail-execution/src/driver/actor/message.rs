@@ -6,6 +6,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_celeborn::lifecycle::LifecycleManagerActor;
+use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -73,6 +75,9 @@ pub enum DriverMessage {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
+    CelebornGetLifecycleManager {
+        result: oneshot::Sender<Option<ActorHandle<LifecycleManagerActor>>>,
+    },
     ObserveState {
         observer: JobRunnerObserver,
     },
@@ -139,6 +144,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
             DriverMessage::ObserveState { .. } => "ObserveState",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
@@ -262,6 +268,7 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
+            DriverMessage::CelebornGetLifecycleManager { result: _ } => {}
             DriverMessage::ObserveState { observer: _ } => {}
             DriverMessage::Shutdown { .. } => {}
         }

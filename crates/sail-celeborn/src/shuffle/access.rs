@@ -12,6 +12,15 @@ pub struct ShuffleClient {
 }
 
 impl ShuffleClient {
+    pub async fn create_shuffle_id(&self, task_key: String) -> CelebornResult<i32> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(ShuffleClientMessage::CreateShuffleId { task_key, result })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
     pub fn new(handle: ActorHandle<ShuffleClientActor>) -> Self {
         Self { handle }
     }
@@ -55,6 +64,15 @@ impl ShuffleClient {
                 num_mappers,
                 result,
             })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    pub async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(ShuffleClientMessage::UnregisterShuffle { shuffle_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?

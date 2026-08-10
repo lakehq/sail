@@ -46,6 +46,13 @@ pub enum TaskRunnerMessage {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
+    CreateCelebornStream {
+        key: TaskStreamKey,
+        num_mappers: usize,
+        channels: usize,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+    },
     FetchDriverStream {
         key: TaskStreamKey,
         schema: SchemaRef,
@@ -65,6 +72,13 @@ pub enum TaskRunnerMessage {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    FetchCelebornStream {
+        job_id: JobId,
+        stage: usize,
+        channels: Vec<usize>,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     CleanUpLocalStreams {
@@ -88,10 +102,12 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
+            Self::CreateCelebornStream { .. } => "CreateCelebornStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
             Self::FetchLocalStream { .. } => "FetchLocalStream",
             Self::FetchStorageStream { .. } => "FetchStorageStream",
+            Self::FetchCelebornStream { .. } => "FetchCelebornStream",
             Self::CleanUpLocalStreams { .. } => "CleanUpLocalStreams",
             Self::CleanUpStorageStreams { .. } => "CleanUpStorageStreams",
             Self::Shutdown => "Shutdown",
@@ -155,7 +171,8 @@ impl SpanAssociation for TaskRunnerMessage {
             }
             Self::ProbePendingLocalStream { key }
             | Self::CreateLocalStream { key, .. }
-            | Self::CreateStorageStream { key, .. } => {
+            | Self::CreateStorageStream { key, .. }
+            | Self::CreateCelebornStream { key, .. } => {
                 let TaskStreamKey {
                     job_id,
                     stage,
@@ -238,6 +255,10 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            Self::FetchCelebornStream { job_id, stage, .. } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
             }
             Self::CleanUpLocalStreams { job_id, stage }
             | Self::CleanUpStorageStreams { job_id, stage, .. } => {
