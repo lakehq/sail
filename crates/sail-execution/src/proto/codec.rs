@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -243,6 +244,7 @@ use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjec
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -251,8 +253,9 @@ use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkN
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
 };
+use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
@@ -294,8 +297,8 @@ use crate::plan::r#gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::r#gen::extended_window_udf::UdwfKind;
 use crate::plan::r#gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
-    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, LambdaExprNode,
-    LambdaVariableExprNode,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, IcebergPartitionTransformExprNode,
+    LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::plan::{StageInputExec, r#gen};
 use crate::proto::converter::RemotePhysicalProtoConverter;
@@ -1373,7 +1376,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         table_exists,
                         options,
                         logical_input_schema,
-                    )
+                    )?
                 } else {
                     IcebergWriterExec::new(
                         input,
@@ -2725,6 +2728,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
+            "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
@@ -2911,6 +2915,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
+            || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -3573,6 +3578,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
+            ExprKind::IcebergPartitionTransform(node) => {
+                if inputs.len() != 1 {
+                    return plan_err!(
+                        "IcebergPartitionTransformExpr expects exactly one input, got {}",
+                        inputs.len()
+                    );
+                }
+                let transform = node
+                    .transform
+                    .parse::<IcebergTransform>()
+                    .map_err(|error| {
+                        plan_datafusion_err!(
+                            "failed to decode Iceberg partition transform: {error}"
+                        )
+                    })?;
+                if transform == IcebergTransform::Unknown {
+                    return plan_err!(
+                        "unsupported Iceberg partition transform: {}",
+                        node.transform
+                    );
+                }
+                Ok(Arc::new(IcebergPartitionTransformExpr::new(
+                    Arc::clone(&inputs[0]),
+                    transform,
+                )))
+            }
             other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
@@ -3597,6 +3628,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })?;
             let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
+        } else if let Some(transform) = node.downcast_ref::<IcebergPartitionTransformExpr>() {
+            if transform.transform() == IcebergTransform::Unknown {
+                return plan_err!("cannot encode unknown Iceberg partition transform");
+            }
+            ExprKind::IcebergPartitionTransform(IcebergPartitionTransformExprNode {
+                transform: transform.transform().to_string(),
+            })
         } else {
             return plan_err!("unsupported physical expr extension: {node}");
         };
@@ -3725,16 +3763,27 @@ impl RemoteExecutionCodec {
         };
 
         let field_name = "__sail_schema_evolution_codec_probe";
-        let logical_schema = Arc::new(Schema::new(vec![Field::new(
-            field_name,
-            DataType::Int64,
-            true,
-        )]));
-        let physical_schema = Arc::new(Schema::new(vec![Field::new(
-            field_name,
-            DataType::Int32,
-            true,
-        )]));
+        let field_id = "1";
+        // Every supported identity resolves the same field, while the type difference
+        // forces the adapter to expose its matching and timezone modes through a cast.
+        let logical_field =
+            Field::new(field_name, DataType::Int64, true).with_metadata(HashMap::from([
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName
+                        .as_ref()
+                        .to_string(),
+                    field_name.to_string(),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+                    field_id.to_string(),
+                ),
+            ]));
+        let physical_field = Field::new(field_name, DataType::Int32, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string())]),
+        );
+        let logical_schema = Arc::new(Schema::new(vec![logical_field]));
+        let physical_schema = Arc::new(Schema::new(vec![physical_field]));
         let adapter = factory.create(logical_schema, physical_schema)?;
         let rewritten = adapter.rewrite(Arc::new(Column::new(field_name, 0)))?;
         if let Some(cast) = rewritten.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
@@ -4889,6 +4938,50 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_codec_probe_preserves_schema_evolution_modes() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+
+        for matching in [
+            StructFieldMatching::Name,
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            for timezone_mode in [
+                SchemaEvolutionTimezoneMode::Strict,
+                SchemaEvolutionTimezoneMode::Relaxed,
+            ] {
+                let adapter_factory = match timezone_mode {
+                    SchemaEvolutionTimezoneMode::Strict => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching)
+                    }
+                    SchemaEvolutionTimezoneMode::Relaxed => {
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
+                            matching,
+                        )
+                    }
+                };
+                let parquet_source = Arc::new(ParquetSource::new(Arc::clone(&table_schema)));
+                let file_scan = FileScanConfigBuilder::new(
+                    datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+                    parquet_source,
+                )
+                .with_expr_adapter(Some(Arc::new(adapter_factory)))
+                .build();
+
+                assert_eq!(
+                    RemoteExecutionCodec::parquet_schema_evolution_modes(&file_scan)?,
+                    (matching, timezone_mode)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_schema_evolution_cast_preserves_timezone_mode() -> Result<()> {
         let input_field = Arc::new(Field::new(
             "event_time",
@@ -4926,6 +5019,77 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_iceberg_partition_transform_expr() -> Result<()> {
+        use datafusion::arrow::array::TimestampMicrosecondArray;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let expression = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("event_time", 0)),
+            IcebergTransform::Day,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let decoded = round_trip_expr(&expression, schema.as_ref())?;
+        let transform = decoded
+            .downcast_ref::<IcebergPartitionTransformExpr>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded expression is not an Iceberg partition transform")
+            })?;
+        assert_eq!(transform.transform(), IcebergTransform::Day);
+        let input = transform
+            .input()
+            .downcast_ref::<Column>()
+            .ok_or_else(|| plan_datafusion_err!("transform input is not a column"))?;
+        assert_eq!(input.name(), "event_time");
+        assert_eq!(input.index(), 0);
+        assert_same_result(
+            &expression,
+            &decoded,
+            schema,
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(0),
+                Some(86_400_000_000),
+                None,
+            ]))],
+        )
+    }
+
+    #[test]
+    fn test_reject_unknown_iceberg_partition_transform_expr() -> Result<()> {
+        let node = ExtendedPhysicalExprNode {
+            expr_kind: Some(ExprKind::IcebergPartitionTransform(
+                IcebergPartitionTransformExprNode {
+                    transform: "future-transform".to_string(),
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        node.encode(&mut buf)
+            .map_err(|error| plan_datafusion_err!("failed to encode test expression: {error}"))?;
+        let input = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+
+        assert!(
+            RemoteExecutionCodec
+                .try_decode_expr(&buf, &[input])
+                .is_err()
+        );
+
+        let unknown = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("value", 0)),
+            IcebergTransform::Unknown,
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(
+            RemoteExecutionCodec
+                .try_encode_expr(&unknown, &mut Vec::new())
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
 
@@ -4936,6 +5100,21 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_inner_product_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorInnerProduct::new()))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<VectorInnerProduct>()
+                .is_some()
+        );
+        assert_eq!(decoded.name(), "vector_inner_product");
 
         Ok(())
     }
@@ -5472,6 +5651,7 @@ mod tests {
 
     #[test]
     fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
+        use crate::plan::ShufflePartitioning;
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
 
         let (physical, schema_ref, list) = build_filter()?;
@@ -5482,15 +5662,15 @@ mod tests {
                 keys: vec![Arc::from(key)],
                 channels: 4,
             },
-            locator: TaskOutputLocator::Local { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined { replicas: 1 },
         };
 
         let ctx = TaskContext::default();
         let partitioning = output
-            .partitioning(&ctx, &schema_ref, &codec)
+            .shuffle_partitioning(&ctx, &schema_ref, &codec)
             .map_err(|e| plan_datafusion_err!("{e}"))?;
 
-        let Partitioning::Hash(keys, channels) = partitioning else {
+        let ShufflePartitioning::Hash(keys, channels) = partitioning else {
             return plan_err!("expected hash partitioning");
         };
         assert_eq!(channels, 4);

@@ -97,7 +97,12 @@ message ExtendedPhysicalExprNode {
     HigherOrderUdfExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
+    IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
   }
+}
+
+message IcebergPartitionTransformExprNode {
+  string transform = 1;
 }
 
 enum StructFieldMatching {

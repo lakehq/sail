@@ -1,13 +1,18 @@
+use std::sync::Arc;
+
+use crate::endpoint::EndpointResolver;
 use crate::master::MasterClientOptions;
 
 /// Configuration owned by a lifecycle manager actor.
-#[derive(Debug, Clone)]
+#[readonly::make]
+#[derive(Debug)]
 pub struct LifecycleManagerOptions {
     pub application_id: String,
     pub master: MasterClientOptions,
     pub hostname: String,
     pub tenant_id: String,
     pub user_name: String,
+    pub endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
 }
 
 impl LifecycleManagerOptions {
@@ -20,6 +25,12 @@ impl LifecycleManagerOptions {
             // Match Celeborn's DefaultIdentityProvider defaults.
             tenant_id: "default".to_string(),
             user_name: "default".to_string(),
+            endpoint_resolver: None,
         }
+    }
+
+    pub fn with_endpoint_resolver(mut self, endpoint_resolver: Arc<dyn EndpointResolver>) -> Self {
+        self.endpoint_resolver = Some(endpoint_resolver);
+        self
     }
 }

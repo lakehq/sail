@@ -6,13 +6,14 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
-use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverOptions};
-use crate::stream_manager::{StreamManager, StreamManagerOptions};
-use crate::task_runner::TaskRunner;
+use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
+use crate::task_runner::{
+    TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement,
+};
 
 #[tonic::async_trait]
 impl Actor for DriverActor {
-    type Message = DriverEvent;
+    type Message = DriverMessage;
     type Options = (DriverOptions, DriverComponents);
 
     fn name() -> &'static str {
@@ -28,97 +29,92 @@ impl Actor for DriverActor {
         let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
             history_reporter,
             worker_pool,
             job_scheduler,
             task_assigner,
-            task_runner: TaskRunner::new(),
-            stream_manager,
+            task_runner: None,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        let driver = ctx.handle().clone();
+        self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
+            TaskRunnerComponents {
+                extensions: TaskRunnerExtensions::new(
+                    (&self.options).into(),
+                    &self.options.shuffle_backend,
+                    self.options.session_id.clone(),
+                ),
+                placement: TaskRunnerPlacement::Driver { driver },
+            },
+        ));
+    }
+
+    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverMessage) -> ActorAction {
         match message {
-            DriverEvent::Activate => self.handle_activate(ctx),
-            DriverEvent::RegisterWorker {
+            DriverMessage::Activate => self.handle_activate(ctx),
+            DriverMessage::RegisterWorker {
                 worker_id,
                 host,
                 port,
                 result,
             } => self.handle_register_worker(ctx, worker_id, host, port, result),
-            DriverEvent::WorkerHeartbeat { worker_id } => {
+            DriverMessage::WorkerHeartbeat { worker_id } => {
                 self.handle_worker_heartbeat(ctx, worker_id)
             }
-            DriverEvent::WorkerKnownPeers {
+            DriverMessage::WorkerKnownPeers {
                 worker_id,
                 peer_worker_ids,
             } => self.handle_worker_known_peers(ctx, worker_id, peer_worker_ids),
-            DriverEvent::ProbePendingWorker { worker_id } => {
+            DriverMessage::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
-            DriverEvent::ProbeIdleWorker { worker_id, instant } => {
+            DriverMessage::ProbeIdleWorker { worker_id, instant } => {
                 self.handle_probe_idle_worker(ctx, worker_id, instant)
             }
-            DriverEvent::ProbeLostWorker { worker_id, instant } => {
+            DriverMessage::ProbeLostWorker { worker_id, instant } => {
                 self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
-            DriverEvent::ExecuteJob {
+            DriverMessage::ExecuteJob {
                 plan,
                 context,
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
-            DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
-            DriverEvent::UpdateTask {
+            DriverMessage::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
+            DriverMessage::UpdateTask {
                 key,
                 status,
                 message,
                 cause,
                 sequence,
             } => self.handle_update_task(ctx, key, status, message, cause, sequence),
-            DriverEvent::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
-            DriverEvent::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(ctx, key)
-            }
-            DriverEvent::CreateLocalStream {
-                key,
-                storage,
-                schema,
-                result,
-            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
-            DriverEvent::CreateRemoteStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
-            DriverEvent::FetchDriverStream { key, result } => {
+            DriverMessage::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
+            DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
-            DriverEvent::FetchWorkerStream {
+            DriverMessage::FetchWorkerStream {
                 worker_id,
                 key,
                 schema,
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            DriverEvent::FetchRemoteStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
-            DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
-            DriverEvent::Shutdown { result } => self.handle_shutdown(ctx, result),
+            DriverMessage::ObserveState { observer } => self.handle_observe_state(ctx, observer),
+            DriverMessage::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         self.job_scheduler.stop();
-        self.stream_manager.stop().await;
+        if let Some(task_runner) = self.task_runner.take() {
+            let _ = task_runner
+                .send(crate::task_runner::TaskRunnerMessage::Shutdown)
+                .await;
+        }
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }

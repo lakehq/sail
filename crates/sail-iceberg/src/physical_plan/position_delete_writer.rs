@@ -19,7 +19,6 @@ use crate::spec::{DataContentType, DataFile, TableMetadata};
 
 #[derive(Debug, Clone, PartialEq)]
 struct PositionDeleteTarget {
-    file_path: String,
     partition_spec_id: i32,
     partition_json: String,
     partition: Vec<Option<Literal>>,
@@ -28,17 +27,54 @@ struct PositionDeleteTarget {
 #[derive(Debug)]
 struct PositionDeleteRows {
     target: PositionDeleteTarget,
-    positions: BTreeSet<i64>,
+    positions_by_file: BTreeMap<String, BTreeSet<i64>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PositionDeleteGroupKey {
+    File(String),
+    Partition {
+        partition_spec_id: i32,
+        partition_json: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PositionDeleteGranularity {
+    File,
+    Partition,
+}
+
+impl PositionDeleteGranularity {
+    fn from_table_metadata(table_meta: &TableMetadata) -> Result<Self> {
+        const PROPERTY: &str = "write.delete.granularity";
+        match table_meta.properties.get(PROPERTY).map(String::as_str) {
+            None => Ok(Self::Partition),
+            Some(value) if value.eq_ignore_ascii_case("file") => Ok(Self::File),
+            Some(value) if value.eq_ignore_ascii_case("partition") => Ok(Self::Partition),
+            Some(value) => Err(DataFusionError::Plan(format!(
+                "Unknown delete granularity: {value}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct PositionDeleteAccumulator {
     // FIXME: Stream sorted positions into rolling delete files and aggregate all
-    // emitted files before commit instead of buffering every position per data file.
-    rows_by_file: BTreeMap<String, PositionDeleteRows>,
+    // emitted files before commit instead of buffering every position in memory.
+    granularity: PositionDeleteGranularity,
+    rows_by_group: BTreeMap<PositionDeleteGroupKey, PositionDeleteRows>,
 }
 
 impl PositionDeleteAccumulator {
+    pub(crate) fn try_new(table_meta: &TableMetadata) -> Result<Self> {
+        Ok(Self {
+            granularity: PositionDeleteGranularity::from_table_metadata(table_meta)?,
+            rows_by_group: BTreeMap::new(),
+        })
+    }
+
     pub(crate) fn add_batch(
         &mut self,
         table_meta: &TableMetadata,
@@ -104,7 +140,16 @@ impl PositionDeleteAccumulator {
             let file_path = file_paths.value(row);
             let partition_spec_id = partition_spec_ids.value(row);
             let partition_json = partitions.value(row);
-            let rows = match self.rows_by_file.entry(file_path.to_string()) {
+            let group_key = match self.granularity {
+                PositionDeleteGranularity::File => {
+                    PositionDeleteGroupKey::File(file_path.to_string())
+                }
+                PositionDeleteGranularity::Partition => PositionDeleteGroupKey::Partition {
+                    partition_spec_id,
+                    partition_json: partition_json.to_string(),
+                },
+            };
+            let rows = match self.rows_by_group.entry(group_key) {
                 Entry::Occupied(entry) => {
                     let rows = entry.into_mut();
                     if rows.target.partition_spec_id != partition_spec_id
@@ -123,7 +168,7 @@ impl PositionDeleteAccumulator {
                         partition_spec_id,
                         partition_json,
                     )?,
-                    positions: BTreeSet::new(),
+                    positions_by_file: BTreeMap::new(),
                 }),
             };
 
@@ -133,7 +178,10 @@ impl PositionDeleteAccumulator {
                     "MERGE position delete row index must be non-negative, got {row_index}"
                 )));
             }
-            rows.positions.insert(row_index);
+            rows.positions_by_file
+                .entry(file_path.to_string())
+                .or_default()
+                .insert(row_index);
         }
         Ok(())
     }
@@ -143,11 +191,21 @@ impl PositionDeleteAccumulator {
         data_store_ctx: &StoreContext,
         data_url: &Url,
     ) -> Result<Vec<DataFile>> {
-        let mut delete_files = Vec::with_capacity(self.rows_by_file.len());
-        for rows in self.rows_by_file.into_values() {
+        let mut delete_files = Vec::with_capacity(self.rows_by_group.len());
+        for rows in self.rows_by_group.into_values() {
+            let referenced_data_file = match self.granularity {
+                PositionDeleteGranularity::File => rows.positions_by_file.keys().next(),
+                PositionDeleteGranularity::Partition => None,
+            };
             delete_files.push(
-                write_position_delete_file(data_store_ctx, data_url, &rows.target, &rows.positions)
-                    .await?,
+                write_position_delete_file(
+                    data_store_ctx,
+                    data_url,
+                    &rows.target,
+                    &rows.positions_by_file,
+                    referenced_data_file.map(String::as_str),
+                )
+                .await?,
             );
         }
         Ok(delete_files)
@@ -175,7 +233,6 @@ fn position_delete_target(
         ))
     })?;
     Ok(PositionDeleteTarget {
-        file_path: file_path.to_string(),
         partition_spec_id,
         partition_json: partition_json.to_string(),
         partition,
@@ -191,13 +248,19 @@ async fn write_position_delete_file(
     data_store_ctx: &StoreContext,
     data_url: &Url,
     target: &PositionDeleteTarget,
-    positions: &BTreeSet<i64>,
+    positions_by_file: &BTreeMap<String, BTreeSet<i64>>,
+    referenced_data_file: Option<&str>,
 ) -> Result<DataFile> {
     let delete_schema = position_delete_arrow_schema();
-    let file_paths = (0..positions.len())
-        .map(|_| Some(target.file_path.as_str()))
-        .collect::<Vec<_>>();
-    let pos_values = positions.iter().copied().collect::<Vec<_>>();
+    let row_count = positions_by_file.values().map(BTreeSet::len).sum();
+    let mut file_paths = Vec::with_capacity(row_count);
+    let mut pos_values = Vec::with_capacity(row_count);
+    for (file_path, positions) in positions_by_file {
+        for position in positions {
+            file_paths.push(Some(file_path.as_str()));
+            pos_values.push(*position);
+        }
+    }
     let batch = ArrowRecordBatch::try_new(
         Arc::new(delete_schema.clone()),
         vec![
@@ -222,7 +285,7 @@ async fn write_position_delete_file(
     )
     .await?;
     delete_file.content = DataContentType::PositionDeletes;
-    delete_file.referenced_data_file = Some(target.file_path.clone());
+    delete_file.referenced_data_file = referenced_data_file.map(str::to_string);
     delete_file.sort_order_id = None;
     delete_file.equality_ids.clear();
     Ok(delete_file)

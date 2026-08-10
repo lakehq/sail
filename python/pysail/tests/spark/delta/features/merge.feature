@@ -288,6 +288,147 @@ Feature: Delta Lake Merge
         | id | status |
         | 1  | new    |
 
+    Scenario: Explicit DEFAULT assignments use the target default or NULL
+      Given variable location for temporary directory delta_merge_explicit_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_explicit_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_explicit_assignment_default (
+          id INT,
+          status STRING DEFAULT 'new',
+          note STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_explicit_assignment_default VALUES (1, 'old', 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_explicit_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_explicit_assignment_default AS t
+        USING delta_merge_explicit_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET status = DEFAULT, note = DEFAULT
+        """
+      When query
+        """
+        SELECT id, status, note FROM delta_merge_explicit_assignment_default
+        """
+      Then query result
+        | id | status | note |
+        | 1  | new    | NULL |
+
+    Scenario: Explicit DEFAULT requires a default for a non-nullable target
+      Given variable location for temporary directory delta_merge_required_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_required_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_required_assignment_default (
+          id INT,
+          status STRING NOT NULL
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_required_assignment_default VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_required_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO delta_merge_required_assignment_default AS t
+        USING delta_merge_required_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET status = DEFAULT
+        """
+      Then query error (?i)(NO_DEFAULT_COLUMN_VALUE_AVAILABLE|not nullable.*no default value)
+
+    Scenario: Explicit DEFAULT cannot be wrapped in a MERGE expression
+      Given variable location for temporary directory delta_merge_complex_assignment_default
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_complex_assignment_default
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_complex_assignment_default (
+          id INT,
+          status STRING DEFAULT 'new'
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_complex_assignment_default VALUES (1, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_complex_assignment_default_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        MERGE INTO delta_merge_complex_assignment_default AS t
+        USING delta_merge_complex_assignment_default_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET status = CAST(DEFAULT AS STRING)
+        """
+      Then query error (?i)(DEFAULT.*standalone|DEFAULT.*complex expression)
+
+  Rule: MERGE assignments honor the configured store assignment policy
+
+    Scenario Outline: Incompatible string assignments are rejected before execution
+      Given config spark.sql.storeAssignmentPolicy = <policy>
+      Given variable location for temporary directory delta_merge_store_assignment_policy
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_store_assignment_policy
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_store_assignment_policy (id INT, value INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_store_assignment_policy VALUES (1, 10)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_store_assignment_policy_source AS
+        SELECT 1 AS id, '20' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_merge_store_assignment_policy AS t
+        USING delta_merge_store_assignment_policy_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then query error (?i)(legacy store assignment policy|cannot safely cast|cannot write incompatible data)
+
+      Examples:
+        | policy |
+        | ANSI   |
+        | STRICT |
+        | LEGACY |
+
   Rule: Matched updates, deletes, and default inserts
     Background:
       Given variable location for temporary directory merge_basic

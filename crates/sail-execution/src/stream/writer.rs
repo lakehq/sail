@@ -1,83 +1,31 @@
 use std::fmt;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
-use datafusion::error::DataFusionError;
 
-use crate::id::{TaskStreamKey, TaskStreamKeyDenseDisplay};
-use crate::stream::error::TaskStreamResult;
-#[derive(Debug, Clone)]
-pub enum TaskWriteLocation {
-    Local {
-        storage: LocalStreamStorage,
-        key: TaskStreamKey,
-    },
-    Remote {
-        key: TaskStreamKey,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LocalStreamStorage {
-    Memory {
-        replicas: usize,
-    },
-    #[expect(unused)]
-    Disk,
-}
-
-impl fmt::Display for TaskWriteLocation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            TaskWriteLocation::Local { key, storage } => {
-                write!(f, "Local({storage}, {})", TaskStreamKeyDenseDisplay(key))
-            }
-            TaskWriteLocation::Remote { key } => {
-                write!(f, "Remote({})", TaskStreamKeyDenseDisplay(key))
-            }
-        }
-    }
-}
-
-impl fmt::Display for LocalStreamStorage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Memory { replicas } => write!(f, "Memory({replicas})"),
-            Self::Disk => write!(f, "Disk"),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStreamWriteState {
+    Active,
+    Closed,
 }
 
 #[tonic::async_trait]
 pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
-    async fn open(
-        &self,
-        location: &TaskWriteLocation,
-        schema: SchemaRef,
-    ) -> Result<Box<dyn TaskStreamSink>>;
+    async fn open(&self, partition: usize) -> Result<Box<dyn TaskStreamSink>>;
 }
 
-/// A sink that can write record batches to a task stream.
+/// A sink for one shuffle task partition and all of its output channels.
 #[tonic::async_trait]
 pub trait TaskStreamSink: Send {
-    /// Write a record batch or an error to the sink.
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState;
-    // TODO: Are we required to call `close` when the user encounters an error and wants to
-    //   abort the sink? Should we have a separate `abort` method?
-    /// Flush all data and close the sink.
-    /// Since the operation may be async, the user must call this method before
-    /// dropping the sink, unless the user has received [`TaskStreamSinkState::Error`] or
-    /// [`TaskStreamSinkState::Closed`] state from [`write`](TaskStreamSink::write).
-    /// No implicit finalization will be done when the sink is dropped.
-    async fn close(self: Box<Self>) -> Result<()>;
+    async fn write(&mut self, channel: usize, batch: RecordBatch) -> Result<TaskStreamWriteState>;
+    async fn commit(self: Box<Self>) -> Result<()>;
+    async fn abort(self: Box<Self>) -> Result<()>;
 }
 
-pub enum TaskStreamSinkState {
-    /// The sink is ready to accept more writes.
-    Ok,
-    /// The sink has encountered an error and no further writes should be attempted.
-    Error(DataFusionError),
-    /// The sink has been closed and no further writes should be attempted.
-    Closed,
+/// A physical sink for exactly one channel of the task stream.
+#[tonic::async_trait]
+pub trait TaskStreamChannelSink: Send {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;
+    async fn commit(self: Box<Self>) -> Result<()>;
+    async fn abort(self: Box<Self>) -> Result<()>;
 }

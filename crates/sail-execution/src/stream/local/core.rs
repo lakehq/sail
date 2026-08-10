@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::TaskContext;
-use log::warn;
-use sail_common::actor::{Actor, ActorContext};
+use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::mpsc;
@@ -15,49 +12,34 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
+use crate::stream::local::memory::MemoryStream;
+use crate::stream::local::options::LocalStreamManagerOptions;
+use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::stream_manager::local::{LocalStream, MemoryStream};
-use crate::stream_manager::options::StreamManagerOptions;
-use crate::stream_manager::remote::RemoteStreamManager;
-use crate::stream_manager::{LocalStreamState, StreamManager, StreamManagerMessage};
+use crate::stream::writer::TaskStreamChannelSink;
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-impl StreamManager {
-    pub fn new(options: StreamManagerOptions) -> Self {
-        let remote_streams = match &options.shuffle_backend {
-            crate::shuffle::ShuffleBackendKind::Flight => None,
-            crate::shuffle::ShuffleBackendKind::Storage {
-                path,
-                max_file_size,
-                compression,
-            } => Some(Arc::new(RemoteStreamManager::new(
-                path.clone(),
-                options.session_id.clone(),
-                *max_file_size,
-                *compression,
-            ))),
-        };
+impl LocalStreamManager {
+    pub fn new(options: LocalStreamManagerOptions) -> Self {
         Self {
             options,
-            remote_streams,
-            local_streams: HashMap::new(),
+            streams: HashMap::new(),
         }
     }
 
-    pub fn create_local_stream(
+    pub fn create_stream(
         &mut self,
         key: TaskStreamKey,
-        storage: LocalStreamStorage,
+        replicas: usize,
         _schema: SchemaRef,
-    ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
-            let mut stream =
-                Self::create_local_stream_with_senders(storage, senders, &self.options)?;
+            let mut stream = Self::create_stream_with_senders(replicas, senders, &self.options);
             let sink = stream.publish()?;
             Ok((stream, sink))
         };
 
-        match self.local_streams.entry(key.clone()) {
+        match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
                     LocalStreamState::Created { .. } => {
@@ -102,30 +84,12 @@ impl StreamManager {
         }
     }
 
-    pub fn create_remote_stream(
+    pub fn fetch_stream(
         &mut self,
-        key: TaskStreamKey,
-        schema: SchemaRef,
-        context: &TaskContext,
-    ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
-        let Some(remote_streams) = &self.remote_streams else {
-            return Err(ExecutionError::InternalError(
-                "remote stream requested without a storage shuffle backend".to_string(),
-            ));
-        };
-        remote_streams.create_stream(key, schema, context)
-    }
-
-    pub fn fetch_local_stream<T>(
-        &mut self,
-        ctx: &mut ActorContext<T>,
+        ctx: &mut ActorContext<TaskRunnerActor>,
         key: &TaskStreamKey,
-    ) -> ExecutionResult<TaskStreamSource>
-    where
-        T: Actor,
-        T::Message: StreamManagerMessage,
-    {
-        match self.local_streams.entry(key.clone()) {
+    ) -> ExecutionResult<TaskStreamSource> {
+        match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
                 LocalStreamState::Pending { senders } => {
@@ -144,7 +108,7 @@ impl StreamManager {
                 let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
-                    T::Message::probe_pending_local_stream(key.clone()),
+                    TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
                     self.options.task_stream_creation_timeout,
                 );
                 Ok(Box::pin(ReceiverStream::new(rx)))
@@ -152,55 +116,17 @@ impl StreamManager {
         }
     }
 
-    pub fn fetch_remote_stream<T>(
-        &mut self,
-        _ctx: &mut ActorContext<T>,
-        key: &TaskStreamKey,
-        schema: SchemaRef,
-        context: &TaskContext,
-    ) -> ExecutionResult<TaskStreamSource>
-    where
-        T: Actor,
-        T::Message: StreamManagerMessage,
-    {
-        let Some(remote_streams) = &self.remote_streams else {
-            return Err(ExecutionError::InternalError(
-                "remote stream requested without a storage shuffle backend".to_string(),
-            ));
-        };
-        remote_streams.fetch_stream(key.clone(), schema, context)
-    }
-
-    pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {
+    pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {
         if let Some(stage) = stage {
-            self.local_streams
+            self.streams
                 .retain(|key, _| key.job_id != job_id || key.stage != stage);
         } else {
-            self.local_streams.retain(|key, _| key.job_id != job_id);
+            self.streams.retain(|key, _| key.job_id != job_id);
         }
     }
 
-    pub fn remove_remote_streams<T>(
-        &mut self,
-        ctx: &mut ActorContext<T>,
-        job_id: JobId,
-        stage: Option<usize>,
-        context: Arc<TaskContext>,
-    ) where
-        T: Actor,
-    {
-        let Some(remote_streams) = self.remote_streams.clone() else {
-            return;
-        };
-        ctx.spawn(async move {
-            if let Err(e) = remote_streams.remove_streams(job_id, stage, &context).await {
-                warn!("failed to remove remote shuffle data for job {job_id}: {e}");
-            }
-        });
-    }
-
-    pub fn fail_local_stream_if_pending(&mut self, key: &TaskStreamKey) {
-        let Some(value) = self.local_streams.get_mut(key) else {
+    pub fn fail_stream_if_pending(&mut self, key: &TaskStreamKey) {
+        let Some(value) = self.streams.get_mut(key) else {
             return;
         };
         if let LocalStreamState::Pending { senders } = value {
@@ -223,24 +149,11 @@ impl StreamManager {
         }
     }
 
-    pub async fn stop(&mut self) {
-        // TODO: remove all remote streams
-    }
-
-    fn create_local_stream_with_senders(
-        storage: LocalStreamStorage,
+    fn create_stream_with_senders(
+        replicas: usize,
         senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
-        options: &StreamManagerOptions,
-    ) -> ExecutionResult<Box<dyn LocalStream>> {
-        match storage {
-            LocalStreamStorage::Memory { replicas } => Ok(Box::new(MemoryStream::new(
-                options.task_stream_buffer,
-                replicas,
-                senders,
-            ))),
-            LocalStreamStorage::Disk => Err(ExecutionError::InternalError(
-                "not implemented: local disk storage".to_string(),
-            )),
-        }
+        options: &LocalStreamManagerOptions,
+    ) -> MemoryStream {
+        MemoryStream::new(options.task_stream_buffer, replicas, senders)
     }
 }
