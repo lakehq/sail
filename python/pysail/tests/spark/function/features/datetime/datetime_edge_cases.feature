@@ -450,3 +450,21 @@ Feature: datetime edge cases
       Then query result
         | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_timestamps     | nested_array   | nested_map  | nested_struct |
         | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [1970-01-01 00:00:00] | [-3723000000] | -3723000000 | -3723000000   |
+
+    Scenario Outline: relative special datetime values use the session-local date
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT
+          CAST('today' AS DATE) = CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE) AS today,
+          CAST('tomorrow' AS DATE) = date_add(CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE), 1) AS tomorrow,
+          CAST('yesterday' AS DATE) = date_add(CAST(CAST(current_timestamp() AS TIMESTAMP_NTZ) AS DATE), -1) AS yesterday
+        """
+      Then query result
+        | today | tomorrow | yesterday |
+        | true  | true     | true      |
+
+      Examples:
+        | zone               |
+        | Pacific/Kiritimati |
+        | Etc/GMT+12         |

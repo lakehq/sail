@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalDayTimeType, TimeUnit};
-use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{BinaryExpr, Expr, Operator, ScalarUDF, cast, lit};
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -61,8 +60,8 @@ fn special_datetime(expr: &Expr) -> Option<SpecialDatetime> {
     }
 }
 
-fn relative_current_date(days: i32) -> Expr {
-    let date = expr_fn::current_date();
+fn relative_current_date(days: i32, session_timezone: &Arc<str>) -> Expr {
+    let date = cast(current_local_timestamp(session_timezone), DataType::Date32);
     if days == 0 {
         date
     } else {
@@ -82,6 +81,19 @@ fn current_timestamp(session_timezone: &Arc<str>) -> Expr {
         TimeUnit::Microsecond,
     ))
     .call(vec![])
+}
+
+fn current_local_timestamp(session_timezone: &Arc<str>) -> Expr {
+    let timestamp = current_timestamp(session_timezone);
+    let timestamp = cast(
+        cast(timestamp, DataType::Int64),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+    );
+    ScalarUDF::from(ConvertTz::new(false)).call(vec![
+        lit("UTC"),
+        lit(session_timezone.to_string()),
+        timestamp,
+    ])
 }
 
 fn date_to_timestamp(date: Expr, target_type: &DataType, session_timezone: &Arc<str>) -> Expr {
@@ -109,9 +121,11 @@ pub(crate) fn foldable_special_datetime_cast(
     match target_type {
         DataType::Date32 => Some(match special {
             SpecialDatetime::Epoch => lit(ScalarValue::Date32(Some(0))),
-            SpecialDatetime::Now | SpecialDatetime::Today => relative_current_date(0),
-            SpecialDatetime::Tomorrow => relative_current_date(1),
-            SpecialDatetime::Yesterday => relative_current_date(-1),
+            SpecialDatetime::Now | SpecialDatetime::Today => {
+                relative_current_date(0, session_timezone)
+            }
+            SpecialDatetime::Tomorrow => relative_current_date(1, session_timezone),
+            SpecialDatetime::Yesterday => relative_current_date(-1, session_timezone),
         }),
         DataType::Timestamp(TimeUnit::Microsecond, timezone) => Some(match special {
             SpecialDatetime::Epoch => {
@@ -122,17 +136,20 @@ pub(crate) fn foldable_special_datetime_cast(
                 if timezone.is_some() {
                     cast(cast(now, DataType::Int64), target_type.clone())
                 } else {
-                    expr_fn::to_local_time(vec![now])
+                    current_local_timestamp(session_timezone)
                 }
             }
             SpecialDatetime::Today => {
-                date_to_timestamp(relative_current_date(0), target_type, session_timezone)
+                let date = relative_current_date(0, session_timezone);
+                date_to_timestamp(date, target_type, session_timezone)
             }
             SpecialDatetime::Tomorrow => {
-                date_to_timestamp(relative_current_date(1), target_type, session_timezone)
+                let date = relative_current_date(1, session_timezone);
+                date_to_timestamp(date, target_type, session_timezone)
             }
             SpecialDatetime::Yesterday => {
-                date_to_timestamp(relative_current_date(-1), target_type, session_timezone)
+                let date = relative_current_date(-1, session_timezone);
+                date_to_timestamp(date, target_type, session_timezone)
             }
         }),
         _ => None,
