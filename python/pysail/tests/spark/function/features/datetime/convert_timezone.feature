@@ -143,6 +143,24 @@ Feature: convert_timezone
         | MST  | 2024-01-01 19:00:00 |
         | HST  | 2024-01-01 22:00:00 |
 
+    Scenario Outline: legacy short zone IDs resolve through Java SHORT_IDS
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '<input>') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone | input               | result              |
+        | EST  | 1800-01-01 00:00:00 | 1800-01-01 05:18:08 |
+        | HST  | 1945-07-01 00:00:00 | 1945-07-01 09:30:00 |
+        | IET  | 2024-01-01 12:00:00 | 2024-01-01 17:00:00 |
+        | IST  | 2024-01-01 12:00:00 | 2024-01-01 06:30:00 |
+        | MST  | 1918-07-01 00:00:00 | 1918-07-01 06:00:00 |
+        | VST  | 2024-01-01 12:00:00 | 2024-01-01 05:00:00 |
+
     Scenario Outline: `convert_timezone` parses the session time zone as the implicit source zone
       Given config spark.sql.session.timeZone = <zone>
       When query

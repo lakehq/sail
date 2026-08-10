@@ -21,7 +21,9 @@ pub const fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
     }
 }
 
-static LEGACY_TIMEZONES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+// Mirrors `java.time.ZoneId#SHORT_IDS`, as used by Spark's `SparkDateTimeUtils#getZoneId`.
+// Resolve these aliases before ordinary parsing because some short IDs are also valid IANA names.
+static JAVA_SHORT_ZONE_IDS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
         ("ACT", "Australia/Darwin"),
         ("AET", "Australia/Sydney"),
@@ -38,8 +40,8 @@ static LEGACY_TIMEZONES: LazyLock<HashMap<&'static str, &'static str>> = LazyLoc
         ("ECT", "Europe/Paris"),
         ("EST", "America/Panama"),
         ("HST", "Pacific/Honolulu"),
-        ("IET", "America/Indianapolis"),
-        ("IST", "Asia/Calcutta"),
+        ("IET", "America/Indiana/Indianapolis"),
+        ("IST", "Asia/Kolkata"),
         ("JST", "Asia/Tokyo"),
         ("MIT", "Pacific/Apia"),
         ("MST", "America/Phoenix"),
@@ -50,7 +52,7 @@ static LEGACY_TIMEZONES: LazyLock<HashMap<&'static str, &'static str>> = LazyLoc
         ("PRT", "America/Puerto_Rico"),
         ("PST", "America/Los_Angeles"),
         ("SST", "Pacific/Guadalcanal"),
-        ("VST", "Asia/Saigon"),
+        ("VST", "Asia/Ho_Chi_Minh"),
     ])
 });
 
@@ -58,14 +60,10 @@ pub fn parse_spark_timezone_id<T>(value: &str) -> CommonResult<T>
 where
     T: FromStr,
 {
-    value
-        .parse::<T>()
-        .ok()
-        .or_else(|| {
-            LEGACY_TIMEZONES
-                .get(value)
-                .and_then(|timezone| timezone.parse::<T>().ok())
-        })
+    JAVA_SHORT_ZONE_IDS
+        .get(value)
+        .and_then(|timezone| timezone.parse::<T>().ok())
+        .or_else(|| value.parse::<T>().ok())
         .ok_or_else(|| {
             CommonError::invalid(format!(
                 "[INVALID_TIMEZONE] The timezone: {value} is invalid. \
