@@ -5561,6 +5561,28 @@ mod tests {
         Ok(())
     }
 
+    fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<()> {
+        use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
+        if expr.downcast_ref::<DistributedHigherOrderExpr>().is_none() {
+            return plan_err!("expected DistributedHigherOrderExpr");
+        }
+        Ok(())
+    }
+
+    fn assert_same_result(
+        expr1: &Arc<dyn PhysicalExpr>,
+        expr2: &Arc<dyn PhysicalExpr>,
+        schema: datafusion::arrow::datatypes::SchemaRef,
+        columns: Vec<Arc<dyn datafusion::arrow::array::Array>>,
+    ) -> Result<()> {
+        use datafusion::arrow::array::RecordBatch;
+        let batch = RecordBatch::try_new(schema, columns)?;
+        let result1 = expr1.evaluate(&batch)?.into_array(1)?;
+        let result2 = expr2.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&result1, &result2);
+        Ok(())
+    }
+
     #[test]
     fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
         use crate::plan::ShufflePartitioning;
