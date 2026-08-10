@@ -614,6 +614,29 @@ Feature: datetime edge cases
         | try_to_timestamp with the LTZ default | try_to_timestamp | TIMESTAMP_LTZ | TIMESTAMP_LTZ  |
         | try_to_timestamp with the NTZ default | try_to_timestamp | TIMESTAMP_NTZ | TIMESTAMP_NTZ  |
 
+    Scenario Outline: no-format timestamp functions resolve now near the current instant: <case>
+      Given config spark.sql.session.timeZone = +01:02:03
+      And config spark.sql.timestampType = <timestamp_type>
+      When query
+        """
+        SELECT abs(
+          unix_micros(CAST(<function>('now') AS TIMESTAMP_LTZ))
+          - unix_micros(current_timestamp())
+        ) <= 60000000 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | case                                  | function         | timestamp_type |
+        | to_timestamp with the LTZ default     | to_timestamp     | TIMESTAMP_LTZ  |
+        | to_timestamp with the NTZ default     | to_timestamp     | TIMESTAMP_NTZ  |
+        | to_timestamp_ltz                      | to_timestamp_ltz | TIMESTAMP_LTZ  |
+        | to_timestamp_ntz                      | to_timestamp_ntz | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the LTZ default | try_to_timestamp | TIMESTAMP_LTZ  |
+        | try_to_timestamp with the NTZ default | try_to_timestamp | TIMESTAMP_NTZ  |
+
     Scenario: timestampadd preserves the input timestamp type and session semantics
       Given config spark.sql.session.timeZone = +01:02:03
       And config spark.sql.timestampType = TIMESTAMP_LTZ
