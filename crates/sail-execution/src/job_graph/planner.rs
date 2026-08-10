@@ -152,17 +152,14 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
 
-        Ok(Transformed::yes(Arc::new(HashJoinExec::try_new(
-            repartition(Arc::clone(&join.left), left_exprs, partition_count)?,
-            repartition(Arc::clone(&join.right), right_exprs, partition_count)?,
-            join.on.clone(),
-            join.filter.clone(),
-            &join.join_type,
-            join.projection.as_deref().map(|p| p.to_vec()),
-            PartitionMode::Partitioned,
-            join.null_equality,
-            false,
-        )?)))
+        let left = repartition(Arc::clone(&join.left), left_exprs, partition_count)?;
+        let right = repartition(Arc::clone(&join.right), right_exprs, partition_count)?;
+        let join = join
+            .builder()
+            .with_new_children(vec![left, right])?
+            .with_partition_mode(PartitionMode::Partitioned)
+            .build_exec()?;
+        Ok(Transformed::yes(join))
     })?;
 
     Ok(result.data)
