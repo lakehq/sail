@@ -54,6 +54,9 @@ use crate::operations::bootstrap::{
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+use crate::physical_plan::write_context::{
+    input_schema_with_logical_metadata, prepare_iceberg_write_context,
+};
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
@@ -501,14 +504,18 @@ pub(crate) async fn plan_iceberg_write(
         _ => {}
     }
 
-    let existing_partition_columns = if table_exists {
-        let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
-        let table =
-            Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location).await?;
-        Some(IcebergTableFormat::partition_columns_from_metadata(&table)?)
+    let table = if let Ok(metadata_path) = &exists_res {
+        Some(
+            Table::load_with_metadata_location(ctx, table_url.clone(), Some(metadata_path.clone()))
+                .await?,
+        )
     } else {
         None
     };
+    let existing_partition_columns = table
+        .as_ref()
+        .map(IcebergTableFormat::partition_columns_from_metadata)
+        .transpose()?;
 
     if let Some(existing_partitions) = &existing_partition_columns
         && !partition_by.is_empty()
@@ -545,22 +552,26 @@ pub(crate) async fn plan_iceberg_write(
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
     options.lakehouse_table = lakehouse_table;
+    let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
+    let writer_input_schema =
+        input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
+    let write_context = prepare_iceberg_write_context(
+        &table_url,
+        table.as_ref().map(Table::metadata),
+        &options,
+        &resolved_partition_columns,
+        &mode,
+        writer_input_schema.as_ref(),
+    )?;
     let table_config = IcebergTableConfig {
         table_url,
         partition_columns: resolved_partition_columns,
         table_exists,
         options,
+        write_context,
     };
 
-    let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
-    let builder = IcebergPlanBuilder::new(
-        physical_input,
-        table_config,
-        mode,
-        physical_sort,
-        Some(logical_input_schema),
-        ctx,
-    );
+    let builder = IcebergPlanBuilder::new(physical_input, table_config, mode, physical_sort, ctx);
     builder.build().await
 }
 
