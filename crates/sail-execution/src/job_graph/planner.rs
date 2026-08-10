@@ -818,14 +818,7 @@ fn create_shuffle(
         graph,
         distribution,
         TaskPlacement::Worker,
-        if matches!(
-            graph.options.shuffle_backend,
-            ShuffleBackendKind::Celeborn { .. }
-        ) {
-            OutputMode::Blocking
-        } else {
-            OutputMode::Pipelined
-        },
+        shuffle_output_mode(graph),
     )?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
@@ -852,13 +845,24 @@ fn create_row_shuffle(
         graph,
         distribution,
         TaskPlacement::Worker,
-        OutputMode::Pipelined,
+        shuffle_output_mode(graph),
     )?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
     create_shuffle_input(stage, mode, properties, graph)
+}
+
+fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
+    if matches!(
+        graph.options.shuffle_backend,
+        ShuffleBackendKind::Celeborn { .. }
+    ) {
+        OutputMode::Blocking
+    } else {
+        OutputMode::Pipelined
+    }
 }
 
 /// In storage shuffle mode, collect each logical shuffle partition in a separate
@@ -995,7 +999,6 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions};
-    use crate::error::ExecutionResult;
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
@@ -1008,13 +1011,10 @@ mod tests {
         Arc::new(EmptyExec::new(schema()))
     }
 
-    fn job_graph(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<JobGraph> {
-        JobGraph::try_new(
-            plan,
-            JobGraphOptions {
-                shuffle_backend: ShuffleBackendKind::Flight,
-            },
-        )
+    fn flight_shuffle_options() -> JobGraphOptions {
+        JobGraphOptions {
+            shuffle_backend: ShuffleBackendKind::Flight,
+        }
     }
 
     fn blocking_shuffle_options() -> JobGraphOptions {
@@ -1039,14 +1039,20 @@ mod tests {
 
     #[test]
     fn test_job_graph_distinguishes_batch_and_explicit_round_robin_shuffle() {
-        let generic_graph = job_graph(Arc::new(
-            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
-        ))
+        let generic_graph = JobGraph::try_new(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            ),
+            flight_shuffle_options(),
+        )
         .unwrap();
-        let explicit_graph = job_graph(Arc::new(ExplicitRepartitionExec::new(
-            empty_plan(),
-            Partitioning::RoundRobinBatch(4),
-        )))
+        let explicit_graph = JobGraph::try_new(
+            Arc::new(ExplicitRepartitionExec::new(
+                empty_plan(),
+                Partitioning::RoundRobinBatch(4),
+            )),
+            flight_shuffle_options(),
+        )
         .unwrap();
 
         assert_eq!(generic_graph.stages().len(), 2);
@@ -1127,11 +1133,29 @@ mod tests {
     }
 
     #[test]
+    fn test_celeborn_explicit_repartition_uses_a_blocking_stage() {
+        let graph = JobGraph::try_new(
+            Arc::new(ExplicitRepartitionExec::new(
+                empty_plan(),
+                Partitioning::RoundRobinBatch(4),
+            )),
+            celeborn_shuffle_options(),
+        )
+        .unwrap();
+
+        assert!(matches!(graph.stages()[0].mode, OutputMode::Blocking));
+    }
+
+    #[test]
     fn test_job_graph_uses_rescale_input_for_coalesce_exec() {
         let input =
             UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
                 .unwrap();
-        let graph = job_graph(Arc::new(CoalesceExec::new(input, 2))).unwrap();
+        let graph = JobGraph::try_new(
+            Arc::new(CoalesceExec::new(input, 2)),
+            flight_shuffle_options(),
+        )
+        .unwrap();
 
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(
@@ -1194,7 +1218,11 @@ mod tests {
             schema(),
         ));
         let command = Arc::new(CooperativeExec::new(command));
-        let graph = job_graph(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
+        let graph = JobGraph::try_new(
+            Arc::new(BarrierExec::new(vec![precondition], command)),
+            flight_shuffle_options(),
+        )
+        .unwrap();
 
         assert_eq!(graph.stages().len(), 3);
         assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
@@ -1246,7 +1274,7 @@ mod tests {
             results,
         ));
 
-        let graph = job_graph(plan).unwrap();
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
 
         assert!(graph.stages().len() >= 3);
         let stage = graph
@@ -1324,7 +1352,7 @@ mod tests {
             results,
         ));
 
-        let graph = job_graph(plan).unwrap();
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
 
         let stage = graph
             .stages()
@@ -1359,7 +1387,7 @@ mod tests {
             results,
         ));
 
-        let graph = job_graph(plan).unwrap();
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
         let stage = graph
             .stages()
             .iter()

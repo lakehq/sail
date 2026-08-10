@@ -13,8 +13,6 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -23,9 +21,6 @@ _IMAGE = "apache/celeborn:0.6.3"
 _MASTER_PORT = 12097
 _MASTER_HTTP_PORT = 12098
 _CONFIG_PATH = Path(__file__).with_name("celeborn-defaults.conf")
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
-
 
 @dataclass(frozen=True)
 class MasterService:
@@ -43,32 +38,6 @@ class WorkerService:
     replicate_port: int
 
 
-@pytest.fixture(scope="package")
-def remote(celeborn_master: MasterService, celeborn_worker: WorkerService) -> Generator[str, None, None]:
-    """Run Spark Connect with a Celeborn shuffle backend."""
-    endpoint_overrides = "[{}]".format(
-        ", ".join(
-            f'{{ advertised_host = "celeborn-worker", advertised_port = {port}, '
-            f'host = "{celeborn_worker.host}", port = {mapped_port} }}'
-            for port, mapped_port in [
-                (12000, celeborn_worker.rpc_port),
-                (12001, celeborn_worker.push_port),
-                (12002, celeborn_worker.fetch_port),
-                (12003, celeborn_worker.replicate_port),
-            ]
-        )
-    )
-    envs = {
-        "SAIL_MODE": "local-cluster",
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_HOST": celeborn_master.host,
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_PORT": str(celeborn_master.port),
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
-    }
-    with spark_connect_server(envs=envs) as server:
-        yield server.remote
-
-
 def _wait_for_port(host: str, port: int, timeout: float = 60) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -81,7 +50,7 @@ def _wait_for_port(host: str, port: int, timeout: float = 60) -> None:
     raise TimeoutError(msg)
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_network() -> Generator[Network, None, None]:
     network = Network()
     network.create()
@@ -91,7 +60,7 @@ def celeborn_network() -> Generator[Network, None, None]:
         network.remove()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None, None]:
     master = (
         DockerContainer(_IMAGE)
@@ -117,7 +86,7 @@ def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None,
         master.stop()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_worker(
     celeborn_network: Network,
     celeborn_master: MasterService,
@@ -157,7 +126,7 @@ def celeborn_worker(
         worker.stop()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_replica_worker(
     celeborn_network: Network,
     celeborn_master: MasterService,
@@ -205,7 +174,7 @@ def _endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]]) -> obj
     return _native._celeborn.StaticEndpointResolver(overrides)  # noqa: SLF001
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def endpoint_resolver(celeborn_worker: WorkerService) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""
     return _endpoint_resolver(
@@ -217,7 +186,7 @@ def endpoint_resolver(celeborn_worker: WorkerService) -> object:
     )
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def replication_endpoint_resolver(
     celeborn_worker: WorkerService,
     celeborn_replica_worker: WorkerService,

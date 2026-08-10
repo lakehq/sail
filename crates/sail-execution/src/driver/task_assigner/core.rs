@@ -212,6 +212,15 @@ impl TaskAssigner {
         self.driver.untrack_external_streams(job_id, stage)
     }
 
+    pub fn active_worker_ids(&self) -> Vec<WorkerId> {
+        self.workers
+            .iter()
+            .filter_map(|(worker_id, worker)| {
+                matches!(worker, WorkerResource::Active { .. }).then_some(*worker_id)
+            })
+            .collect()
+    }
+
     pub fn is_worker_idle(&self, worker_id: WorkerId) -> bool {
         let Some(worker) = self.workers.get(&worker_id) else {
             warn!("worker {worker_id} not found");

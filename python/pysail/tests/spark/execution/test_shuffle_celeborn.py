@@ -7,14 +7,53 @@ from typing import TYPE_CHECKING
 from urllib.request import urlopen
 
 import pyspark.sql.functions as F  # noqa: N812
+import pytest
 from pyspark.sql.types import Row
 
-from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
-    from pysail.tests.spark.celeborn.conftest import MasterService
+    from collections.abc import Generator
 
-_SLEEP_SECONDS = 5
+    from pysail.testing.containers.celeborn import MasterService, WorkerService
+
+_SLEEP_SECONDS = 2
+pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+
+
+@pytest.fixture(scope="module")
+def remote(
+    celeborn_master: MasterService,
+    celeborn_worker: WorkerService,
+    celeborn_replica_worker: WorkerService,
+) -> Generator[str, None, None]:
+    """Run Spark Connect with a Celeborn shuffle backend."""
+    endpoint_overrides = "[{}]".format(
+        ", ".join(
+            f'{{ internal_host = "{hostname}", internal_port = {port}, '
+            f'external_host = "{worker.host}", external_port = {mapped_port} }}'
+            for hostname, worker in [
+                ("celeborn-worker", celeborn_worker),
+                ("celeborn-replica-worker", celeborn_replica_worker),
+            ]
+            for port, mapped_port in [
+                (12000, worker.rpc_port),
+                (12001, worker.push_port),
+                (12002, worker.fetch_port),
+                (12003, worker.replicate_port),
+            ]
+        )
+    )
+    envs = {
+        "SAIL_MODE": "local-cluster",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_HOST": celeborn_master.host,
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_PORT": str(celeborn_master.port),
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
+    }
+    with spark_connect_server(envs=envs) as server:
+        yield server.remote
 
 
 def _master_shuffle_ids(master: MasterService) -> list[str]:

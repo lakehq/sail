@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use futures::stream::BoxStream;
 use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
@@ -8,7 +9,7 @@ use crate::master::SlotReservation;
 
 pub enum ShuffleClientMessage {
     CreateShuffleId {
-        task_key: String,
+        shuffle_key: String,
         result: oneshot::Sender<CelebornResult<i32>>,
     },
     RegisterShuffle {
@@ -42,10 +43,14 @@ pub enum ShuffleClientMessage {
         shuffle_id: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
-    ReadPartition {
+    ClearShuffle {
+        shuffle_id: i32,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
+    ReadPartitionStream {
         shuffle_id: i32,
         partition_id: i32,
-        result: oneshot::Sender<CelebornResult<Vec<u8>>>,
+        result: oneshot::Sender<CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>>>,
     },
     Stop {
         result: oneshot::Sender<()>,
@@ -61,7 +66,8 @@ impl SpanAssociation for ShuffleClientMessage {
             Self::PushData { .. } => "PushData",
             Self::MapperEnd { .. } => "MapperEnd",
             Self::UnregisterShuffle { .. } => "UnregisterShuffle",
-            Self::ReadPartition { .. } => "ReadPartition",
+            Self::ClearShuffle { .. } => "ClearShuffle",
+            Self::ReadPartitionStream { .. } => "ReadPartitionStream",
             Self::Stop { .. } => "Stop",
         }
         .into()

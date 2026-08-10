@@ -19,9 +19,9 @@ impl RemoteLifecycleManager {
 
 #[tonic::async_trait]
 impl LifecycleManager for RemoteLifecycleManager {
-    async fn create_shuffle_id(&self, task_key: String) -> CelebornResult<i32> {
+    async fn create_shuffle_id(&self, shuffle_key: String) -> CelebornResult<i32> {
         self.client
-            .create_shuffle_id(task_key)
+            .create_shuffle_id(shuffle_key)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))
     }

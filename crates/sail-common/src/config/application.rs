@@ -331,10 +331,10 @@ pub struct CelebornShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornEndpointOverride {
-    pub advertised_host: String,
-    pub advertised_port: u16,
-    pub host: String,
-    pub port: u16,
+    pub internal_host: String,
+    pub internal_port: u16,
+    pub external_host: String,
+    pub external_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

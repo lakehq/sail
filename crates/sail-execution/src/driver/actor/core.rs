@@ -15,6 +15,8 @@ use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
 use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
 use crate::stream::celeborn::CelebornStreamManager;
+use crate::stream::local::LocalStreamManager;
+use crate::stream::storage::StorageStreamManager;
 use crate::task_runner::{
     TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerMessage,
     TaskRunnerPlacement,
@@ -86,12 +88,23 @@ impl Actor for DriverActor {
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
-                extensions: TaskRunnerExtensions::new(
-                    (&self.options).into(),
-                    &self.options.shuffle_backend,
-                    self.options.session_id.clone(),
+                extensions: TaskRunnerExtensions {
+                    local_streams: LocalStreamManager::new((&self.options).into()),
+                    storage_streams: match &self.options.shuffle_backend {
+                        ShuffleBackendKind::Storage {
+                            path,
+                            max_file_size,
+                            compression,
+                        } => Some(StorageStreamManager::new(
+                            path.clone(),
+                            self.options.session_id.clone(),
+                            *max_file_size,
+                            *compression,
+                        )),
+                        ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+                    },
                     celeborn_streams,
-                ),
+                },
                 placement: TaskRunnerPlacement::Driver { driver },
             },
         ));

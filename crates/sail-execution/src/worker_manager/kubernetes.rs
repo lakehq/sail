@@ -288,16 +288,10 @@ impl KubernetesWorkerService {
         if let ShuffleBackendKind::Celeborn {
             master_host,
             master_port,
-            endpoint_overrides,
+            ..
         } = &shuffle_backend
         {
-            #[expect(
-                clippy::expect_used,
-                reason = "Celeborn endpoint overrides derive Serialize and TOML values support arrays of inline tables"
-            )]
-            let endpoint_overrides = toml::Value::try_from(endpoint_overrides)
-                .expect("serializing Celeborn endpoint overrides")
-                .to_string();
+            let endpoint_overrides = shuffle_backend.celeborn_endpoint_overrides_string();
             env.extend([
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_HOST.to_string(),

@@ -8,7 +8,7 @@ use crate::master::SlotReservation;
 
 pub enum LifecycleManagerMessage {
     CreateShuffleId {
-        task_key: String,
+        shuffle_key: String,
         result: oneshot::Sender<CelebornResult<i32>>,
     },
     RequestSlotsBegin {

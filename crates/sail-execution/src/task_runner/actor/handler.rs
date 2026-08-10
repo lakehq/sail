@@ -7,8 +7,8 @@ use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::{debug, error, warn};
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -25,8 +25,8 @@ use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::decode_remote_physical_plan;
 use crate::stream::accessor::TaskStreamFactory;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamChannelSink;
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput, TaskOutputLocator};
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement};
 use crate::worker::{WorkerLocation, WorkerMessage};
@@ -189,11 +189,11 @@ impl TaskRunnerActor {
     pub(super) fn handle_create_celeborn_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
+        key: TaskKey,
         num_mappers: usize,
         channels: usize,
         schema: Arc<Schema>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         if let Some(streams) = self.extensions.celeborn_streams.clone() {
             ctx.spawn(async move {
@@ -348,6 +348,22 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_clean_up_celeborn_streams(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        stage: Option<usize>,
+    ) -> ActorAction {
+        if let (Some(streams), Some(stage)) = (self.extensions.celeborn_streams.clone(), stage) {
+            ctx.spawn(async move {
+                if let Err(error) = streams.clear_stream(job_id, stage).await {
+                    warn!("failed to clear Celeborn shuffle cache for job {job_id} stage {stage}: {error}");
+                }
+            });
+        }
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_shutdown(&mut self) -> ActorAction {
         ActorAction::Stop
     }
@@ -429,7 +445,13 @@ impl TaskRunnerActor {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let streams = TaskStreamFactory::new(ctx.handle().clone(), context.clone());
+        let input_plan = plan.clone();
+        let streams = TaskStreamFactory::new(
+            ctx.handle().clone(),
+            context.clone(),
+            &self.extensions,
+            input_plan.as_ref(),
+        );
         let result = {
             let streams = streams.clone();
             plan.transform(move |node| {
@@ -452,18 +474,7 @@ impl TaskRunnerActor {
         let plan = result.data()?;
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, self.codec.as_ref())?;
-        let writer = if self.extensions.celeborn_streams.is_some()
-            && matches!(output.locator, TaskOutputLocator::Blocking)
-        {
-            streams.celeborn_writer(
-                key.clone(),
-                output.clone(),
-                schema.clone(),
-                plan.output_partitioning().partition_count(),
-            )
-        } else {
-            streams.writer(key.clone(), output.clone(), schema.clone())
-        };
+        let writer = streams.writer(key.clone(), output.clone(), schema.clone());
         Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
     }
 }

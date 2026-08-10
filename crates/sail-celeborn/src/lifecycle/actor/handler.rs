@@ -11,15 +11,15 @@ use crate::worker::{WorkerClient, WorkerClientOptions};
 impl LifecycleManagerActor {
     pub(super) fn handle_create_shuffle_id(
         &mut self,
-        task_key: String,
+        shuffle_key: String,
         reply: oneshot::Sender<CelebornResult<i32>>,
     ) -> ActorAction {
-        let id = match self.shuffle_ids.get(&task_key) {
+        let id = match self.shuffle_ids.get(&shuffle_key) {
             Some(id) => Ok(*id),
             None => match self.next_shuffle_id.checked_add(1) {
                 Some(next) => {
                     self.next_shuffle_id = next;
-                    self.shuffle_ids.insert(task_key, next);
+                    self.shuffle_ids.insert(shuffle_key, next);
                     Ok(next)
                 }
                 None => Err(CelebornError::Application(
@@ -77,16 +77,14 @@ impl LifecycleManagerActor {
                     )
                     .await?;
                 for locations in reservation.worker_locations.values() {
-                    let location = locations
+                    let Some(location) = locations
                         .primary_locations
                         .first()
                         .or_else(|| locations.replica_locations.first())
-                        .ok_or_else(|| {
-                            CelebornError::Protocol(
-                                "worker reservation has no partition locations".to_string(),
-                            )
-                        })?
-                        .clone();
+                        .cloned()
+                    else {
+                        continue;
+                    };
                     WorkerClient::new(
                         WorkerClientOptions::new(location)
                             .with_endpoint_resolver(endpoint_resolver.clone()),

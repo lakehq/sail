@@ -7556,6 +7556,7 @@ dependencies = [
 name = "sail-celeborn"
 version = "0.7.0"
 dependencies = [
+ "futures",
  "log",
  "prost",
  "readonly",

@@ -1,3 +1,5 @@
+use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
@@ -12,10 +14,13 @@ pub struct ShuffleClient {
 }
 
 impl ShuffleClient {
-    pub async fn create_shuffle_id(&self, task_key: String) -> CelebornResult<i32> {
+    pub async fn create_shuffle_id(&self, shuffle_key: String) -> CelebornResult<i32> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::CreateShuffleId { task_key, result })
+            .send(ShuffleClientMessage::CreateShuffleId {
+                shuffle_key,
+                result,
+            })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
@@ -78,14 +83,23 @@ impl ShuffleClient {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    pub async fn read_partition(
+    pub async fn clear_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(ShuffleClientMessage::ClearShuffle { shuffle_id, result })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    pub async fn read_partition_stream(
         &self,
         shuffle_id: i32,
         partition_id: i32,
-    ) -> CelebornResult<Vec<u8>> {
+    ) -> CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::ReadPartition {
+            .send(ShuffleClientMessage::ReadPartitionStream {
                 shuffle_id,
                 partition_id,
                 result,
@@ -93,6 +107,19 @@ impl ShuffleClient {
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    pub async fn read_partition(
+        &self,
+        shuffle_id: i32,
+        partition_id: i32,
+    ) -> CelebornResult<Vec<u8>> {
+        let mut stream = self.read_partition_stream(shuffle_id, partition_id).await?;
+        let mut data = vec![];
+        while let Some(batch) = stream.try_next().await? {
+            data.extend(batch);
+        }
+        Ok(data)
     }
 
     /// Register a shuffle and reserve slots for its reduce partitions.

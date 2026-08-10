@@ -5,6 +5,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
+use datafusion::physical_plan::ExecutionPlanProperties;
 use futures::future::try_join_all;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -17,25 +18,39 @@ use crate::stream::writer::{
     TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState, TaskStreamWriter,
 };
 use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
-use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerExtensions, TaskRunnerMessage};
 
-pub struct TaskStreamFactory {
+pub struct TaskStreamFactory<'a> {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
+    extensions: &'a TaskRunnerExtensions,
+    plan: &'a dyn datafusion::physical_plan::ExecutionPlan,
 }
 
-impl Clone for TaskStreamFactory {
+impl Clone for TaskStreamFactory<'_> {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
             context: self.context.clone(),
+            extensions: self.extensions,
+            plan: self.plan,
         }
     }
 }
 
-impl TaskStreamFactory {
-    pub fn new(handle: ActorHandle<TaskRunnerActor>, context: Arc<TaskContext>) -> Self {
-        Self { handle, context }
+impl<'a> TaskStreamFactory<'a> {
+    pub fn new(
+        handle: ActorHandle<TaskRunnerActor>,
+        context: Arc<TaskContext>,
+        extensions: &'a TaskRunnerExtensions,
+        plan: &'a dyn datafusion::physical_plan::ExecutionPlan,
+    ) -> Self {
+        Self {
+            handle,
+            context,
+            extensions,
+            plan,
+        }
     }
 
     pub fn reader(
@@ -59,30 +74,26 @@ impl TaskStreamFactory {
         output: TaskOutput,
         schema: SchemaRef,
     ) -> Arc<dyn TaskStreamWriter> {
-        Arc::new(MultiChannelTaskStreamWriter::new(
-            self.handle.clone(),
-            self.context.clone(),
-            key,
-            output,
-            schema,
-        ))
-    }
-
-    pub fn celeborn_writer(
-        &self,
-        key: TaskKey,
-        output: TaskOutput,
-        schema: SchemaRef,
-        mappers: usize,
-    ) -> Arc<dyn TaskStreamWriter> {
-        Arc::new(CelebornTaskStreamWriter::new(
-            self.handle.clone(),
-            self.context.clone(),
-            key,
-            output.channels(),
-            schema,
-            mappers,
-        ))
+        if self.extensions.celeborn_streams.is_some()
+            && matches!(output.locator, TaskOutputLocator::Blocking)
+        {
+            Arc::new(CelebornTaskStreamWriter::new(
+                self.handle.clone(),
+                self.context.clone(),
+                key,
+                output.channels(),
+                schema,
+                self.plan.output_partitioning().partition_count(),
+            ))
+        } else {
+            Arc::new(MultiChannelTaskStreamWriter::new(
+                self.handle.clone(),
+                self.context.clone(),
+                key,
+                output,
+                schema,
+            ))
+        }
     }
 }
 
@@ -148,11 +159,11 @@ impl TaskStreamAccessor {
 
     async fn create_celeborn_stream(
         &self,
-        key: TaskStreamKey,
+        key: TaskKey,
         num_mappers: usize,
         channels: usize,
         schema: SchemaRef,
-    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+    ) -> Result<Box<dyn TaskStreamSink>> {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::CreateCelebornStream {
@@ -443,18 +454,14 @@ impl TaskStreamWriter for CelebornTaskStreamWriter {
                 self.key.partition
             )));
         }
-        let sinks = try_join_all((0..self.channels).map(|channel| {
-            self.streams.create_celeborn_stream(
-                self.key.task_stream_key(channel),
+        self.streams
+            .create_celeborn_stream(
+                self.key.clone(),
                 self.mappers,
                 self.channels,
                 self.schema.clone(),
             )
-        }))
-        .await?;
-        Ok(Box::new(MultiChannelTaskStreamSink {
-            sinks: sinks.into_iter().map(Some).collect(),
-        }))
+            .await
     }
 }
 

@@ -306,9 +306,11 @@
   type: array
   default: "[]"
   description: |
-    Optional endpoint mappings for Celeborn workers advertised from an isolated network.
-    Each entry has `advertised_host`, `advertised_port`, `host`, and `port` fields.
+    For tests only: optional endpoint mappings for Celeborn workers advertised from an
+    isolated network. Each entry maps `internal_host` and `internal_port` to
+    `external_host` and `external_port`.
   experimental: true
+  hidden: true
 
 - key: execution.batch_size
   type: number

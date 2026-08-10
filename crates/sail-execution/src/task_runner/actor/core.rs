@@ -99,6 +99,9 @@ impl Actor for TaskRunnerActor {
                 stage,
                 context,
             } => self.handle_clean_up_storage_streams(ctx, job_id, stage, context),
+            TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage } => {
+                self.handle_clean_up_celeborn_streams(ctx, job_id, stage)
+            }
             TaskRunnerMessage::Shutdown => self.handle_shutdown(),
         }
     }

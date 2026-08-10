@@ -48,9 +48,10 @@ impl Actor for LifecycleManagerActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            LifecycleManagerMessage::CreateShuffleId { task_key, result } => {
-                self.handle_create_shuffle_id(task_key, result)
-            }
+            LifecycleManagerMessage::CreateShuffleId {
+                shuffle_key,
+                result,
+            } => self.handle_create_shuffle_id(shuffle_key, result),
             LifecycleManagerMessage::RequestSlotsBegin {
                 shuffle_id,
                 partition_ids,

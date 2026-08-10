@@ -532,6 +532,20 @@ impl DriverActor {
                             }
                         });
                     }
+                    if let Some(task_runner) = self.task_runner.clone() {
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::CleanUpCelebornStreams {
+                                    job_id,
+                                    stage: Some(stage),
+                                })
+                                .await;
+                        });
+                    }
+                    for worker_id in self.task_assigner.active_worker_ids() {
+                        self.worker_pool
+                            .clean_up_job(ctx, worker_id, job_id, Some(stage));
+                    }
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {

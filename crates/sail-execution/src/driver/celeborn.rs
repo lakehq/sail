@@ -74,7 +74,7 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
         let (result, receiver) = oneshot::channel();
         manager
             .send(LifecycleManagerMessage::CreateShuffleId {
-                task_key: request.task_key,
+                shuffle_key: request.shuffle_key,
                 result,
             })
             .await

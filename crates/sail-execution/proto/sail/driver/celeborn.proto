@@ -4,7 +4,7 @@ package sail.driver;
 
 message CelebornCreateShuffleIdRequest {
   uint64 driver_id = 1;
-  string task_key = 2;
+  string shuffle_key = 2;
 }
 
 message CelebornCreateShuffleIdResponse {

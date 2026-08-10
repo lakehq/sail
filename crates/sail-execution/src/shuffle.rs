@@ -20,10 +20,10 @@ pub enum ShuffleBackendKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ShuffleEndpointOverride {
-    pub advertised_host: String,
-    pub advertised_port: u16,
-    pub host: String,
-    pub port: u16,
+    pub internal_host: String,
+    pub internal_port: u16,
+    pub external_host: String,
+    pub external_port: u16,
 }
 
 impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
@@ -42,10 +42,10 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
                     .endpoint_overrides
                     .iter()
                     .map(|override_| ShuffleEndpointOverride {
-                        advertised_host: override_.advertised_host.clone(),
-                        advertised_port: override_.advertised_port,
-                        host: override_.host.clone(),
-                        port: override_.port,
+                        internal_host: override_.internal_host.clone(),
+                        internal_port: override_.internal_port,
+                        external_host: override_.external_host.clone(),
+                        external_port: override_.external_port,
                     })
                     .collect(),
             },
@@ -58,6 +58,22 @@ pub fn celeborn_application_id(session_id: &str) -> String {
 }
 
 impl ShuffleBackendKind {
+    pub fn celeborn_endpoint_overrides_string(&self) -> String {
+        let Self::Celeborn {
+            endpoint_overrides, ..
+        } = self
+        else {
+            return "[]".to_string();
+        };
+        #[expect(
+            clippy::expect_used,
+            reason = "Celeborn endpoint overrides derive Serialize and TOML values support arrays of inline tables"
+        )]
+        toml::Value::try_from(endpoint_overrides)
+            .expect("serializing Celeborn endpoint overrides")
+            .to_string()
+    }
+
     pub fn celeborn_endpoint_resolver(&self) -> Option<Arc<dyn EndpointResolver>> {
         let Self::Celeborn {
             endpoint_overrides, ..
@@ -72,8 +88,8 @@ impl ShuffleBackendKind {
             .iter()
             .map(|override_| {
                 (
-                    (override_.advertised_host.clone(), override_.advertised_port),
-                    (override_.host.clone(), override_.port),
+                    (override_.internal_host.clone(), override_.internal_port),
+                    (override_.external_host.clone(), override_.external_port),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -95,5 +111,37 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
             sail_common::config::ShuffleCompression::Lz4 => Self::Lz4,
             sail_common::config::ShuffleCompression::Zstd => Self::Zstd,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ShuffleBackendKind, ShuffleEndpointOverride};
+
+    #[test]
+    fn test_celeborn_endpoint_overrides_string() {
+        let backend = ShuffleBackendKind::Celeborn {
+            master_host: "master".to_string(),
+            master_port: 12097,
+            endpoint_overrides: vec![ShuffleEndpointOverride {
+                internal_host: "celeborn-worker".to_string(),
+                internal_port: 12000,
+                external_host: "127.0.0.1".to_string(),
+                external_port: 32000,
+            }],
+        };
+
+        assert_eq!(
+            backend.celeborn_endpoint_overrides_string(),
+            "[{ external_host = \"127.0.0.1\", external_port = 32000, internal_host = \"celeborn-worker\", internal_port = 12000 }]"
+        );
+    }
+
+    #[test]
+    fn test_non_celeborn_endpoint_overrides_string_is_empty() {
+        assert_eq!(
+            ShuffleBackendKind::Flight.celeborn_endpoint_overrides_string(),
+            "[]"
+        );
     }
 }
