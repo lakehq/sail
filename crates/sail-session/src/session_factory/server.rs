@@ -12,7 +12,7 @@ use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::actor::ActorHandle;
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
@@ -128,7 +128,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
-        self.apply_optimizer_config(&mut config);
+        self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -175,9 +175,10 @@ impl ServerSessionFactory {
         execution.listing_table_ignore_subdirectory = false;
     }
 
-    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
+        disable_dynamic_filter_pushdown_for_cluster(config, &self.config.mode)
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
@@ -229,4 +230,20 @@ impl ServerSessionFactory {
         parquet.content_defined_chunking.norm_level =
             self.config.parquet.content_defined_chunking.norm_level;
     }
+}
+
+fn disable_dynamic_filter_pushdown_for_cluster(
+    config: &mut SessionConfig,
+    mode: &ExecutionMode,
+) -> Result<()> {
+    if matches!(
+        mode,
+        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+    ) {
+        config.options_mut().set(
+            "datafusion.optimizer.enable_dynamic_filter_pushdown",
+            "false",
+        )?;
+    }
+    Ok(())
 }

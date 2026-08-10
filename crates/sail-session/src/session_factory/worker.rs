@@ -33,11 +33,15 @@ impl SessionFactory<()> for WorkerSessionFactory {
         // We still add default features for the worker session
         // since we need built-in functions to be available for the codec
         // when decoding the execution plan.
-        let config = SessionConfig::default()
+        let mut config = SessionConfig::default()
             .with_extension(Arc::new(DeltaTableCache::default()))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.repartition_buffer_size,
             )));
+        config.options_mut().set(
+            "datafusion.optimizer.enable_dynamic_filter_pushdown",
+            "false",
+        )?;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
