@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common::actor::{Actor, ActorContext};
+use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::mpsc;
@@ -14,9 +14,10 @@ use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
-use crate::stream::local::{LocalStreamManager, LocalStreamManagerMessage, LocalStreamState};
+use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::TaskStreamChannelSink;
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 impl LocalStreamManager {
     pub fn new(options: LocalStreamManagerOptions) -> Self {
@@ -83,15 +84,11 @@ impl LocalStreamManager {
         }
     }
 
-    pub fn fetch_stream<T>(
+    pub fn fetch_stream(
         &mut self,
-        ctx: &mut ActorContext<T>,
+        ctx: &mut ActorContext<TaskRunnerActor>,
         key: &TaskStreamKey,
-    ) -> ExecutionResult<TaskStreamSource>
-    where
-        T: Actor,
-        T::Message: LocalStreamManagerMessage,
-    {
+    ) -> ExecutionResult<TaskStreamSource> {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
@@ -111,7 +108,7 @@ impl LocalStreamManager {
                 let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
-                    T::Message::probe_pending_local_stream(key.clone()),
+                    TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
                     self.options.task_stream_creation_timeout,
                 );
                 Ok(Box::pin(ReceiverStream::new(rx)))

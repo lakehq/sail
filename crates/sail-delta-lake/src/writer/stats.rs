@@ -638,10 +638,10 @@ impl From<StatsScalar> for StatValue {
                 .unwrap_or_else(|| StatValue::String(v.to_string())),
             StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
             }
             StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
                 .map(StatValue::Number)
@@ -878,11 +878,11 @@ mod tests {
 
         assert_eq!(
             timestamp_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
         );
         assert_eq!(
             timestamp_ntz_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
         );
     }
 }

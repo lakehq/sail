@@ -1,28 +1,30 @@
+use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use sail_common::actor::{Actor, ActorHandle};
+use futures::future::try_join_all;
+use sail_common::actor::ActorHandle;
+use tokio::sync::oneshot;
 
-use crate::id::TaskKey;
-pub(crate) use crate::stream::local::accessor::LocalStreamAccessorMessage;
-use crate::stream::local::accessor::{LocalTaskStreamReader, LocalTaskStreamWriter};
-use crate::stream::reader::TaskStreamReader;
-pub(crate) use crate::stream::storage::accessor::StorageStreamAccessorMessage;
-use crate::stream::storage::accessor::{StorageTaskStreamReader, StorageTaskStreamWriter};
+use crate::error::ExecutionResult;
+use crate::id::{TaskKey, TaskStreamKey, WorkerId};
+use crate::stream::merge::merged_stream;
+use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
     TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState, TaskStreamWriter,
 };
 use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-pub struct TaskStreamFactory<T: Actor> {
-    handle: ActorHandle<T>,
+pub struct TaskStreamFactory {
+    handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
 }
 
-impl<T: Actor> Clone for TaskStreamFactory<T> {
+impl Clone for TaskStreamFactory {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
@@ -31,8 +33,8 @@ impl<T: Actor> Clone for TaskStreamFactory<T> {
     }
 }
 
-impl<T: Actor> TaskStreamFactory<T> {
-    pub fn new(handle: ActorHandle<T>, context: Arc<TaskContext>) -> Self {
+impl TaskStreamFactory {
+    pub fn new(handle: ActorHandle<TaskRunnerActor>, context: Arc<TaskContext>) -> Self {
         Self { handle, context }
     }
 
@@ -41,22 +43,14 @@ impl<T: Actor> TaskStreamFactory<T> {
         key: TaskKey,
         input: TaskInput,
         schema: SchemaRef,
-    ) -> Arc<dyn TaskStreamReader>
-    where
-        T::Message: LocalStreamAccessorMessage + StorageStreamAccessorMessage,
-    {
-        match &input.locator {
-            TaskInputLocator::Storage { .. } => Arc::new(StorageTaskStreamReader::new(
-                self.handle.clone(),
-                self.context.clone(),
-                key,
-                input,
-                schema,
-            )),
-            TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. } => Arc::new(
-                LocalTaskStreamReader::new(self.handle.clone(), key, input, schema),
-            ),
-        }
+    ) -> Arc<dyn TaskStreamReader> {
+        Arc::new(MultiChannelTaskStreamReader::new(
+            self.handle.clone(),
+            self.context.clone(),
+            key,
+            input,
+            schema,
+        ))
     }
 
     pub fn writer(
@@ -64,27 +58,272 @@ impl<T: Actor> TaskStreamFactory<T> {
         key: TaskKey,
         output: TaskOutput,
         schema: SchemaRef,
-    ) -> Arc<dyn TaskStreamWriter>
-    where
-        T::Message: LocalStreamAccessorMessage + StorageStreamAccessorMessage,
-    {
-        let channels = output.channels();
-        match output.locator {
-            TaskOutputLocator::Pipelined { replicas } => Arc::new(LocalTaskStreamWriter::new(
-                self.handle.clone(),
+    ) -> Arc<dyn TaskStreamWriter> {
+        Arc::new(MultiChannelTaskStreamWriter::new(
+            self.handle.clone(),
+            self.context.clone(),
+            key,
+            output,
+            schema,
+        ))
+    }
+}
+
+struct TaskStreamAccessor {
+    handle: ActorHandle<TaskRunnerActor>,
+    context: Arc<TaskContext>,
+}
+
+impl TaskStreamAccessor {
+    fn new(handle: ActorHandle<TaskRunnerActor>, context: Arc<TaskContext>) -> Self {
+        Self { handle, context }
+    }
+
+    async fn receive<R>(
+        &self,
+        message: TaskRunnerMessage,
+        rx: oneshot::Receiver<ExecutionResult<R>>,
+    ) -> Result<R> {
+        self.handle.send(message).await.map_err(|_| {
+            DataFusionError::Internal("actor send error for task stream accessor".to_string())
+        })?;
+        rx.await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+            .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    async fn create_local_stream(
+        &self,
+        key: TaskStreamKey,
+        replicas: usize,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateLocalStream {
                 key,
-                channels,
                 replicas,
                 schema,
-            )),
-            TaskOutputLocator::Blocking => Arc::new(StorageTaskStreamWriter::new(
-                self.handle.clone(),
-                self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
+    async fn create_storage_stream(
+        &self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateStorageStream {
                 key,
-                channels,
                 schema,
-            )),
+                context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
+    async fn fetch_driver_stream(
+        &self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<TaskStreamSource> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::FetchDriverStream {
+                key,
+                schema,
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
+    async fn fetch_worker_stream(
+        &self,
+        worker_id: WorkerId,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<TaskStreamSource> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::FetchWorkerStream {
+                worker_id,
+                key,
+                schema,
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
+    async fn fetch_storage_stream(
+        &self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<TaskStreamSource> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::FetchStorageStream {
+                key,
+                schema,
+                context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+}
+
+pub(crate) struct MultiChannelTaskStreamReader {
+    streams: TaskStreamAccessor,
+    key: TaskKey,
+    input: TaskInput,
+    schema: SchemaRef,
+}
+
+impl MultiChannelTaskStreamReader {
+    fn new(
+        handle: ActorHandle<TaskRunnerActor>,
+        context: Arc<TaskContext>,
+        key: TaskKey,
+        input: TaskInput,
+        schema: SchemaRef,
+    ) -> Self {
+        Self {
+            streams: TaskStreamAccessor::new(handle, context),
+            key,
+            input,
+            schema,
         }
+    }
+}
+
+impl fmt::Debug for MultiChannelTaskStreamReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MultiChannelTaskStreamReader").finish()
+    }
+}
+
+#[tonic::async_trait]
+impl TaskStreamReader for MultiChannelTaskStreamReader {
+    async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
+        let streams = match &self.input.locator {
+            TaskInputLocator::Driver { keys } => {
+                let keys = keys.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                try_join_all(keys.iter().map(|key| {
+                    self.streams.fetch_driver_stream(
+                        key.task_stream_key(self.key.job_id, self.input.stage),
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+            TaskInputLocator::Worker { keys } => {
+                let keys = keys.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                try_join_all(keys.iter().map(|(worker_id, key)| {
+                    self.streams.fetch_worker_stream(
+                        *worker_id,
+                        key.task_stream_key(self.key.job_id, self.input.stage),
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+            TaskInputLocator::Storage { keys } => {
+                let keys = keys.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                try_join_all(keys.iter().map(|key| {
+                    self.streams.fetch_storage_stream(
+                        key.task_stream_key(self.key.job_id, self.input.stage),
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+        };
+        Ok(merged_stream(self.schema.clone(), streams))
+    }
+}
+
+pub(crate) struct MultiChannelTaskStreamWriter {
+    streams: TaskStreamAccessor,
+    key: TaskKey,
+    output: TaskOutput,
+    schema: SchemaRef,
+}
+
+impl MultiChannelTaskStreamWriter {
+    fn new(
+        handle: ActorHandle<TaskRunnerActor>,
+        context: Arc<TaskContext>,
+        key: TaskKey,
+        output: TaskOutput,
+        schema: SchemaRef,
+    ) -> Self {
+        Self {
+            streams: TaskStreamAccessor::new(handle, context),
+            key,
+            output,
+            schema,
+        }
+    }
+}
+
+impl fmt::Debug for MultiChannelTaskStreamWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MultiChannelTaskStreamWriter").finish()
+    }
+}
+
+#[tonic::async_trait]
+impl TaskStreamWriter for MultiChannelTaskStreamWriter {
+    async fn open(&self, partition: usize) -> Result<Box<dyn TaskStreamSink>> {
+        if partition != self.key.partition {
+            return Err(DataFusionError::Execution(format!(
+                "task stream writer for partition {} cannot open partition {partition}",
+                self.key.partition
+            )));
+        }
+        let channels = self.output.channels();
+        let sinks = match &self.output.locator {
+            TaskOutputLocator::Pipelined { replicas } => {
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_local_stream(
+                        self.key.task_stream_key(channel),
+                        *replicas,
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+            TaskOutputLocator::Blocking => {
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_storage_stream(
+                        self.key.task_stream_key(channel),
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+        };
+        Ok(Box::new(MultiChannelTaskStreamSink {
+            sinks: sinks.into_iter().map(Some).collect(),
+        }))
     }
 }
 
