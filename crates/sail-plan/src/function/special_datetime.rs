@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalDayTimeType, TimeUnit};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{BinaryExpr, Expr, Operator, ScalarUDF, cast, lit};
+use datafusion_expr::{BinaryExpr, Expr, Operator, ScalarUDF, cast, lit, try_cast};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
@@ -103,7 +103,9 @@ pub(crate) fn foldable_special_datetime_cast(
     let special = special_datetime(expr)?;
     match target_type {
         DataType::Date32 => Some(match special {
-            SpecialDatetime::Epoch => lit(ScalarValue::Date32(Some(0))),
+            SpecialDatetime::Epoch => {
+                try_cast(lit(ScalarValue::Date32(Some(0))), DataType::Date32)
+            }
             SpecialDatetime::Now | SpecialDatetime::Today => {
                 relative_current_date(0, session_timezone)
             }
@@ -111,9 +113,10 @@ pub(crate) fn foldable_special_datetime_cast(
             SpecialDatetime::Yesterday => relative_current_date(-1, session_timezone),
         }),
         DataType::Timestamp(TimeUnit::Microsecond, timezone) => Some(match special {
-            SpecialDatetime::Epoch => {
-                lit(ScalarValue::TimestampMicrosecond(Some(0), timezone.clone()))
-            }
+            SpecialDatetime::Epoch => try_cast(
+                lit(ScalarValue::TimestampMicrosecond(Some(0), timezone.clone())),
+                target_type.clone(),
+            ),
             SpecialDatetime::Now => {
                 let now = current_timestamp(session_timezone);
                 if timezone.is_some() {

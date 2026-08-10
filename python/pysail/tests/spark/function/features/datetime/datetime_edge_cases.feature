@@ -506,3 +506,25 @@ Feature: datetime edge cases
          |-- date_to_ltz: timestamp (nullable = false)
          |-- ltz_to_ntz: timestamp_ntz (nullable = false)
         """
+
+    Scenario: folded epoch casts retain Spark's nullable schema
+      When query
+        """
+        SELECT
+          CAST('epoch' AS DATE) AS date_cast,
+          TRY_CAST('epoch' AS DATE) AS date_try,
+          CAST('epoch' AS TIMESTAMP) AS timestamp_cast,
+          TRY_CAST('epoch' AS TIMESTAMP) AS timestamp_try,
+          CAST('epoch' AS TIMESTAMP_NTZ) AS ntz_cast,
+          TRY_CAST('epoch' AS TIMESTAMP_NTZ) AS ntz_try
+        """
+      Then query schema
+        """
+        root
+         |-- date_cast: date (nullable = true)
+         |-- date_try: date (nullable = true)
+         |-- timestamp_cast: timestamp (nullable = true)
+         |-- timestamp_try: timestamp (nullable = true)
+         |-- ntz_cast: timestamp_ntz (nullable = true)
+         |-- ntz_try: timestamp_ntz (nullable = true)
+        """
