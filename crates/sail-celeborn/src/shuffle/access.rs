@@ -14,11 +14,12 @@ pub struct ShuffleClient {
 }
 
 impl ShuffleClient {
-    pub async fn create_shuffle_id(&self, shuffle_key: String) -> CelebornResult<i32> {
+    pub async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         let (result, receiver) = oneshot::channel();
         self.handle
             .send(ShuffleClientMessage::CreateShuffleId {
-                shuffle_key,
+                job_id,
+                stage,
                 result,
             })
             .await

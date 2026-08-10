@@ -18,7 +18,10 @@ if TYPE_CHECKING:
 
     from pysail.testing.containers.celeborn import MasterService, WorkerService
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only"),
+]
 
 
 @pytest.fixture(scope="module")

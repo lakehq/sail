@@ -14,12 +14,13 @@ impl ShuffleClientActor {
     pub(super) fn handle_create_shuffle_id(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        shuffle_key: String,
+        job_id: u64,
+        stage: u64,
         reply: oneshot::Sender<CelebornResult<i32>>,
     ) -> ActorAction {
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
         ctx.spawn(async move {
-            let _ = reply.send(lifecycle_manager.create_shuffle_id(shuffle_key).await);
+            let _ = reply.send(lifecycle_manager.create_shuffle_id(job_id, stage).await);
         });
         ActorAction::Continue
     }

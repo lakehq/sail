@@ -86,23 +86,24 @@ impl Actor for DriverActor {
             }
             ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
         };
+        let storage_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(StorageStreamManager::new(
+                path.clone(),
+                self.options.session_id.clone(),
+                *max_file_size,
+                *compression,
+            )),
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+        };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
                 extensions: TaskRunnerExtensions {
                     local_streams: LocalStreamManager::new((&self.options).into()),
-                    storage_streams: match &self.options.shuffle_backend {
-                        ShuffleBackendKind::Storage {
-                            path,
-                            max_file_size,
-                            compression,
-                        } => Some(StorageStreamManager::new(
-                            path.clone(),
-                            self.options.session_id.clone(),
-                            *max_file_size,
-                            *compression,
-                        )),
-                        ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
-                    },
+                    storage_streams,
                     celeborn_streams,
                 },
                 placement: TaskRunnerPlacement::Driver { driver },

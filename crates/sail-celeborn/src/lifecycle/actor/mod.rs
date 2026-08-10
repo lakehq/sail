@@ -32,6 +32,12 @@ impl ApplicationRegistration {
     }
 }
 
+#[derive(Eq, Hash, PartialEq)]
+struct ShuffleKey {
+    job_id: u64,
+    stage: u64,
+}
+
 pub struct LifecycleManagerActor {
     options: LifecycleManagerOptions,
     client: MasterClient,
@@ -41,7 +47,7 @@ pub struct LifecycleManagerActor {
     mapper_attempts: HashMap<i32, Vec<i32>>,
     committing_shuffles: HashSet<i32>,
     committed_shuffles: HashSet<i32>,
-    shuffle_ids: HashMap<String, i32>,
+    shuffle_ids: HashMap<ShuffleKey, i32>,
     next_shuffle_id: i32,
     application_registration: ApplicationRegistration,
 }

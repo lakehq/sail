@@ -44,14 +44,15 @@ impl CelebornLifecycleManagerClient {
         }
     }
 
-    pub async fn create_shuffle_id(&self, shuffle_key: String) -> ExecutionResult<i32> {
+    pub async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> ExecutionResult<i32> {
         Ok(self
             .inner
             .get()
             .await?
             .create_shuffle_id(Request::new(r#gen::CelebornCreateShuffleIdRequest {
                 driver_id: self.driver_id.into(),
-                shuffle_key,
+                job_id,
+                stage,
             }))
             .await?
             .into_inner()

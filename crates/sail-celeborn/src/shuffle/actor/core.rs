@@ -23,9 +23,10 @@ impl Actor for ShuffleClientActor {
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
             ShuffleClientMessage::CreateShuffleId {
-                shuffle_key,
+                job_id,
+                stage,
                 result,
-            } => self.handle_create_shuffle_id(ctx, shuffle_key, result),
+            } => self.handle_create_shuffle_id(ctx, job_id, stage, result),
             ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,

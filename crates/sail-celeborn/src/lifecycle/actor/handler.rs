@@ -4,22 +4,24 @@ use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::LifecycleManagerMessage;
-use crate::lifecycle::actor::LifecycleManagerActor;
+use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
 use crate::master::{SlotReservation, UserIdentifier};
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl LifecycleManagerActor {
     pub(super) fn handle_create_shuffle_id(
         &mut self,
-        shuffle_key: String,
+        job_id: u64,
+        stage: u64,
         reply: oneshot::Sender<CelebornResult<i32>>,
     ) -> ActorAction {
-        let id = match self.shuffle_ids.get(&shuffle_key) {
+        let key = ShuffleKey { job_id, stage };
+        let id = match self.shuffle_ids.get(&key) {
             Some(id) => Ok(*id),
             None => match self.next_shuffle_id.checked_add(1) {
                 Some(next) => {
                     self.next_shuffle_id = next;
-                    self.shuffle_ids.insert(shuffle_key, next);
+                    self.shuffle_ids.insert(key, next);
                     Ok(next)
                 }
                 None => Err(CelebornError::Application(
