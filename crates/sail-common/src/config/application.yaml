@@ -306,9 +306,10 @@
   type: array
   default: "[]"
   description: |
-    For tests only: optional endpoint mappings for Celeborn workers advertised from an
+    Optional endpoint mappings for Celeborn workers advertised from an
     isolated network. Each entry maps `internal_host` and `internal_port` to
     `external_host` and `external_port`.
+    This option is intended for use in tests only.
   experimental: true
   hidden: true
 

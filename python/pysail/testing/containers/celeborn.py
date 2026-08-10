@@ -13,7 +13,6 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -21,6 +20,7 @@ _IMAGE = "apache/celeborn:0.6.3"
 _MASTER_PORT = 12097
 _MASTER_HTTP_PORT = 12098
 _CONFIG_PATH = Path(__file__).with_name("celeborn-defaults.conf")
+
 
 @dataclass(frozen=True)
 class MasterService:
@@ -169,7 +169,7 @@ def celeborn_replica_worker(
 
 
 def _endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]]) -> object:
-    from pysail import _native
+    from pysail import _native  # noqa: PLC0415
 
     return _native._celeborn.StaticEndpointResolver(overrides)  # noqa: SLF001
 

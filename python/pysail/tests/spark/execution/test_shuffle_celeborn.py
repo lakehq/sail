@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
     from pysail.testing.containers.celeborn import MasterService, WorkerService
 
-_SLEEP_SECONDS = 2
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
@@ -88,7 +87,7 @@ def test_repartition_collect_with_celeborn_shuffle(remote):
 def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: MasterService):
     @F.udf("long")
     def identity(value):
-        time.sleep(_SLEEP_SECONDS)
+        time.sleep(2)
         return value
 
     session_id = spark.session_id
@@ -98,7 +97,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         result = executor.submit(
             lambda: spark.range(2).repartition(2).groupBy().count().select(identity("count").alias("count")).collect()
         )
-        deadline = time.monotonic() + _SLEEP_SECONDS
+        deadline = time.monotonic() + 2
         while not (shuffle_ids := _application_shuffle_ids(celeborn_master, session_id)):
             if result.done() or time.monotonic() >= deadline:
                 break
@@ -107,4 +106,10 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         assert shuffle_ids, "the shuffle was never registered with the Celeborn master"
         assert result.result() == [Row(count=2)]
 
-    assert _application_shuffle_ids(celeborn_master, session_id) == []
+    deadline = time.monotonic() + 5
+    while shuffle_ids := _application_shuffle_ids(celeborn_master, session_id):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+
+    assert shuffle_ids == [], "the Celeborn shuffle was not removed after the query completed"
