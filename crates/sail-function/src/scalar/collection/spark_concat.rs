@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{BooleanArray, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::compute::kernels::boolean::{is_null, or};
+use datafusion::arrow::compute::kernels::concat_elements::concat_elements_dyn;
 use datafusion::arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::string::concat::ConcatFunc;
@@ -183,6 +184,8 @@ impl ScalarUDFImpl for SparkConcat {
                 config_options: args.config_options,
             };
             ArrayConcat::new().invoke_with_args(casted_scalar_args)
+        } else if matches!(return_type, DataType::Binary | DataType::LargeBinary) {
+            concat_binary_values(&args.args, return_type)
         } else {
             let casted_columns =
                 if args.args.iter().any(|arg| {
@@ -214,6 +217,22 @@ impl ScalarUDFImpl for SparkConcat {
             &null_mask,
         )?))
     }
+}
+
+fn concat_binary_values(values: &[ColumnarValue], return_type: &DataType) -> Result<ColumnarValue> {
+    let arrays = ColumnarValue::values_to_arrays(values)?;
+    let mut arrays = arrays
+        .into_iter()
+        .map(|array| Ok(cast(&array, return_type)?))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+    let Some(first) = arrays.next() else {
+        return internal_err!("spark_concat: binary concatenation requires an argument");
+    };
+    let concatenated = arrays.try_fold(first, |left, right| -> Result<_> {
+        Ok(concat_elements_dyn(left.as_ref(), right.as_ref())?)
+    })?;
+    Ok(ColumnarValue::Array(concatenated))
 }
 
 fn cast_columnar_values(
