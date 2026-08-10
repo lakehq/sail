@@ -103,9 +103,7 @@ pub(crate) fn foldable_special_datetime_cast(
     let special = special_datetime(expr)?;
     match target_type {
         DataType::Date32 => Some(match special {
-            SpecialDatetime::Epoch => {
-                try_cast(lit(ScalarValue::Date32(Some(0))), DataType::Date32)
-            }
+            SpecialDatetime::Epoch => try_cast(lit(ScalarValue::Date32(Some(0))), DataType::Date32),
             SpecialDatetime::Now | SpecialDatetime::Today => {
                 relative_current_date(0, session_timezone)
             }
