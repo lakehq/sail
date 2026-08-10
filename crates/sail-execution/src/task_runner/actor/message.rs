@@ -51,14 +51,14 @@ pub enum TaskRunnerMessage {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchLocalStream {
-        key: TaskStreamKey,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    },
     FetchWorkerStream {
         worker_id: WorkerId,
         key: TaskStreamKey,
         schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    FetchLocalStream {
+        key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchStorageStream {
@@ -89,8 +89,8 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
-            Self::FetchLocalStream { .. } => "FetchLocalStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
+            Self::FetchLocalStream { .. } => "FetchLocalStream",
             Self::FetchStorageStream { .. } => "FetchStorageStream",
             Self::CleanUpLocalStreams { .. } => "CleanUpLocalStreams",
             Self::CleanUpStorageStreams { .. } => "CleanUpStorageStreams",
@@ -155,10 +155,7 @@ impl SpanAssociation for TaskRunnerMessage {
             }
             Self::ProbePendingLocalStream { key }
             | Self::CreateLocalStream { key, .. }
-            | Self::CreateStorageStream { key, .. }
-            | Self::FetchDriverStream { key, .. }
-            | Self::FetchLocalStream { key, .. }
-            | Self::FetchStorageStream { key, .. } => {
+            | Self::CreateStorageStream { key, .. } => {
                 let TaskStreamKey {
                     job_id,
                     stage,
@@ -166,6 +163,23 @@ impl SpanAssociation for TaskRunnerMessage {
                     attempt,
                     channel,
                 } = key;
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            Self::FetchDriverStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                ..
+            } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
@@ -185,6 +199,40 @@ impl SpanAssociation for TaskRunnerMessage {
                 ..
             } => {
                 properties.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            Self::FetchLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                ..
+            } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            Self::FetchStorageStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                ..
+            } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
@@ -24,6 +24,7 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisp
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use crate::task_runner::TaskRunnerMessage;
 
 impl DriverActor {
     pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
@@ -289,9 +290,9 @@ impl DriverActor {
         };
         ctx.spawn(async move {
             let _ = task_runner
-                .send(crate::task_runner::TaskRunnerMessage::FetchDriverStream {
+                .send(TaskRunnerMessage::FetchDriverStream {
                     key,
-                    schema: Arc::new(datafusion::arrow::datatypes::Schema::empty()),
+                    schema: Arc::new(Schema::empty()),
                     result,
                 })
                 .await;
@@ -415,11 +416,8 @@ impl DriverActor {
                         TaskAssignment::Driver => {
                             if let Some(task_runner) = self.task_runner.clone() {
                                 ctx.spawn(async move {
-                                    let _ = task_runner
-                                        .send(crate::task_runner::TaskRunnerMessage::StopTask {
-                                            key,
-                                        })
-                                        .await;
+                                    let _ =
+                                        task_runner.send(TaskRunnerMessage::StopTask { key }).await;
                                 });
                             }
                         }
@@ -451,13 +449,11 @@ impl DriverActor {
                             let task_schema = schema.clone();
                             ctx.spawn(async move {
                                 let _ = task_runner
-                                    .send(
-                                        crate::task_runner::TaskRunnerMessage::FetchDriverStream {
-                                            key: task_key,
-                                            schema: task_schema,
-                                            result,
-                                        },
-                                    )
+                                    .send(TaskRunnerMessage::FetchDriverStream {
+                                        key: task_key,
+                                        schema: task_schema,
+                                        result,
+                                    })
                                     .await;
                             });
                         } else {
@@ -504,13 +500,11 @@ impl DriverActor {
                 {
                     ctx.spawn(async move {
                         let _ = task_runner
-                            .send(
-                                crate::task_runner::TaskRunnerMessage::CleanUpStorageStreams {
-                                    job_id,
-                                    stage,
-                                    context,
-                                },
-                            )
+                            .send(TaskRunnerMessage::CleanUpStorageStreams {
+                                job_id,
+                                stage,
+                                context,
+                            })
                             .await;
                     });
                 }
@@ -520,7 +514,7 @@ impl DriverActor {
                             if let Some(task_runner) = self.task_runner.clone() {
                                 ctx.spawn(async move {
                                     let _ = task_runner
-                                        .send(crate::task_runner::TaskRunnerMessage::CleanUpLocalStreams {
+                                        .send(TaskRunnerMessage::CleanUpLocalStreams {
                                             job_id,
                                             stage,
                                         })
@@ -581,7 +575,7 @@ impl DriverActor {
                         };
                         ctx.spawn(async move {
                             let _ = task_runner
-                                .send(crate::task_runner::TaskRunnerMessage::RunTask {
+                                .send(TaskRunnerMessage::RunTask {
                                     key: entry.key,
                                     definition,
                                     context,

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -19,125 +20,25 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::ExecutionResult;
-use crate::id::{TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::decode_remote_physical_plan;
 use crate::stream::accessor::TaskStreamFactory;
 use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::TaskStreamChannelSink;
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement};
-use crate::worker::WorkerMessage;
+use crate::worker::{WorkerLocation, WorkerMessage};
 
 impl TaskRunnerActor {
-    pub(super) fn handle_stop_task(&mut self, key: TaskKey) -> ActorAction {
-        if let Some(signal) = self.signals.remove(&key) {
-            let _ = signal.send(());
-        }
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_probe_pending_local_stream(&mut self, key: TaskStreamKey) -> ActorAction {
-        self.extensions.local_streams.fail_stream_if_pending(&key);
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_create_local_stream(
-        &mut self,
-        key: TaskStreamKey,
-        replicas: usize,
-        schema: Arc<datafusion::arrow::datatypes::Schema>,
-        result: oneshot::Sender<
-            ExecutionResult<Box<dyn crate::stream::writer::TaskStreamChannelSink>>,
-        >,
-    ) -> ActorAction {
-        let _ = result.send(
-            self.extensions
-                .local_streams
-                .create_stream(key, replicas, schema),
-        );
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_create_storage_stream(
-        &mut self,
-        key: TaskStreamKey,
-        schema: Arc<datafusion::arrow::datatypes::Schema>,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<
-            ExecutionResult<Box<dyn crate::stream::writer::TaskStreamChannelSink>>,
-        >,
-    ) -> ActorAction {
-        let output = self
-            .extensions
-            .storage_streams()
-            .and_then(|streams| streams.create_stream(key, schema, &context));
-        let _ = result.send(output);
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_fetch_local_stream(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    ) -> ActorAction {
-        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_fetch_storage_stream(
-        &mut self,
-        key: TaskStreamKey,
-        schema: Arc<datafusion::arrow::datatypes::Schema>,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    ) -> ActorAction {
-        let output = self
-            .extensions
-            .storage_streams()
-            .and_then(|streams| streams.fetch_stream(key, schema, &context));
-        let _ = result.send(output);
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_clean_up_local_streams(
-        &mut self,
-        job_id: crate::id::JobId,
-        stage: Option<usize>,
-    ) -> ActorAction {
-        self.extensions.local_streams.remove_streams(job_id, stage);
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_clean_up_storage_streams(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        job_id: crate::id::JobId,
-        stage: Option<usize>,
-        context: Arc<TaskContext>,
-    ) -> ActorAction {
-        if let Some(streams) = self.extensions.storage_streams.clone() {
-            ctx.spawn(async move {
-                if let Err(error) = streams.remove_streams(job_id, stage, &context).await {
-                    warn!("failed to remove storage shuffle data for job {job_id}: {error}");
-                }
-            });
-        }
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_shutdown(&mut self) -> ActorAction {
-        ActorAction::Stop
-    }
-
     pub(super) fn handle_run_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
         key: TaskKey,
         definition: TaskDefinition,
         context: Arc<TaskContext>,
-        peers: Vec<crate::worker::WorkerLocation>,
+        peers: Vec<WorkerLocation>,
     ) -> ActorAction {
         if !peers.is_empty()
             && let TaskRunnerPlacement::Worker {
@@ -175,6 +76,13 @@ impl TaskRunnerActor {
         let (tx, rx) = oneshot::channel();
         self.signals.insert(key.clone(), tx);
         ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).run());
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_stop_task(&mut self, key: TaskKey) -> ActorAction {
+        if let Some(signal) = self.signals.remove(&key) {
+            let _ = signal.send(());
+        }
         ActorAction::Continue
     }
 
@@ -243,11 +151,46 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_probe_pending_local_stream(&mut self, key: TaskStreamKey) -> ActorAction {
+        self.extensions.local_streams.fail_stream_if_pending(&key);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_create_local_stream(
+        &mut self,
+        key: TaskStreamKey,
+        replicas: usize,
+        schema: Arc<Schema>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+    ) -> ActorAction {
+        let _ = result.send(
+            self.extensions
+                .local_streams
+                .create_stream(key, replicas, schema),
+        );
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_create_storage_stream(
+        &mut self,
+        key: TaskStreamKey,
+        schema: Arc<Schema>,
+        context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+    ) -> ActorAction {
+        let output = self
+            .extensions
+            .storage_streams()
+            .and_then(|streams| streams.create_stream(key, schema, &context));
+        let _ = result.send(output);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_fetch_driver_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
-        schema: Arc<datafusion::arrow::datatypes::Schema>,
+        schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         match &self.placement {
@@ -269,7 +212,7 @@ impl TaskRunnerActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
         key: TaskStreamKey,
-        schema: Arc<datafusion::arrow::datatypes::Schema>,
+        schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         match &mut self.placement {
@@ -305,6 +248,61 @@ impl TaskRunnerActor {
             },
         }
         ActorAction::Continue
+    }
+
+    pub(super) fn handle_fetch_local_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ActorAction {
+        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_fetch_storage_stream(
+        &mut self,
+        key: TaskStreamKey,
+        schema: Arc<Schema>,
+        context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ActorAction {
+        let output = self
+            .extensions
+            .storage_streams()
+            .and_then(|streams| streams.fetch_stream(key, schema, &context));
+        let _ = result.send(output);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_clean_up_local_streams(
+        &mut self,
+        job_id: JobId,
+        stage: Option<usize>,
+    ) -> ActorAction {
+        self.extensions.local_streams.remove_streams(job_id, stage);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_clean_up_storage_streams(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        stage: Option<usize>,
+        context: Arc<TaskContext>,
+    ) -> ActorAction {
+        if let Some(streams) = self.extensions.storage_streams.clone() {
+            ctx.spawn(async move {
+                if let Err(error) = streams.remove_streams(job_id, stage, &context).await {
+                    warn!("failed to remove storage shuffle data for job {job_id}: {error}");
+                }
+            });
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_shutdown(&mut self) -> ActorAction {
+        ActorAction::Stop
     }
 
     fn execute_plan(
@@ -351,6 +349,12 @@ impl TaskRunnerActor {
             if let Some(ds) = node.downcast_ref::<DataSourceExec>()
                 && let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>()
             {
+                // DataFusion file scans can use process-local sibling state to let
+                // partitions steal work from a shared queue of all file groups. In Sail
+                // cluster mode each partition runs as an isolated task with its own
+                // deserialized plan, so that queue would be recreated in every task and
+                // every task would scan every file. Preserve-order disables sibling
+                // work sharing and keeps each task on its own file group.
                 let mut builder =
                     FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
                 if ds.downcast_to_file_source::<ParquetSource>().is_some()

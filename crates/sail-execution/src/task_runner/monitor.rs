@@ -38,14 +38,17 @@ impl TaskMonitor {
             stream,
             signal,
         } = self;
-        let _ = handle
-            .send(Self::status(key.clone(), TaskStatus::Running, None, None))
-            .await;
+        let _ = handle.send(Self::running(key.clone())).await;
         let message = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
         let _ = handle.send(message).await;
+    }
+
+    /// Builds a "task is running" status message.
+    fn running(key: TaskKey) -> TaskRunnerMessage {
+        Self::status(key, TaskStatus::Running, None, None)
     }
 
     fn status(
@@ -62,6 +65,7 @@ impl TaskMonitor {
         }
     }
 
+    /// Waits for a cancellation signal and builds a canceled status message.
     async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> TaskRunnerMessage {
         let _ = signal.await;
         Self::status(

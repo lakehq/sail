@@ -9,6 +9,8 @@ use crate::worker::r#gen;
 
 pub enum WorkerMessage {
     ServerReady {
+        /// The local port that the worker server listens on.
+        /// This may be different from the port accessible from other nodes.
         port: u16,
         signal: oneshot::Sender<()>,
     },
