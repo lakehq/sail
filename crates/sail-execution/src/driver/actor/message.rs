@@ -16,7 +16,6 @@ use crate::driver::r#gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamChannelSink;
 
 pub enum DriverMessage {
     Activate,
@@ -64,21 +63,6 @@ pub enum DriverMessage {
     ProbePendingTask {
         key: TaskKey,
     },
-    ProbePendingLocalStream {
-        key: TaskStreamKey,
-    },
-    CreateLocalStream {
-        key: TaskStreamKey,
-        replicas: usize,
-        schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
-    },
-    CreateStorageStream {
-        key: TaskStreamKey,
-        schema: SchemaRef,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
-    },
     FetchDriverStream {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
@@ -87,12 +71,6 @@ pub enum DriverMessage {
         worker_id: WorkerId,
         key: TaskStreamKey,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    },
-    FetchStorageStream {
-        key: TaskStreamKey,
-        schema: SchemaRef,
-        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     ObserveState {
@@ -159,12 +137,8 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
-            DriverMessage::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
-            DriverMessage::CreateLocalStream { .. } => "CreateLocalStream",
-            DriverMessage::CreateStorageStream { .. } => "CreateStorageStream",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
-            DriverMessage::FetchStorageStream { .. } => "FetchStorageStream",
             DriverMessage::ObserveState { .. } => "ObserveState",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
@@ -251,60 +225,6 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            DriverMessage::ProbePendingLocalStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
-            } => {
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-            }
-            DriverMessage::CreateLocalStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
-                replicas: _,
-                schema: _,
-                result: _,
-            } => {
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-            }
-            DriverMessage::CreateStorageStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
-                schema: _,
-                context: _,
-                result: _,
-            } => {
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-            }
             DriverMessage::FetchDriverStream {
                 key:
                     TaskStreamKey {
@@ -336,25 +256,6 @@ impl SpanAssociation for DriverMessage {
                 result: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
-            }
-            DriverMessage::FetchStorageStream {
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
-                schema: _,
-                context: _,
-                result: _,
-            } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));

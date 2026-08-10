@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use log::{error, info};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
-use crate::driver::actor::extensions::DriverExtensions;
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
-use crate::task_runner::TaskRunner;
+use crate::task_runner::{
+    TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement,
+};
 
 #[tonic::async_trait]
 impl Actor for DriverActor {
@@ -28,18 +29,30 @@ impl Actor for DriverActor {
         let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
-        let extensions = DriverExtensions::new(&options);
         Self {
             options,
             history_reporter,
             worker_pool,
             job_scheduler,
             task_assigner,
-            task_runner: TaskRunner::new(),
-            extensions,
+            task_runner: None,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
+    }
+
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        let driver = ctx.handle().clone();
+        self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
+            TaskRunnerComponents {
+                extensions: TaskRunnerExtensions::new(
+                    (&self.options).into(),
+                    &self.options.shuffle_backend,
+                    self.options.session_id.clone(),
+                ),
+                placement: TaskRunnerPlacement::Driver { driver },
+            },
+        ));
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverMessage) -> ActorAction {
@@ -81,21 +94,6 @@ impl Actor for DriverActor {
                 sequence,
             } => self.handle_update_task(ctx, key, status, message, cause, sequence),
             DriverMessage::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
-            DriverMessage::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(ctx, key)
-            }
-            DriverMessage::CreateLocalStream {
-                key,
-                replicas,
-                schema,
-                result,
-            } => self.handle_create_local_stream(ctx, key, replicas, schema, result),
-            DriverMessage::CreateStorageStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_create_storage_stream(ctx, key, schema, context, result),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
@@ -105,12 +103,6 @@ impl Actor for DriverActor {
                 schema,
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            DriverMessage::FetchStorageStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_fetch_storage_stream(ctx, key, schema, context, result),
             DriverMessage::ObserveState { observer } => self.handle_observe_state(ctx, observer),
             DriverMessage::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
@@ -118,6 +110,11 @@ impl Actor for DriverActor {
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         self.job_scheduler.stop();
+        if let Some(task_runner) = self.task_runner.take() {
+            let _ = task_runner
+                .send(crate::task_runner::TaskRunnerMessage::Shutdown)
+                .await;
+        }
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }

@@ -11,13 +11,14 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
+use crate::worker::WorkerMessage;
 use crate::worker::actor::WorkerActor;
 use crate::worker::r#gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
-use crate::worker::{WorkerMessage, WorkerStreamOwner};
 
 struct WorkerTaskStreamFetcher {
-    handle: ActorHandle<WorkerActor>,
+    handle: ActorHandle<TaskRunnerActor>,
 }
 
 #[async_trait]
@@ -27,8 +28,7 @@ impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
         key: TaskStreamKey,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let message = WorkerMessage::FetchWorkerStream {
-            owner: WorkerStreamOwner::This,
+        let message = TaskRunnerMessage::FetchLocalStream {
             key,
             result: sender,
         };
@@ -42,13 +42,15 @@ impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
 impl WorkerActor {
     pub(super) async fn serve(
         handle: ActorHandle<WorkerActor>,
+        task_runner: ActorHandle<TaskRunnerActor>,
+        context: std::sync::Arc<datafusion::execution::TaskContext>,
         addr: impl ToSocketAddrs,
     ) -> ExecutionResult<()> {
         let listener = TcpListener::bind(addr).await?;
         let port = listener.local_addr()?.port();
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let server = WorkerServer::new(handle.clone());
+        let server = WorkerServer::new(handle.clone(), task_runner.clone(), context);
         let service = WorkerServiceServer::new(server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
@@ -58,7 +60,7 @@ impl WorkerActor {
 
         let flight_server =
             TaskStreamFlightServer::<TaskStreamKey>::new(Box::new(WorkerTaskStreamFetcher {
-                handle: handle.clone(),
+                handle: task_runner,
             }));
         let flight_service = FlightServiceServer::new(flight_server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)

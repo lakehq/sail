@@ -5,7 +5,7 @@ use datafusion::execution::TaskContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::WorkerId;
+use crate::id::{JobId, TaskStreamKey, WorkerId};
 use crate::plan::ShufflePartitioning;
 use crate::proto::decode_remote_physical_expr;
 use crate::task::r#gen;
@@ -41,6 +41,18 @@ pub struct TaskInputKey {
     pub partition: usize,
     pub attempt: usize,
     pub channel: usize,
+}
+
+impl TaskInputKey {
+    pub fn task_stream_key(&self, job_id: JobId, stage: usize) -> TaskStreamKey {
+        TaskStreamKey {
+            job_id,
+            stage,
+            partition: self.partition,
+            attempt: self.attempt,
+            channel: self.channel,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
