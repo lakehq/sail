@@ -183,18 +183,11 @@ fn cast_array(
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(unit, Some(timezone)),
         ) => cast_to_ltz(array, *unit, timezone, safe),
-        (
-            DataType::Timestamp(_, Some(_)),
-            DataType::Timestamp(unit, Some(timezone)),
-        ) => {
+        (DataType::Timestamp(_, Some(_)), DataType::Timestamp(unit, Some(timezone))) => {
             // LTZ-to-LTZ preserves the instant. Remove the metadata before
             // changing precision so Arrow never parses Spark-only zone IDs.
             let timestamp = retag_timestamp(array, None)?;
-            let timestamp = arrow_cast(
-                &timestamp,
-                &DataType::Timestamp(*unit, None),
-                safe,
-            )?;
+            let timestamp = arrow_cast(&timestamp, &DataType::Timestamp(*unit, None), safe)?;
             retag_timestamp(&timestamp, Some(Arc::clone(timezone)))
         }
         (DataType::Timestamp(_, Some(_)), DataType::Timestamp(unit, None)) => {
