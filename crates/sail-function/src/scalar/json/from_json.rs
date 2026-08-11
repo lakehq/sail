@@ -6,7 +6,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, plan_err};
+use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -123,9 +123,14 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark: `JsonToStructs` declares `override def nullable: Boolean = true`
+    /// (`jsonExpressions.scala:273`) — unconditionally, so it wins over the `UnaryExpression`
+    /// arity default (`child.nullable`).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..

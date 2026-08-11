@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions_aggregate::min_max;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -13,6 +16,14 @@ use crate::functions_nested_utils::make_scalar_function;
 enum ArrayOp {
     Min,
     Max,
+}
+
+fn element_return_type(name: &str, data_type: Option<&DataType>) -> Result<DataType> {
+    match data_type {
+        Some(DataType::List(field) | DataType::LargeList(field)) => Ok(field.data_type().clone()),
+        Some(DataType::Null) => Ok(DataType::Null),
+        _ => plan_err!("{name} can only accept List or LargeList."),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -43,12 +54,23 @@ impl ScalarUDFImpl for ArrayMin {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMin can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `ArrayMin` declares `override def nullable: Boolean = true`
+    /// (`collectionOperations.scala:2315`) — unconditionally, so it wins over the
+    /// `UnaryExpression` arity default (`child.nullable`). An empty array yields NULL whatever
+    /// the child's flag says.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_type =
+            element_return_type("ArrayMin", args.arg_fields.first().map(|f| f.data_type()))?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -88,12 +110,23 @@ impl ScalarUDFImpl for ArrayMax {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMax can only accept List or LargeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `ArrayMax` declares `override def nullable: Boolean = true`
+    /// (`collectionOperations.scala:2388`) — unconditionally, so it wins over the
+    /// `UnaryExpression` arity default (`child.nullable`). An empty array yields NULL whatever
+    /// the child's flag says.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_type =
+            element_return_type("ArrayMax", args.arg_fields.first().map(|f| f.data_type()))?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -177,4 +210,79 @@ where
         result_values.push(value);
     }
     Ok(result_values)
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_min() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Int32, true),
+        )))];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = ArrayMin::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_min() {
+        assert!(
+            ArrayMin::new()
+                .return_type(&[DataType::List(Arc::new(Field::new_list_field(
+                    DataType::Int32,
+                    true
+                )))])
+                .is_err()
+        );
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_max() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Int32, true),
+        )))];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = ArrayMax::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_max() {
+        assert!(
+            ArrayMax::new()
+                .return_type(&[DataType::List(Arc::new(Field::new_list_field(
+                    DataType::Int32,
+                    true
+                )))])
+                .is_err()
+        );
+    }
 }

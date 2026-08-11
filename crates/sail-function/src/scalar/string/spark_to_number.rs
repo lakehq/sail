@@ -72,10 +72,27 @@ impl ScalarUDFImpl for SparkToNumber {
     /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         // We cannot know the final DataType result without knowing the format input args
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark splits the rule between the two expressions this type serves, and `self.safe` is
+    /// the same flag `name()` uses to tell them apart:
+    ///
+    /// - `try_to_number` is `TryToNumber`, which declares
+    ///   `override def nullable: Boolean = true` (`numberFormatExpressions.scala:183`),
+    ///   unconditionally — bad input becomes NULL.
+    /// - `to_number` is `ToNumber` (`:145`), which has NO override, so it falls through to the
+    ///   `BinaryExpression` arity default `left.nullable || right.nullable`
+    ///   (`Expression.scala:711`) — bad input raises instead of returning NULL.
+    ///
+    /// The narrow `false` is sound here: with `safe = false` and both arguments non-nullable,
+    /// no path in `spark_to_number_impl` can produce NULL. The null-value branch needs a NULL
+    /// input, the null-format branch needs a NULL format (both nullable by then), and a parse
+    /// failure returns `Err`, not NULL.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = self.safe || args.arg_fields.iter().any(|f| f.is_nullable());
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
@@ -111,7 +128,7 @@ impl ScalarUDFImpl for SparkToNumber {
             precision, scale, ..
         } = NumberComponents::try_from(&format_spec)?;
         let return_type = DataType::Decimal256(precision, scale);
-        Ok(Arc::new(Field::new(self.name(), return_type, true)))
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -679,5 +696,62 @@ fn match_regex<'a>(value: &'a str, regex: &Regex) -> Result<Captures<'a>> {
             .ok_or_else(|| exec_datafusion_err!("Value '{value}' does not match the format"))
     } else {
         exec_err!("String '{value}' does not match the expected regex pattern.")
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    fn declared_nullable(safe: bool, value_nullable: bool) -> Result<bool> {
+        let arg_fields = vec![
+            Arc::new(Field::new("c", DataType::Utf8, value_nullable)),
+            non_nullable(DataType::Utf8),
+        ];
+        let format = ScalarValue::Utf8(Some("999".to_string()));
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None, Some(&format)];
+        let field = SparkToNumber::new(safe).return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Decimal256(3, 0));
+        Ok(field.is_nullable())
+    }
+
+    /// `TryToNumber` declares `nullable = true` unconditionally
+    /// (`numberFormatExpressions.scala:183`), so non-nullable arguments stay nullable.
+    #[test]
+    fn test_try_to_number_is_always_nullable() -> Result<()> {
+        assert!(declared_nullable(true, false)?);
+        assert!(declared_nullable(true, true)?);
+        Ok(())
+    }
+
+    /// `ToNumber` has no override (`numberFormatExpressions.scala:145`), so it falls back to
+    /// the `BinaryExpression` arity default `left.nullable || right.nullable`.
+    #[test]
+    fn test_to_number_derives_from_its_arguments() -> Result<()> {
+        assert!(!declared_nullable(false, false)?);
+        assert!(declared_nullable(false, true)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkToNumber::new(false)
+                .return_type(&[DataType::Utf8, DataType::Utf8])
+                .is_err()
+        );
     }
 }

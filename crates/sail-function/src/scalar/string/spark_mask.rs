@@ -1,11 +1,28 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, GenericStringBuilder, new_null_array};
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
+
+fn mask_return_type(arg_types: &[DataType]) -> Result<DataType> {
+    if arg_types.is_empty() || arg_types.len() > 5 {
+        return exec_err!(
+            "Spark `mask` function requires 1 to 5 arguments, got {}",
+            arg_types.len()
+        );
+    }
+    match arg_types[0] {
+        DataType::Utf8 | DataType::Utf8View | DataType::Null => Ok(DataType::Utf8),
+        DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+        _ => exec_err!(
+            "Spark `mask` function: first arg must be string, got {}",
+            arg_types[0]
+        ),
+    }
+}
 
 // Default character to replace upper-case characters
 const MASKED_UPPERCASE: char = 'X';
@@ -52,21 +69,26 @@ impl ScalarUDFImpl for SparkMask {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() || arg_types.len() > 5 {
-            return exec_err!(
-                "Spark `mask` function requires 1 to 5 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            _ => exec_err!(
-                "Spark `mask` function: first arg must be string, got {}",
-                arg_types[0]
-            ),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Mask` declares `override def nullable: Boolean = true`
+    /// (`maskExpressions.scala:201`) — unconditionally, so it wins over the `QuinaryExpression`
+    /// arity default (`children.exists(_.nullable)`, `Expression.scala:1069`).
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = mask_return_type(&arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -310,4 +332,40 @@ fn mask(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkMask::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(SparkMask::new().return_type(&[DataType::Utf8]).is_err());
+    }
 }

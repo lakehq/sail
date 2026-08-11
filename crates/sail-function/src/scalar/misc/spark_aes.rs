@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::consts::U12;
@@ -12,9 +13,13 @@ use datafusion::arrow::array::{
     BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
     StringArray, StringViewArray,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
@@ -116,14 +121,25 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 6 {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `AesEncrypt` (`misc.scala:405-419`) is `RuntimeReplaceable` and declares no
+    /// `nullable`, so the rule is `replacement.nullable` (`Expression.scala:446`). The
+    /// replacement is a `StaticInvoke` that does not pass `returnNullable`, which defaults to
+    /// `true` (`objects/objects.scala:323`), and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable` (`:334`) — so `true` regardless of the arguments.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 || args.arg_fields.len() > 6 {
             return exec_err!(
                 "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
-                arg_types.len()
+                args.arg_fields.len()
             );
         }
-        Ok(DataType::Binary)
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -618,14 +634,25 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 5 {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `AesDecrypt` (`misc.scala:486-499`) is `RuntimeReplaceable` and declares no
+    /// `nullable`, so the rule is `replacement.nullable` (`Expression.scala:446`). The
+    /// replacement is a `StaticInvoke` that does not pass `returnNullable`, which defaults to
+    /// `true` (`objects/objects.scala:323`), and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable` (`:334`) — so `true` regardless of the arguments.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 || args.arg_fields.len() > 5 {
             return exec_err!(
                 "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
-                arg_types.len()
+                args.arg_fields.len()
             );
         }
-        Ok(DataType::Binary)
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1044,7 +1071,18 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark 4.1.1 has no `TryAesEncrypt` expression — `try_aes_encrypt` is a Sail-only
+    /// spelling. Its sibling `TryAesDecrypt` (`misc.scala:537-550`) wraps the strict expression
+    /// in `TryEval`, which declares `nullable = true` (`TryEval.scala:50`), and `AesEncrypt`
+    /// itself is already `true` (`misc.scala:414` via `objects/objects.scala:334`), so `true`
+    /// is the value under either reading.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1085,7 +1123,18 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryAesDecrypt` (`misc.scala:537-550`) is `RuntimeReplaceable` and declares no
+    /// `nullable` of its own, and neither does `InheritAnalysisRules`
+    /// (`Expression.scala:470`), so the rule is `replacement.nullable`
+    /// (`Expression.scala:446`). The replacement is `TryEval(AesDecrypt(...))` (`:550`), and
+    /// `TryEval` declares `true` (`TryEval.scala:50`).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1094,5 +1143,132 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
         }
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_aes_encrypt() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Binary),
+            non_nullable(DataType::Binary),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkAESEncrypt::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_aes_encrypt() {
+        assert!(
+            SparkAESEncrypt::new()
+                .return_type(&[DataType::Binary, DataType::Binary])
+                .is_err()
+        );
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_aes_decrypt() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Binary),
+            non_nullable(DataType::Binary),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkAESDecrypt::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_aes_decrypt() {
+        assert!(
+            SparkAESDecrypt::new()
+                .return_type(&[DataType::Binary, DataType::Binary])
+                .is_err()
+        );
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_try_aes_encrypt() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Binary),
+            non_nullable(DataType::Binary),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkTryAESEncrypt::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_try_aes_encrypt() {
+        assert!(
+            SparkTryAESEncrypt::new()
+                .return_type(&[DataType::Binary, DataType::Binary])
+                .is_err()
+        );
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field_try_aes_decrypt() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Binary),
+            non_nullable(DataType::Binary),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkTryAESDecrypt::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth_try_aes_decrypt() {
+        assert!(
+            SparkTryAESDecrypt::new()
+                .return_type(&[DataType::Binary, DataType::Binary])
+                .is_err()
+        );
     }
 }

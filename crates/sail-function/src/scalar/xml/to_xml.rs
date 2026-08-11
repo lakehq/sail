@@ -5,8 +5,10 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
@@ -189,7 +191,20 @@ impl ScalarUDFImpl for SparkToXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `StructsToXml` declares `override def nullable: Boolean = true`
+    /// (`xmlExpressions.scala:236`) — unconditionally, so it wins over the `UnaryExpression`
+    /// arity default (`child.nullable`). Its `nullIntolerant = true` (`:237`) is a different
+    /// mechanism (constraint inference) and does not feed the declared flag.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn schema_name(&self, args: &[datafusion_expr::Expr]) -> Result<String> {
@@ -1141,5 +1156,45 @@ mod tests {
         assert_eq!(format_single(0.1), "0.1");
         assert_eq!(format_single(123.456), "123.456");
         assert_eq!(format_single(10000000.0), "1.0E7");
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkToXml::new(Arc::from("UTC")).return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkToXml::new(Arc::from("UTC"))
+                .return_type(&[DataType::Utf8])
+                .is_err()
+        );
     }
 }

@@ -2,13 +2,41 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, as_primitive_array};
 use datafusion::arrow::compute::binary;
-use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Float32Type, Float64Type, Int32Type, Int64Type,
+};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
+
+fn bround_return_type(arg_types: &[DataType]) -> Result<DataType> {
+    if !(1..=2).contains(&arg_types.len()) {
+        return Err(invalid_arg_count_exec_err(
+            "spark_bround",
+            (1, 2),
+            arg_types.len(),
+        ));
+    }
+    let t = &arg_types[0];
+    match t {
+        DataType::Float64
+        | DataType::Float32
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => Ok(DataType::Float64),
+        DataType::Int32 => Ok(DataType::Int32),
+        DataType::Int64 => Ok(DataType::Int64),
+        _ => Err(unsupported_data_type_exec_err(
+            "spark_bround",
+            "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
+            t,
+        )),
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBRound {
@@ -38,28 +66,27 @@ impl ScalarUDFImpl for SparkBRound {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !(1..=2).contains(&arg_types.len()) {
-            return Err(invalid_arg_count_exec_err(
-                "spark_bround",
-                (1, 2),
-                arg_types.len(),
-            ));
-        }
-        let t = &arg_types[0];
-        match t {
-            DataType::Float64
-            | DataType::Float32
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            _ => Err(unsupported_data_type_exec_err(
-                "spark_bround",
-                "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
-                t,
-            )),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `BRound` extends `RoundBase`, which declares
+    /// `override def nullable: Boolean = true` (`mathExpressions.scala:1499`) — unconditionally,
+    /// so it wins over the `BinaryExpression` arity default (`left || right`). The comment on
+    /// that line gives the reason: rounding a decimal yields NULL when `changePrecision` fails.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = bround_return_type(&arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -341,5 +368,48 @@ mod tests {
         assert_eq!(spark_bround_f64(2.6, 0), 3.0);
         assert_eq!(spark_bround_f64(-2.4, 0), -2.0);
         assert_eq!(spark_bround_f64(-2.6, 0), -3.0);
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Float64),
+            non_nullable(DataType::Int32),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkBRound::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Float64);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkBRound::new()
+                .return_type(&[DataType::Float64, DataType::Int32])
+                .is_err()
+        );
     }
 }

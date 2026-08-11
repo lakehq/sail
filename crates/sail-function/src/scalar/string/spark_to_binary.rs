@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::encoding::expr_fn::decode;
 use datafusion::functions::encoding::inner::DecodeFunc;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::{Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
+use datafusion_expr::{Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -204,7 +204,18 @@ impl ScalarUDFImpl for SparkTryToBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryToBinary` (`TryEval.scala:258-270`) is `RuntimeReplaceable` and declares no
+    /// `nullable` of its own, and neither does `InheritAnalysisRules`
+    /// (`Expression.scala:470`), so the rule is `replacement.nullable`
+    /// (`Expression.scala:446`). Every constructor wraps the strict expression in `TryEval`
+    /// (`:264`, `:268`), which declares `true` (`TryEval.scala:50`).
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -213,5 +224,45 @@ impl ScalarUDFImpl for SparkTryToBinary {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
         }
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkTryToBinary::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkTryToBinary::new()
+                .return_type(&[DataType::Utf8])
+                .is_err()
+        );
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -36,10 +36,15 @@ impl ScalarUDFImpl for SparkDateTrunc {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark: `TruncInstant` declares `override def nullable: Boolean = true`
+    /// (`datetimeExpressions.scala:2285`) — unconditionally, so it wins over the
+    /// `BinaryExpression` arity default (`left || right`).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let field = self.inner.return_field_from_args(args)?;
         Ok(Arc::new(field.as_ref().clone().with_nullable(true)))

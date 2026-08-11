@@ -4,10 +4,12 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BooleanBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder,
     Int64Builder, StringArray, StringBuilder,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use xee_xpath::{Documents, Queries, Query};
 
 use crate::functions_utils::make_scalar_function;
@@ -91,7 +93,26 @@ impl ScalarUDFImpl for XpathTyped {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.kind.return_type())
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: every typed variant (`XPathBoolean`, `XPathShort`, `XPathInt`, `XPathLong`,
+    /// `XPathFloat`, `XPathDouble`, `XPathString`) inherits `override def nullable: Boolean =
+    /// true` from its base `XPathExtract` (`xml/xpath.scala:40`); none of them overrides it,
+    /// and the `Predicate` trait mixed into `XPathBoolean` does not declare `nullable`
+    /// (`predicates.scala:68-72`). The rule is unconditional, so it wins over the
+    /// `BinaryExpression` arity default (`left || right`).
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.kind.return_type(),
+            true,
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -302,4 +323,45 @@ fn build_string_array(xmls: &StringArray, paths: &StringArray) -> Result<ArrayRe
         }
     }
     Ok(Arc::new(builder.finish()))
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Utf8), non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field =
+            XpathTyped::new(XpathTypedKind::Int).return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalar_arguments,
+            })?;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            XpathTyped::new(XpathTypedKind::Int)
+                .return_type(&[DataType::Utf8, DataType::Utf8])
+                .is_err()
+        );
+    }
 }

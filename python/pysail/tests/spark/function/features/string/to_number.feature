@@ -352,7 +352,6 @@ Feature: to_number comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null string literal yields a decimal
       When query
         """
@@ -364,8 +363,12 @@ Feature: to_number comprehensive tests
          |-- result: decimal(3,0) (nullable = false)
         """
 
-    @sail-bug
-    Scenario: a non-null string column yields a decimal
+    # The only execution-backed scenario in this Rule, and the one that matters: `to_number`
+    # is the sole non-nullable declaration here, so this is the pair that proves the declared
+    # flag agrees with the data. `Then query schema` resolves at analysis and never runs the
+    # kernel, so a `false` declared over a column that really held nulls would sail through it
+    # and only fail later in `RecordBatch::try_new`. Measured on both engines.
+    Scenario: a non-null string column yields a decimal and produces no NULL
       When query
         """
         SELECT to_number(CAST(id AS STRING), '9') AS result FROM range(3)
@@ -375,6 +378,33 @@ Feature: to_number comprehensive tests
         root
          |-- result: decimal(1,0) (nullable = false)
         """
+      And query result
+        | result |
+        | 0      |
+        | 1      |
+        | 2      |
+
+    # The discriminating twin: SAME non-nullable argument, opposite flag. Spark splits the rule
+    # between the two expressions `SparkToNumber` serves — `ToNumber` has no `nullable`
+    # override, so it takes the `BinaryExpression` default `left.nullable || right.nullable`
+    # (`Expression.scala:711`), while `TryToNumber` declares `override def nullable = true`
+    # unconditionally (`numberFormatExpressions.scala:183`). Nothing else in the file exercises
+    # that split. Measured on both engines.
+    Scenario: try_to_number is nullable even for the same non-null column
+      When query
+        """
+        SELECT try_to_number(CAST(id AS STRING), '9') AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(1,0) (nullable = true)
+        """
+      And query result
+        | result |
+        | 0      |
+        | 1      |
+        | 2      |
 
     Scenario: a nullable string column stays nullable
       When query

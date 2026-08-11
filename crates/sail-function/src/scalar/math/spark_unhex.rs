@@ -5,14 +5,14 @@ use datafusion::arrow::array::{
     BinaryBuilder, OffsetSizeTrait, StringArray, as_dictionary_array, as_largestring_array,
     as_string_array,
 };
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{
     as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
     as_string_view_array,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -51,7 +51,20 @@ impl ScalarUDFImpl for SparkUnHex {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Unhex` declares `override def nullable: Boolean = true`
+    /// (`mathExpressions.scala:1183`) — unconditionally, not derived from its child and not
+    /// narrowed by its `failOnError` parameter. Its `nullIntolerant = true` (`:1175`) is a
+    /// different mechanism (constraint inference) and does not feed the declared flag.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -323,5 +336,41 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
         }
         DataType::LargeUtf8 => spark_unhex_inner::<i64>(val_to_unhex, fail_on_error),
         other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkUnHex::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(SparkUnHex::new().return_type(&[DataType::Utf8]).is_err());
     }
 }

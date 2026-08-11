@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use chrono::{Datelike, Duration, Weekday};
 use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType, new_null_array};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::invalid_arg_count_exec_err;
 
@@ -46,7 +48,20 @@ impl ScalarUDFImpl for SparkNextDay {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `NextDay` declares `override def nullable: Boolean = true`
+    /// (`datetimeExpressions.scala:1586`) — unconditionally, so it wins over the
+    /// `BinaryExpression` arity default (`left || right`), and it is NOT narrowed by the
+    /// `failOnError` parameter the expression carries.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -265,4 +280,44 @@ fn spark_next_day(days: i32, target: Weekday) -> Option<i32> {
     Some(Date32Type::from_naive_date(
         date + Duration::days((7 - date.weekday().days_since(target)) as i64),
     ))
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![non_nullable(DataType::Date32), non_nullable(DataType::Utf8)];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkNextDay::new(false).return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Date32);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkNextDay::new(false)
+                .return_type(&[DataType::Date32, DataType::Utf8])
+                .is_err()
+        );
+    }
 }

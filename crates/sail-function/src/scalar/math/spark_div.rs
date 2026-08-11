@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use datafusion::arrow::datatypes::{
-    DataType, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    DataType, Field, FieldRef, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType,
 };
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
 use crate::functions_nested_utils::make_scalar_function;
@@ -41,7 +44,21 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `div` between two intervals is `IntegralDivide` — its `inputType` admits
+    /// `YearMonthIntervalType` and `DayTimeIntervalType` and its `dataType` is `LongType`
+    /// (`arithmetic.scala:876-895`). It extends `DivModLike`, which declares
+    /// `override def nullable: Boolean = true` (`arithmetic.scala:658`) unconditionally — a
+    /// zero divisor yields NULL, and ANSI does not narrow the declared flag.
+    ///
+    /// Declared here rather than left to DataFusion's default: the default happens to agree
+    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -228,5 +245,51 @@ mod tests {
         };
         assert!(int_array.is_null(0));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod return_field_tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    use super::*;
+
+    fn non_nullable(data_type: DataType) -> FieldRef {
+        Arc::new(Field::new("c", data_type, false))
+    }
+
+    /// Spark declares this function's output nullable regardless of its children, so a
+    /// non-nullable argument -- the case where the arity default would say `false` -- must
+    /// still come back nullable.
+    #[test]
+    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
+        let arg_fields = vec![
+            non_nullable(DataType::Interval(IntervalUnit::YearMonth)),
+            non_nullable(DataType::Interval(IntervalUnit::YearMonth)),
+        ];
+        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
+        let field = SparkIntervalDiv::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn test_return_type_is_not_the_source_of_truth() {
+        assert!(
+            SparkIntervalDiv::new()
+                .return_type(&[
+                    DataType::Interval(IntervalUnit::YearMonth),
+                    DataType::Interval(IntervalUnit::YearMonth)
+                ])
+                .is_err()
+        );
     }
 }
