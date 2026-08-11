@@ -80,12 +80,14 @@ pub fn retag_timestamp_array(array: &ArrayRef, timezone: &Arc<str>) -> Result<Ar
             Ok(retag_timestamp_array(&child, timezone)?.to_data())
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(make_array(
-        data.into_builder()
-            .data_type(data_type)
-            .child_data(child_data)
-            .build()?,
-    ))
+    let data = data
+        .into_builder()
+        .data_type(data_type)
+        .child_data(child_data);
+    // SAFETY: `data` came from an existing valid array. This preserves its length,
+    // offset, buffers, nulls, and container layout; it changes only timestamp
+    // timezone metadata and recursively retags children to match their parent fields.
+    Ok(make_array(unsafe { data.build_unchecked() }))
 }
 
 pub fn retag_schema_timestamp_timezone(schema: &Schema, timezone: &str) -> Result<Schema> {
@@ -103,21 +105,25 @@ pub fn retag_record_batch_timestamp_timezone(
     timezone: &str,
 ) -> Result<RecordBatch> {
     let timezone = Arc::<str>::from(timezone);
-    let columns = batch
-        .columns()
-        .iter()
-        .map(|array| retag_timestamp_array(array, &timezone))
-        .collect::<Result<Vec<_>>>()?;
-    let fields = batch
-        .schema()
+    let input_schema = batch.schema_ref();
+    let fields = input_schema
         .fields()
         .iter()
         .map(|field| retag_timestamp_field(field, &timezone))
         .collect::<Result<Vec<_>>>()?;
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
-        batch.schema().metadata().clone(),
+        input_schema.metadata().clone(),
     ));
+    if schema.as_ref() == input_schema.as_ref() {
+        return Ok(batch.clone());
+    }
+
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|array| retag_timestamp_array(array, &timezone))
+        .collect::<Result<Vec<_>>>()?;
     Ok(RecordBatch::try_new_with_options(
         schema,
         columns,
@@ -513,8 +519,12 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray, TimestampMicrosecondArray};
-    use datafusion::arrow::datatypes::{Field, Fields};
+    use datafusion::arrow::array::{
+        ArrayData, ArrayRef, DictionaryArray, Int8Array, Int16Array, Int32Array, RunArray,
+        StructArray, TimestampMicrosecondArray, UnionArray,
+    };
+    use datafusion::arrow::buffer::ScalarBuffer;
+    use datafusion::arrow::datatypes::{Field, Fields, Int8Type, Int16Type};
 
     use super::*;
 
@@ -524,11 +534,33 @@ mod tests {
         StructArray::new(field_refs, columns, None)
     }
 
+    fn assert_physical_buffers_shared(left: &ArrayData, right: &ArrayData) {
+        assert_eq!(left.len(), right.len());
+        assert_eq!(left.offset(), right.offset());
+        assert_eq!(left.buffers().len(), right.buffers().len());
+        for (left, right) in left.buffers().iter().zip(right.buffers()) {
+            assert!(left.ptr_eq(right));
+        }
+        match (left.nulls(), right.nulls()) {
+            (Some(left), Some(right)) => assert!(left.buffer().ptr_eq(right.buffer())),
+            (None, None) => {}
+            _ => panic!("null buffers differ"),
+        }
+        assert_eq!(left.child_data().len(), right.child_data().len());
+        for (left, right) in left.child_data().iter().zip(right.child_data()) {
+            assert_physical_buffers_shared(left, right);
+        }
+    }
+
     #[test]
     fn retag_timestamp_timezone_recursively_without_changing_values() {
         let timestamp: ArrayRef = Arc::new(
-            TimestampMicrosecondArray::from(vec![Some(-3_723_000_000)]).with_timezone("+01:02:03"),
+            TimestampMicrosecondArray::from(vec![Some(-3_723_000_000), None])
+                .with_timezone("+01:02:03"),
         );
+        let timestamp_data = timestamp.to_data();
+        let values_buffer = timestamp_data.buffers()[0].as_ptr();
+        let validity_buffer = timestamp_data.nulls().unwrap().buffer().as_ptr();
         let nested_fields: Fields = vec![Arc::new(Field::new(
             "ts",
             timestamp.data_type().clone(),
@@ -549,7 +581,6 @@ mod tests {
             vec![payload],
         )
         .unwrap();
-
         let internal = retag_record_batch_timestamp_timezone(&batch, "UTC").unwrap();
         let internal_schema = internal.schema();
         let DataType::Struct(fields) = internal_schema.field(0).data_type() else {
@@ -570,6 +601,13 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         assert_eq!(timestamp.value(0), -3_723_000_000);
+        assert!(timestamp.is_null(1));
+        let timestamp_data = timestamp.to_data();
+        assert_eq!(timestamp_data.buffers()[0].as_ptr(), values_buffer);
+        assert_eq!(
+            timestamp_data.nulls().unwrap().buffer().as_ptr(),
+            validity_buffer
+        );
 
         let external = retag_record_batch_timestamp_timezone(&internal, "+01:02:03").unwrap();
         let external_schema = external.schema();
@@ -579,6 +617,90 @@ mod tests {
         assert_eq!(
             fields[0].data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+01:02:03")),)
+        );
+    }
+
+    #[test]
+    fn retag_timestamp_timezone_reuses_unchanged_batch_storage() {
+        let timestamp: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0)]).with_timezone("UTC"));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "timestamp",
+                timestamp.data_type().clone(),
+                false,
+            )])),
+            vec![timestamp],
+        )
+        .unwrap();
+        let output = retag_record_batch_timestamp_timezone(&batch, "UTC").unwrap();
+
+        assert!(Arc::ptr_eq(batch.schema_ref(), output.schema_ref()));
+        assert!(Arc::ptr_eq(batch.column(0), output.column(0)));
+    }
+
+    #[test]
+    fn retag_sliced_union_dictionary_and_run_array_remains_valid_and_zero_copy() {
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![0_i8, 1]),
+                Arc::new(
+                    TimestampMicrosecondArray::from(vec![Some(10), Some(20)])
+                        .with_timezone("+01:02:03"),
+                ),
+            )
+            .unwrap(),
+        );
+        let run_ends = Int16Array::from(vec![1_i16, 3]);
+        let run_values: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![Some(30), Some(40)]).with_timezone("+01:02:03"),
+        );
+        let run: ArrayRef =
+            Arc::new(RunArray::<Int16Type>::try_new(&run_ends, run_values.as_ref()).unwrap());
+        let fields = UnionFields::try_new(
+            [3_i8, 9_i8],
+            [
+                Field::new("dictionary", dictionary.data_type().clone(), true),
+                Field::new("run", run.data_type().clone(), true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![3_i8, 9, 3]),
+            Some(ScalarBuffer::from(vec![0_i32, 0, 1])),
+            vec![dictionary, run],
+        )
+        .unwrap();
+        let input: ArrayRef = Arc::new(union.slice(1, 2));
+        let before = input.to_data();
+
+        let output = retag_timestamp_array(&input, &Arc::from("UTC")).unwrap();
+        let after = output.to_data();
+
+        after.validate_full().unwrap();
+        assert_physical_buffers_shared(&before, &after);
+        let union = output.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(union.type_ids().as_ref(), &[9, 3]);
+        assert_eq!(
+            union
+                .child(3)
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int8Type>>()
+                .unwrap()
+                .values()
+                .data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
+        assert_eq!(
+            union
+                .child(9)
+                .as_any()
+                .downcast_ref::<RunArray<Int16Type>>()
+                .unwrap()
+                .values()
+                .data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
         );
     }
 
