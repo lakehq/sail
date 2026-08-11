@@ -1,4 +1,5 @@
 mod actor;
+mod celeborn;
 mod client;
 mod gateway;
 pub(super) mod job_scheduler;
@@ -18,7 +19,8 @@ mod r#gen {
 
 pub(crate) use actor::{DriverActor, DriverMessage, TaskStatus};
 pub use actor::{DriverComponents, DriverOptions};
-pub(crate) use client::DriverClientSet;
+pub(crate) use client::{CelebornLifecycleManagerClient, DriverClientSet};
 pub use gateway::{DriverGateway, DriverGatewayOptions};
+pub(crate) use r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
 pub(crate) use r#gen::driver_service_client::DriverServiceClient;
 pub use registry::{DriverHandle, DriverRegistry, DriverRegistryAccessor};

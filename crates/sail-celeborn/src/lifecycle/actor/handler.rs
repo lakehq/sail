@@ -1,13 +1,38 @@
+use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::LifecycleManagerMessage;
-use crate::lifecycle::actor::LifecycleManagerActor;
+use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
 use crate::master::{SlotReservation, UserIdentifier};
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl LifecycleManagerActor {
+    pub(super) fn handle_create_shuffle_id(
+        &mut self,
+        job_id: u64,
+        stage: u64,
+        reply: oneshot::Sender<CelebornResult<i32>>,
+    ) -> ActorAction {
+        let key = ShuffleKey { job_id, stage };
+        let id = match self.shuffle_ids.get(&key) {
+            Some(id) => Ok(*id),
+            None => match self.next_shuffle_id.checked_add(1) {
+                Some(next) => {
+                    self.next_shuffle_id = next;
+                    self.shuffle_ids.insert(key, next);
+                    Ok(next)
+                }
+                None => Err(CelebornError::Application(
+                    "shuffle ID space is exhausted".to_string(),
+                )),
+            },
+        };
+        let _ = reply.send(id);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_request_slots_begin(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -17,8 +42,21 @@ impl LifecycleManagerActor {
         max_workers: i32,
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     ) -> ActorAction {
+        if let Some(reservation) = self.reservations.get(&shuffle_id) {
+            let _ = reply.send(Ok(reservation.clone()));
+            return ActorAction::Continue;
+        }
+        if let Some(replies) = self.pending_slot_requests.get_mut(&shuffle_id) {
+            replies.push(reply);
+            return ActorAction::Continue;
+        }
+        self.pending_slot_requests.insert(shuffle_id, vec![reply]);
         if let Some(error) = self.application_registration.error() {
-            let _ = reply.send(Err(error));
+            if let Some(replies) = self.pending_slot_requests.remove(&shuffle_id) {
+                for reply in replies {
+                    let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+                }
+            }
             return ActorAction::Continue;
         }
         let client = self.client.clone();
@@ -41,16 +79,14 @@ impl LifecycleManagerActor {
                     )
                     .await?;
                 for locations in reservation.worker_locations.values() {
-                    let location = locations
+                    let Some(location) = locations
                         .primary_locations
                         .first()
                         .or_else(|| locations.replica_locations.first())
-                        .ok_or_else(|| {
-                            CelebornError::Protocol(
-                                "worker reservation has no partition locations".to_string(),
-                            )
-                        })?
-                        .clone();
+                        .cloned()
+                    else {
+                        continue;
+                    };
                     WorkerClient::new(
                         WorkerClientOptions::new(location)
                             .with_endpoint_resolver(endpoint_resolver.clone()),
@@ -68,11 +104,7 @@ impl LifecycleManagerActor {
             }
             .await;
             let _ = handle
-                .send(LifecycleManagerMessage::RequestSlotsEnd {
-                    shuffle_id,
-                    result,
-                    reply,
-                })
+                .send(LifecycleManagerMessage::RequestSlotsEnd { shuffle_id, result })
                 .await;
         });
         ActorAction::Continue
@@ -82,13 +114,23 @@ impl LifecycleManagerActor {
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
-        reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     ) -> ActorAction {
+        let replies = self
+            .pending_slot_requests
+            .remove(&shuffle_id)
+            .unwrap_or_default();
         if let Ok(reservation) = &result {
             self.registered_shuffles
                 .insert(shuffle_id, reservation.worker_locations.clone());
+            self.reservations.insert(shuffle_id, reservation.clone());
+            for reply in replies {
+                let _ = reply.send(Ok(reservation.clone()));
+            }
+        } else if let Err(error) = result {
+            for reply in replies {
+                let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+            }
         }
-        let _ = reply.send(result);
         ActorAction::Continue
     }
 
@@ -243,11 +285,39 @@ impl LifecycleManagerActor {
     ) -> ActorAction {
         if result.is_ok() {
             self.registered_shuffles.remove(&shuffle_id);
+            self.reservations.remove(&shuffle_id);
             self.mapper_attempts.remove(&shuffle_id);
             self.committing_shuffles.remove(&shuffle_id);
             self.committed_shuffles.remove(&shuffle_id);
         }
         let _ = reply.send(result);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_stop(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<()>,
+    ) -> ActorAction {
+        let client = self.client.clone();
+        let application_id = self.options.application_id.clone();
+        let shuffle_ids = self.registered_shuffles.keys().copied().collect::<Vec<_>>();
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            for shuffle_id in shuffle_ids {
+                if let Err(error) = client
+                    .unregister_shuffle(application_id.clone(), shuffle_id)
+                    .await
+                {
+                    warn!(
+                        "failed to unregister Celeborn shuffle {shuffle_id} while stopping: {error}"
+                    );
+                }
+            }
+            let _ = handle
+                .send(LifecycleManagerMessage::StopEnd { result })
+                .await;
+        });
         ActorAction::Continue
     }
 

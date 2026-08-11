@@ -17,15 +17,13 @@ use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, 
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
-fn explain_job_graph(plan: Arc<dyn ExecutionPlan>, use_blocking_shuffle: bool) -> Result<String> {
-    JobGraph::try_new(
-        plan,
-        JobGraphOptions {
-            use_blocking_shuffle,
-        },
-    )
-    .map(|graph| graph.to_string())
-    .map_err(|e| DataFusionError::External(Box::new(e)))
+fn explain_job_graph(
+    plan: Arc<dyn ExecutionPlan>,
+    shuffle_backend: ShuffleBackendKind,
+) -> Result<String> {
+    JobGraph::try_new(plan, JobGraphOptions { shuffle_backend })
+        .map(|graph| graph.to_string())
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub struct LocalJobRunner {
@@ -54,7 +52,7 @@ impl StateObservable<JobRunnerObserver> for LocalJobRunner {
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, false)
+        explain_job_graph(plan, ShuffleBackendKind::Flight)
     }
 
     async fn execute(
@@ -139,10 +137,7 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(
-            plan,
-            matches!(&self.shuffle_backend, ShuffleBackendKind::Storage { .. }),
-        )
+        explain_job_graph(plan, self.shuffle_backend.clone())
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.

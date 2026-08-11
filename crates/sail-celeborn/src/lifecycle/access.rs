@@ -15,10 +15,27 @@ impl LocalLifecycleManager {
     pub fn new(handle: ActorHandle<LifecycleManagerActor>) -> Self {
         Self { handle }
     }
+
+    pub fn handle(&self) -> ActorHandle<LifecycleManagerActor> {
+        self.handle.clone()
+    }
 }
 
 #[tonic::async_trait]
 impl LifecycleManager for LocalLifecycleManager {
+    async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::CreateShuffleId {
+                job_id,
+                stage,
+                result,
+            })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
     async fn request_slots(
         &self,
         shuffle_id: i32,

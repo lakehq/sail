@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use futures::stream::BoxStream;
 use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
@@ -7,6 +8,11 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum ShuffleClientMessage {
+    CreateShuffleId {
+        job_id: u64,
+        stage: u64,
+        result: oneshot::Sender<CelebornResult<i32>>,
+    },
     RegisterShuffle {
         shuffle_id: i32,
         partition_ids: Vec<i32>,
@@ -34,10 +40,18 @@ pub enum ShuffleClientMessage {
         num_mappers: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
-    ReadPartition {
+    UnregisterShuffle {
+        shuffle_id: i32,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
+    ClearShuffle {
+        shuffle_id: i32,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
+    ReadPartitionStream {
         shuffle_id: i32,
         partition_id: i32,
-        result: oneshot::Sender<CelebornResult<Vec<u8>>>,
+        result: oneshot::Sender<CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>>>,
     },
     Stop {
         result: oneshot::Sender<()>,
@@ -47,11 +61,14 @@ pub enum ShuffleClientMessage {
 impl SpanAssociation for ShuffleClientMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
+            Self::CreateShuffleId { .. } => "CreateShuffleId",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleEnd { .. } => "RegisterShuffleEnd",
             Self::PushData { .. } => "PushData",
             Self::MapperEnd { .. } => "MapperEnd",
-            Self::ReadPartition { .. } => "ReadPartition",
+            Self::UnregisterShuffle { .. } => "UnregisterShuffle",
+            Self::ClearShuffle { .. } => "ClearShuffle",
+            Self::ReadPartitionStream { .. } => "ReadPartitionStream",
             Self::Stop { .. } => "Stop",
         }
         .into()

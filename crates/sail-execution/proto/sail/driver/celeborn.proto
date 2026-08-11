@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package sail.driver;
+
+message CelebornCreateShuffleIdRequest {
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+  uint64 stage = 3;
+}
+
+message CelebornCreateShuffleIdResponse {
+  int32 shuffle_id = 1;
+}
+
+message CelebornRequestSlotsRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  repeated int32 partition_ids = 3;
+  bool should_replicate = 4;
+  int32 max_workers = 5;
+}
+
+message CelebornPartitionLocation {
+  int32 id = 1;
+  int32 epoch = 2;
+  string host = 3;
+  uint32 rpc_port = 4;
+  uint32 push_port = 5;
+  uint32 fetch_port = 6;
+  uint32 replicate_port = 7;
+  CelebornPartitionLocation peer = 8;
+  int32 mode = 9;
+}
+
+message CelebornRequestSlotsResponse {
+  repeated CelebornPartitionLocation primary_locations = 1;
+}
+
+message CelebornMapperEndRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  int32 map_id = 3;
+  int32 attempt_id = 4;
+  int32 num_mappers = 5;
+}
+
+message CelebornMapperEndResponse {}
+
+message CelebornUnregisterShuffleRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+}
+
+message CelebornUnregisterShuffleResponse {}
+
+service CelebornLifecycleManagerService {
+  rpc CreateShuffleId(CelebornCreateShuffleIdRequest) returns (CelebornCreateShuffleIdResponse) {}
+  rpc RequestSlots(CelebornRequestSlotsRequest) returns (CelebornRequestSlotsResponse) {}
+  rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
+  rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}
+}

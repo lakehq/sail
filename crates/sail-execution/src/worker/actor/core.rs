@@ -1,12 +1,18 @@
 use std::mem;
+use std::sync::Arc;
 
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use log::info;
+use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
+use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
+use crate::stream::celeborn::{CelebornStreamManager, RemoteLifecycleManager};
+use crate::stream::local::LocalStreamManager;
+use crate::stream::storage::StorageStreamManager;
 use crate::task_runner::{
     TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement,
 };
@@ -41,13 +47,44 @@ impl Actor for WorkerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let worker = ctx.handle().clone();
-        self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
-            TaskRunnerComponents {
-                extensions: TaskRunnerExtensions::new(
-                    (&self.options).into(),
-                    &self.options.shuffle_backend,
-                    self.options.session_id.clone(),
-                ),
+        let celeborn_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Celeborn { .. } => {
+                let application_id = celeborn_application_id(&self.options.session_id);
+                let lifecycle_manager = Arc::new(RemoteLifecycleManager::new(
+                    self.driver_client_set.celeborn.clone(),
+                ));
+                let client = ShuffleClient::new(ctx.children_mut().spawn::<ShuffleClientActor>(
+                    ShuffleClientOptions::new(
+                        application_id,
+                        lifecycle_manager,
+                        self.options.shuffle_backend.celeborn_endpoint_resolver(),
+                    ),
+                ));
+                Some(CelebornStreamManager::new(client))
+            }
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+        };
+        let storage_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(StorageStreamManager::new(
+                path.clone(),
+                self.options.session_id.clone(),
+                *max_file_size,
+                *compression,
+            )),
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+        };
+        let task_runner = ctx
+            .children_mut()
+            .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                extensions: TaskRunnerExtensions {
+                    local_streams: LocalStreamManager::new((&self.options).into()),
+                    storage_streams,
+                    celeborn_streams,
+                },
                 placement: TaskRunnerPlacement::Worker {
                     worker_id: self.options.worker_id,
                     sequence: 42,
@@ -56,17 +93,14 @@ impl Actor for WorkerActor {
                     peers: PeerTracker::new(PeerTrackerOptions::from(&self.options)),
                     retry_strategy: self.options.rpc_retry_strategy.clone(),
                 },
-            },
-        ));
+            });
+        self.task_runner = Some(task_runner.clone());
         let addr = (
             self.options.worker_listen_host.clone(),
             self.options.worker_listen_port,
         );
         let server = mem::take(&mut self.server);
         let span = Span::enter_with_local_parent("WorkerActor::serve");
-        let Some(task_runner) = self.task_runner.clone() else {
-            return;
-        };
         let task_context = self.options.session.task_ctx();
         self.server = server
             .start(Self::serve(ctx.handle().clone(), task_runner, task_context, addr).in_span(span))

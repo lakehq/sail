@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 _IMAGE = "apache/celeborn:0.6.3"
 _MASTER_PORT = 12097
+_MASTER_HTTP_PORT = 12098
 _CONFIG_PATH = Path(__file__).with_name("celeborn-defaults.conf")
 
 
@@ -25,6 +26,7 @@ _CONFIG_PATH = Path(__file__).with_name("celeborn-defaults.conf")
 class MasterService:
     host: str
     port: int
+    http_port: int
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,7 @@ def _wait_for_port(host: str, port: int, timeout: float = 60) -> None:
     raise TimeoutError(msg)
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_network() -> Generator[Network, None, None]:
     network = Network()
     network.create()
@@ -58,7 +60,7 @@ def celeborn_network() -> Generator[Network, None, None]:
         network.remove()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None, None]:
     master = (
         DockerContainer(_IMAGE)
@@ -68,7 +70,7 @@ def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None,
         .with_env("CELEBORN_NO_DAEMONIZE", "1")
         .with_command(["start-master.sh", "--host", "celeborn-master", "--port", str(_MASTER_PORT)])
         .with_volume_mapping(str(_CONFIG_PATH), "/opt/celeborn/conf/celeborn-defaults.conf", "ro")
-        .with_exposed_ports(_MASTER_PORT)
+        .with_exposed_ports(_MASTER_PORT, _MASTER_HTTP_PORT)
         .with_network(celeborn_network)
         .with_network_aliases("celeborn-master")
     )
@@ -76,13 +78,15 @@ def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None,
         master.start()
         host = master.get_container_host_ip()
         port = int(master.get_exposed_port(_MASTER_PORT))
+        http_port = int(master.get_exposed_port(_MASTER_HTTP_PORT))
         _wait_for_port(host, port)
-        yield MasterService(host, port)
+        _wait_for_port(host, http_port)
+        yield MasterService(host, port, http_port)
     finally:
         master.stop()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_worker(
     celeborn_network: Network,
     celeborn_master: MasterService,
@@ -122,7 +126,7 @@ def celeborn_worker(
         worker.stop()
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def celeborn_replica_worker(
     celeborn_network: Network,
     celeborn_master: MasterService,
@@ -165,12 +169,12 @@ def celeborn_replica_worker(
 
 
 def _endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]]) -> object:
-    from pysail import _native
+    from pysail import _native  # noqa: PLC0415
 
     return _native._celeborn.StaticEndpointResolver(overrides)  # noqa: SLF001
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def endpoint_resolver(celeborn_worker: WorkerService) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""
     return _endpoint_resolver(
@@ -182,7 +186,7 @@ def endpoint_resolver(celeborn_worker: WorkerService) -> object:
     )
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="session")
 def replication_endpoint_resolver(
     celeborn_worker: WorkerService,
     celeborn_replica_worker: WorkerService,

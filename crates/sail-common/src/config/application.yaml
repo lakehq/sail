@@ -260,7 +260,7 @@
   type: string
   default: "flight"
   description: |
-    The shuffle backend type. Valid values are `flight` and `storage`.
+    The shuffle backend type. Valid values are `flight`, `storage`, and `celeborn`.
     The `flight` shuffle backend streams shuffle data directly among tasks via Arrow Flight.
     The `storage` shuffle backend materializes merged shuffle partitions in object storage
     before running dependent stages.
@@ -289,6 +289,29 @@
     Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
     `lz4`, and `zstd`.
   experimental: true
+
+- key: cluster.shuffle_backend.celeborn.master_host
+  type: string
+  default: ""
+  description: The hostname of the Celeborn master.
+  experimental: true
+
+- key: cluster.shuffle_backend.celeborn.master_port
+  type: number
+  default: "0"
+  description: The port of the Celeborn master.
+  experimental: true
+
+- key: cluster.shuffle_backend.celeborn.endpoint_overrides
+  type: array
+  default: "[]"
+  description: |
+    Optional endpoint mappings for Celeborn workers advertised from an
+    isolated network. Each entry maps `internal_host` and `internal_port` to
+    `external_host` and `external_port`.
+    This option is intended for use in tests only.
+  experimental: true
+  hidden: true
 
 - key: execution.batch_size
   type: number

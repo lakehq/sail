@@ -15,6 +15,8 @@ pub struct DriverResource {
     /// Storage task streams are tracked by the driver
     /// regardless of whether they are created by the driver or workers.
     storage_streams: IndexSet<TaskKey>,
+    /// The active externally managed shuffle stages.
+    external_streams: IndexSet<(JobId, usize)>,
 }
 
 impl DriverResource {
@@ -48,6 +50,11 @@ impl DriverResource {
         self.storage_streams.extend(set.storage_streams().cloned());
     }
 
+    pub fn track_external_streams(&mut self, set: &TaskSet) {
+        self.external_streams
+            .extend(set.external_streams().map(|key| (key.job_id, key.stage)));
+    }
+
     pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         let count = self.local_streams.len();
         if let Some(stage) = stage {
@@ -68,6 +75,22 @@ impl DriverResource {
             self.storage_streams.retain(|x| x.job_id != job_id);
         }
         count != self.storage_streams.len()
+    }
+
+    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> Vec<usize> {
+        let streams = self
+            .external_streams
+            .iter()
+            .filter_map(|(stream_job_id, stream_stage)| {
+                (*stream_job_id == job_id && stage.is_none_or(|stage| stage == *stream_stage))
+                    .then_some(*stream_stage)
+            })
+            .collect();
+        self.external_streams
+            .retain(|(stream_job_id, stream_stage)| {
+                *stream_job_id != job_id || !stage.is_none_or(|stage| stage == *stream_stage)
+            });
+        streams
     }
 }
 

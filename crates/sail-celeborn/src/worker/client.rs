@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::TryStreamExt;
+use futures::stream::{self, BoxStream};
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -163,8 +165,11 @@ impl WorkerClient {
         Ok(())
     }
 
-    /// Fetch all committed batches for this primary partition.
-    pub async fn read_partition(&self, shuffle_key: &str) -> CelebornResult<Vec<u8>> {
+    /// Open a lazy stream of committed batches for this primary partition.
+    pub async fn read_partition_stream(
+        &self,
+        shuffle_key: &str,
+    ) -> CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>> {
         let request = PbOpenStream {
             shuffle_key: shuffle_key.to_string(),
             file_name: format!("{}-{}-0", self.location.id, self.location.epoch),
@@ -182,11 +187,39 @@ impl WorkerClient {
             ));
         }
         let handler = PbStreamHandler::decode(response.payload.as_slice())?;
-        let mut batches = Vec::new();
-        for chunk_index in 0..handler.num_chunks {
-            batches.extend(self.fetch_chunk(handler.stream_id, chunk_index).await?);
+        let client = self.clone();
+        Ok(Box::pin(stream::try_unfold(
+            (client, handler.stream_id, 0, handler.num_chunks, Vec::new()),
+            |(client, stream_id, mut chunk_index, num_chunks, mut buffered)| async move {
+                loop {
+                    if let Some(batch) = take_batch(&mut buffered)? {
+                        return Ok(Some((
+                            batch,
+                            (client, stream_id, chunk_index, num_chunks, buffered),
+                        )));
+                    }
+                    if chunk_index == num_chunks {
+                        return if buffered.is_empty() {
+                            Ok(None)
+                        } else {
+                            Err(CelebornError::Protocol("truncated batch data".to_string()))
+                        };
+                    }
+                    buffered.extend(client.fetch_chunk(stream_id, chunk_index).await?);
+                    chunk_index += 1;
+                }
+            },
+        )))
+    }
+
+    /// Fetch all committed batches for this primary partition.
+    pub async fn read_partition(&self, shuffle_key: &str) -> CelebornResult<Vec<u8>> {
+        let mut stream = self.read_partition_stream(shuffle_key).await?;
+        let mut data = vec![];
+        while let Some(batch) = stream.try_next().await? {
+            data.extend(batch);
         }
-        Self::decode_batches(&batches)
+        Ok(data)
     }
 
     async fn fetch_chunk(&self, stream_id: i64, chunk_index: i32) -> CelebornResult<Vec<u8>> {
@@ -276,38 +309,6 @@ impl WorkerClient {
         })
         .await
         .map_err(|_| CelebornError::Timeout)?
-    }
-
-    fn decode_batches(bytes: &[u8]) -> CelebornResult<Vec<u8>> {
-        let mut position = 0;
-        let mut data = Vec::new();
-        while position < bytes.len() {
-            let header_end = position
-                .checked_add(16)
-                .ok_or_else(|| CelebornError::Protocol("invalid batch header".to_string()))?;
-            if header_end > bytes.len() {
-                return Err(CelebornError::Protocol(
-                    "truncated batch header".to_string(),
-                ));
-            }
-            let length = i32::from_be_bytes(
-                bytes[position + 12..header_end]
-                    .try_into()
-                    .map_err(|_| CelebornError::Protocol("invalid batch header".to_string()))?,
-            );
-            let length = usize::try_from(length)
-                .map_err(|_| CelebornError::Protocol("invalid batch length".to_string()))?;
-            position = header_end;
-            let end = position
-                .checked_add(length)
-                .ok_or_else(|| CelebornError::Protocol("invalid batch length".to_string()))?;
-            if end > bytes.len() {
-                return Err(CelebornError::Protocol("truncated batch data".to_string()));
-            }
-            data.extend_from_slice(&bytes[position..end]);
-            position = end;
-        }
-        Ok(data)
     }
 
     /// Push one Celeborn map-data batch to this primary partition location.
@@ -406,6 +407,28 @@ impl WorkerClient {
             .map(|resolver| resolver.resolve(&self.location.host, port))
             .unwrap_or_else(|| (self.location.host.clone(), port))
     }
+}
+
+fn take_batch(buffered: &mut Vec<u8>) -> CelebornResult<Option<Vec<u8>>> {
+    const HEADER_LENGTH: usize = 16;
+    if buffered.len() < HEADER_LENGTH {
+        return Ok(None);
+    }
+    let length = i32::from_be_bytes(
+        buffered[12..HEADER_LENGTH]
+            .try_into()
+            .map_err(|_| CelebornError::Protocol("invalid batch header".to_string()))?,
+    );
+    let length = usize::try_from(length)
+        .map_err(|_| CelebornError::Protocol("invalid batch length".to_string()))?;
+    let end = HEADER_LENGTH
+        .checked_add(length)
+        .ok_or_else(|| CelebornError::Protocol("invalid batch length".to_string()))?;
+    if buffered.len() < end {
+        return Ok(None);
+    }
+    let mut batch = buffered.drain(..end).collect::<Vec<_>>();
+    Ok(Some(batch.split_off(HEADER_LENGTH)))
 }
 
 async fn write_bytes(stream: &mut TcpStream, bytes: &[u8]) -> CelebornResult<()> {

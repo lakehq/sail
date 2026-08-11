@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::memory::DataSourceExec;
-use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -19,13 +19,13 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::decode_remote_physical_plan;
 use crate::stream::accessor::TaskStreamFactory;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamChannelSink;
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement};
@@ -186,6 +186,31 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_create_celeborn_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskKey,
+        num_mappers: usize,
+        channels: usize,
+        schema: Arc<Schema>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    ) -> ActorAction {
+        if let Some(streams) = self.extensions.celeborn_streams.clone() {
+            ctx.spawn(async move {
+                let output = streams
+                    .create_stream(key, num_mappers, channels, schema)
+                    .await
+                    .map_err(ExecutionError::from);
+                let _ = result.send(output);
+            });
+            return ActorAction::Continue;
+        }
+        let _ = result.send(Err(ExecutionError::InternalError(
+            "Celeborn stream requested without a Celeborn shuffle backend".to_string(),
+        )));
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_fetch_driver_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -275,6 +300,28 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_fetch_celeborn_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        stage: usize,
+        channels: Vec<usize>,
+        schema: Arc<Schema>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ActorAction {
+        let streams = self.extensions.celeborn_streams.clone();
+        ctx.spawn(async move {
+            let output = match streams {
+                Some(streams) => streams.fetch_stream(job_id, stage, channels, schema).await,
+                None => Err(DataFusionError::Internal(
+                    "Celeborn stream requested without a Celeborn shuffle backend".to_string(),
+                )),
+            };
+            let _ = result.send(output.map_err(ExecutionError::from));
+        });
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_clean_up_local_streams(
         &mut self,
         job_id: JobId,
@@ -295,6 +342,22 @@ impl TaskRunnerActor {
             ctx.spawn(async move {
                 if let Err(error) = streams.remove_streams(job_id, stage, &context).await {
                     warn!("failed to remove storage shuffle data for job {job_id}: {error}");
+                }
+            });
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_clean_up_celeborn_streams(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        stage: Option<usize>,
+    ) -> ActorAction {
+        if let (Some(streams), Some(stage)) = (self.extensions.celeborn_streams.clone(), stage) {
+            ctx.spawn(async move {
+                if let Err(error) = streams.clear_stream(job_id, stage).await {
+                    warn!("failed to clear Celeborn shuffle cache for job {job_id} stage {stage}: {error}");
                 }
             });
         }
@@ -382,7 +445,13 @@ impl TaskRunnerActor {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let streams = TaskStreamFactory::new(ctx.handle().clone(), context.clone());
+        let input_plan = plan.clone();
+        let streams = TaskStreamFactory::new(
+            ctx.handle().clone(),
+            context.clone(),
+            &self.extensions,
+            input_plan.as_ref(),
+        );
         let result = {
             let streams = streams.clone();
             plan.transform(move |node| {
@@ -405,10 +474,7 @@ impl TaskRunnerActor {
         let plan = result.data()?;
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, self.codec.as_ref())?;
-        Ok(Arc::new(ShuffleWriteExec::new(
-            plan,
-            streams.writer(key.clone(), output.clone(), schema),
-            partitioning,
-        )))
+        let writer = streams.writer(key.clone(), output.clone(), schema.clone());
+        Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
     }
 }
