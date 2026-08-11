@@ -245,6 +245,7 @@ impl KubernetesWorkerService {
                     match &shuffle_backend {
                         ShuffleBackendKind::Flight => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
+                        ShuffleBackendKind::Celeborn { .. } => "celeborn",
                     }
                     .to_string(),
                 ),
@@ -255,12 +256,12 @@ impl KubernetesWorkerService {
             path,
             max_file_size,
             compression,
-        } = shuffle_backend
+        } = &shuffle_backend
         {
             if let Some(path) = path {
                 env.push(EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__PATH.to_string(),
-                    value: Some(path),
+                    value: Some(path.clone()),
                     value_from: None,
                 });
             }
@@ -280,6 +281,32 @@ impl KubernetesWorkerService {
                         }
                         .to_string(),
                     ),
+                    value_from: None,
+                },
+            ]);
+        }
+        if let ShuffleBackendKind::Celeborn {
+            master_host,
+            master_port,
+            ..
+        } = &shuffle_backend
+        {
+            let endpoint_overrides = shuffle_backend.celeborn_endpoint_overrides_string();
+            env.extend([
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_HOST.to_string(),
+                    value: Some(master_host.clone()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_PORT.to_string(),
+                    value: Some(master_port.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES
+                        .to_string(),
+                    value: Some(endpoint_overrides),
                     value_from: None,
                 },
             ]);

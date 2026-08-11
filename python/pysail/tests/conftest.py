@@ -23,6 +23,8 @@ def pytest_configure(config: pytest.Config) -> None:
     since these files are not part of the installed package.
     """
 
+    config.pluginmanager.import_plugin("pysail.testing.containers.celeborn")
+
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
     # Since clearing the cache requires access to the private attribute of `config`, we do not

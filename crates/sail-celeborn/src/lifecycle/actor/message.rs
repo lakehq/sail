@@ -7,6 +7,11 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum LifecycleManagerMessage {
+    CreateShuffleId {
+        job_id: u64,
+        stage: u64,
+        result: oneshot::Sender<CelebornResult<i32>>,
+    },
     RequestSlotsBegin {
         shuffle_id: i32,
         partition_ids: Vec<i32>,
@@ -17,7 +22,6 @@ pub enum LifecycleManagerMessage {
     RequestSlotsEnd {
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
-        reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     },
     MapperEndBegin {
         shuffle_id: i32,
@@ -43,11 +47,15 @@ pub enum LifecycleManagerMessage {
     Stop {
         result: oneshot::Sender<()>,
     },
+    StopEnd {
+        result: oneshot::Sender<()>,
+    },
 }
 
 impl SpanAssociation for LifecycleManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
+            Self::CreateShuffleId { .. } => "CreateShuffleId",
             Self::RequestSlotsBegin { .. } => "RequestSlotsBegin",
             Self::RequestSlotsEnd { .. } => "RequestSlotsEnd",
             Self::MapperEndBegin { .. } => "MapperEndBegin",
@@ -55,6 +63,7 @@ impl SpanAssociation for LifecycleManagerMessage {
             Self::UnregisterShuffleBegin { .. } => "UnregisterShuffleBegin",
             Self::UnregisterShuffleEnd { .. } => "UnregisterShuffleEnd",
             Self::Stop { .. } => "Stop",
+            Self::StopEnd { .. } => "StopEnd",
         }
         .into()
     }

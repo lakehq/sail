@@ -55,6 +55,15 @@ impl Actor for TaskRunnerActor {
                 context,
                 result,
             } => self.handle_create_storage_stream(key, schema, context, result),
+            TaskRunnerMessage::CreateCelebornStream {
+                key,
+                num_mappers,
+                channels,
+                schema,
+                result,
+            } => {
+                self.handle_create_celeborn_stream(ctx, key, num_mappers, channels, schema, result)
+            }
             TaskRunnerMessage::FetchDriverStream {
                 key,
                 schema,
@@ -75,6 +84,13 @@ impl Actor for TaskRunnerActor {
                 context,
                 result,
             } => self.handle_fetch_storage_stream(key, schema, context, result),
+            TaskRunnerMessage::FetchCelebornStream {
+                job_id,
+                stage,
+                channels,
+                schema,
+                result,
+            } => self.handle_fetch_celeborn_stream(ctx, job_id, stage, channels, schema, result),
             TaskRunnerMessage::CleanUpLocalStreams { job_id, stage } => {
                 self.handle_clean_up_local_streams(job_id, stage)
             }
@@ -83,6 +99,9 @@ impl Actor for TaskRunnerActor {
                 stage,
                 context,
             } => self.handle_clean_up_storage_streams(ctx, job_id, stage, context),
+            TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage } => {
+                self.handle_clean_up_celeborn_streams(ctx, job_id, stage)
+            }
             TaskRunnerMessage::Shutdown => self.handle_shutdown(),
         }
     }

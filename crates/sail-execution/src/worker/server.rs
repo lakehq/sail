@@ -115,12 +115,15 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
-        let message = TaskRunnerMessage::CleanUpLocalStreams {
-            job_id: job_id.into(),
-            stage: stage.map(|x| x as usize),
-        };
+        let job_id = job_id.into();
+        let stage = stage.map(|x| x as usize);
+        let message = TaskRunnerMessage::CleanUpLocalStreams { job_id, stage };
         self.task_runner
             .send(message)
+            .await
+            .map_err(ExecutionError::from)?;
+        self.task_runner
+            .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};

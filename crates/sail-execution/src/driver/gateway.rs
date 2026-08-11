@@ -10,6 +10,8 @@ use tokio::task::JoinHandle;
 use tonic::codec::CompressionEncoding;
 use tonic::{Status, async_trait};
 
+use crate::driver::celeborn::CelebornLifecycleManagerServer;
+use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLifecycleManagerServiceServer;
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
 use crate::driver::{DriverMessage, DriverRegistryAccessor};
@@ -116,6 +118,14 @@ impl DriverGateway {
             .accept_compressed(CompressionEncoding::Zstd)
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
+        let celeborn_service = CelebornLifecycleManagerServiceServer::new(
+            CelebornLifecycleManagerServer::new(registry.clone()),
+        )
+        .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Zstd)
+        .send_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Zstd);
         let flight_service =
             FlightServiceServer::new(TaskStreamFlightServer::<DriverTaskStreamKey>::new(
                 Box::new(DriverTaskStreamFetcher { registry }),
@@ -129,6 +139,8 @@ impl DriverGateway {
         let handle = tokio::spawn(async move {
             ServerBuilder::new("sail_driver", Default::default())
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
+                .await
+                .add_service(celeborn_service, None)
                 .await
                 .add_service(flight_service, None)
                 .await

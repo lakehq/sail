@@ -7556,6 +7556,7 @@ dependencies = [
 name = "sail-celeborn"
 version = "0.7.0"
 dependencies = [
+ "futures",
  "log",
  "prost",
  "readonly",
@@ -7769,6 +7770,7 @@ dependencies = [
  "readonly",
  "sail-catalog",
  "sail-catalog-system",
+ "sail-celeborn",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
@@ -7784,6 +7786,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "toml 0.8.23",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",

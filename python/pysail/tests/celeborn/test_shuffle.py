@@ -7,17 +7,19 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from pysail.tests.celeborn.conftest import MasterService, WorkerService
+    from pysail.testing.containers.celeborn import MasterService, WorkerService
 
 
 ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 _DATA = b"hello Celeborn"
 _REPLICATION_WORKER_COUNT = 2
+pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
 @pytest.fixture(scope="module")

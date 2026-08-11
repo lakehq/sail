@@ -10,6 +10,7 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 log = { workspace = true }
+futures = { workspace = true }
 prost = { workspace = true }
 readonly = { workspace = true }
 thiserror = { workspace = true }
