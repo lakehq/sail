@@ -12,6 +12,8 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
+const NAMED_LAMBDA_VARIABLE_DISPLAY_NAME: &str = "namedlambdavariable()";
+
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {
         spec::Expr::LambdaFunction { .. } => true,
@@ -167,7 +169,7 @@ impl PlanResolver<'_> {
         let name = format!(
             "lambdafunction({}, {})",
             body.name.clone().one()?,
-            params.join(", ")
+            vec![NAMED_LAMBDA_VARIABLE_DISPLAY_NAME; params.len()].join(", ")
         );
         Ok(NamedExpr::new(
             vec![name],
@@ -197,7 +199,7 @@ impl PlanResolver<'_> {
                 }
             })?;
         Ok(NamedExpr::new(
-            vec![declared.clone()],
+            vec![NAMED_LAMBDA_VARIABLE_DISPLAY_NAME.to_string()],
             expr::Expr::LambdaVariable(LambdaVariable::new(declared, field)),
         ))
     }

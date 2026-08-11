@@ -85,7 +85,7 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error DATATYPE_MISMATCH
 
-  Rule: Numeric preservation (Sail currently diverges from Spark)
+  Rule: Numeric handling
 
     Scenario Outline: Numeric: <case>
       When query
@@ -101,6 +101,9 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | parse_json negative scientific notation                   | '1.5e-1'   | 0.15   |
         | parse_json negative zero                                  | '-0'       | 0      |
         | parse_json accepts trailing garbage (Spark parses prefix) | '42 extra' | 42     |
+        | parse_json preserves wide positive decimal                | '467440737095.51617'   | 467440737095.51617   |
+        | parse_json preserves wide negative decimal                | '-67.849438003827263'  | -67.849438003827263  |
+        | parse_json preserves large number beyond i64              | '99999999999999999999' | 99999999999999999999 |
 
     @sail-bug
     Scenario Outline: Numeric (sail-bug): <case>
@@ -113,15 +116,13 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | <result> |
 
       Examples:
-        | case                                             | json                   | result               |
-        | parse_json scientific notation preserves decimal | '1.5e3'                | 1500.0               |
-        | parse_json preserves large number beyond i64     | '99999999999999999999' | 99999999999999999999 |
+        | case                                             | json    | result |
+        | parse_json scientific notation preserves decimal | '1.5e3' | 1500.0 |
 
     @sail-bug
     # Spark keeps scientific negative zero as -0.0 (the exponent makes it a DOUBLE);
-    # only the non-exponent forms `-0`/`-0.0` normalize to 0. Sail can't match this:
-    # serde_json discards the exponent, and Sail renders -0.0 as `-0` anyway
-    # (Sail-wide double->string formatting gap, same root cause as `1e10` -> `1.0E10`).
+    # only the non-exponent forms `-0`/`-0.0` normalize to 0. Sail renders -0.0 as
+    # `-0` (Sail-wide double->string formatting gap, same root cause as `1e10` -> `1.0E10`).
     Scenario: parse_json scientific negative zero keeps sign
       When query
         """

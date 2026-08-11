@@ -176,6 +176,22 @@ Feature: exists higher-order function
 
   Rule: Array borne by a column rather than a literal
 
+    Scenario: lambda parameter remains distinct from columns in a wide input
+      When query
+        """
+        SELECT exists(b, x -> x < 0) AS result
+        FROM VALUES
+          (ARRAY('a', 'ab'), ARRAY(1, 2, 3), ARRAY(1, NULL, 3), 1, 2, 'a', NULL, MAP(0, 0)),
+          (ARRAY('x', NULL), NULL, ARRAY(1, 3), 3, 4, 'x', MAP(2, 0), MAP(-1, 1)),
+          (NULL, ARRAY(-1, -2, -3), ARRAY(), 5, 6, NULL, MAP(-1, 2, -3, -4), NULL)
+          AS t(a, b, c, d, e, f, g, h)
+        """
+      Then query result ordered
+        | result |
+        | false  |
+        | NULL   |
+        | true   |
+
     Scenario: distinct arrays per row are not broadcast from the first row
       When query
         """

@@ -7846,6 +7846,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.10.2",
  "rand_distr",
+ "recursive",
  "regex",
  "sail-common",
  "sail-common-datafusion",

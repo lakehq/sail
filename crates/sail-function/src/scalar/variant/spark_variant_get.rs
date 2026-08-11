@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
+use arrow::array::{Array, ArrayRef, Float32Array, Float64Array};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -8,8 +9,8 @@ use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusi
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use parquet_variant::{VariantPath, VariantPathElement};
-use parquet_variant_compute::{GetOptions, VariantType, variant_get};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
+use parquet_variant_compute::{GetOptions, VariantArray, VariantType, variant_get};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -43,6 +44,76 @@ fn build_get_options<'a>(path: VariantPath<'a>, as_type: &Option<FieldRef>) -> G
     match as_type {
         Some(field) => GetOptions::new_with_path(path).with_as_type(Some(field.clone())),
         None => GetOptions::new_with_path(path),
+    }
+}
+
+fn variant_decimal_as_float<T: std::str::FromStr>(value: Variant<'_, '_>) -> Option<T> {
+    match value {
+        // Parsing the exact decimal text avoids double rounding through an
+        // intermediate integer-to-float conversion and matches Spark's
+        // BigDecimal float/double casts.
+        Variant::Decimal4(value) => value.to_string().parse().ok(),
+        Variant::Decimal8(value) => value.to_string().parse().ok(),
+        Variant::Decimal16(value) => value.to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+/// parquet-variant currently leaves decimal-to-float extractions NULL. Fill
+/// only those slots from an untyped extraction, preserving its handling of all
+/// other values and casts.
+fn fill_decimal_float_values(
+    result: ArrayRef,
+    input: &ArrayRef,
+    path: VariantPath<'_>,
+    name: &str,
+) -> Result<ArrayRef> {
+    if result.null_count() == 0 || result.is_empty() {
+        return Ok(result);
+    }
+
+    let variants = variant_get(input, GetOptions::new_with_path(path))
+        .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+    let variants = VariantArray::try_new(variants.as_ref())?;
+
+    match result.data_type() {
+        DataType::Float32 => {
+            let floats = result
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| exec_datafusion_err!("{name}: expected Float32 extraction"))?;
+            let values = (0..result.len())
+                .map(|index| {
+                    if floats.is_valid(index) {
+                        Ok(Some(floats.value(index)))
+                    } else if variants.is_null(index) {
+                        Ok(None)
+                    } else {
+                        Ok(variant_decimal_as_float::<f32>(variants.try_value(index)?))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Float32Array::from(values)))
+        }
+        DataType::Float64 => {
+            let floats = result
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| exec_datafusion_err!("{name}: expected Float64 extraction"))?;
+            let values = (0..result.len())
+                .map(|index| {
+                    if floats.is_valid(index) {
+                        Ok(Some(floats.value(index)))
+                    } else if variants.is_null(index) {
+                        Ok(None)
+                    } else {
+                        Ok(variant_decimal_as_float::<f64>(variants.try_value(index)?))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Float64Array::from(values)))
+        }
+        _ => Ok(result),
     }
 }
 
@@ -138,6 +209,9 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
         Some(dt) => (Some(Arc::new(Field::new(name, dt.clone(), true))), false),
         None => (None, false),
     };
+    let extracts_float = extract_field
+        .as_ref()
+        .is_some_and(|field| matches!(field.data_type(), DataType::Float32 | DataType::Float64));
 
     // Build options
     let mut options = build_get_options(variant_path.clone(), &extract_field);
@@ -157,6 +231,12 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     // Execute
     let result = variant_get(&variant_arr, options)
         .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+
+    let result = if extracts_float {
+        fill_decimal_float_values(result, &variant_arr, variant_path.clone(), name)?
+    } else {
+        result
+    };
 
     // Fallback: if extracting as numeric type returned all NULLs,
     // try extracting as Boolean and cast (Spark casts true→1, false→0)

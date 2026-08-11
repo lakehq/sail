@@ -13,7 +13,6 @@ use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWindows;
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
-use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
@@ -26,11 +25,13 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
+use crate::projection_pushdown::HigherOrderProjectionPushdown;
 
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
+mod projection_pushdown;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -56,14 +57,14 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(EnforceSorting::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(WindowTopN::new()));
-    rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(HigherOrderProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(Arc::new(LimitPushPastWindows::new()));
     rules.push(Arc::new(HashJoinBuffering::new()));
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(TopKRepartition::new()));
-    rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(HigherOrderProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));

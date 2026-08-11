@@ -24,6 +24,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
+recursive = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 ordered-float = { workspace = true }

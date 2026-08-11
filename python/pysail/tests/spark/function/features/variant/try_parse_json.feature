@@ -172,6 +172,7 @@ Feature: try_parse_json comprehensive tests
         | try_parse_json negative number    | '-42'               | 'int'     | -42               |
         | try_parse_json boolean true       | 'true'              | 'boolean' | true              |
         | try_parse_json boolean false      | 'false'             | 'boolean' | false             |
+        | try_parse_json decimal as float   | '1.25'              | 'float'   | 1.25              |
         | try_parse_json float zero         | '0.0'               | 'double'  | 0.0               |
         | try_parse_json empty string value | '""'                | 'string'  |                   |
 
@@ -185,6 +186,36 @@ Feature: try_parse_json comprehensive tests
       Then query result
         | result |
         | true   |
+
+    Scenario: try_parse_json validates root primitive termination like Spark
+      When query
+        """
+        SELECT
+          try_parse_json('true,garbage') IS NOT NULL AS literal_punctuation,
+          try_parse_json('truex') IS NULL AS literal_identifier,
+          try_parse_json('null$') IS NOT NULL AS literal_dollar,
+          try_parse_json(CONCAT('true', CHR(1), 'garbage')) IS NOT NULL AS literal_c0,
+          try_parse_json('true𐐀') IS NOT NULL AS literal_supplementary,
+          try_parse_json(CONCAT('1', CHR(11), 'garbage')) IS NULL AS number_vt,
+          try_parse_json(CONCAT('1', CHR(12), 'garbage')) IS NULL AS number_ff,
+          try_parse_json(CONCAT('1', CHR(9), 'garbage')) IS NOT NULL AS number_tab
+        """
+      Then query result
+        | literal_punctuation | literal_identifier | literal_dollar | literal_c0 | literal_supplementary | number_vt | number_ff | number_tab |
+        | true                | true               | true           | true       | true                  | true      | true      | true       |
+
+    Scenario: try_parse_json enforces Spark stream read constraints
+      When query
+        """
+        SELECT
+          try_parse_json(REPEAT('9', 1000)) IS NOT NULL AS number_1000,
+          try_parse_json(REPEAT('9', 1001)) IS NULL AS number_1001,
+          try_parse_json(CONCAT(REPEAT('[', 1000), '0', REPEAT(']', 1000))) IS NOT NULL AS depth_1000,
+          try_parse_json(CONCAT(REPEAT('[', 1001), '0', REPEAT(']', 1001))) IS NULL AS depth_1001
+        """
+      Then query result
+        | number_1000 | number_1001 | depth_1000 | depth_1001 |
+        | true        | true        | true       | true       |
 
     @sail-bug
     Scenario: try_parse_json scientific notation preserves decimal
@@ -205,7 +236,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 0.15   |
 
-    @sail-bug
     Scenario: try_parse_json preserves large number beyond i64
       When query
         """

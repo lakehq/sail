@@ -18,9 +18,7 @@ Feature: schema_of_variant
         | schema_of_variant string  | '"hello"' | STRING  |
         | schema_of_variant boolean | 'true'    | BOOLEAN |
 
-    # parquet-variant-json parses 3.14 as f64 (DOUBLE) instead of Decimal like Spark
-    @sail-bug
-    Scenario: schema_of_variant double
+    Scenario: schema_of_variant decimal
       When query
         """
         SELECT schema_of_variant(parse_json('3.14')) AS result

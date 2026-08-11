@@ -21,6 +21,9 @@ use crate::resolver::expression::lambda::is_spec_lambda_argument;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
+const DEFAULT_AGGREGATE_FINISH_DISPLAY_NAME: &str =
+    "lambdafunction(namedlambdavariable(), namedlambdavariable())";
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_function(
         &self,
@@ -251,7 +254,7 @@ impl PlanResolver<'_> {
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
         // to individual column names so the output header matches Spark JVM behavior
         // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
-        let argument_display_names =
+        let mut argument_display_names =
             if canonical_function_name == "current_time" && argument_display_names.is_empty() {
                 vec!["6".to_string()]
             } else if is_distinct && argument_display_names.iter().any(|n| n == "*") {
@@ -270,6 +273,11 @@ impl PlanResolver<'_> {
             } else {
                 argument_display_names
             };
+        if matches!(canonical_function_name.as_str(), "aggregate" | "reduce")
+            && argument_display_names.len() == 3
+        {
+            argument_display_names.push(DEFAULT_AGGREGATE_FINISH_DISPLAY_NAME.to_string());
+        }
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
