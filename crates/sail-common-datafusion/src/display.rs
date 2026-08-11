@@ -76,6 +76,9 @@ pub struct FormatOptions<'a> {
     timestamp_format: TimeFormat<'a>,
     /// Timestamp format for timestamp with timezone arrays
     timestamp_tz_format: TimeFormat<'a>,
+    /// Display timezone for timestamp with timezone arrays. When unset, the
+    /// timezone stored in the Arrow data type is used.
+    timestamp_timezone: Option<&'a str>,
     /// Time format for time arrays
     time_format: TimeFormat<'a>,
     /// Duration format
@@ -97,6 +100,7 @@ impl<'a> FormatOptions<'a> {
             datetime_format: TimeFormat::Spark,
             timestamp_format: TimeFormat::Spark,
             timestamp_tz_format: TimeFormat::Spark,
+            timestamp_timezone: None,
             time_format: TimeFormat::Spark,
             duration_format: DurationFormat::Spark,
         }
@@ -142,6 +146,15 @@ impl<'a> FormatOptions<'a> {
     pub const fn with_timestamp_tz_format(self, timestamp_tz_format: TimeFormat<'a>) -> Self {
         Self {
             timestamp_tz_format,
+            ..self
+        }
+    }
+
+    /// Overrides the timezone used to display [`DataType::Timestamp`] columns
+    /// whose Arrow data type has a timezone.
+    pub const fn with_timestamp_timezone(self, timestamp_timezone: Option<&'a str>) -> Self {
+        Self {
+            timestamp_timezone,
             ..self
         }
     }
@@ -308,6 +321,8 @@ fn make_formatter<'a>(
         }
         DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
         DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
+        DataType::ListView(_) => array_format(array.as_list_view::<i32>(), options),
+        DataType::LargeListView(_) => array_format(array.as_list_view::<i64>(), options),
         DataType::FixedSizeList(_, _) => {
             let a = array.as_any().downcast_ref::<FixedSizeListArray>().ok_or_else(|| {
                 ArrowError::CastError(
@@ -567,7 +582,7 @@ macro_rules! timestamp_display {
                 match self.data_type() {
                     DataType::Timestamp(_, Some(timezone)) => Ok((
                         Some(
-                            parse_spark_timezone(timezone)
+                            parse_spark_timezone(options.timestamp_timezone.unwrap_or(timezone))
                                 .map_err(|error| ArrowError::ParseError(error.to_string()))?,
                         ),
                         options.timestamp_tz_format,
@@ -864,6 +879,20 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
     }
 }
 
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListViewArray<O> {
+    type State = Box<dyn DisplayIndex + 'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        make_formatter(self.values().as_ref(), options)
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let start = self.value_offset(idx).as_usize();
+        let end = start + self.value_size(idx).as_usize();
+        write_list(f, start..end, s.as_ref())
+    }
+}
+
 impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
     type State = (usize, Box<dyn DisplayIndex + 'a>);
 
@@ -1022,8 +1051,11 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::arrow::array::builder::StringRunBuilder;
-    use datafusion::arrow::datatypes::{Fields, Int32Type};
+    use datafusion::arrow::buffer::ScalarBuffer;
+    use datafusion::arrow::datatypes::{Field, Fields, Int32Type};
 
     use super::*;
 
@@ -1035,6 +1067,52 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
+    }
+
+    #[test]
+    fn test_timestamp_timezone_override() {
+        let array = TimestampMicrosecondArray::from(vec![0]).with_timezone("UTC");
+        let options = FormatOptions::new().with_timestamp_timezone(Some("+01:02:03"));
+
+        assert_eq!(
+            format_array(&array, &options),
+            ["1970-01-01 01:02:03".to_string()]
+        );
+    }
+
+    #[expect(clippy::unwrap_used)]
+    #[test]
+    fn test_list_view_timestamp_timezone_override() {
+        let values: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![0]).with_timezone("UTC"));
+        let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let options = FormatOptions::new().with_timestamp_timezone(Some("+01:02:03"));
+
+        let list_view = ListViewArray::try_new(
+            Arc::clone(&field),
+            ScalarBuffer::from(vec![0]),
+            ScalarBuffer::from(vec![1]),
+            Arc::clone(&values),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            format_array(&list_view, &options),
+            ["[1970-01-01 01:02:03]".to_string()]
+        );
+
+        let large_list_view = LargeListViewArray::try_new(
+            field,
+            ScalarBuffer::from(vec![0]),
+            ScalarBuffer::from(vec![1]),
+            values,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            format_array(&large_list_view, &options),
+            ["[1970-01-01 01:02:03]".to_string()]
+        );
     }
 
     #[expect(clippy::unwrap_used)]

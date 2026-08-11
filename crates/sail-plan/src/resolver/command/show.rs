@@ -26,7 +26,7 @@ impl PlanResolver<'_> {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,
         };
-        let format = ShowStringFormat::new(style, truncate);
+        let format = ShowStringFormat::new(style, truncate, self.config.session_timezone.clone());
         let names = Self::get_field_names(input.schema(), state)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(
@@ -51,7 +51,11 @@ impl PlanResolver<'_> {
         } = html;
         let input = self.resolve_query_plan(*input, state).await?;
         let input = Self::rewrite_show_input_with_limit(input, num_rows);
-        let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
+        let format = ShowStringFormat::new(
+            ShowStringStyle::Html,
+            truncate,
+            self.config.session_timezone.clone(),
+        );
         let names = Self::get_field_names(input.schema(), state)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(

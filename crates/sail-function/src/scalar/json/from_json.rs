@@ -434,7 +434,11 @@ fn create_builder(
             capacity, 0,
         ))),
         DataType::Timestamp(time_unit, tz) => {
-            let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
+            let resolved_tz = if tz.is_some() {
+                Arc::from(session_timezone)
+            } else {
+                Arc::from("UTC")
+            };
             match time_unit {
                 TimeUnit::Microsecond => Ok(FieldBuilder::TimestampMicrosecond {
                     builder: TimestampMicrosecondBuilder::with_capacity(capacity)
@@ -1118,7 +1122,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
         "date" => Ok(DataType::Date32),
         "timestamp" | "timestamp_ltz" => Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some(Arc::from(session_timezone)),
+            Some(Arc::from("UTC")),
         )),
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
@@ -1228,7 +1232,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
             to_time_unit(time_unit),
             match timestamp_type {
                 spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
+                    Some(Arc::from("UTC"))
                 }
                 spec::TimestampType::WithoutTimeZone => None,
             },
@@ -1648,13 +1652,13 @@ mod tests {
         let dt = parse_schema_to_data_type(r#""timestamp""#, "America/New_York")?;
         assert_eq!(
             dt,
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("America/New_York")))
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
         );
 
         let dt2 = parse_schema_to_data_type(r#""timestamp_ltz""#, "Europe/London")?;
         assert_eq!(
             dt2,
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("Europe/London")))
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
         );
         Ok(())
     }

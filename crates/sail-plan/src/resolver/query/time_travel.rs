@@ -4,8 +4,12 @@ use chrono::{SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
-use datafusion_expr::{EmptyRelation, Expr, Limit, LogicalPlan, Projection};
+use datafusion_expr::{
+    EmptyRelation, Expr, ExprSchemable, Limit, LogicalPlan, Projection, ScalarUDF, cast,
+};
 use sail_common::spec;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -89,13 +93,47 @@ impl PlanResolver<'_> {
         let resolved = self
             .resolve_time_travel_expression(expr, "timestamp", state)
             .await?;
-        let timestamp = Expr::Cast(datafusion_expr::expr::Cast::new(
-            Box::new(resolved),
-            DataType::Timestamp(
-                TimeUnit::Microsecond,
-                self.resolve_timezone(&spec::TimestampType::Configured)?,
-            ),
-        ));
+        let source_type = resolved.get_type(&DFSchema::empty())?;
+        let target_type = DataType::Timestamp(
+            TimeUnit::Microsecond,
+            self.resolve_timezone(&spec::TimestampType::Configured)?,
+        );
+        let timestamp = match source_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                let timezone = if matches!(target_type, DataType::Timestamp(_, Some(_))) {
+                    Some(Arc::clone(&self.config.session_timezone))
+                } else {
+                    None
+                };
+                ScalarUDF::from(SparkTimestamp::try_new(
+                    timezone,
+                    self.config.ansi_mode,
+                    false,
+                )?)
+                .call(vec![resolved])
+            }
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
+                if matches!(target_type, DataType::Timestamp(_, Some(_))) =>
+            {
+                ScalarUDF::from(SparkTimezoneCast::new(
+                    target_type,
+                    Arc::clone(&self.config.session_timezone),
+                    false,
+                ))
+                .call(vec![resolved])
+            }
+            DataType::Timestamp(_, Some(_))
+                if matches!(target_type, DataType::Timestamp(_, None)) =>
+            {
+                ScalarUDF::from(SparkTimezoneCast::new(
+                    target_type,
+                    Arc::clone(&self.config.session_timezone),
+                    false,
+                ))
+                .call(vec![resolved])
+            }
+            _ => cast(resolved, target_type),
+        };
         let scalar = self.execute_time_travel_scalar(timestamp).await?;
         Self::normalize_time_travel_timestamp_scalar(scalar)
     }

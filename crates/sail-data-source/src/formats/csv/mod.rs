@@ -2,6 +2,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_function::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
 
 use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::ResolveOptions;
@@ -95,14 +96,25 @@ impl FormatFactory for CsvFormatFactory {
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let timestamp_format = super::effective_string_option(
+            &options,
+            &["timestamp_format", "timestampFormat"],
+            SPARK_FILE_TIMESTAMP_FORMAT,
+        );
         let options = CsvWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
-        Ok(CsvWriteFormat { options })
+        Ok(CsvWriteFormat {
+            options,
+            timestamp_format,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion::prelude::SessionContext;
+
     use super::*;
+    use crate::options::option_list;
 
     #[test]
     fn test_convert_string_columns() {
@@ -132,5 +144,28 @@ mod tests {
         assert_eq!(renamed.fields()[0].name(), "_c0");
         assert_eq!(renamed.fields()[1].name(), "_c1");
         assert_eq!(renamed.fields()[2].name(), "_c2");
+    }
+
+    #[test]
+    fn timestamp_format_is_preserved_for_spark_aware_writer() {
+        let context = SessionContext::new();
+        let default = CsvFormatFactory::write(&context.state(), vec![]).unwrap();
+        assert_eq!(
+            default.timestamp_format.as_ref(),
+            SPARK_FILE_TIMESTAMP_FORMAT
+        );
+
+        let custom = CsvFormatFactory::write(
+            &context.state(),
+            vec![option_list(&[(
+                "timestampFormat",
+                "yyyy/MM/dd HH:mm:ss XXXXX",
+            )])],
+        )
+        .unwrap();
+        assert_eq!(
+            custom.timestamp_format.as_ref(),
+            "yyyy/MM/dd HH:mm:ss XXXXX"
+        );
     }
 }

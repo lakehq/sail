@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
-use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::Result;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use pyo3::{Py, PyAny, Python};
+use sail_common_datafusion::array::record_batch::cast_array_recursively;
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::array::{build_singleton_list_array, get_list_field};
@@ -142,6 +142,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
             udf,
             field,
             large_var_types: self.config.arrow_use_large_var_types,
+            session_timezone: self.config.session_timezone.clone(),
         });
         Ok(Box::new(BatchAggregateAccumulator::new(
             self.input_types.clone(),
@@ -160,17 +161,19 @@ struct PySparkGroupMapper {
     udf: Py<PyAny>,
     field: FieldRef,
     large_var_types: bool,
+    session_timezone: String,
 }
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let data = Python::attach(|py| -> PyUdfResult<_> {
-            let output = self
-                .udf
-                .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;
+            let output = self.udf.call1(
+                py,
+                (args.try_to_py(py, self.large_var_types, Some(&self.session_timezone))?,),
+            )?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
-        let array = cast(&make_array(data), self.field.data_type())?;
+        let array = cast_array_recursively(&make_array(data), self.field.data_type())?;
         Ok(build_singleton_list_array(array))
     }
 }

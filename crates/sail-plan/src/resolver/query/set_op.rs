@@ -8,11 +8,81 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 
+use super::{align_expr_to_ltz_type, common_ltz_type};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn align_set_operation_ltz(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        if left.schema().fields().len() != right.schema().fields().len() {
+            return Ok((left, right));
+        }
+
+        let mut changed = false;
+        let (left_exprs, right_exprs): (Vec<_>, Vec<_>) = left
+            .schema()
+            .fields()
+            .iter()
+            .zip(right.schema().fields())
+            .enumerate()
+            .map(|(index, (left_field, right_field))| {
+                let left_type = left_field.data_type();
+                let right_type = right_field.data_type();
+                let target_type = common_ltz_type(
+                    left_type,
+                    right_type,
+                    self.config.ansi_mode,
+                    true,
+                    self.config.case_sensitive,
+                );
+                changed |= target_type
+                    .as_ref()
+                    .is_some_and(|target| target != left_type || target != right_type);
+
+                let left_expr = Expr::Column(Column::from(left.schema().qualified_field(index)));
+                let right_expr = Expr::Column(Column::from(right.schema().qualified_field(index)));
+                let left_expr = if let Some(target_type) = &target_type {
+                    align_expr_to_ltz_type(
+                        left_expr,
+                        left_type,
+                        target_type,
+                        &self.config,
+                        !self.config.ansi_mode,
+                    )?
+                } else {
+                    left_expr
+                }
+                .alias(left_field.name());
+                let right_expr = if let Some(target_type) = &target_type {
+                    align_expr_to_ltz_type(
+                        right_expr,
+                        right_type,
+                        target_type,
+                        &self.config,
+                        !self.config.ansi_mode,
+                    )?
+                } else {
+                    right_expr
+                }
+                .alias(right_field.name());
+                Ok((left_expr, right_expr))
+            })
+            .collect::<PlanResult<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+
+        if changed {
+            Ok((project(left, left_exprs)?, project(right, right_exprs)?))
+        } else {
+            Ok((left, right))
+        }
+    }
+
     pub(super) async fn resolve_query_set_operation(
         &self,
         op: spec::SetOperation,
@@ -31,7 +101,10 @@ impl PlanResolver<'_> {
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
-            SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+            SetOpType::Intersect => {
+                let (left, right) = self.align_set_operation_ltz(left, right)?;
+                Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
+            }
             SetOpType::Union => {
                 let (left, right) = if by_name {
                     let left_names = Self::get_field_names(left.schema(), state)?;
@@ -104,6 +177,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let (left, right) = self.align_set_operation_ltz(left, right)?;
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -113,6 +187,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
+                let (left, right) = self.align_set_operation_ltz(left, right)?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 

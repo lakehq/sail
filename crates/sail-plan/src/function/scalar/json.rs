@@ -107,15 +107,22 @@ fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
     json_object_keys_udf().call(vec![json_data])
 }
 
-fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn to_json(
+    ScalarFunctionInput {
+        arguments,
+        function_context,
+    }: ScalarFunctionInput,
+) -> PlanResult<expr::Expr> {
     // to_json accepts 1 or 2 arguments:
     // - to_json(expr) - convert expr to JSON string
     // - to_json(expr, options) - convert expr to JSON string with options
     // Note: the SparkToJson UDF detects Variant inputs and delegates to variant_to_json,
     // which ignores any options provided.
     // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
-    match args.len() {
-        1 | 2 => Ok(to_json_udf().call(args)),
+    match arguments.len() {
+        1 | 2 => {
+            Ok(to_json_udf(function_context.plan_config.session_timezone.clone()).call(arguments))
+        }
         n => Err(PlanError::invalid(format!(
             "to_json expects 1 or 2 arguments, got {n}"
         ))),
@@ -180,6 +187,6 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("json_object_keys", F::unary(json_object_keys)),
         ("json_tuple", F::custom(json_tuple)),
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
-        ("to_json", F::var_arg(to_json)),
+        ("to_json", F::custom(to_json)),
     ]
 }

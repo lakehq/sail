@@ -4,12 +4,24 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import Row
+from pyspark.sql.types import (
+    ArrayType,
+    IntegerType,
+    Row,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+
+SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS = -3_723_000_000
+NESTED_PAYLOAD_VALUE = 7
+NESTED_ASSIGNMENT_ROW_COUNT = 2
 
 
 def _partition_count(df):
@@ -76,6 +88,170 @@ def test_temporal_sequence_in_cluster_mode(spark):
         noon,
         stop,
     ]
+
+
+@pytest.mark.timeout(30)
+def test_timestamp_interval_arithmetic_survives_shuffle_and_codec(spark):
+    previous_timezone = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    try:
+        rows = (
+            spark.range(2)
+            .repartition(2, "id")
+            .selectExpr(
+                "id",
+                "unix_micros(timestampadd(DAY, id, TIMESTAMP '2019-03-09 12:00:00')) AS day_micros",
+                "unix_micros(timestampadd(HOUR, id * 24, TIMESTAMP '2019-03-09 12:00:00')) AS hour_micros",
+                "unix_micros(timestampadd(DAY, id, TIMESTAMP '2019-03-09 12:00:00') + INTERVAL 1 DAY) AS plus_micros",
+                "CAST(timestampadd(DAY, id, TIMESTAMP '2019-03-09 12:00:00') AS STRING) AS rendered",
+            )
+            .orderBy("id")
+            .collect()
+        )
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", previous_timezone)
+
+    assert rows == [
+        Row(
+            id=0,
+            day_micros=1552161600000000,
+            hour_micros=1552161600000000,
+            plus_micros=1552244400000000,
+            rendered="2019-03-09 12:00:00",
+        ),
+        Row(
+            id=1,
+            day_micros=1552244400000000,
+            hour_micros=1552248000000000,
+            plus_micros=1552330800000000,
+            rendered="2019-03-10 12:00:00",
+        ),
+    ]
+
+
+@pytest.mark.timeout(30)
+def test_to_schema_localizes_nested_ntz_to_ltz(spark):
+    previous_timezone = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "+01:02:03")
+    try:
+        target_schema = StructType(
+            [
+                StructField("ts", ArrayType(TimestampType(), containsNull=False), nullable=False),
+                StructField("rendered", StringType(), nullable=False),
+                StructField(
+                    "payload",
+                    StructType(
+                        [
+                            StructField("a", TimestampType(), nullable=False),
+                            StructField("b", IntegerType(), nullable=False),
+                        ]
+                    ),
+                    nullable=False,
+                ),
+            ]
+        )
+        row = (
+            spark.sql(
+                "SELECT array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts, "
+                "TIMESTAMP_LTZ '1970-01-01 00:00:00Z' AS rendered, "
+                "named_struct('b', 7, 'a', "
+                "TIMESTAMP_NTZ '1970-01-01 00:00:00') AS payload"
+            )
+            .to(target_schema)
+            .selectExpr(
+                "unix_micros(element_at(ts, 1)) AS micros",
+                "rendered",
+                "unix_micros(payload.a) AS payload_micros",
+                "payload.b AS payload_value",
+            )
+            .collect()[0]
+        )
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", previous_timezone)
+
+    assert row.micros == SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS
+    assert row.rendered == "1970-01-01 01:02:03"
+    assert row.payload_micros == SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS
+    assert row.payload_value == NESTED_PAYLOAD_VALUE
+
+
+@pytest.mark.timeout(30)
+def test_insert_localizes_nested_ntz_to_ltz(spark, tmp_path):
+    previous_timezone = spark.conf.get("spark.sql.session.timeZone")
+    table = "nested_ltz_assignment"
+    path = str(tmp_path / table)
+    spark.conf.set("spark.sql.session.timeZone", "+01:02:03")
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} ("
+            "ts ARRAY<TIMESTAMP>, payload STRUCT<a:TIMESTAMP,b:INT>"
+            f") USING parquet LOCATION '{path}'"
+        )
+        spark.sql(
+            f"INSERT INTO {table} SELECT "
+            "array(TIMESTAMP_NTZ '1970-01-01 00:00:00'), "
+            "named_struct('b', TIMESTAMP_NTZ '1970-01-01 00:00:00', 'a', 7)"
+        )
+        spark.sql(
+            f"INSERT INTO {table} BY NAME SELECT "
+            "array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts, "
+            "named_struct('b', 7, 'a', "
+            "TIMESTAMP_NTZ '1970-01-01 00:00:00') AS payload"
+        )
+        rows = spark.sql(
+            f"SELECT unix_micros(element_at(ts, 1)) AS micros, "  # noqa: S608
+            "unix_micros(payload.a) AS payload_micros, "
+            f"payload.b AS payload_value FROM {table}"
+        ).collect()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.conf.set("spark.sql.session.timeZone", previous_timezone)
+
+    assert len(rows) == NESTED_ASSIGNMENT_ROW_COUNT
+    for row in rows:
+        assert row.micros == SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS
+        assert row.payload_micros == SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS
+        assert row.payload_value == NESTED_PAYLOAD_VALUE
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("policy", ["ANSI", "STRICT", "LEGACY"])
+def test_timestamp_write_uses_store_assignment_policy(spark, tmp_path, policy):
+    previous_timezone = spark.conf.get("spark.sql.session.timeZone")
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    previous_policy = spark.conf.get("spark.sql.storeAssignmentPolicy")
+    table = f"ltz_assignment_{policy.lower()}"
+    path = str(tmp_path / table)
+    spark.conf.set("spark.sql.session.timeZone", "+01:02:03")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    spark.conf.set("spark.sql.storeAssignmentPolicy", policy)
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (ts TIMESTAMP) USING parquet LOCATION '{path}'")
+        invalid_insert = f"INSERT INTO {table} SELECT 'bad'"
+        valid_insert = f"INSERT INTO {table} SELECT '1970-01-01 00:00:00'"
+        if policy == "LEGACY":
+            spark.sql(invalid_insert)
+            spark.sql(valid_insert)
+            rows = spark.sql(
+                f"SELECT unix_micros(ts) AS micros FROM {table} "  # noqa: S608
+                "ORDER BY micros NULLS FIRST"
+            ).collect()
+            assert [row.micros for row in rows] == [
+                None,
+                SECOND_OFFSET_LOCAL_MIDNIGHT_MICROS,
+            ]
+        else:
+            with pytest.raises(Exception, match=r"(?i)(cast|timestamp|invalid|assignment|sql parser)"):
+                spark.sql(invalid_insert)
+            with pytest.raises(Exception, match=r"(?i)(cast|timestamp|invalid|assignment|sql parser)"):
+                spark.sql(valid_insert)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.conf.set("spark.sql.storeAssignmentPolicy", previous_policy)
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+        spark.conf.set("spark.sql.session.timeZone", previous_timezone)
 
 
 def test_dataframe_operations(spark):

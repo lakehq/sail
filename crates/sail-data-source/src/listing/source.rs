@@ -8,20 +8,29 @@ use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
-use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexRequirement, PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Result, Statistics, not_impl_err, plan_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
+use datafusion_expr::ScalarUDF;
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::array::record_batch::retag_timestamp_data_type;
 use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionCastColumnExpr, StructFieldMatching,
+};
+use sail_function::scalar::datetime::spark_file_timestamp::SparkFileTimestamp;
 use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
@@ -84,6 +93,12 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
+    /// Adapts a physical scan to the engine's canonical schema. Most formats already
+    /// produce their canonical schema directly.
+    fn adapt_scan_plan(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(input)
+    }
+
     /// Whether validating an explicit schema requires the physical file schema.
     fn requires_explicit_schema_validation(&self) -> bool {
         false
@@ -133,6 +148,120 @@ pub struct ListingSinkInput {
     pub input: Arc<dyn ExecutionPlan>,
     pub sink: FileSinkConfig,
     pub sort_order: Option<LexRequirement>,
+    pub session_timezone: Arc<str>,
+}
+
+impl ListingSinkInput {
+    /// Retags LTZ columns at text and Arrow serialization boundaries so those formats preserve
+    /// Spark's session-zone presentation while execution continues to use canonical UTC metadata.
+    pub fn retag_timestamps_for_output(mut self) -> Result<Self> {
+        let input = retag_timestamp_plan(Arc::clone(&self.input), &self.session_timezone)?;
+        if !Arc::ptr_eq(&input, &self.input) {
+            self.input = input;
+            self.sink.output_schema = self.input.schema();
+        }
+        Ok(self)
+    }
+
+    /// Prepares LTZ timestamps for CSV/JSON writers using Spark's formatter and
+    /// explicit session timezone, without exposing timezone metadata to Arrow's formatter.
+    pub fn format_timestamps_for_text_output(
+        mut self,
+        ctx: &dyn Session,
+        timestamp_format: &Arc<str>,
+    ) -> Result<Self> {
+        let requires_formatting = self.input.schema().fields().iter().any(|field| {
+            SparkFileTimestamp::output_type(field.data_type())
+                .is_ok_and(|output| output != *field.data_type())
+        });
+        if !requires_formatting {
+            return Ok(self);
+        }
+        if let Some(sort_order) = self.sort_order.take() {
+            self.input = Arc::new(
+                SortExec::new(sort_order.into(), self.input).with_preserve_partitioning(true),
+            );
+        }
+        self.input = format_timestamp_plan_for_text_output(
+            self.input,
+            &self.session_timezone,
+            timestamp_format,
+            Arc::new(ctx.config_options().clone()),
+        )?;
+        self.sink.output_schema = self.input.schema();
+        Ok(self)
+    }
+}
+
+pub(crate) fn retag_timestamp_plan(
+    input: Arc<dyn ExecutionPlan>,
+    session_timezone: &Arc<str>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let mut changed = false;
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, input_field)| {
+            let target_type = retag_timestamp_data_type(input_field.data_type(), session_timezone)?;
+            let column = Arc::new(Column::new(input_field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let expression = if target_type == *input_field.data_type() {
+                column
+            } else {
+                changed = true;
+                let target_field =
+                    Arc::new(input_field.as_ref().clone().with_data_type(target_type));
+                Arc::new(SchemaEvolutionCastColumnExpr::new_relaxed_timezone(
+                    column,
+                    Arc::clone(input_field),
+                    target_field,
+                    None,
+                    StructFieldMatching::Name,
+                )) as Arc<dyn PhysicalExpr>
+            };
+            Ok((expression, input_field.name().clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if changed {
+        Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+    } else {
+        Ok(input)
+    }
+}
+
+fn format_timestamp_plan_for_text_output(
+    input: Arc<dyn ExecutionPlan>,
+    session_timezone: &Arc<str>,
+    timestamp_format: &Arc<str>,
+    config_options: Arc<datafusion_common::config::ConfigOptions>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let udf = Arc::new(ScalarUDF::from(SparkFileTimestamp::new(
+        Arc::clone(session_timezone),
+        Arc::clone(timestamp_format),
+    )));
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, input_field)| {
+            let output_type = SparkFileTimestamp::output_type(input_field.data_type())?;
+            let column = Arc::new(Column::new(input_field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let expression = if output_type == *input_field.data_type() {
+                column
+            } else {
+                Arc::new(ScalarFunctionExpr::try_new(
+                    Arc::clone(&udf),
+                    vec![column],
+                    input_schema.as_ref(),
+                    Arc::clone(&config_options),
+                )?) as Arc<dyn PhysicalExpr>
+            };
+            Ok((expression, input_field.name().clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
 }
 
 /// A trait for format-specific logic for writing listing files.
@@ -279,6 +408,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         };
         let SinkInfo {
             input,
+            session_timezone,
             mode,
             partition_by,
             bucket_by,
@@ -321,6 +451,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                     format: Arc::new(write_format),
                     url,
                     overwrite,
+                    session_timezone,
                     partition_by,
                     sort_by: sort_order,
                 },
@@ -375,4 +506,176 @@ fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) ->
         fields.push(reconciled);
     }
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{ArrayRef, TimestampMicrosecondArray};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+    use datafusion::logical_expr::dml::InsertOp;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DataFusionError;
+    use futures::{StreamExt, TryStreamExt};
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::formats::csv::CsvFormatFactory;
+    use crate::formats::json::JsonFormatFactory;
+    use crate::options::option_list;
+
+    #[tokio::test]
+    async fn output_boundary_retags_ltz_without_changing_instant() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "ltz",
+                DataType::Timestamp(
+                    datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                    Some(Arc::from("UTC")),
+                ),
+                false,
+            ),
+            Field::new(
+                "ntz",
+                DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+                false,
+            ),
+        ]));
+        let ltz =
+            Arc::new(TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("UTC"))
+                as ArrayRef;
+        let ntz = Arc::new(TimestampMicrosecondArray::from(vec![0])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![ltz, ntz])?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
+
+        let output = retag_timestamp_plan(input, &Arc::from("America/Los_Angeles"))?;
+        assert_eq!(
+            output.schema().field(0).data_type(),
+            &DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles")),
+            )
+        );
+        assert_eq!(
+            output.schema().field(1).data_type(),
+            &DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
+        );
+
+        let context = SessionContext::new();
+        let mut stream = output.execute(0, context.task_ctx())?;
+        let output_batch = stream.next().await.transpose()?.ok_or_else(|| {
+            DataFusionError::Execution("output boundary returned no batch".to_string())
+        })?;
+        let output_ltz = output_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("LTZ output was not a timestamp array".to_string())
+            })?;
+        assert_eq!(output_ltz.value(0), -3_723_000_000);
+        Ok(())
+    }
+
+    async fn write_timestamp_file<F: WriteFormat>(format: F) -> Result<Vec<u8>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "t",
+            DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                Some(Arc::from("UTC")),
+            ),
+            false,
+        )]));
+        let timestamp =
+            Arc::new(TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("UTC"))
+                as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![timestamp])?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        let context = SessionContext::new();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = ListingTableUrl::parse("memory://spark-file-format/output/")?;
+        let object_store_url = table_path.object_store();
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), Arc::clone(&store));
+        let sink = FileSinkConfig {
+            original_url: table_path.to_string(),
+            object_store_url,
+            file_group: Default::default(),
+            table_paths: vec![table_path.clone()],
+            output_schema: Arc::clone(&schema),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: String::new(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+        let plan = format
+            .sink(
+                &context.state(),
+                ListingSinkInput {
+                    input,
+                    sink,
+                    sort_order: None,
+                    session_timezone: Arc::from("+01:02:03"),
+                },
+            )
+            .await?;
+        collect(plan, context.task_ctx()).await?;
+
+        let objects = store
+            .list(Some(table_path.prefix()))
+            .try_collect::<Vec<_>>()
+            .await?;
+        let [object] = objects.as_slice() else {
+            return Err(DataFusionError::Execution(format!(
+                "expected one output file, got {}",
+                objects.len()
+            )));
+        };
+        Ok(store.get(&object.location).await?.bytes().await?.to_vec())
+    }
+
+    #[tokio::test]
+    async fn csv_and_json_writers_preserve_second_precision_session_offset() -> Result<()> {
+        let context = SessionContext::new();
+        let default_csv = CsvFormatFactory::write(&context.state(), vec![])?;
+        assert_eq!(
+            write_timestamp_file(default_csv).await?,
+            b"1970-01-01T00:00:00.000+01:02:03\n"
+        );
+        let custom_csv = CsvFormatFactory::write(
+            &context.state(),
+            vec![option_list(&[(
+                "timestampFormat",
+                "yyyy/MM/dd HH:mm:ss XXXXX",
+            )])],
+        )?;
+        assert_eq!(
+            write_timestamp_file(custom_csv).await?,
+            b"1970/01/01 00:00:00 +01:02:03\n"
+        );
+
+        let default_json = JsonFormatFactory::write(&context.state(), vec![])?;
+        assert_eq!(
+            write_timestamp_file(default_json).await?,
+            b"{\"t\":\"1970-01-01T00:00:00.000+01:02:03\"}\n"
+        );
+        let custom_json = JsonFormatFactory::write(
+            &context.state(),
+            vec![option_list(&[(
+                "timestampFormat",
+                "yyyy/MM/dd HH:mm:ss XXXXX",
+            )])],
+        )?;
+        assert_eq!(
+            write_timestamp_file(custom_json).await?,
+            b"{\"t\":\"1970/01/01 00:00:00 +01:02:03\"}\n"
+        );
+        Ok(())
+    }
 }

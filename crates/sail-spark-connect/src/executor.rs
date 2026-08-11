@@ -14,6 +14,7 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::Stream;
 use futures::stream::StreamExt;
+use sail_common_datafusion::array::record_batch::retag_record_batch_timestamp_timezone;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -134,6 +135,7 @@ struct ExecutorTask {
 struct ExecutorTaskContext {
     stream: SendableRecordBatchStream,
     heartbeat_interval: Duration,
+    session_timezone: Arc<str>,
     state: ExecutorTaskState,
     buffer: Arc<Mutex<ExecutorBuffer>>,
 }
@@ -217,6 +219,7 @@ impl Executor {
         metadata: ExecutorMetadata,
         stream: SendableRecordBatchStream,
         heartbeat_interval: Duration,
+        session_timezone: Arc<str>,
         mode: ExecutorMode,
     ) -> Self {
         let state = match mode {
@@ -237,6 +240,7 @@ impl Executor {
                 context: ExecutorTaskContext {
                     stream,
                     heartbeat_interval,
+                    session_timezone,
                     state,
                     buffer: Arc::new(Mutex::new(buffer)),
                 },
@@ -273,7 +277,7 @@ impl Executor {
                         .await?
                     {
                         ExecutorTaskItem::Batch(Some(batch)) => {
-                            let batch = to_arrow_batch(&batch)?;
+                            let batch = to_arrow_batch(&batch, &context.session_timezone)?;
                             ExecutorTaskContext::send_output(
                                 &context.buffer,
                                 tx,
@@ -295,7 +299,7 @@ impl Executor {
                 }
                 if empty {
                     let batch = RecordBatch::new_empty(context.stream.schema());
-                    let batch = to_arrow_batch(&batch)?;
+                    let batch = to_arrow_batch(&batch, &context.session_timezone)?;
                     ExecutorTaskContext::send_output(
                         &context.buffer,
                         tx,
@@ -463,12 +467,16 @@ impl Executor {
     }
 }
 
-pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+pub(crate) fn to_arrow_batch(
+    batch: &RecordBatch,
+    session_timezone: &str,
+) -> SparkResult<ArrowBatch> {
+    let batch = retag_record_batch_timestamp_timezone(batch, session_timezone)?;
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
+        writer.write(&batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }

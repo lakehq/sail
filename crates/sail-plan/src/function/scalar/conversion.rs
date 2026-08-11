@@ -1,11 +1,14 @@
+use std::ops::Mul;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
+use datafusion_expr::{ExprSchemable, ScalarUDF, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -25,12 +28,27 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
             func: Arc::new(ScalarUDF::from(SparkDate::new(false))),
             args: vec![arg],
         }))
+    } else if matches!(data_type, DataType::Timestamp(_, Some(_))) {
+        Ok(ScalarUDF::from(SparkTimezoneCast::new(
+            DataType::Date32,
+            Arc::clone(&input.function_context.plan_config.session_timezone),
+            false,
+        ))
+        .call(vec![arg]))
     } else {
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
             DataType::Date32,
         )))
     }
+}
+
+fn cast_to_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    Ok(ScalarUDF::from(SparkToUtf8::new(Arc::clone(
+        &input.function_context.plan_config.session_timezone,
+    )))
+    .call(vec![arg]))
 }
 
 fn cast_to_time(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -76,10 +94,17 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![arg],
         }))
     } else {
-        Ok(expr::Expr::Cast(expr::Cast::new(
-            Box::new(arg),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-        )))
+        let arg = if data_type.is_numeric() {
+            arg.mul(lit(1_000_000_i64))
+        } else {
+            arg
+        };
+        Ok(ScalarUDF::from(SparkTimezoneCast::new(
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            Arc::clone(&input.function_context.plan_config.session_timezone),
+            false,
+        ))
+        .call(vec![arg]))
     }
 }
 
@@ -97,7 +122,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("float", F::cast(DataType::Float32)),
         ("int", F::cast(DataType::Int32)),
         ("smallint", F::cast(DataType::Int16)),
-        ("string", F::cast(DataType::Utf8)),
+        ("string", F::custom(cast_to_string)),
         ("time", F::custom(cast_to_time)),
         ("timestamp", F::custom(cast_to_timestamp)),
         ("tinyint", F::cast(DataType::Int8)),

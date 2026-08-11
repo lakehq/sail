@@ -172,6 +172,7 @@ impl PlanResolver<'_> {
                     kwargs,
                     &argument_is_tables,
                     self.config.pyspark_udf_config.arrow_use_large_var_types,
+                    &self.config.pyspark_udf_config.session_timezone,
                 )?
             }
         };

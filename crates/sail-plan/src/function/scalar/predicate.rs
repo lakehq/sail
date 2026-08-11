@@ -1,13 +1,233 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{Operator, ScalarUDF, expr, lit, not};
+use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn is_temporal_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+    )
+}
+
+fn comparison_temporal_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if !(is_temporal_type(left) || is_temporal_type(right)) {
+        return None;
+    }
+    if !matches!(left, DataType::Null) && !is_temporal_type(left) && !is_string_type(left) {
+        return None;
+    }
+    if !matches!(right, DataType::Null) && !is_temporal_type(right) && !is_string_type(right) {
+        return None;
+    }
+
+    if matches!(left, DataType::Timestamp(_, Some(_)))
+        || matches!(right, DataType::Timestamp(_, Some(_)))
+    {
+        Some(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from("UTC")),
+        ))
+    } else if matches!(left, DataType::Timestamp(_, None))
+        || matches!(right, DataType::Timestamp(_, None))
+    {
+        Some(DataType::Timestamp(TimeUnit::Microsecond, None))
+    } else {
+        Some(DataType::Date32)
+    }
+}
+
+pub(crate) fn coerce_temporal_expr(
+    expression: expr::Expr,
+    source_type: &DataType,
+    target_type: &DataType,
+    config: &PlanConfig,
+) -> PlanResult<expr::Expr> {
+    if source_type == target_type {
+        return Ok(expression);
+    }
+    if is_string_type(source_type) {
+        return match target_type {
+            DataType::Date32 => {
+                Ok(ScalarUDF::from(SparkDate::new(!config.ansi_mode)).call(vec![expression]))
+            }
+            DataType::Timestamp(_, timezone) => Ok(ScalarUDF::from(SparkTimestamp::try_new(
+                timezone
+                    .as_ref()
+                    .map(|_| Arc::clone(&config.session_timezone)),
+                config.ansi_mode,
+                false,
+            )?)
+            .call(vec![expression])),
+            _ => Ok(cast(expression, target_type.clone())),
+        };
+    }
+    if matches!(
+        (source_type, target_type),
+        (
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+            DataType::Timestamp(_, Some(_)),
+        ) | (
+            DataType::Timestamp(_, Some(_)),
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
+        )
+    ) {
+        return Ok(ScalarUDF::from(SparkTimezoneCast::new(
+            target_type.clone(),
+            Arc::clone(&config.session_timezone),
+            false,
+        ))
+        .call(vec![expression]));
+    }
+    Ok(cast(expression, target_type.clone()))
+}
+
+fn stringify_ltz(
+    expression: expr::Expr,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> PlanResult<expr::Expr> {
+    if matches!(
+        expression.get_type(schema)?,
+        DataType::Timestamp(_, Some(_))
+    ) {
+        Ok(
+            ScalarUDF::from(SparkToUtf8::new(Arc::clone(&config.session_timezone)))
+                .call(vec![expression]),
+        )
+    } else {
+        Ok(expression)
+    }
+}
+
+pub(crate) fn coerce_temporal_comparison(
+    left: expr::Expr,
+    right: expr::Expr,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> PlanResult<(expr::Expr, expr::Expr)> {
+    let left_type = left.get_type(schema)?;
+    let right_type = right.get_type(schema)?;
+    let Some(target_type) = comparison_temporal_type(&left_type, &right_type) else {
+        return Ok((left, right));
+    };
+    Ok((
+        coerce_temporal_expr(left, &left_type, &target_type, config)?,
+        coerce_temporal_expr(right, &right_type, &target_type, config)?,
+    ))
+}
+
+pub(crate) fn coerce_temporal_in_list(
+    value: expr::Expr,
+    list: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> PlanResult<(expr::Expr, Vec<expr::Expr>)> {
+    let mut expressions = Vec::with_capacity(list.len() + 1);
+    expressions.push(value);
+    expressions.extend(list);
+    let data_types = expressions
+        .iter()
+        .map(|expression| expression.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_temporal = data_types.iter().any(is_temporal_type);
+    if !has_temporal {
+        let value = expressions.remove(0);
+        return Ok((value, expressions));
+    }
+
+    if data_types.iter().any(is_string_type)
+        && !config.ansi_mode
+        && data_types.iter().all(|data_type| !data_type.is_nested())
+    {
+        let expressions = expressions
+            .into_iter()
+            .zip(data_types)
+            .map(|(expression, data_type)| {
+                if is_string_type(&data_type) {
+                    expression
+                } else {
+                    ScalarUDF::from(SparkToUtf8::new(Arc::clone(&config.session_timezone)))
+                        .call(vec![expression])
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut expressions = expressions.into_iter();
+        let value = expressions
+            .next()
+            .ok_or_else(|| PlanError::invalid("IN requires a value expression"))?;
+        return Ok((value, expressions.collect()));
+    }
+
+    if data_types.iter().all(|data_type| {
+        is_temporal_type(data_type)
+            || (config.ansi_mode && is_string_type(data_type))
+            || matches!(data_type, DataType::Null)
+    }) {
+        let target_type = if data_types
+            .iter()
+            .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
+        {
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        } else if data_types
+            .iter()
+            .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
+        {
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        } else {
+            DataType::Date32
+        };
+        let expressions = expressions
+            .into_iter()
+            .zip(data_types)
+            .map(|(expression, data_type)| {
+                coerce_temporal_expr(expression, &data_type, &target_type, config)
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let mut expressions = expressions.into_iter();
+        let value = expressions
+            .next()
+            .ok_or_else(|| PlanError::invalid("IN requires a value expression"))?;
+        Ok((value, expressions.collect()))
+    } else {
+        let value = expressions.remove(0);
+        Ok((value, expressions))
+    }
+}
+
+fn binary_comparison(input: ScalarFunctionInput, op: Operator) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) = coerce_temporal_comparison(
+        left,
+        right,
+        input.function_context.schema,
+        input.function_context.plan_config,
+    )?;
+    Ok(expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        Box::new(left),
+        op,
+        Box::new(right),
+    )))
+}
 
 fn extract_escape_char(escape_expr: expr::Expr) -> PlanResult<Option<char>> {
     match escape_expr {
@@ -29,11 +249,21 @@ fn extract_escape_char(escape_expr: expr::Expr) -> PlanResult<Option<char>> {
 }
 
 fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let n = arguments.len();
     match n {
         2 => {
             let (value, pattern) = arguments.two()?;
+            let value =
+                stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+            let pattern = stringify_ltz(
+                pattern,
+                function_context.schema,
+                function_context.plan_config,
+            )?;
             Ok(expr::Expr::Like(expr::Like {
                 negated: false,
                 expr: Box::new(value),
@@ -44,6 +274,13 @@ fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanRe
         }
         3 => {
             let (value, pattern, escape) = arguments.three()?;
+            let value =
+                stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+            let pattern = stringify_ltz(
+                pattern,
+                function_context.schema,
+                function_context.plan_config,
+            )?;
             let escape_char = extract_escape_char(escape)?;
             // Arrow's LIKE kernel only supports `\` as the escape character.
             // For any other escape, wrap the pattern in a UDF that rewrites
@@ -84,9 +321,33 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     })
 }
 
+fn build_rlike(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, pattern) = arguments.two()?;
+    let value = stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+    let pattern = stringify_ltz(
+        pattern,
+        function_context.schema,
+        function_context.plan_config,
+    )?;
+    Ok(rlike(value, pattern))
+}
+
 fn is_in_list(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let (value, list) = arguments.at_least_one()?;
+    let (value, list) = coerce_temporal_in_list(
+        value,
+        list,
+        function_context.schema,
+        function_context.plan_config,
+    )?;
     Ok(expr::Expr::InList(expr::InList {
         expr: Box::new(value),
         list,
@@ -99,14 +360,38 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
 
     vec![
         ("!", F::unary(not)),
-        ("!=", F::binary_op(Operator::NotEq)),
-        ("<", F::binary_op(Operator::Lt)),
-        ("<=", F::binary_op(Operator::LtEq)),
-        ("<=>", F::binary_op(Operator::IsNotDistinctFrom)),
-        ("=", F::binary_op(Operator::Eq)),
-        ("==", F::binary_op(Operator::Eq)),
-        (">", F::binary_op(Operator::Gt)),
-        (">=", F::binary_op(Operator::GtEq)),
+        (
+            "!=",
+            F::custom(|input| binary_comparison(input, Operator::NotEq)),
+        ),
+        (
+            "<",
+            F::custom(|input| binary_comparison(input, Operator::Lt)),
+        ),
+        (
+            "<=",
+            F::custom(|input| binary_comparison(input, Operator::LtEq)),
+        ),
+        (
+            "<=>",
+            F::custom(|input| binary_comparison(input, Operator::IsNotDistinctFrom)),
+        ),
+        (
+            "=",
+            F::custom(|input| binary_comparison(input, Operator::Eq)),
+        ),
+        (
+            "==",
+            F::custom(|input| binary_comparison(input, Operator::Eq)),
+        ),
+        (
+            ">",
+            F::custom(|input| binary_comparison(input, Operator::Gt)),
+        ),
+        (
+            ">=",
+            F::custom(|input| binary_comparison(input, Operator::GtEq)),
+        ),
         ("and", F::binary_op(Operator::And)),
         ("ilike", F::custom(|input| build_like_expr(input, true))),
         // TODO:
@@ -123,8 +408,8 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
-        ("regexp", F::binary(rlike)),
-        ("regexp_like", F::binary(rlike)),
-        ("rlike", F::binary(rlike)),
+        ("regexp", F::custom(build_rlike)),
+        ("regexp_like", F::custom(build_rlike)),
+        ("rlike", F::custom(build_rlike)),
     ]
 }

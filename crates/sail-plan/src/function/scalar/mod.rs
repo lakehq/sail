@@ -1,5 +1,9 @@
+pub(crate) use conditional::coerce_temporal_collection_comparison;
 pub(crate) use datetime::{current_timestamp, to_session_local_timestamp};
 pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
+pub(crate) use predicate::{
+    coerce_temporal_comparison, coerce_temporal_expr, coerce_temporal_in_list,
+};
 
 use crate::function::common::ScalarFunction;
 

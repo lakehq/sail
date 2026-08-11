@@ -392,7 +392,7 @@ impl PythonDataSource {
 /// Convert a `spec::DataType` to an Arrow `DataType` for DDL schema parsing.
 fn spec_data_type_to_arrow(dt: &sail_common::spec::DataType) -> Result<arrow_schema::DataType> {
     use arrow_schema::{DataType, TimeUnit};
-    use sail_common::spec::DataType as SDT;
+    use sail_common::spec::{DataType as SDT, TimestampType};
 
     match dt {
         SDT::Null => Ok(DataType::Null),
@@ -406,7 +406,15 @@ fn spec_data_type_to_arrow(dt: &sail_common::spec::DataType) -> Result<arrow_sch
         SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
         SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
         SDT::Date32 => Ok(DataType::Date32),
-        SDT::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        SDT::Timestamp { timestamp_type, .. } => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            match timestamp_type {
+                TimestampType::Configured | TimestampType::WithLocalTimeZone => {
+                    Some(Arc::from("UTC"))
+                }
+                TimestampType::WithoutTimeZone => None,
+            },
+        )),
         SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
         other => Err(PythonDataSourceError::SchemaError(format!(
             "Unsupported type in DDL schema: {other:?}. Use PyArrow Schema for complex types.",
@@ -454,8 +462,10 @@ mod tests {
         assert_eq!(schema.field(1).data_type(), &arrow_schema::DataType::Utf8);
 
         // More types
-        let schema = PythonDataSource::parse_ddl_schema("a BIGINT, b DOUBLE, c BOOLEAN, d DATE")?;
-        assert_eq!(schema.fields().len(), 4);
+        let schema = PythonDataSource::parse_ddl_schema(
+            "a BIGINT, b DOUBLE, c BOOLEAN, d DATE, ts TIMESTAMP, ts_ntz TIMESTAMP_NTZ",
+        )?;
+        assert_eq!(schema.fields().len(), 6);
         assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
         assert_eq!(
             schema.field(1).data_type(),
@@ -466,6 +476,17 @@ mod tests {
             &arrow_schema::DataType::Boolean
         );
         assert_eq!(schema.field(3).data_type(), &arrow_schema::DataType::Date32);
+        assert_eq!(
+            schema.field(4).data_type(),
+            &arrow_schema::DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some(Arc::from("UTC")),
+            )
+        );
+        assert_eq!(
+            schema.field(5).data_type(),
+            &arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+        );
         Ok(())
     }
 }

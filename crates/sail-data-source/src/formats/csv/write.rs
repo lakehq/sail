@@ -13,6 +13,7 @@ use crate::options::r#gen::CsvWriteOptions;
 #[derive(Debug, Clone)]
 pub struct CsvWriteFormat {
     pub(super) options: CsvWriteOptions,
+    pub(super) timestamp_format: Arc<str>,
 }
 
 #[async_trait]
@@ -22,6 +23,7 @@ impl WriteFormat for CsvWriteFormat {
         ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        input = input.format_timestamps_for_text_output(ctx, &self.timestamp_format)?;
         let options = self
             .options
             .clone()

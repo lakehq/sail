@@ -15,8 +15,7 @@ Feature: DATE_TRUNC output type
         """
 
     # `date_trunc` is declared to return TIMESTAMP regardless of the input type, so a
-    # TIMESTAMP_NTZ argument is converted rather than preserved. Sail returns timestamp_ntz.
-    @sail-bug
+    # TIMESTAMP_NTZ argument is converted rather than preserved.
     @function(nullability)
     Scenario Outline: date_trunc on timestamp_ntz returns timestamp: <case>
       When query
@@ -102,8 +101,7 @@ Feature: DATE_TRUNC output type
         | result              |
         | 2015-03-01 00:00:00 |
 
-    # Sail rejects the column: Sail errors: Granularity of `date_trunc` must be non-null scalar Utf8
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario Outline: Date_trunc: <case>
       When query
         """
@@ -118,6 +116,57 @@ Feature: DATE_TRUNC output type
         | case                                                                   | v1     | v2     | r1                  | r2                  |
         | date_trunc takes argument 1 from a column holding two different values | 'YEAR' | 'MM'   | 2015-01-01 00:00:00 | 2015-03-01 00:00:00 |
         | date_trunc takes argument 1 from a column                              | 'YEAR' | 'YEAR' | 2015-01-01 00:00:00 | 2015-01-01 00:00:00 |
+
+    Scenario: invalid and null formats return null
+      When query
+        """
+        SELECT
+          date_trunc('not-a-unit', TIMESTAMP '2024-01-15 10:00:00') AS invalid_format,
+          date_trunc(CAST(NULL AS STRING), TIMESTAMP '2024-01-15 10:00:00') AS null_format
+        """
+      Then query result
+        | invalid_format | null_format |
+        | NULL           | NULL        |
+
+  Rule: date_trunc resolves calendar boundaries in the session time zone
+
+    Scenario: truncating an instant in the repeated hour preserves its later offset
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT unix_micros(date_trunc(
+          'HOUR',
+          TIMESTAMP '2019-11-03 01:30:45.987654-08:00'
+        )) AS result
+        """
+      Then query result
+        | result           |
+        | 1572771600000000 |
+
+    Scenario: truncating to a nonexistent midnight shifts across the DST gap
+      Given config spark.sql.session.timeZone = America/Sao_Paulo
+      When query
+        """
+        SELECT
+          CAST(date_trunc('DAY', TIMESTAMP '2018-11-04 01:30:00') AS STRING) AS rendered,
+          unix_micros(date_trunc('DAY', TIMESTAMP '2018-11-04 01:30:00')) AS micros
+        """
+      Then query result
+        | rendered            | micros           |
+        | 2018-11-04 01:00:00 | 1541300400000000 |
+
+    Scenario: truncation supports a historical second-precision session offset
+      Given config spark.sql.session.timeZone = Asia/Kathmandu
+      When query
+        """
+        SELECT CAST(date_trunc(
+          'MINUTE',
+          TIMESTAMP '1769-10-17 17:10:02.123456'
+        ) AS STRING) AS result
+        """
+      Then query result
+        | result              |
+        | 1769-10-17 17:10:00 |
 
   @function(nullability)
   Rule: Output schema

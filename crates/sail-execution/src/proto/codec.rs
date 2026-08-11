@@ -154,6 +154,9 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
+use sail_function::scalar::datetime::spark_file_timestamp::{
+    SPARK_FILE_TIMESTAMP_FORMAT, SparkFileTimestamp,
+};
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -166,6 +169,7 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_interval::SparkTimestampInterval;
 use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
@@ -314,6 +318,22 @@ use crate::proto::encode::{
 
 pub struct RemoteExecutionCodec;
 
+fn decode_session_timezone(timezone: String) -> Arc<str> {
+    if timezone.is_empty() {
+        Arc::from("UTC")
+    } else {
+        Arc::from(timezone)
+    }
+}
+
+fn decode_file_timestamp_format(format: String) -> Arc<str> {
+    if format.is_empty() {
+        Arc::from(SPARK_FILE_TIMESTAMP_FORMAT)
+    } else {
+        Arc::from(format)
+    }
+}
+
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "RemoteExecutionCodec")
@@ -359,6 +379,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style,
                 truncate,
                 schema,
+                session_timezone,
             }) => {
                 let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
@@ -368,6 +389,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ShowStringFormat::new(
                         self.try_decode_show_string_style(style)?,
                         truncate as usize,
+                        decode_session_timezone(session_timezone),
                     ),
                     Arc::new(schema),
                 )))
@@ -1067,9 +1089,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }
             }
-            NodeKind::ConsoleSink(r#gen::ConsoleSinkExecNode { input }) => {
+            NodeKind::ConsoleSink(r#gen::ConsoleSinkExecNode {
+                input,
+                session_timezone,
+            }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
-                Ok(Arc::new(ConsoleSinkExec::new(input)))
+                Ok(Arc::new(ConsoleSinkExec::new(
+                    input,
+                    decode_session_timezone(session_timezone),
+                )))
             }
             NodeKind::NoopSink(r#gen::NoopSinkExecNode { input }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
@@ -1567,6 +1595,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 is_arrow,
                 input,
+                session_timezone,
             }) => {
                 let schema = Arc::new(try_decode_schema(&schema)?);
                 let input = try_decode_physical_plan(ctx, self, &input)?;
@@ -1579,6 +1608,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     pickled_writer,
                     is_arrow,
+                    decode_session_timezone(session_timezone),
                 )))
             }
             NodeKind::PythonDataSourceWriteCommit(r#gen::PythonDataSourceWriteCommitExecNode {
@@ -1635,6 +1665,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
                 schema,
+                session_timezone: show_string.format().session_timezone().to_string(),
             })
         } else if let Some(stage_input) = node.downcast_ref::<StageInputExec<usize>>() {
             let eq_properties = self.try_encode_equivalence_properties(
@@ -2099,7 +2130,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
             let input = try_encode_physical_plan(self, console_sink.input().clone())?;
-            NodeKind::ConsoleSink(r#gen::ConsoleSinkExecNode { input })
+            NodeKind::ConsoleSink(r#gen::ConsoleSinkExecNode {
+                input,
+                session_timezone: console_sink.session_timezone().to_string(),
+            })
         } else if let Some(noop_sink) = node.downcast_ref::<NoopSinkExec>() {
             let input = try_encode_physical_plan(self, noop_sink.input().clone())?;
             NodeKind::NoopSink(r#gen::NoopSinkExecNode { input })
@@ -2429,6 +2463,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 is_arrow: python_write_exec.is_arrow(),
                 input,
+                session_timezone: python_write_exec.session_timezone().to_string(),
             })
         } else if let Some(python_commit_exec) =
             node.downcast_ref::<PythonDataSourceWriteCommitExec>()
@@ -2610,6 +2645,69 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkTimestampInterval(r#gen::SparkTimestampIntervalUdf {
+                session_timezone,
+                subtract,
+                safe,
+                timestampadd_unit,
+            }) => {
+                let udf = match timestampadd_unit {
+                    Some(unit) => {
+                        if subtract || safe {
+                            return plan_err!(
+                                "timestampadd interval UDF cannot be subtracting or safe"
+                            );
+                        }
+                        SparkTimestampInterval::new_timestampadd(
+                            decode_session_timezone(session_timezone),
+                            Arc::from(unit),
+                        )
+                    }
+                    None => SparkTimestampInterval::new(
+                        decode_session_timezone(session_timezone),
+                        subtract,
+                        safe,
+                    ),
+                };
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDateTrunc(r#gen::SparkDateTruncUdf { session_timezone }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new(
+                    decode_session_timezone(session_timezone),
+                ))));
+            }
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                name,
+                session_timezone,
+            }) => {
+                let session_timezone = decode_session_timezone(session_timezone);
+                return match name.as_str() {
+                    "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new(
+                        session_timezone,
+                    )))),
+                    "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new(
+                        session_timezone,
+                    )))),
+                    "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new(
+                        session_timezone,
+                    )))),
+                    _ => plan_err!("unknown SparkToString UDF name: {name}"),
+                };
+            }
+            UdfKind::SparkToJson(r#gen::SparkToJsonUdf { session_timezone }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkToJson::new(
+                    decode_session_timezone(session_timezone),
+                ))));
+            }
+            UdfKind::SparkFileTimestamp(r#gen::SparkFileTimestampUdf {
+                session_timezone,
+                timestamp_format,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkFileTimestamp::new(
+                    decode_session_timezone(session_timezone),
+                    decode_file_timestamp_format(timestamp_format),
+                ))));
+            }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2718,13 +2816,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_type,
                 session_timezone,
                 safe,
+                struct_by_name,
+                case_sensitive,
             }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
-                return Ok(Arc::new(ScalarUDF::from(SparkTimezoneCast::new(
-                    target_type,
-                    Arc::from(session_timezone),
-                    safe,
-                ))));
+                let session_timezone = Arc::from(session_timezone);
+                let function = if struct_by_name {
+                    SparkTimezoneCast::new_by_name(
+                        target_type,
+                        session_timezone,
+                        safe,
+                        case_sensitive,
+                    )
+                } else {
+                    SparkTimezoneCast::new(target_type, session_timezone, safe)
+                };
+                return Ok(Arc::new(ScalarUDF::from(function)));
             }
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
@@ -2868,7 +2975,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
-            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
+            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::default()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -2896,9 +3003,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
-            "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
-            "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
-            "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::default()))),
+            "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::default()))),
+            "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::default()))),
             "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
             "spark_try_divide" | "try_divide" => Ok(Arc::new(ScalarUDF::from(SparkTryDiv::new()))),
             "spark_try_mod" | "try_mod" => Ok(Arc::new(ScalarUDF::from(SparkTryMod::new()))),
@@ -2906,7 +3013,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
             }
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
-            "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(SparkToJson::new()))),
+            "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(SparkToJson::default()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -2978,7 +3085,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
-            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -3014,9 +3120,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
-            || node_inner.is::<SparkToLargeUtf8>()
-            || node_inner.is::<SparkToUtf8>()
-            || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
@@ -3041,7 +3144,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
-            || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
@@ -3127,6 +3229,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkTimestampInterval>() {
+            UdfKind::SparkTimestampInterval(r#gen::SparkTimestampIntervalUdf {
+                session_timezone: func.session_timezone().to_string(),
+                subtract: func.subtract(),
+                safe: func.safe(),
+                timestampadd_unit: func.timestampadd_unit().map(str::to_string),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkDateTrunc>() {
+            UdfKind::SparkDateTrunc(r#gen::SparkDateTruncUdf {
+                session_timezone: func.session_timezone().to_string(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToUtf8>() {
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                name: func.name().to_string(),
+                session_timezone: func.session_timezone().to_string(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToLargeUtf8>() {
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                name: func.name().to_string(),
+                session_timezone: func.session_timezone().to_string(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToUtf8View>() {
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                name: func.name().to_string(),
+                session_timezone: func.session_timezone().to_string(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToJson>() {
+            UdfKind::SparkToJson(r#gen::SparkToJsonUdf {
+                session_timezone: func.session_timezone().to_string(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkFileTimestamp>() {
+            UdfKind::SparkFileTimestamp(r#gen::SparkFileTimestampUdf {
+                session_timezone: func.session_timezone().to_string(),
+                timestamp_format: func.timestamp_format().to_string(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names })
@@ -3223,6 +3360,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_type,
                 session_timezone: func.session_timezone().to_string(),
                 safe: func.safe(),
+                struct_by_name: func.struct_by_name(),
+                case_sensitive: func.case_sensitive(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -4884,6 +5023,23 @@ mod tests {
             .ok_or_else(|| plan_datafusion_err!("decoded UDF should be {name}"))
     }
 
+    #[test]
+    fn test_missing_state_defaults() {
+        assert_eq!(decode_session_timezone(String::new()).as_ref(), "UTC");
+        assert_eq!(
+            decode_session_timezone("America/Los_Angeles".to_string()).as_ref(),
+            "America/Los_Angeles"
+        );
+        assert_eq!(
+            decode_file_timestamp_format(String::new()).as_ref(),
+            SPARK_FILE_TIMESTAMP_FORMAT
+        );
+        assert_eq!(
+            decode_file_timestamp_format("yyyy/MM/dd".to_string()).as_ref(),
+            "yyyy/MM/dd"
+        );
+    }
+
     fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
         round_trip_udwf_arc(Arc::new(udwf))
     }
@@ -4894,6 +5050,81 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_show_string_preserves_session_timezone() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input_schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
+        let output_schema = Arc::new(Schema::empty());
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ShowStringExec::new(
+            input,
+            vec![],
+            20,
+            ShowStringFormat::new(
+                ShowStringStyle::Default,
+                20,
+                Arc::from("America/Los_Angeles"),
+            ),
+            output_schema,
+        ));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ShowStringExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan should be ShowStringExec"))?;
+        assert_eq!(decoded.format().session_timezone(), "America/Los_Angeles");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_console_sink_preserves_session_timezone() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ConsoleSinkExec::new(
+            input,
+            Arc::from("America/Los_Angeles"),
+        ));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ConsoleSinkExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan should be ConsoleSinkExec"))?;
+        assert_eq!(decoded.session_timezone().as_ref(), "America/Los_Angeles");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_python_write_preserves_session_timezone() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(PythonDataSourceWriteExec::new(
+            input,
+            vec![1, 2, 3],
+            true,
+            Arc::from("+01:02:03"),
+        ));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<PythonDataSourceWriteExec>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded plan should be PythonDataSourceWriteExec")
+            })?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+        Ok(())
     }
 
     #[test]
@@ -6216,21 +6447,101 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_timezone_cast_preserves_options() -> Result<()> {
-        let target_type = DataType::Timestamp(
+        let requested_target_type = DataType::Timestamp(
             TimeUnit::Microsecond,
             Some(Arc::from("America/Los_Angeles")),
         );
         let decoded = round_trip_udf(ScalarUDF::from(SparkTimezoneCast::new(
-            target_type.clone(),
+            requested_target_type,
             Arc::from("+01:02:03"),
             true,
         )))?;
 
         let decoded = downcast_udf::<SparkTimezoneCast>(&decoded, "SparkTimezoneCast")?;
-        assert_eq!(decoded.target_type(), &target_type);
+        assert_eq!(
+            decoded.target_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
         assert_eq!(decoded.session_timezone(), "+01:02:03");
         assert!(decoded.safe());
+        assert!(!decoded.struct_by_name());
+        assert!(!decoded.case_sensitive());
 
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimezoneCast::new_by_name(
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles")),
+            ),
+            Arc::from("+01:02:03"),
+            false,
+            true,
+        )))?;
+        let decoded = downcast_udf::<SparkTimezoneCast>(&decoded, "SparkTimezoneCast")?;
+        assert!(decoded.struct_by_name());
+        assert!(decoded.case_sensitive());
+        assert!(!decoded.safe());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_timestamp_interval_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimestampInterval::new(
+            Arc::from("America/Los_Angeles"),
+            true,
+            true,
+        )))?;
+        let decoded = downcast_udf::<SparkTimestampInterval>(&decoded, "SparkTimestampInterval")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(decoded.subtract());
+        assert!(decoded.safe());
+        assert_eq!(decoded.timestampadd_unit(), None);
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimestampInterval::new_timestampadd(
+            Arc::from("America/Los_Angeles"),
+            Arc::from("hour"),
+        )))?;
+        let decoded = downcast_udf::<SparkTimestampInterval>(&decoded, "SparkTimestampInterval")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(!decoded.subtract());
+        assert!(!decoded.safe());
+        assert_eq!(decoded.timestampadd_unit(), Some("HOUR"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_session_aware_format_udfs_preserve_timezone() -> Result<()> {
+        let timezone = Arc::from("+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDateTrunc::new(Arc::clone(&timezone))))?;
+        let decoded = downcast_udf::<SparkDateTrunc>(&decoded, "SparkDateTrunc")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToUtf8::new(Arc::clone(&timezone))))?;
+        let decoded = downcast_udf::<SparkToUtf8>(&decoded, "SparkToUtf8")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToLargeUtf8::new(Arc::clone(
+            &timezone,
+        ))))?;
+        let decoded = downcast_udf::<SparkToLargeUtf8>(&decoded, "SparkToLargeUtf8")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToUtf8View::new(Arc::clone(&timezone))))?;
+        let decoded = downcast_udf::<SparkToUtf8View>(&decoded, "SparkToUtf8View")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToJson::new(Arc::clone(&timezone))))?;
+        let decoded = downcast_udf::<SparkToJson>(&decoded, "SparkToJson")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkFileTimestamp::new(
+            timezone,
+            Arc::from("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+        )))?;
+        let decoded = downcast_udf::<SparkFileTimestamp>(&decoded, "SparkFileTimestamp")?;
+        assert_eq!(decoded.session_timezone(), "+01:02:03");
+        assert_eq!(decoded.timestamp_format(), "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
         Ok(())
     }
 

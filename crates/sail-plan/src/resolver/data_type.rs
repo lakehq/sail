@@ -417,14 +417,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Option<Arc<str>>> {
         match timestamp_type {
             spec::TimestampType::Configured => match self.config.default_timestamp_type {
-                DefaultTimestampType::TimestampLtz => {
-                    Ok(Some(Arc::clone(&self.config.session_timezone)))
-                }
+                DefaultTimestampType::TimestampLtz => Ok(Some(Arc::from("UTC"))),
                 DefaultTimestampType::TimestampNtz => Ok(None),
             },
-            spec::TimestampType::WithLocalTimeZone => {
-                Ok(Some(Arc::clone(&self.config.session_timezone)))
-            }
+            spec::TimestampType::WithLocalTimeZone => Ok(Some(Arc::from("UTC"))),
             spec::TimestampType::WithoutTimeZone => Ok(None),
         }
     }

@@ -42,10 +42,7 @@ impl ScalarUDFImpl for TimestampNow {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            *self.time_unit(),
-            Some(self.session_timezone().into()),
-        ))
+        Ok(DataType::Timestamp(*self.time_unit(), Some("UTC".into())))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -62,7 +59,7 @@ impl ScalarUDFImpl for TimestampNow {
         };
         let expr = Expr::Cast(datafusion_expr::Cast::new(
             Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
-            DataType::Timestamp(*self.time_unit(), Some(self.session_timezone().into())),
+            DataType::Timestamp(*self.time_unit(), Some("UTC".into())),
         ));
         Ok(ExprSimplifyResult::Simplified(expr))
     }

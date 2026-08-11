@@ -25,6 +25,7 @@ impl WriteFormat for TextWriteFormat {
         _ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        input = input.retag_timestamps_for_output()?;
         let options = self
             .options
             .clone()

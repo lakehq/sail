@@ -13,6 +13,7 @@ use crate::options::r#gen::JsonWriteOptions;
 #[derive(Debug, Clone)]
 pub struct JsonWriteFormat {
     pub(super) options: JsonWriteOptions,
+    pub(super) timestamp_format: Arc<str>,
 }
 
 #[async_trait]
@@ -22,6 +23,7 @@ impl WriteFormat for JsonWriteFormat {
         ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        input = input.format_timestamps_for_text_output(ctx, &self.timestamp_format)?;
         let options = self
             .options
             .clone()

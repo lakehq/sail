@@ -45,8 +45,16 @@ impl PySpark {
             intern!(py, "PySparkBatchUdf"),
             (
                 udf,
-                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
-                output_type.try_to_py(py, config.arrow_use_large_var_types)?,
+                input_types.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
+                output_type.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
             ),
         )
     }
@@ -206,9 +214,17 @@ impl PySpark {
             intern!(py, "PySparkTableUdf"),
             (
                 udf,
-                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
+                input_types.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
                 passthrough_columns,
-                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
+                output_schema.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
                 config.clone(),
             ),
         )
@@ -229,9 +245,17 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
-                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
+                input_types.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
                 passthrough_columns,
-                output_schema.try_to_py(py, config.arrow_use_large_var_types)?,
+                output_schema.try_to_py(
+                    py,
+                    config.arrow_use_large_var_types,
+                    Some(&config.session_timezone),
+                )?,
                 config.clone(),
             ),
         )

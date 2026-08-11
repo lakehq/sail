@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::{Offset, TimeZone};
 use datafusion::arrow::array::{
-    Array, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
@@ -77,16 +77,30 @@ impl ScalarUDFImpl for SparkDateFormat {
                     DataType::Date32 => format_date32_array(&array, &format)?,
                     DataType::Date64 => format_date64_array(&array, &format)?,
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                        format_timestamp_array_microsecond(&array, tz.as_ref(), &format)?
+                        format_timestamp_array_microsecond(
+                            &array,
+                            tz.as_ref().map(|_| &self.session_timezone),
+                            &format,
+                        )?
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
-                        format_timestamp_array_millisecond(&array, tz.as_ref(), &format)?
+                        format_timestamp_array_millisecond(
+                            &array,
+                            tz.as_ref().map(|_| &self.session_timezone),
+                            &format,
+                        )?
                     }
-                    DataType::Timestamp(TimeUnit::Second, tz) => {
-                        format_timestamp_array_second(&array, tz.as_ref(), &format)?
-                    }
+                    DataType::Timestamp(TimeUnit::Second, tz) => format_timestamp_array_second(
+                        &array,
+                        tz.as_ref().map(|_| &self.session_timezone),
+                        &format,
+                    )?,
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                        format_timestamp_array_nanosecond(&array, tz.as_ref(), &format)?
+                        format_timestamp_array_nanosecond(
+                            &array,
+                            tz.as_ref().map(|_| &self.session_timezone),
+                            &format,
+                        )?
                     }
                     _ => {
                         return exec_err!(
@@ -112,7 +126,10 @@ impl ScalarUDFImpl for SparkDateFormat {
                             )?);
                         (ts_array, Some(self.session_timezone.clone()))
                     }
-                    DataType::Timestamp(_, tz) => (timestamp_array, tz.clone()),
+                    DataType::Timestamp(_, Some(_)) => {
+                        (timestamp_array, Some(self.session_timezone.clone()))
+                    }
+                    DataType::Timestamp(_, None) => (timestamp_array, None),
                     _ => (timestamp_array, None),
                 };
                 format_timestamp_array_dynamic(&timestamp_array, &format_array, tz.as_ref())
@@ -140,18 +157,30 @@ impl ScalarUDFImpl for SparkDateFormat {
                             None => return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                         }
                     }
-                    ScalarValue::TimestampMicrosecond(Some(value), tz) => {
-                        format_timestamp_value(value, &TimeUnit::Microsecond, tz.as_ref(), &format)?
-                    }
-                    ScalarValue::TimestampMillisecond(Some(value), tz) => {
-                        format_timestamp_value(value, &TimeUnit::Millisecond, tz.as_ref(), &format)?
-                    }
-                    ScalarValue::TimestampSecond(Some(value), tz) => {
-                        format_timestamp_value(value, &TimeUnit::Second, tz.as_ref(), &format)?
-                    }
-                    ScalarValue::TimestampNanosecond(Some(value), tz) => {
-                        format_timestamp_value(value, &TimeUnit::Nanosecond, tz.as_ref(), &format)?
-                    }
+                    ScalarValue::TimestampMicrosecond(Some(value), tz) => format_timestamp_value(
+                        value,
+                        &TimeUnit::Microsecond,
+                        tz.as_ref().map(|_| &self.session_timezone),
+                        &format,
+                    )?,
+                    ScalarValue::TimestampMillisecond(Some(value), tz) => format_timestamp_value(
+                        value,
+                        &TimeUnit::Millisecond,
+                        tz.as_ref().map(|_| &self.session_timezone),
+                        &format,
+                    )?,
+                    ScalarValue::TimestampSecond(Some(value), tz) => format_timestamp_value(
+                        value,
+                        &TimeUnit::Second,
+                        tz.as_ref().map(|_| &self.session_timezone),
+                        &format,
+                    )?,
+                    ScalarValue::TimestampNanosecond(Some(value), tz) => format_timestamp_value(
+                        value,
+                        &TimeUnit::Nanosecond,
+                        tz.as_ref().map(|_| &self.session_timezone),
+                        &format,
+                    )?,
                     ScalarValue::Date32(Some(value)) => format_date32_value(value, &format)?,
                     ScalarValue::Date64(Some(value)) => format_date64_value(value, &format)?,
                     ScalarValue::Utf8(None)
@@ -185,7 +214,7 @@ impl ScalarUDFImpl for SparkDateFormat {
                         match micros {
                             Some(micros) => ScalarValue::TimestampMicrosecond(
                                 Some(micros),
-                                Some(self.session_timezone.clone()),
+                                Some(Arc::from("UTC")),
                             ),
                             None => return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                         }
@@ -198,12 +227,19 @@ impl ScalarUDFImpl for SparkDateFormat {
                 ])?;
                 let timestamp_array = arrays[0].clone();
                 let format_array = arrays[1].clone();
-                // Extract timezone from scalar if present, otherwise use session timezone
+                // LTZ metadata marks the value as an instant; the Spark session
+                // zone, rather than the canonical Arrow metadata, controls display.
                 let tz = match scalar {
-                    ScalarValue::TimestampMicrosecond(_, tz)
-                    | ScalarValue::TimestampMillisecond(_, tz)
-                    | ScalarValue::TimestampSecond(_, tz)
-                    | ScalarValue::TimestampNanosecond(_, tz) => tz.clone(),
+                    ScalarValue::TimestampMicrosecond(_, Some(_))
+                    | ScalarValue::TimestampMillisecond(_, Some(_))
+                    | ScalarValue::TimestampSecond(_, Some(_))
+                    | ScalarValue::TimestampNanosecond(_, Some(_)) => {
+                        Some(self.session_timezone.clone())
+                    }
+                    ScalarValue::TimestampMicrosecond(_, None)
+                    | ScalarValue::TimestampMillisecond(_, None)
+                    | ScalarValue::TimestampSecond(_, None)
+                    | ScalarValue::TimestampNanosecond(_, None) => None,
                     _ => Some(self.session_timezone.clone()),
                 };
                 format_timestamp_array_dynamic(&timestamp_array, &format_array, tz.as_ref())
@@ -375,8 +411,7 @@ fn format_timestamp_array_with_formats<'f>(
                         "spark_date_format: failed to downcast to TimestampMicrosecondArray"
                     )
                 })?;
-            // Use array's timezone if present, otherwise use the provided timezone
-            let effective_tz = array_tz.as_ref().or(tz);
+            let effective_tz = tz.or(array_tz.as_ref());
             format_timestamp_values(
                 values.iter(),
                 formats,
@@ -394,8 +429,7 @@ fn format_timestamp_array_with_formats<'f>(
                         "spark_date_format: failed to downcast to TimestampMillisecondArray"
                     )
                 })?;
-            // Use array's timezone if present, otherwise use the provided timezone
-            let effective_tz = array_tz.as_ref().or(tz);
+            let effective_tz = tz.or(array_tz.as_ref());
             format_timestamp_values(
                 values.iter(),
                 formats,
@@ -413,8 +447,7 @@ fn format_timestamp_array_with_formats<'f>(
                         "spark_date_format: failed to downcast to TimestampSecondArray"
                     )
                 })?;
-            // Use array's timezone if present, otherwise use the provided timezone
-            let effective_tz = array_tz.as_ref().or(tz);
+            let effective_tz = tz.or(array_tz.as_ref());
             format_timestamp_values(
                 values.iter(),
                 formats,
@@ -432,8 +465,7 @@ fn format_timestamp_array_with_formats<'f>(
                         "spark_date_format: failed to downcast to TimestampNanosecondArray"
                     )
                 })?;
-            // Use array's timezone if present, otherwise use the provided timezone
-            let effective_tz = array_tz.as_ref().or(tz);
+            let effective_tz = tz.or(array_tz.as_ref());
             format_timestamp_values(
                 values.iter(),
                 formats,
@@ -575,6 +607,35 @@ fn format_timestamp_value(
     }
 }
 
+pub(crate) fn format_file_timestamp_array(
+    array: &ArrayRef,
+    session_timezone: &str,
+    pattern: &str,
+) -> Result<ArrayRef> {
+    let format = DateTimeFormat::for_formatting(pattern)?;
+    let timezone = Arc::<str>::from(session_timezone);
+    let output = match array.data_type() {
+        DataType::Timestamp(TimeUnit::Second, Some(_)) => {
+            format_timestamp_array_second(array, Some(&timezone), &format)?
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, Some(_)) => {
+            format_timestamp_array_millisecond(array, Some(&timezone), &format)?
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            format_timestamp_array_microsecond(array, Some(&timezone), &format)?
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
+            format_timestamp_array_nanosecond(array, Some(&timezone), &format)?
+        }
+        data_type => {
+            return exec_err!(
+                "file timestamp formatter expected a zoned timestamp, got {data_type}"
+            );
+        }
+    };
+    Ok(Arc::new(output))
+}
+
 fn format_date32_value(value: i32, format: &DateTimeFormat) -> Result<String> {
     let datetime = date32_to_datetime(value).ok_or_else(|| {
         exec_datafusion_err!("spark_date_format: cannot convert date32 value {value} to datetime")
@@ -599,6 +660,45 @@ fn format_date64_value(value: i64, format: &DateTimeFormat) -> Result<String> {
         timestamp_kind: TimestampKind::Normal,
         precision: TimePrecision::Microsecond,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    #[test]
+    fn test_dynamic_format_uses_session_timezone_for_scalar_ltz() -> Result<()> {
+        let udf = SparkDateFormat::new(Arc::from("+01:02:03"));
+        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+        let result = udf.invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    Some(0),
+                    Some(Arc::from("UTC")),
+                )),
+                ColumnarValue::Array(Arc::new(StringArray::from(vec![
+                    "yyyy-MM-dd HH:mm:ss",
+                    "HH:mm:ss",
+                ]))),
+            ],
+            arg_fields: vec![
+                Arc::new(Field::new("timestamp", timestamp_type, false)),
+                Arc::new(Field::new("format", DataType::Utf8, false)),
+            ],
+            number_rows: 2,
+            return_field: Arc::new(Field::new("result", DataType::Utf8, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+        let result = result.into_array(2)?;
+        let result = as_string_array(&result)?;
+
+        assert_eq!(result.value(0), "1970-01-01 01:02:03");
+        assert_eq!(result.value(1), "01:02:03");
+        Ok(())
+    }
 }
 
 fn format_date32_array(

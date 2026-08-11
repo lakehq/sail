@@ -287,7 +287,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         } else {
             let line: &str = array.value(i);
             let values: Vec<ScalarValue> =
-                parse_csv_line_to_scalar_values(line, &options, &fields)?;
+                parse_csv_line_to_scalar_values(line, &options, &fields, session_timezone)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
@@ -329,6 +329,7 @@ fn parse_csv_line_to_scalar_values(
     line: &str,
     options: &SparkFromCSVOptions,
     fields: &Fields,
+    session_timezone: &str,
 ) -> Result<Vec<ScalarValue>> {
     let values: Vec<&str> = line.split(&options.sep).map(|s| s.trim()).collect();
 
@@ -349,7 +350,9 @@ fn parse_csv_line_to_scalar_values(
                 ScalarValue::try_new_null(field.data_type())
             } else {
                 match field.data_type() {
-                    DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
+                    DataType::Timestamp(_, _) => {
+                        parse_timestamp(field.data_type(), value, options, session_timezone)
+                    }
                     DataType::Date32 | DataType::Date64 => {
                         parse_date(field.data_type(), value, options)
                     }
@@ -384,6 +387,7 @@ fn parse_timestamp(
     data_type: &DataType,
     value: &str,
     options: &SparkFromCSVOptions,
+    session_timezone: &str,
 ) -> Result<ScalarValue> {
     let (time_unit, timezone) = match data_type {
         DataType::Timestamp(time_unit, timezone) => (*time_unit, timezone.clone()),
@@ -414,9 +418,8 @@ fn parse_timestamp(
         // Use user-provided timezone from options
         let tz = parse_spark_timezone(tz_str)?;
         localize_with_fallback(&tz, &naive_datetime)?
-    } else if let Some(tz) = timezone.as_ref() {
-        // Use timezone from the schema (session timezone)
-        let tz = parse_spark_timezone(tz.as_ref())?;
+    } else if timezone.is_some() {
+        let tz = parse_spark_timezone(session_timezone)?;
         localize_with_fallback(&tz, &naive_datetime)?
     } else {
         // No timezone, treat as UTC
@@ -612,7 +615,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
             to_time_unit(time_unit),
             match timestamp_type {
                 spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
+                    Some(Arc::from("UTC"))
                 }
                 spec::TimestampType::WithoutTimeZone => None,
             },
@@ -871,7 +874,7 @@ mod tests {
             TimestampMicrosecondArray,
             "Expected `created` field not found"
         );
-        assert_eq!(ts_array.timezone(), Some("Asia/Shanghai"));
+        assert_eq!(ts_array.timezone(), Some("UTC"));
         assert_eq!(ts_array.value(0), -28_800_000_000);
 
         Ok(())
@@ -931,7 +934,7 @@ mod tests {
         let dt = parse_data_type_with_session_timezone("TIMESTAMP(3)", "Asia/Shanghai")?;
         assert_eq!(
             dt,
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("Asia/Shanghai")))
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC")))
         );
 
         let dt = parse_data_type_with_session_timezone("TIMESTAMP_NTZ(9)", "Asia/Shanghai")?;

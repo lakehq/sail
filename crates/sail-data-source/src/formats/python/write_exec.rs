@@ -22,6 +22,9 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, internal_err};
 use futures::StreamExt;
+use sail_common_datafusion::array::record_batch::{
+    retag_record_batch_timestamp_timezone, retag_schema_timestamp_timezone,
+};
 
 use super::executor::{InProcessExecutor, PythonExecutor};
 
@@ -64,13 +67,20 @@ pub struct PythonDataSourceWriteExec {
     pickled_writer: Vec<u8>,
     /// Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
     is_arrow: bool,
+    /// Spark session zone exposed at the Python writer boundary.
+    session_timezone: Arc<str>,
     /// Execution plan properties
     properties: Arc<PlanProperties>,
 }
 
 impl PythonDataSourceWriteExec {
     /// Create a new distributed write execution plan.
-    pub fn new(input: Arc<dyn ExecutionPlan>, pickled_writer: Vec<u8>, is_arrow: bool) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        pickled_writer: Vec<u8>,
+        is_arrow: bool,
+        session_timezone: Arc<str>,
+    ) -> Self {
         let output_partition_count = input.properties().partitioning.partition_count();
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(write_result_schema()),
@@ -83,6 +93,7 @@ impl PythonDataSourceWriteExec {
             input,
             pickled_writer,
             is_arrow,
+            session_timezone,
             properties,
         }
     }
@@ -95,6 +106,11 @@ impl PythonDataSourceWriteExec {
     /// Get whether this is an Arrow-based writer.
     pub fn is_arrow(&self) -> bool {
         self.is_arrow
+    }
+
+    /// Get the Spark session zone used by the Python writer.
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 
     /// Get the input plan.
@@ -142,6 +158,7 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
             children[0].clone(),
             self.pickled_writer.clone(),
             self.is_arrow,
+            Arc::clone(&self.session_timezone),
         )))
     }
 
@@ -154,6 +171,7 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         let pickled_writer = self.pickled_writer.clone();
         let is_arrow = self.is_arrow;
         let input_schema = input.schema();
+        let session_timezone = Arc::clone(&self.session_timezone);
         let output_schema = write_result_schema();
 
         let stream = futures::stream::once(async move {
@@ -167,14 +185,19 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
             };
 
             let schema_for_validation = input_schema.clone();
+            let writer_schema = Arc::new(retag_schema_timestamp_timezone(
+                input_schema.as_ref(),
+                &session_timezone,
+            )?);
+            let writer_timezone = Arc::clone(&session_timezone);
             let stream = input_stream.map(move |batch_result| {
                 let batch = batch_result?;
                 super::arrow_utils::validate_schema(&schema_for_validation, batch.schema_ref())?;
-                Ok(batch)
+                retag_record_batch_timestamp_timezone(&batch, &writer_timezone)
             });
 
             match executor
-                .execute_write(&pickled_writer, input_schema, is_arrow, Box::pin(stream))
+                .execute_write(&pickled_writer, writer_schema, is_arrow, Box::pin(stream))
                 .await
             {
                 Ok(write_result) => {
@@ -213,6 +236,7 @@ mod tests {
             input,
             vec![1, 2, 3], // mock pickled writer
             true,          // is_arrow
+            Arc::from("UTC"),
         );
 
         assert!(exec.is_arrow());
@@ -235,7 +259,7 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = PythonDataSourceWriteExec::new(input, vec![], false);
+        let exec = PythonDataSourceWriteExec::new(input, vec![], false, Arc::from("UTC"));
 
         assert!(!exec.is_arrow());
         assert_eq!(exec.name(), "PythonDataSourceWriteExec");
@@ -253,7 +277,12 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = Arc::new(PythonDataSourceWriteExec::new(input1, vec![], true));
+        let exec = Arc::new(PythonDataSourceWriteExec::new(
+            input1,
+            vec![],
+            true,
+            Arc::from("UTC"),
+        ));
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
@@ -272,7 +301,12 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = Arc::new(PythonDataSourceWriteExec::new(input, vec![], true));
+        let exec = Arc::new(PythonDataSourceWriteExec::new(
+            input,
+            vec![],
+            true,
+            Arc::from("UTC"),
+        ));
 
         assert!(exec.clone().with_new_children(vec![]).is_err());
         assert!(

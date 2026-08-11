@@ -391,6 +391,7 @@ impl TableFormat for DeltaTableFormat {
         };
         let SinkInfo {
             input,
+            session_timezone: _,
             mode,
             partition_by,
             bucket_by,

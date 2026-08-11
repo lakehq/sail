@@ -19,6 +19,7 @@ impl WriteFormat for ArrowWriteFormat {
         ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        input = input.retag_timestamps_for_output()?;
         input.sink.file_extension = ArrowFormat.get_ext();
         ArrowFormat
             .create_writer_physical_plan(input.input, ctx, input.sink, input.sort_order)

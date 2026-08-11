@@ -213,6 +213,7 @@ impl TableFormat for PythonTableFormat {
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
+            session_timezone,
             mode,
             partition_by,
             options,
@@ -236,6 +237,7 @@ impl TableFormat for PythonTableFormat {
                 Arc::new(input),
                 self.name.clone(),
                 self.pickled_class.clone(),
+                session_timezone,
                 mode,
                 options,
             )),
@@ -249,6 +251,7 @@ pub struct PythonWriteNode {
     input: Arc<LogicalPlan>,
     name: String,
     pickled_class: Option<Vec<u8>>,
+    session_timezone: Arc<str>,
     mode: SinkMode,
     options: Vec<OptionLayer>,
     #[educe(PartialOrd(ignore))]
@@ -260,6 +263,7 @@ impl PythonWriteNode {
         input: Arc<LogicalPlan>,
         name: String,
         pickled_class: Option<Vec<u8>>,
+        session_timezone: Arc<str>,
         mode: SinkMode,
         options: Vec<OptionLayer>,
     ) -> Self {
@@ -267,6 +271,7 @@ impl PythonWriteNode {
             input,
             name,
             pickled_class,
+            session_timezone,
             mode,
             options,
             schema: Arc::new(DFSchema::empty()),
@@ -301,6 +306,7 @@ impl UserDefinedLogicalNodeCore for PythonWriteNode {
             input: Arc::new(inputs.one()?),
             name: self.name.clone(),
             pickled_class: self.pickled_class.clone(),
+            session_timezone: Arc::clone(&self.session_timezone),
             mode: self.mode.clone(),
             options: self.options.clone(),
             schema: self.schema.clone(),
@@ -355,6 +361,7 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
                 input.clone(),
                 pickled_writer.clone(),
                 writer_plan.is_arrow,
+                Arc::clone(&node.session_timezone),
             ));
 
         Ok(Some(Arc::new(

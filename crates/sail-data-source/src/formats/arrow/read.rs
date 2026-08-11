@@ -15,8 +15,11 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::array::record_batch::retag_schema_timestamp_timezone;
 
-use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::source::{
+    ListingFileSample, ListingScanInput, ReadFormat, retag_timestamp_plan,
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
@@ -40,6 +43,27 @@ async fn is_object_in_arrow_ipc_file_format(
     Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
 
+async fn read_arrow_schema(store: &dyn ObjectStore, object_location: &Path) -> Result<SchemaRef> {
+    let result = store.get(object_location).await?;
+    match result.payload {
+        #[cfg(not(target_arch = "wasm32"))]
+        GetResultPayload::File(mut file, _) => match FileReader::try_new(&mut file, None) {
+            Ok(reader) => Ok(reader.schema()),
+            Err(file_error) => {
+                // `FileReader` consumed bytes while probing, so rewind before trying stream IPC.
+                file.seek(SeekFrom::Start(0))?;
+                match StreamReader::try_new(&mut file, None) {
+                    Ok(reader) => Ok(reader.schema()),
+                    Err(stream_error) => Err(internal_datafusion_err!(
+                        "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
+                    )),
+                }
+            }
+        },
+        GetResultPayload::Stream(stream) => infer_stream_schema(stream).await,
+    }
+}
+
 #[async_trait::async_trait]
 impl ReadFormat for ArrowReadFormat {
     async fn infer_compression(
@@ -60,33 +84,14 @@ impl ReadFormat for ArrowReadFormat {
         let mut schemas = vec![];
         for group in files {
             for object in &group.objects {
-                let r = group.store.as_ref().get(&object.location).await?;
-                let schema = match r.payload {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    GetResultPayload::File(mut file, _) => {
-                        match FileReader::try_new(&mut file, None) {
-                            Ok(reader) => reader.schema(),
-                            Err(file_error) => {
-                                // `FileReader` read some bytes while trying to parse the file,
-                                // so we need to rewind it to the beginning.
-                                file.seek(SeekFrom::Start(0))?;
-                                match StreamReader::try_new(&mut file, None) {
-                                    Ok(reader) => reader.schema(),
-                                    Err(stream_error) => {
-                                        return Err(internal_datafusion_err!(
-                                            "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
-                };
+                let schema = read_arrow_schema(group.store.as_ref(), &object.location).await?;
                 schemas.push(schema.as_ref().clone());
             }
         }
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(retag_schema_timestamp_timezone(
+            &Schema::try_merge(schemas)?,
+            "UTC",
+        )?))
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
@@ -101,13 +106,21 @@ impl ReadFormat for ArrowReadFormat {
             .object_meta
             .location;
 
+        // Decode with the physical IPC schema first. The Arrow reader constructs batches
+        // directly with this schema and cannot accept a canonicalized timezone in its place.
+        let physical_schema = read_arrow_schema(object_store.as_ref(), object_location).await?;
+        let physical_table_schema = datafusion_datasource::TableSchema::new(
+            physical_schema,
+            input.schema.table_partition_cols().clone(),
+        );
+
         let source =
             if is_object_in_arrow_ipc_file_format(Arc::clone(&object_store), object_location)
                 .await?
             {
-                ArrowSource::new_file_source(input.schema)
+                ArrowSource::new_file_source(physical_table_schema)
             } else {
-                ArrowSource::new_stream_file_source(input.schema)
+                ArrowSource::new_stream_file_source(physical_table_schema)
             };
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
@@ -122,6 +135,13 @@ impl ReadFormat for ArrowReadFormat {
             .build();
 
         Ok(config)
+    }
+
+    fn adapt_scan_plan(
+        &self,
+        input: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    ) -> Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        retag_timestamp_plan(input, &Arc::from("UTC"))
     }
 }
 
@@ -211,4 +231,102 @@ async fn extend_bytes_to_n_length_from_stream(
     }
 
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, TimestampMicrosecondArray};
+    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit, TimestampMicrosecondType};
+    use datafusion::arrow::ipc::writer::StreamWriter;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{Constraints, Statistics};
+    use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::{ListingTableUrl, PartitionedFile, TableSchema};
+    use object_store::memory::InMemory;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn inferred_arrow_ltz_schema_is_canonical_utc() -> Result<()> {
+        let raw_timezone = Arc::<str>::from("+01:02:03");
+        let raw_schema = Arc::new(Schema::new(vec![Field::new(
+            "t",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(&raw_timezone))),
+            false,
+        )]));
+        let raw_batch = RecordBatch::try_new(
+            Arc::clone(&raw_schema),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone(raw_timezone),
+            )],
+        )?;
+        let mut bytes = Vec::new();
+        {
+            let mut writer = StreamWriter::try_new(&mut bytes, &raw_schema)?;
+            writer.write(&raw_batch)?;
+            writer.finish()?;
+        }
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let location = Path::from("input.arrow");
+        store.put(&location, bytes.into()).await?;
+        let object = store.head(&location).await?;
+        let url = ListingTableUrl::parse("memory://bucket/input.arrow")?;
+        let samples = [ListingFileSample {
+            url: &url,
+            store: Arc::clone(&store),
+            objects: vec![object.clone()],
+        }];
+        let context = SessionContext::new();
+
+        let schema = ArrowReadFormat
+            .infer_schema(
+                &context.state(),
+                &samples,
+                CompressionTypeVariant::UNCOMPRESSED,
+            )
+            .await?;
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
+
+        let object_store_url = url.object_store();
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), Arc::clone(&store));
+        let config = ArrowReadFormat
+            .scan(
+                &context.state(),
+                ListingScanInput {
+                    object_store_url,
+                    file_groups: vec![FileGroup::from(vec![PartitionedFile::from(object)])],
+                    constraints: Constraints::default(),
+                    projection: None,
+                    limit: None,
+                    preserve_order: false,
+                    output_ordering: vec![],
+                    statistics: Statistics::new_unknown(&schema),
+                    partitioned_by_file_group: false,
+                    schema: TableSchema::new(Arc::clone(&schema), vec![]),
+                    compression: CompressionTypeVariant::UNCOMPRESSED,
+                },
+            )
+            .await?;
+        let plan = ArrowReadFormat.adapt_scan_plan(DataSourceExec::from_data_source(config))?;
+        let batches = collect(plan, context.task_ctx()).await?;
+        let [batch] = batches.as_slice() else {
+            panic!("expected exactly one Arrow batch, got {}", batches.len());
+        };
+        assert_eq!(
+            batch.schema().field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
+        let timestamps = batch.column(0).as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(timestamps.value(0), -3_723_000_000);
+        Ok(())
+    }
 }

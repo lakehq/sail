@@ -20,6 +20,7 @@ use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::coerce_temporal_collection_comparison;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -268,6 +269,8 @@ impl PlanResolver<'_> {
                 .await?;
 
             let result_name = format!("{}[{}]", name.one()?, extraction_name.one()?);
+            let (expr, extraction_expr) =
+                coerce_temporal_collection_comparison(expr, extraction_expr, schema, &self.config)?;
             // Use map_extract which supports dynamic keys, then extract first element
             let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
             return Ok(NamedExpr::new(vec![result_name], result_expr));

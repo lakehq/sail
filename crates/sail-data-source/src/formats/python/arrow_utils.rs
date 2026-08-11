@@ -28,6 +28,9 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
+use sail_common_datafusion::array::record_batch::{
+    retag_record_batch_timestamp_timezone, retag_schema_timestamp_timezone,
+};
 
 /// Convert a Python PyArrow RecordBatch to a Rust Arrow RecordBatch.
 ///
@@ -38,12 +41,13 @@ pub fn py_record_batch_to_rust(
 ) -> Result<RecordBatch> {
     use sail_pyarrow::FromPyArrow;
 
-    RecordBatch::from_pyarrow_bound(py_batch).map_err(|e| {
+    let batch = RecordBatch::from_pyarrow_bound(py_batch).map_err(|e| {
         DataFusionError::External(Box::new(std::io::Error::other(format!(
             "Failed to convert PyArrow RecordBatch: {}",
             e
         ))))
-    })
+    })?;
+    retag_record_batch_timestamp_timezone(&batch, "UTC")
 }
 
 /// Convert a Rust Arrow Schema to a Python PyArrow Schema.
@@ -71,7 +75,7 @@ pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Resul
         ))))
     })?;
 
-    Ok(Arc::new(schema))
+    Ok(Arc::new(retag_schema_timestamp_timezone(&schema, "UTC")?))
 }
 
 /// Convert a Rust Arrow RecordBatch to a Python PyArrow RecordBatch.

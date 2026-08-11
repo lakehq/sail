@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -44,6 +45,7 @@ macro_rules! downcast_and_convert {
 struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
+    session_timezone: Arc<str>,
 }
 
 impl ToJsonOptions {
@@ -51,11 +53,11 @@ impl ToJsonOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     // Default ISO 8601 format with timezone offset (not Z)
     // Using Java DateTimeFormatter patterns
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = SPARK_FILE_TIMESTAMP_FORMAT;
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
-    fn from_map(map: &MapArray) -> Result<Self> {
+    fn from_map(map: &MapArray, session_timezone: Arc<str>) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_formatting)
@@ -79,6 +81,7 @@ impl ToJsonOptions {
         Ok(Self {
             timestamp_format,
             date_format,
+            session_timezone,
         })
     }
 }
@@ -91,6 +94,7 @@ impl Default for ToJsonOptions {
                 .expect("default timestamp format should be valid"),
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
+            session_timezone: Arc::from("UTC"),
         }
     }
 }
@@ -99,23 +103,29 @@ impl Default for ToJsonOptions {
 pub struct SparkToJson {
     signature: Signature,
     aliases: [String; 1],
+    session_timezone: Arc<str>,
 }
 
 impl Default for SparkToJson {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::from("UTC"))
     }
 }
 
 impl SparkToJson {
-    pub fn new() -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             signature: Signature::new(
                 TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
                 Volatility::Immutable,
             ),
             aliases: ["to_json".to_string()],
+            session_timezone,
         }
+    }
+
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -158,15 +168,16 @@ impl ScalarUDFImpl for SparkToJson {
                 other => Ok(other),
             };
         }
-        make_scalar_function(to_json_inner, vec![])(&args.args)
+        let session_timezone = Arc::clone(&self.session_timezone);
+        make_scalar_function(
+            move |args| to_json_inner(args, Arc::clone(&session_timezone)),
+            vec![],
+        )(&args.args)
     }
 }
 
-pub fn to_json_udf() -> Arc<ScalarUDF> {
-    static STATIC_TO_JSON: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
-    STATIC_TO_JSON
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkToJson::new())))
-        .clone()
+pub fn to_json_udf(session_timezone: Arc<str>) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(SparkToJson::new(session_timezone)))
 }
 
 /// Core implementation of the `to_json` function logic.
@@ -175,7 +186,7 @@ pub fn to_json_udf() -> Arc<ScalarUDF> {
 /// - `args`: An array of input arrays, where:
 ///   - `args[0]` is the value to convert to JSON (struct, map, array, etc.)
 ///   - `args[1]` (optional) is a `MapArray` of options like timestampFormat, dateFormat, etc.
-fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn to_json_inner(args: &[ArrayRef], session_timezone: Arc<str>) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 2 {
         return Err(datafusion_common::DataFusionError::Plan(
             "to_json requires 1 or 2 arguments".to_string(),
@@ -188,9 +199,12 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
             )
         })?;
-        ToJsonOptions::from_map(map_array)?
+        ToJsonOptions::from_map(map_array, session_timezone)?
     } else {
-        ToJsonOptions::default()
+        ToJsonOptions {
+            session_timezone,
+            ..ToJsonOptions::default()
+        }
     };
 
     array_to_json_strings(&args[0], &options)
@@ -291,7 +305,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let value = arr.value(index);
             let formatted = format_timestamp(
                 value,
-                tz.as_ref().map(|s| s.as_ref()),
+                tz.as_ref().map(|_| options.session_timezone.as_ref()),
                 &options.timestamp_format,
             );
             Ok(Value::String(formatted))
@@ -608,5 +622,25 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
             .map(|values| values.value(index).to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_second_precision_offset_default_and_custom() -> Result<()> {
+        let default = DateTimeFormat::for_formatting(ToJsonOptions::TIMESTAMP_FORMAT_DEFAULT)?;
+        assert_eq!(
+            format_timestamp(-3_723_000_000, Some("+01:02:03"), &default),
+            "1970-01-01T00:00:00.000+01:02:03"
+        );
+        let custom = DateTimeFormat::for_formatting("yyyy/MM/dd HH:mm:ss XXXXX")?;
+        assert_eq!(
+            format_timestamp(-3_723_000_000, Some("+01:02:03"), &custom),
+            "1970/01/01 00:00:00 +01:02:03"
+        );
+        Ok(())
     }
 }

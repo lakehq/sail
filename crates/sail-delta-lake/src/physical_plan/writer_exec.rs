@@ -51,6 +51,7 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
 };
+use sail_function::scalar::datetime::spark_timezone_cast::spark_timezone_cast_array;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
@@ -303,6 +304,44 @@ fn matching_nested_types(source: &DataType, target: &DataType) -> bool {
             | (DataType::FixedSizeList(_, _), DataType::FixedSizeList(_, _))
             | (DataType::Map(_, _), DataType::Map(_, _))
     )
+}
+
+fn needs_spark_timezone_cast(source: &DataType, target: &DataType) -> bool {
+    match (source, target) {
+        (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_)))
+        | (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
+        | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
+        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64)
+        | (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Timestamp(_, Some(_)),
+        )
+        | (
+            DataType::Timestamp(_, Some(_)),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+        ) => true,
+        (DataType::List(source), DataType::List(target))
+        | (DataType::LargeList(source), DataType::LargeList(target))
+        | (DataType::ListView(source), DataType::ListView(target))
+        | (DataType::LargeListView(source), DataType::LargeListView(target)) => {
+            needs_spark_timezone_cast(source.data_type(), target.data_type())
+        }
+        (
+            DataType::FixedSizeList(source, source_size),
+            DataType::FixedSizeList(target, target_size),
+        ) if source_size == target_size => {
+            needs_spark_timezone_cast(source.data_type(), target.data_type())
+        }
+        (DataType::Struct(source), DataType::Struct(target)) if source.len() == target.len() => {
+            source.iter().zip(target).any(|(source, target)| {
+                needs_spark_timezone_cast(source.data_type(), target.data_type())
+            })
+        }
+        (DataType::Map(source, _), DataType::Map(target, _)) => {
+            needs_spark_timezone_cast(source.data_type(), target.data_type())
+        }
+        _ => false,
+    }
 }
 
 fn validate_cast_safety_recursively(
@@ -1085,47 +1124,15 @@ impl DeltaWriterExec {
                                     *unit_to,
                                     Some(target_tz.clone()),
                                 )?,
-                                (
-                                    DataType::Timestamp(unit_from, None),
-                                    DataType::Timestamp(_unit_to, Some(_)),
-                                    Some(session_tz),
-                                ) => {
-                                    // Interpret NTZ as local time in session timezone before converting
-                                    let session_type = DataType::Timestamp(
-                                        *unit_from,
-                                        Some(Arc::<str>::from(session_tz)),
-                                    );
-                                    let with_session_tz = datafusion::arrow::compute::cast(
+                                (source, target, Some(session_tz))
+                                    if needs_spark_timezone_cast(source, target) =>
+                                {
+                                    spark_timezone_cast_array(
                                         batch_column,
-                                        &session_type,
-                                    )
-                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-                                    datafusion::arrow::compute::cast(
-                                        &with_session_tz,
                                         final_field.data_type(),
-                                    )
-                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
-                                }
-                                (
-                                    DataType::Timestamp(unit_from, Some(_)),
-                                    DataType::Timestamp(_unit_to, None),
-                                    Some(session_tz),
-                                ) => {
-                                    // Convert to session timezone before dropping timezone info
-                                    let session_type = DataType::Timestamp(
-                                        *unit_from,
-                                        Some(Arc::<str>::from(session_tz)),
-                                    );
-                                    let session_aligned = datafusion::arrow::compute::cast(
-                                        batch_column,
-                                        &session_type,
-                                    )
-                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-                                    datafusion::arrow::compute::cast(
-                                        &session_aligned,
-                                        final_field.data_type(),
-                                    )
-                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                                        session_tz,
+                                        false,
+                                    )?
                                 }
                                 _ => cast_array_recursively(batch_column, final_field.data_type())?,
                             };
@@ -1205,8 +1212,11 @@ impl DisplayAs for DeltaWriterExec {
 mod tests {
     use std::collections::HashMap;
 
-    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StructArray};
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Int32Array, ListArray, StructArray, TimestampMicrosecondArray,
+    };
+    use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatchOptions;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
@@ -1315,5 +1325,69 @@ mod tests {
             .expect_err("narrowing nested cast must fail");
 
         assert!(error.to_string().contains("details.value"));
+    }
+
+    #[test]
+    fn adapt_batch_localizes_nested_ntz_to_ltz() -> Result<()> {
+        let source_timestamp = Arc::new(TimestampMicrosecondArray::from(vec![0])) as ArrayRef;
+        let source_struct = Arc::new(StructArray::try_new(
+            vec![Arc::new(Field::new(
+                "at",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ))]
+            .into(),
+            vec![source_timestamp],
+            None,
+        )?) as ArrayRef;
+        let source_list = Arc::new(ListArray::try_new(
+            Arc::new(Field::new("item", source_struct.data_type().clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            source_struct,
+            None,
+        )?) as ArrayRef;
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "events",
+            source_list.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(source_schema, vec![source_list])?;
+
+        let target_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+        let target_struct = DataType::Struct(
+            vec![Arc::new(Field::new("at", target_timestamp.clone(), true))].into(),
+        );
+        let final_schema = Arc::new(Schema::new(vec![Field::new(
+            "events",
+            DataType::List(Arc::new(Field::new("item", target_struct, true))),
+            true,
+        )]));
+
+        let adapted = DeltaWriterExec::validate_and_adapt_batch(
+            batch,
+            &final_schema,
+            None,
+            ColumnMappingMode::None,
+            Some("+01:02:03"),
+        )?;
+        let events = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let event = events
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let timestamp = event
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+
+        assert_eq!(timestamp.data_type(), &target_timestamp);
+        assert_eq!(timestamp.value(0), -3_723_000_000);
+        Ok(())
     }
 }

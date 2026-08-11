@@ -191,7 +191,8 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )
             .await?;
 
-        Ok(Some(DataSourceExec::from_data_source(config)))
+        let plan = DataSourceExec::from_data_source(config);
+        Ok(Some(source.config().read_format.adapt_scan_plan(plan)?))
     }
 }
 
@@ -208,6 +209,7 @@ async fn plan_file_write(
         format,
         url,
         overwrite,
+        session_timezone,
         partition_by,
         sort_by,
     } = node.options();
@@ -239,6 +241,7 @@ async fn plan_file_write(
                 input: physical_input,
                 sink: conf,
                 sort_order,
+                session_timezone: Arc::clone(session_timezone),
             },
         )
         .await?;

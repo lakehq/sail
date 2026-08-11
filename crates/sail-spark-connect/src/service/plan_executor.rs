@@ -120,7 +120,9 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let plan_config = spark.plan_config()?;
+    let session_timezone = plan_config.session_timezone.clone();
+    let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
@@ -130,6 +132,7 @@ async fn handle_execute_plan(
         metadata,
         stream,
         spark.options().execution_heartbeat_interval,
+        session_timezone,
         mode,
     );
     let rx = executor.start()?;
@@ -214,6 +217,7 @@ pub(crate) async fn handle_execute_sql_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
+    let session_timezone = spark.plan_config()?.session_timezone.clone();
     let relation = if let Some(input) = sql.input {
         input
     } else {
@@ -237,7 +241,7 @@ pub(crate) async fn handle_execute_sql_command(
                 let relation = Relation {
                     common: None,
                     rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
-                        data: Some(to_arrow_batch(&data)?.data),
+                        data: Some(to_arrow_batch(&data, &session_timezone)?.data),
                         schema: None,
                     })),
                 };

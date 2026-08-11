@@ -129,11 +129,22 @@ impl PlanResolver<'_> {
                     lit(data_type_string),
                 ])
             }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, tz),
+                is_try,
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
+                tz.as_ref()
+                    .map(|_| Arc::clone(&self.config.session_timezone)),
+                self.config.ansi_mode,
+                is_try,
+            )?))
+            .call(vec![expr]),
             (from, to, is_try) if needs_spark_timezone_cast(&from, &to) => {
                 ScalarUDF::new_from_impl(SparkTimezoneCast::new(
                     to,
                     self.config.session_timezone.clone(),
-                    is_try,
+                    is_try || !self.config.ansi_mode,
                 ))
                 .call(vec![expr])
             }
@@ -176,24 +187,17 @@ impl PlanResolver<'_> {
                 DataType::Date32,
                 is_try,
             ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
-            (
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-                DataType::Timestamp(TimeUnit::Microsecond, tz),
-                is_try,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
-                tz,
-                self.config.ansi_mode,
-                is_try,
-            )?))
-            .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8::new(self.config.session_timezone.clone()))
+                    .call(vec![expr])
             }
-            (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
-            }
+            (_, DataType::LargeUtf8, _) if override_string_cast => ScalarUDF::new_from_impl(
+                SparkToLargeUtf8::new(self.config.session_timezone.clone()),
+            )
+            .call(vec![expr]),
             (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8View::new(self.config.session_timezone.clone()))
+                    .call(vec![expr])
             }
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
@@ -226,14 +230,24 @@ impl PlanResolver<'_> {
     }
 }
 
-fn needs_spark_timezone_cast(from: &DataType, to: &DataType) -> bool {
+pub(crate) fn needs_spark_timezone_cast(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_)))
         | (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
         | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
-        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64) => true,
+        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64)
+        | (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Timestamp(_, Some(_)),
+        )
+        | (
+            DataType::Timestamp(_, Some(_)),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+        ) => true,
         (DataType::List(from), DataType::List(to))
-        | (DataType::LargeList(from), DataType::LargeList(to)) => {
+        | (DataType::LargeList(from), DataType::LargeList(to))
+        | (DataType::ListView(from), DataType::ListView(to))
+        | (DataType::LargeListView(from), DataType::LargeListView(to)) => {
             needs_spark_timezone_cast(from.data_type(), to.data_type())
         }
         (DataType::FixedSizeList(from, from_size), DataType::FixedSizeList(to, to_size))

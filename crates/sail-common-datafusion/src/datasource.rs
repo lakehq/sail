@@ -266,6 +266,8 @@ pub struct TableFormatCreateTableResult {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// Spark session zone used at external writer boundaries.
+    pub session_timezone: Arc<str>,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,

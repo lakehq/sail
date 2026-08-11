@@ -169,6 +169,10 @@ impl SparkTimestamp {
         self.timezone.as_deref()
     }
 
+    fn output_timezone(&self) -> Option<Arc<str>> {
+        self.timezone.as_ref().map(|_| Arc::from("UTC"))
+    }
+
     pub fn ansi_mode(&self) -> bool {
         self.ansi_mode
     }
@@ -181,6 +185,42 @@ impl SparkTimestamp {
     /// variant when ANSI is disabled.
     fn safe(&self) -> bool {
         self.is_try || !self.ansi_mode
+    }
+
+    pub(crate) fn parse_array(&self, array: &Arc<dyn Array>) -> Result<Arc<dyn Array>> {
+        let array =
+            self.parse_array_with_scalar_format(array, &ScalarFormat::Omitted, self.safe())?;
+        Ok(Arc::new(array.with_timezone_opt(self.output_timezone())))
+    }
+
+    fn parse_array_with_scalar_format(
+        &self,
+        array: &Arc<dyn Array>,
+        format: &ScalarFormat,
+        safe: bool,
+    ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
+        let parse = |value: &str| match format {
+            ScalarFormat::Format(format) => self
+                .parser
+                .formatted_string_to_microseconds(value, format, safe),
+            ScalarFormat::Omitted => self.parser.string_to_microseconds(value, safe),
+            ScalarFormat::Null => Ok(None),
+        };
+        match array.data_type() {
+            DataType::Utf8 => as_string_array(array)?
+                .iter()
+                .map(|value| value.map(&parse).transpose().map(|value| value.flatten()))
+                .collect(),
+            DataType::LargeUtf8 => as_large_string_array(array)?
+                .iter()
+                .map(|value| value.map(&parse).transpose().map(|value| value.flatten()))
+                .collect(),
+            DataType::Utf8View => as_string_view_array(array)?
+                .iter()
+                .map(|value| value.map(&parse).transpose().map(|value| value.flatten()))
+                .collect(),
+            _ => exec_err!("expected string array for `timestamp`"),
+        }
     }
 }
 
@@ -201,7 +241,7 @@ impl ScalarUDFImpl for SparkTimestamp {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
-            self.timezone.clone(),
+            self.output_timezone(),
         ))
     }
 
@@ -266,58 +306,8 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
             (ColumnarValue::Array(array), format) => {
                 let format = parse_scalar_format(format)?;
-                let array: PrimitiveArray<TimestampMicrosecondType> = match array.data_type() {
-                    DataType::Utf8 => as_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<_>>()?,
-                    DataType::LargeUtf8 => as_large_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<_>>()?,
-                    DataType::Utf8View => as_string_view_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<_>>()?,
-                    _ => return exec_err!("expected string array for `timestamp`"),
-                };
-                let array = array.with_timezone_opt(self.timezone.clone());
+                let array = self.parse_array_with_scalar_format(&array, &format, safe)?;
+                let array = array.with_timezone_opt(self.output_timezone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
@@ -325,7 +315,7 @@ impl ScalarUDFImpl for SparkTimestamp {
                 if matches!(format, ScalarFormat::Null) {
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                         None,
-                        self.timezone.clone(),
+                        self.output_timezone(),
                     )));
                 }
 
@@ -346,7 +336,7 @@ impl ScalarUDFImpl for SparkTimestamp {
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                     value,
-                    self.timezone.clone(),
+                    self.output_timezone(),
                 )))
             }
         }
@@ -392,7 +382,7 @@ impl SparkTimestamp {
             _ => return exec_err!("spark_timestamp format argument must be a string array"),
         };
         Ok(ColumnarValue::Array(Arc::new(
-            array.with_timezone_opt(self.timezone.clone()),
+            array.with_timezone_opt(self.output_timezone()),
         )))
     }
 

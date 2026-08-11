@@ -70,7 +70,7 @@ impl PlanResolver<'_> {
             let expr = if input_field.data_type() == target_field.data_type() {
                 expr
             } else {
-                expr.cast_to(target_field.data_type(), &input.schema())?
+                self.cast_assignment(expr, target_field.data_type(), input.schema())?
                     .alias_qualified(input_qualifier.cloned(), input_field.name())
             };
             projected_exprs.push(expr);

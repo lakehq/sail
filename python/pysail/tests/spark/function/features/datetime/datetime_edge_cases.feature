@@ -309,7 +309,6 @@ Feature: datetime edge cases
         | GMT+8:30  | -30600000000 |
         | +01:02:03 | -3723000000  |
 
-    @sail-bug
     Scenario: temporal kernels accept second-precision session offsets
       Given config spark.sql.session.timeZone = +01:02:03
       When query
@@ -477,6 +476,25 @@ Feature: datetime edge cases
       Then query result
         | ntz_cast   | ntz_try    | date_cast  | reverse_cast        | nested_timestamps     | nested_array   | nested_map  | nested_struct |
         | -3723000000 | -3723000000 | -3723000000 | 1970-01-01 01:02:03 | [1970-01-01 00:00:00] | [-3723000000] | -3723000000 | -3723000000   |
+
+    Scenario: nested string and LTZ casts use the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(element_at(CAST(array('1970-01-01 00:00:00') AS ARRAY<TIMESTAMP>), 1)) AS array_micros,
+          unix_micros(element_at(CAST(map('x', '1970-01-01 00:00:00') AS MAP<STRING,TIMESTAMP>), 'x')) AS map_micros,
+          unix_micros(CAST(named_struct('x', '1970-01-01 00:00:00') AS STRUCT<x:TIMESTAMP>).x) AS struct_micros,
+          element_at(CAST(array(TIMESTAMP '1970-01-01 00:00:00Z') AS ARRAY<STRING>), 1) AS array_value,
+          element_at(CAST(map('x', TIMESTAMP '1970-01-01 00:00:00Z') AS MAP<STRING,STRING>), 'x') AS map_value,
+          CAST(named_struct('x', TIMESTAMP '1970-01-01 00:00:00Z') AS STRUCT<x:STRING>).x AS struct_value,
+          CAST(array(TIMESTAMP '1970-01-01 00:00:00Z') AS STRING) AS array_display,
+          CAST(map('x', TIMESTAMP '1970-01-01 00:00:00Z') AS STRING) AS map_display,
+          CAST(named_struct('x', TIMESTAMP '1970-01-01 00:00:00Z') AS STRING) AS struct_display
+        """
+      Then query result
+        | array_micros | map_micros | struct_micros | array_value         | map_value           | struct_value        | array_display         | map_display                      | struct_display         |
+        | -3723000000  | -3723000000 | -3723000000   | 1970-01-01 01:02:03 | 1970-01-01 01:02:03 | 1970-01-01 01:02:03 | [1970-01-01 01:02:03] | {x -> 1970-01-01 01:02:03} | {1970-01-01 01:02:03} |
 
     Scenario Outline: current date expressions use the session-local date
       Given config spark.sql.session.timeZone = <zone>
@@ -658,6 +676,53 @@ Feature: datetime edge cases
          |-- date_result: timestamp (nullable = false)
         """
 
+    Scenario: timestamp applies Spark input-unit and session-zone conversions
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(timestamp(1)) AS numeric_seconds,
+          unix_micros(timestamp(DATE '1970-01-01')) AS date_value,
+          unix_micros(timestamp(TIMESTAMP_NTZ '1970-01-01 00:00:00')) AS ntz_value,
+          unix_micros(timestamp(TIMESTAMP_LTZ '1970-01-01 00:00:00Z')) AS ltz_value
+        """
+      Then query result
+        | numeric_seconds | date_value  | ntz_value   | ltz_value |
+        | 1000000         | -3723000000 | -3723000000 | 0         |
+
+    Scenario: struct serializers preserve second-precision session offsets
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          to_csv(named_struct('ts', TIMESTAMP '1970-01-01 00:00:00')) AS csv_default,
+          to_csv(
+            named_struct('ts', TIMESTAMP '1970-01-01 00:00:00'),
+            map('timestampFormat', 'yyyy/MM/dd HH:mm:ss XXXXX')
+          ) AS csv_custom,
+          to_json(named_struct('ts', TIMESTAMP '1970-01-01 00:00:00')) AS json_default,
+          to_json(
+            named_struct('ts', TIMESTAMP '1970-01-01 00:00:00'),
+            map('timestampFormat', 'yyyy/MM/dd HH:mm:ss XXXXX')
+          ) AS json_custom,
+          replace(
+            to_xml(named_struct('ts', TIMESTAMP '1970-01-01 00:00:00')),
+            '\n',
+            '~'
+          ) AS xml_default,
+          replace(
+            to_xml(
+              named_struct('ts', TIMESTAMP '1970-01-01 00:00:00'),
+              map('timestampFormat', 'yyyy/MM/dd HH:mm:ss XXXXX')
+            ),
+            '\n',
+            '~'
+          ) AS xml_custom
+        """
+      Then query result
+        | csv_default                           | csv_custom                         | json_default                                    | json_custom                                  | xml_default                                                    | xml_custom                                                  |
+        | 1970-01-01T00:00:00.000+01:02:03     | 1970/01/01 00:00:00 +01:02:03     | {"ts":"1970-01-01T00:00:00.000+01:02:03"}     | {"ts":"1970/01/01 00:00:00 +01:02:03"}     | <ROW>~    <ts>1970-01-01T00:00:00.000+01:02:03</ts>~</ROW>     | <ROW>~    <ts>1970/01/01 00:00:00 +01:02:03</ts>~</ROW>     |
+
     Scenario: timestampadd uses session-zone calendar arithmetic across DST
       Given config spark.sql.session.timeZone = America/Los_Angeles
       When query
@@ -734,6 +799,30 @@ Feature: datetime edge cases
          |-- ltz_to_ntz: timestamp_ntz (nullable = false)
         """
 
+    Scenario Outline: fallible string casts and lossless temporal casts report correct nullability
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          <expression> AS bad,
+          CAST(TIMESTAMP_NTZ '1970-01-01 00:00:00' AS TIMESTAMP) AS lossless
+        """
+      Then query result
+        | bad  | lossless            |
+        | NULL | 1970-01-01 00:00:00 |
+      And query schema
+        """
+        root
+         |-- bad: timestamp (nullable = true)
+         |-- lossless: timestamp (nullable = false)
+        """
+
+      Examples:
+        | ansi  | expression                    |
+        | true  | TRY_CAST('bad' AS TIMESTAMP)  |
+        | false | CAST('bad' AS TIMESTAMP)      |
+
     Scenario: folded epoch casts retain Spark's nullable schema
       When query
         """
@@ -755,3 +844,446 @@ Feature: datetime edge cases
          |-- ntz_cast: timestamp_ntz (nullable = true)
          |-- ntz_try: timestamp_ntz (nullable = true)
         """
+
+    Scenario: timestamp interval arithmetic follows Spark through DST gaps and overlaps
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          unix_micros(TIMESTAMP '2019-03-09 12:00:00' + INTERVAL 1 DAY) AS spring_day,
+          unix_micros(TIMESTAMP '2019-11-02 12:00:00' + INTERVAL 1 DAY) AS fall_day,
+          unix_micros(TIMESTAMP '2019-02-10 02:30:00' + INTERVAL 1 MONTH) AS gap_month,
+          unix_micros(TIMESTAMP '2019-10-03 01:30:00-07:00' + INTERVAL 1 MONTH) AS overlap_early,
+          unix_micros(TIMESTAMP '2019-12-03 01:30:00-08:00' - INTERVAL 1 MONTH) AS overlap_late,
+          unix_micros(TIMESTAMP '2019-11-03 01:30:00-08:00' + INTERVAL 0 MONTH) AS overlap_zero,
+          unix_micros(try_add(TIMESTAMP '2019-02-10 02:30:00', INTERVAL 1 MONTH)) AS try_gap,
+          unix_micros(try_subtract(TIMESTAMP '2019-12-03 01:30:00-08:00', INTERVAL 1 MONTH)) AS try_overlap
+        """
+      Then query result
+        | spring_day      | fall_day         | gap_month        | overlap_early    | overlap_late     | overlap_zero     | try_gap          | try_overlap      |
+        | 1552244400000000 | 1572811200000000 | 1552213800000000 | 1572769800000000 | 1572773400000000 | 1572773400000000 | 1552213800000000 | 1572773400000000 |
+
+    Scenario: timestampadd distinguishes calendar days from elapsed hours
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CAST(timestampadd(DAY, 1, TIMESTAMP '2019-03-09 12:00:00') AS STRING) AS spring_day,
+          CAST(TIMESTAMP '2019-03-09 12:00:00' + INTERVAL 24 HOURS AS STRING) AS spring_generic_hours,
+          CAST(timestampadd(HOUR, 24, TIMESTAMP '2019-03-09 12:00:00') AS STRING) AS spring_hours,
+          CAST(timestampadd(DAY, 1, TIMESTAMP '2019-11-02 12:00:00') AS STRING) AS fall_day,
+          CAST(TIMESTAMP '2019-11-02 12:00:00' + INTERVAL 24 HOURS AS STRING) AS fall_generic_hours,
+          CAST(timestampadd(HOUR, 24, TIMESTAMP '2019-11-02 12:00:00') AS STRING) AS fall_hours
+        """
+      Then query result
+        | spring_day          | spring_generic_hours | spring_hours        | fall_day            | fall_generic_hours  | fall_hours          |
+        | 2019-03-10 12:00:00 | 2019-03-10 12:00:00  | 2019-03-10 13:00:00 | 2019-11-03 12:00:00 | 2019-11-03 12:00:00 | 2019-11-03 11:00:00 |
+
+    Scenario: calendar interval components apply months before days
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CAST(TIMESTAMP '2019-02-09 02:30:00' + make_interval(0, 1, 0, 1) AS STRING) AS result,
+          unix_micros(TIMESTAMP '2019-02-09 02:30:00' + make_interval(0, 1, 0, 1)) AS micros
+        """
+      Then query result
+        | result              | micros           |
+        | 2019-03-10 03:30:00 | 1552213800000000 |
+
+    Scenario: try_add returns NULL on timestamp overflow
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT try_add(timestamp_micros(9223372036854775807), INTERVAL 1 MICROSECOND) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: timestamp subtraction uses session-local time across DST
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          TIMESTAMP '2019-03-10 12:00:00' - TIMESTAMP '2019-03-09 12:00:00' = INTERVAL 1 DAY AS spring,
+          TIMESTAMP '2019-11-03 12:00:00' - TIMESTAMP '2019-11-02 12:00:00' = INTERVAL 1 DAY AS fall,
+          try_subtract(TIMESTAMP '2019-03-10 12:00:00', TIMESTAMP '2019-03-09 12:00:00') = INTERVAL 1 DAY AS try_spring,
+          TIMESTAMP_NTZ '2019-03-10 12:00:00' - TIMESTAMP_NTZ '2019-03-09 12:00:00' = INTERVAL 1 DAY AS ntz
+        """
+      Then query result
+        | spring | fall | try_spring | ntz  |
+        | true   | true | true       | true |
+
+    Scenario: date and day-time interval arithmetic uses the session time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          unix_micros(DATE '2024-03-10' + INTERVAL 2 HOURS) AS gap,
+          unix_micros(INTERVAL 2 HOURS + DATE '2024-11-03') AS overlap,
+          unix_micros(DATE '2024-03-10' - INTERVAL 2 HOURS) AS subtract,
+          unix_micros(try_add(DATE '2024-03-10', INTERVAL 2 HOURS)) AS try_gap,
+          unix_micros(try_subtract(DATE '2024-11-03', INTERVAL 2 HOURS)) AS try_overlap
+        """
+      Then query result
+        | gap              | overlap         | subtract         | try_gap          | try_overlap      |
+        | 1710064800000000 | 1730624400000000 | 1710050400000000 | 1710064800000000 | 1730610000000000 |
+
+    Scenario: date and day-time interval arithmetic supports a second-precision session offset
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          unix_micros(DATE '1970-01-01' + INTERVAL 1 HOUR) AS add,
+          unix_micros(INTERVAL 1 HOUR + DATE '1970-01-01') AS reverse_add,
+          unix_micros(DATE '1970-01-01' - INTERVAL 1 HOUR) AS subtract
+        """
+      Then query result
+        | add        | reverse_add | subtract   |
+        | -123000000 | -123000000  | -7323000000 |
+
+    Scenario: listagg renders LTZ values and delimiters in the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          (
+            SELECT listagg(ts, TIMESTAMP '1970-01-01 00:00:01Z')
+            FROM VALUES
+              (1, TIMESTAMP '1970-01-01 00:00:00Z'),
+              (2, TIMESTAMP '1970-01-01 00:00:02Z') AS t(id, ts)
+          ) AS aggregate_result,
+          (
+            SELECT first(result)
+            FROM (
+              SELECT listagg(ts, TIMESTAMP '1970-01-01 00:00:01Z') OVER (
+                ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+              ) AS result
+              FROM VALUES
+                (1, TIMESTAMP '1970-01-01 00:00:00Z'),
+                (2, TIMESTAMP '1970-01-01 00:00:02Z') AS t(id, ts)
+            )
+          ) AS window_result
+        """
+      Then query result
+        | aggregate_result                                          | window_result                                             |
+        | 1970-01-01 01:02:031970-01-01 01:02:041970-01-01 01:02:05 | 1970-01-01 01:02:031970-01-01 01:02:041970-01-01 01:02:05 |
+
+    Scenario: ANSI set operations and VALUES localize inputs aligned to LTZ
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          (
+            SELECT sort_array(collect_list(unix_micros(ts)))
+            FROM (
+              SELECT TIMESTAMP_NTZ '1970-01-01 00:00:00' AS ts
+              UNION ALL
+              SELECT TIMESTAMP_LTZ '1970-01-01 00:00:00Z'
+            )
+          ) AS union_ntz,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts)))
+            FROM (
+              SELECT DATE '1970-01-01' AS ts
+              UNION ALL
+              SELECT TIMESTAMP_LTZ '1970-01-01 00:00:00Z'
+            )
+          ) AS union_date,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts)))
+            FROM (
+              SELECT '1970-01-01 00:00:00' AS ts
+              UNION ALL
+              SELECT TIMESTAMP_LTZ '1970-01-01 00:00:00Z'
+            )
+          ) AS union_string,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts)))
+            FROM VALUES
+              (TIMESTAMP_NTZ '1970-01-01 00:00:00'),
+              (TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS t(ts)
+          ) AS values_ntz,
+          (
+            SELECT unix_micros(ts)
+            FROM (
+              SELECT TIMESTAMP_NTZ '1970-01-01 00:00:00' AS ts
+              INTERSECT
+              SELECT TIMESTAMP_LTZ '1969-12-31 22:57:57Z'
+            )
+          ) AS intersect_ntz,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts)))
+            FROM (
+              (SELECT TIMESTAMP_NTZ '1970-01-01 00:00:00' AS ts
+               UNION ALL
+               SELECT TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+              EXCEPT
+              SELECT TIMESTAMP_LTZ '1969-12-31 22:57:57Z'
+            )
+          ) AS except_ntz,
+          (
+            SELECT sort_array(collect_list(unix_micros(element_at(ts, 1))))
+            FROM (
+              SELECT array(TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts
+              UNION ALL
+              SELECT array(TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+            )
+          ) AS union_array,
+          (
+            SELECT sort_array(collect_list(unix_micros(element_at(ts, 'x'))))
+            FROM (
+              SELECT map('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts
+              UNION ALL
+              SELECT map('x', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+            )
+          ) AS union_map,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts.x)))
+            FROM (
+              SELECT named_struct('x', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts
+              UNION ALL
+              SELECT named_struct('x', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+            )
+          ) AS union_struct
+        """
+      Then query result
+        | union_ntz        | union_date       | union_string     | values_ntz       | intersect_ntz | except_ntz | union_array      | union_map        | union_struct     |
+        | [-3723000000, 0] | [-3723000000, 0] | [-3723000000, 0] | [-3723000000, 0] | -3723000000   | [0]        | [-3723000000, 0] | [-3723000000, 0] | [-3723000000, 0] |
+
+    Scenario: legacy set operations render LTZ values before widening to string
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          (
+            SELECT sort_array(collect_list(ts))
+            FROM (
+              SELECT 'x' AS ts
+              UNION ALL
+              SELECT TIMESTAMP_LTZ '1970-01-01 00:00:00Z'
+            )
+          ) AS union_string,
+          (
+            SELECT sort_array(collect_list(element_at(ts, 1)))
+            FROM (
+              SELECT array('x') AS ts
+              UNION ALL
+              SELECT array(TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+            )
+          ) AS nested_string
+        """
+      Then query result
+        | union_string                 | nested_string                |
+        | [1970-01-01 01:02:03, x]     | [1970-01-01 01:02:03, x]     |
+
+    Scenario: nested LTZ common types use Spark's case-insensitive resolver by default
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT
+          (
+            SELECT sort_array(collect_list(unix_micros(ts.A)))
+            FROM (
+              SELECT named_struct('A', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts
+              UNION ALL
+              SELECT named_struct('a', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+            )
+          ) AS union_result,
+          (
+            SELECT sort_array(collect_list(unix_micros(ts.A)))
+            FROM VALUES
+              (named_struct('A', TIMESTAMP_NTZ '1970-01-01 00:00:00')),
+              (named_struct('a', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')) AS t(ts)
+          ) AS values_result
+        """
+      Then query result
+        | union_result      | values_result     |
+        | [-3723000000, 0] | [-3723000000, 0] |
+
+    Scenario: case-sensitive LTZ set operations reject differently cased nested fields
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT named_struct('A', TIMESTAMP_NTZ '1970-01-01 00:00:00') AS ts
+        UNION ALL
+        SELECT named_struct('a', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')
+        """
+      Then query error (?i)(incompatible|different|struct|type|schema)
+
+    Scenario: case-sensitive VALUES reject differently cased nested LTZ fields
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT *
+        FROM VALUES
+          (named_struct('A', TIMESTAMP_NTZ '1970-01-01 00:00:00')),
+          (named_struct('a', TIMESTAMP_LTZ '1970-01-01 00:00:00Z')) AS t(ts)
+        """
+      Then query error (?i)(incompatible|different|struct|type|schema)
+
+    Scenario: ANSI set operations reject string-to-timestamp map key coercion
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT map('1970-01-01 00:00:00', 1) AS value
+        UNION ALL
+        SELECT map(TIMESTAMP_LTZ '1970-01-01 00:00:00', 2)
+        """
+      Then query error (?i)(incompatible|different|map|type)
+
+    Scenario: legacy set operations widen temporal map keys to session-local strings
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT element_at(map_keys(value), 1) AS key
+        FROM (
+          SELECT map('1970-01-01 00:00:00', 1) AS value
+          UNION ALL
+          SELECT map(TIMESTAMP_LTZ '1970-01-01 00:00:00Z', 2)
+        )
+        ORDER BY key
+        """
+      Then query result
+        | key                 |
+        | 1970-01-01 00:00:00 |
+        | 1970-01-01 01:02:03 |
+
+    Scenario Outline: VALUES rejects string-to-timestamp map key coercion
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT *
+        FROM VALUES
+          (map('1970-01-01 00:00:00', 1)),
+          (map(TIMESTAMP_LTZ '1970-01-01 00:00:00Z', 2)) AS t(value)
+        """
+      Then query error (?i)(incompatible|inconsistent).*type
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: VALUES rejects mixed string and LTZ inputs
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT *
+        FROM VALUES
+          ('x'),
+          (TIMESTAMP_LTZ '1970-01-01 00:00:00Z') AS t(ts)
+        """
+      Then query error (?i)(incompatible|inconsistent).*type
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: lag and lead localize LTZ defaults in the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      When query
+        """
+        SELECT
+          id,
+          unix_micros(<expression> OVER (ORDER BY id)) AS micros
+        FROM VALUES
+          (1, TIMESTAMP_LTZ '1970-01-01 00:00:00Z'),
+          (2, TIMESTAMP_LTZ '1970-01-01 00:00:01Z') AS t(id, ts)
+        ORDER BY id
+        """
+      Then query result
+        | id | micros      |
+        | 1  | <first>     |
+        | 2  | <second>    |
+
+      Examples:
+        | expression                                              | first       | second      |
+        | lag(ts, 1, TIMESTAMP_NTZ '1970-01-01 00:00:00')         | -3723000000 | 0           |
+        | lead(ts, 1, DATE '1970-01-01')                          | 1000000     | -3723000000 |
+        | lead(ts, 1, '1970-01-01 00:00:00')                      | 1000000     | -3723000000 |
+
+    Scenario: calendar consumers interpret LTZ instants in the session time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          hour(TIMESTAMP '2025-03-09 09:30:00Z') AS extracted_hour,
+          date_part('HOUR', TIMESTAMP '2025-03-09 09:30:00Z') AS date_part_hour,
+          to_date(TIMESTAMP '2025-03-09 07:30:00Z') AS local_date,
+          last_day(TIMESTAMP '2025-03-01 07:30:00Z') AS local_last_day,
+          next_day(TIMESTAMP '2025-03-10 00:30:00Z', 'MON') AS local_next_day,
+          trunc(TIMESTAMP '2025-03-01 07:30:00Z', 'MONTH') AS local_trunc,
+          months_between(
+            TIMESTAMP '2000-02-29 00:00:00Z',
+            TIMESTAMP '1997-03-01 00:00:00Z'
+          ) AS local_months,
+          timestampdiff(
+            HOUR,
+            TIMESTAMP '2019-03-09 12:00:00',
+            TIMESTAMP '2019-03-10 12:00:00'
+          ) AS local_hours
+        """
+      Then query result
+        | extracted_hour | date_part_hour | local_date | local_last_day | local_next_day | local_trunc | local_months | local_hours |
+        | 1              | 1              | 2025-03-08 | 2025-02-28     | 2025-03-10     | 2025-02-01  | 36.0         | 24          |
+
+    Scenario: implicit temporal and string coercions use the session time zone
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          TIMESTAMP '1970-01-01 00:00:00Z' = '1970-01-01 01:02:03' AS equality,
+          TIMESTAMP '1970-01-01 00:00:00Z' BETWEEN '1970-01-01 01:02:02' AND '1970-01-01 01:02:04' AS range_match,
+          TIMESTAMP '1970-01-01 00:00:00Z' IN ('1970-01-01 01:02:03') AS in_match,
+          DATE '2020-01-01' = 'bad' AS invalid_date_comparison,
+          DATE '2020-01-01' IN ('bad') AS invalid_date_in,
+          equal_null(TIMESTAMP '1970-01-01 00:00:00Z', '1970-01-01 01:02:03') AS null_safe_match,
+          CASE WHEN true THEN TIMESTAMP '1970-01-01 00:00:00Z' ELSE 'x' END AS case_value,
+          greatest(TIMESTAMP '1970-01-01 00:00:00Z', '0') AS greatest_value,
+          array_join(array(TIMESTAMP '1970-01-01 00:00:00Z', 'x'), ',') AS array_value,
+          concat_ws(',', TIMESTAMP '1970-01-01 00:00:00Z', array(TIMESTAMP '1970-01-01 00:00:00Z')) AS concatenated,
+          array_contains(array(TIMESTAMP '1970-01-01 00:00:00'), DATE '1970-01-01') AS array_match,
+          map_contains_key(map(TIMESTAMP '1970-01-01 00:00:00', 'x'), DATE '1970-01-01') AS map_match
+        """
+      Then query result
+        | equality | range_match | in_match | invalid_date_comparison | invalid_date_in | null_safe_match | case_value          | greatest_value      | array_value            | concatenated                               | array_match | map_match |
+        | true     | true        | true     | NULL                    | false           | true            | 1970-01-01 01:02:03 | 1970-01-01 01:02:03 | 1970-01-01 01:02:03,x | 1970-01-01 01:02:03,1970-01-01 01:02:03 | true        | true      |
+
+    Scenario: row-dependent temporal comparisons parse strings across DST
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          id,
+          value = local_text AS equality,
+          value BETWEEN local_text AND local_text AS range_match,
+          value IN (local_text) AS in_match
+        FROM VALUES
+          (1, TIMESTAMP '2025-03-09 09:30:00Z', '2025-03-09 01:30:00'),
+          (2, TIMESTAMP '2025-03-09 10:30:00Z', '2025-03-09 03:30:00'),
+          (3, TIMESTAMP '2025-11-02 08:30:00Z', '2025-11-02 01:30:00')
+        AS t(id, value, local_text)
+        ORDER BY id
+        """
+      Then query result
+        | id | equality | range_match | in_match |
+        | 1  | true     | true        | true     |
+        | 2  | true     | true        | true     |
+        | 3  | true     | true        | true     |

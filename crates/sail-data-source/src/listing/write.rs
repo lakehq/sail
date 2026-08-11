@@ -18,6 +18,7 @@ pub struct FileWriteOptions {
     pub format: Arc<dyn WriteFormat>,
     pub url: Url,
     pub overwrite: bool,
+    pub session_timezone: Arc<str>,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<Sort>,
 }

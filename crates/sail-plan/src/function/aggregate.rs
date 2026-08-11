@@ -38,6 +38,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -564,11 +565,23 @@ fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Ex
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
+    let session_timezone = &input.function_context.plan_config.session_timezone;
     let (agg_col, other_args) = input.arguments.at_least_one()?;
-    if agg_col.get_type(schema)? == DataType::Null {
+    let agg_col_type = agg_col.get_type(schema)?;
+    if agg_col_type == DataType::Null {
         return Ok(lit(ScalarValue::Null));
     }
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
+    let agg_col = if matches!(&agg_col_type, DataType::Timestamp(_, Some(_))) {
+        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![agg_col])
+    } else {
+        agg_col
+    };
+    let delim = if matches!(delim.get_type(schema)?, DataType::Timestamp(_, Some(_))) {
+        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![delim])
+    } else {
+        delim.cast_to(&DataType::Utf8, schema)?
+    };
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
@@ -594,10 +607,10 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             ))),
             schema,
         )?,
-        delim.cast_to(&DataType::Utf8, schema)?,
+        delim,
     );
 
-    let casted_agg = match agg_col.get_type(schema)? {
+    let casted_agg = match agg_col_type {
         DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
         DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
         _ => string_agg,

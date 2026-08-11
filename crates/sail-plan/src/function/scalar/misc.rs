@@ -27,6 +27,21 @@ use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
+fn equal_null(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) = super::predicate::coerce_temporal_comparison(
+        left,
+        right,
+        input.function_context.schema,
+        input.function_context.plan_config,
+    )?;
+    Ok(expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        Box::new(left),
+        Operator::IsNotDistinctFrom,
+        Box::new(right),
+    )))
+}
+
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (err_msg, col) = if arguments.len() == 1 {
@@ -191,7 +206,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("current_user", F::custom(current_user)),
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
-        ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
+        ("equal_null", F::custom(equal_null)),
         (
             "hll_sketch_estimate",
             F::udf(HllSketchEstimateFunction::new()),

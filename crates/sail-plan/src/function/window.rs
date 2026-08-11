@@ -15,7 +15,8 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition, cast, expr, lit, when,
+    AggregateUDF, ExprSchemable, ScalarUDF, WindowFrame, WindowFunctionDefinition, WindowUDF, cast,
+    expr, lit, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -38,19 +39,59 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    WinFunction, WinFunctionBuilder, WinFunctionInput, count_min_sketch_args,
+    get_arguments_and_null_treatment, get_null_treatment, hll_args_with_default_lg,
+    hll_union_args_with_default_allow_different_lg, theta_args_with_default_lg,
 };
-use crate::function::transform_count_star_wildcard_expr;
+use crate::function::{coerce_temporal_expr, transform_count_star_wildcard_expr};
 
 lazy_static! {
     static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
         HashMap::from_iter(list_built_in_window_functions());
+}
+
+fn lead_lag(input: WinFunctionInput, function: fn() -> Arc<WindowUDF>) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        mut arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context,
+    } = input;
+    if arguments.len() == 3 {
+        let value_type = arguments[0].get_type(function_context.schema)?;
+        let default_type = arguments[2].get_type(function_context.schema)?;
+        arguments[2] = coerce_temporal_expr(
+            arguments[2].clone(),
+            &default_type,
+            &value_type,
+            function_context.plan_config,
+        )?;
+    }
+    WinFunctionBuilder::window(function)(WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context,
+    })
+}
+
+fn lag(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    lead_lag(input, lag_udwf)
+}
+
+fn lead(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    lead_lag(input, lead_udwf)
 }
 
 fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -528,11 +569,23 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let schema = function_context.schema;
+    let session_timezone = &function_context.plan_config.session_timezone;
     let (agg_col, other_args) = arguments.at_least_one()?;
-    if agg_col.get_type(schema)? == DataType::Null {
+    let agg_col_type = agg_col.get_type(schema)?;
+    if agg_col_type == DataType::Null {
         return Ok(lit(ScalarValue::Null));
     }
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
+    let agg_col = if matches!(&agg_col_type, DataType::Timestamp(_, Some(_))) {
+        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![agg_col])
+    } else {
+        agg_col
+    };
+    let delim = if matches!(delim.get_type(schema)?, DataType::Timestamp(_, Some(_))) {
+        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![delim])
+    } else {
+        delim.cast_to(&DataType::Utf8, schema)?
+    };
 
     let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
@@ -561,10 +614,10 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             ))),
             schema,
         )?,
-        delim.cast_to(&DataType::Utf8, schema)?,
+        delim,
     );
 
-    let casted_agg = match agg_col.get_type(schema)? {
+    let casted_agg = match agg_col_type {
         DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
         DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
         _ => string_agg,
@@ -663,10 +716,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("dense_rank", F::window(dense_rank_udwf)),
         ("first", F::window(first_value_udwf)),
         ("first_value", F::window(first_value_udwf)),
-        ("lag", F::window(lag_udwf)),
+        ("lag", F::custom(lag)),
         ("last", F::window(last_value_udwf)),
         ("last_value", F::window(last_value_udwf)),
-        ("lead", F::window(lead_udwf)),
+        ("lead", F::custom(lead)),
         ("nth_value", F::custom(nth_value)),
         ("ntile", F::window(spark_ntile_udwf)),
         ("rank", F::window(rank_udwf)),

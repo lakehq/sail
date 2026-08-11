@@ -49,9 +49,9 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
             return plan_err!("`try_to_timestamp` function requires at least 1 argument");
         };
         match first {
-            DataType::Timestamp(_, Some(tz)) => Ok(DataType::Timestamp(
+            DataType::Timestamp(_, Some(_)) => Ok(DataType::Timestamp(
                 TimeUnit::Microsecond,
-                Some(Arc::clone(tz)),
+                Some(Arc::from("UTC")),
             )),
             _ => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         }

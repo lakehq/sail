@@ -38,7 +38,7 @@ impl RateStreamSource {
             [t, v] => {
                 if !matches!(
                     t.data_type(),
-                    DataType::Timestamp(TimeUnit::Microsecond, Some(_tz))
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC"
                 ) {
                     plan_err!("invalid timestamp type for rate table")
                 } else if !matches!(v.data_type(), DataType::Int64) {
@@ -81,7 +81,6 @@ impl StreamSource for RateStreamSource {
 #[derive(Debug)]
 pub struct RateSourceExec {
     options: RateReadOptions,
-    time_zone: Arc<str>,
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
@@ -96,7 +95,6 @@ impl RateSourceExec {
         schema: SchemaRef,
         projection: Vec<usize>,
     ) -> Result<Self> {
-        let time_zone = Self::infer_time_zone(&schema)?;
         let projected_schema = Arc::new(schema.project(&projection)?);
         let output_schema = Arc::new(to_flow_event_schema(&projected_schema));
         let properties = Arc::new(PlanProperties::new(
@@ -109,7 +107,6 @@ impl RateSourceExec {
         ));
         Ok(Self {
             options,
-            time_zone,
             original_schema: schema,
             projected_schema,
             projection,
@@ -127,21 +124,6 @@ impl RateSourceExec {
 
     pub fn projection(&self) -> &[usize] {
         &self.projection
-    }
-
-    fn infer_time_zone(schema: &Schema) -> Result<Arc<str>> {
-        match schema.fields.iter().as_slice() {
-            [t, _] => {
-                if let DataType::Timestamp(_, Some(tz)) = t.data_type() {
-                    Ok(Arc::clone(tz))
-                } else {
-                    plan_err!("invalid timestamp type for rate table schema")
-                }
-            }
-            _ => {
-                plan_err!("invalid schema for rate table")
-            }
-        }
     }
 }
 
@@ -215,11 +197,8 @@ impl ExecutionPlan for RateSourceExec {
                 let batches_per_second = rows_per_second.min(1_000);
                 let batch_size = rows_per_second / batches_per_second;
                 let interval = Duration::from_secs(1) / (batches_per_second as u32);
-                let generator = BatchGenerator::try_new(
-                    Arc::clone(&self.time_zone),
-                    &self.projection,
-                    self.projected_schema.clone(),
-                )?;
+                let generator =
+                    BatchGenerator::try_new(&self.projection, self.projected_schema.clone())?;
                 let output = futures::stream::unfold(generator, move |mut generator| async move {
                     // The interval does not take into account the time it takes to generate data,
                     // but the sleep itself is inaccurate anyway.
@@ -251,16 +230,11 @@ enum BatchGeneratorAction {
 struct BatchGenerator {
     offset: usize,
     projected_schema: SchemaRef,
-    time_zone: Arc<str>,
     actions: Vec<BatchGeneratorAction>,
 }
 
 impl BatchGenerator {
-    fn try_new(
-        time_zone: Arc<str>,
-        projection: &[usize],
-        projected_schema: SchemaRef,
-    ) -> Result<Self> {
+    fn try_new(projection: &[usize], projected_schema: SchemaRef) -> Result<Self> {
         let mut actions = vec![];
         let mut timestamp_index = None;
         let mut value_index = None;
@@ -290,7 +264,6 @@ impl BatchGenerator {
         Ok(Self {
             offset: 0,
             projected_schema,
-            time_zone,
             actions,
         })
     }
@@ -301,8 +274,8 @@ impl BatchGenerator {
             match action {
                 BatchGeneratorAction::Timestamp => {
                     let ts = chrono::Utc::now().timestamp_micros();
-                    let array = TimestampMicrosecondArray::from(vec![ts; batch_size])
-                        .with_timezone(Arc::clone(&self.time_zone));
+                    let array =
+                        TimestampMicrosecondArray::from(vec![ts; batch_size]).with_timezone("UTC");
                     columns.push(Arc::new(array) as _);
                 }
                 BatchGeneratorAction::Value => {
@@ -320,5 +293,29 @@ impl BatchGenerator {
         self.offset += batch_size;
         RecordBatch::try_new(self.projected_schema.clone(), columns)
             .map_err(|e| arrow_datafusion_err!(e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    fn rate_schema(timezone: &str) -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(timezone))),
+                true,
+            ),
+            Field::new("value", DataType::Int64, true),
+        ]))
+    }
+
+    #[test]
+    fn rate_source_requires_canonical_utc_timestamp_metadata() {
+        assert!(RateStreamSource::validate_schema(&rate_schema("UTC")).is_ok());
+        assert!(RateStreamSource::validate_schema(&rate_schema("+01:02:03")).is_err());
     }
 }

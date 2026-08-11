@@ -20,6 +20,7 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+pub(crate) use merge::store_assignment_compatible;
 mod show;
 mod variable;
 mod with_relations;

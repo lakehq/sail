@@ -12,13 +12,12 @@ use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{IntoPyObject, Py, PyAny, PyRef, PyRefMut, PyResult, Python, pyclass, pymethods};
 use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
-use sail_pyarrow::FromPyArrow;
 use tokio::runtime::Handle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::conversion::TryToPy;
+use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 
 struct PyInputStreamState {
@@ -40,6 +39,7 @@ struct PyInputStream {
     state: Arc<tokio::sync::Mutex<PyInputStreamState>>,
     handle: Handle,
     large_var_types: bool,
+    session_timezone: String,
 }
 
 impl PyInputStream {
@@ -48,6 +48,7 @@ impl PyInputStream {
         signal: oneshot::Receiver<()>,
         handle: Handle,
         large_var_types: bool,
+        session_timezone: String,
     ) -> Self {
         Self {
             state: Arc::new(tokio::sync::Mutex::new(PyInputStreamState {
@@ -56,6 +57,7 @@ impl PyInputStream {
             })),
             handle,
             large_var_types,
+            session_timezone,
         }
     }
 }
@@ -70,6 +72,7 @@ impl PyInputStream {
         let state = Arc::clone(&self_.state);
         let handle = self_.handle.clone();
         let large_var_types = self_.large_var_types;
+        let session_timezone = self_.session_timezone.clone();
         let py = self_.py();
         py.detach(|| {
             handle.block_on(async {
@@ -81,7 +84,12 @@ impl PyInputStream {
                     .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
             })
         })
-        .map(|x| x.and_then(|x| x.try_to_py(py, large_var_types).map(|batch| batch.unbind())))
+        .map(|x| {
+            x.and_then(|x| {
+                x.try_to_py(py, large_var_types, Some(&session_timezone))
+                    .map(|batch| batch.unbind())
+            })
+        })
         .unwrap_or(Err(PyStopIteration::new_err("")))
     }
 }
@@ -107,6 +115,7 @@ impl PyMapStream {
         function: Py<PyAny>,
         output_schema: SchemaRef,
         large_var_types: bool,
+        session_timezone: String,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
         let (signal_tx, signal_rx) = oneshot::channel();
@@ -125,6 +134,7 @@ impl PyMapStream {
                     output_tx.clone(),
                     handle,
                     large_var_types,
+                    session_timezone,
                 )
             }) {
                 Ok(()) => {}
@@ -154,12 +164,13 @@ impl PyMapStream {
         sender: mpsc::Sender<Result<RecordBatch>>,
         handle: Handle,
         large_var_types: bool,
+        session_timezone: String,
     ) -> PyUdfResult<()> {
         // Create a Python iterator from the input record batch stream and call the function.
         // We could have wrap each record batch in a single-element list and call the function
         // for each record batch, but that does not work if the user wants to maintain state
         // across record batches.
-        let input = PyInputStream::new(input, signal, handle, large_var_types);
+        let input = PyInputStream::new(input, signal, handle, large_var_types, session_timezone);
         let input = input.into_pyobject(py)?;
         let output = function.call1(py, (input,))?.into_bound(py);
         for batch in output.try_iter()? {
@@ -168,7 +179,7 @@ impl PyMapStream {
             if batch.as_ref().is_ok_and(|x| x.is_empty().unwrap_or(false)) {
                 continue;
             }
-            let batch = batch.and_then(|x| RecordBatch::from_pyarrow_bound(&x));
+            let batch = batch.and_then(|x| RecordBatch::try_from_py(py, &x.unbind()));
             if py
                 .detach(|| {
                     let batch = batch

@@ -4,11 +4,9 @@ use datafusion::arrow::array::{
     ArrayRef, BinaryArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
     TimestampMicrosecondArray,
 };
-use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::arrow::array::ArrayData;
-
-use crate::formats::binary::time_zone_from_read_schema;
 
 #[derive(Debug, Clone)]
 pub struct BinaryFileMetadata {
@@ -49,14 +47,10 @@ impl BinaryFileReader {
                     columns.push(Arc::clone(arr));
                 }
                 "modificationTime" => {
-                    let tz = match field.data_type() {
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => tz.clone(),
-                        _ => time_zone_from_read_schema(&self.schema)?,
-                    };
                     let arr = modification_time_array.get_or_insert_with(|| {
                         Arc::new(
                             TimestampMicrosecondArray::from(vec![self.metadata.modification_time])
-                                .with_timezone(tz),
+                                .with_timezone("UTC"),
                         ) as _
                     });
                     columns.push(Arc::clone(arr));
@@ -125,7 +119,7 @@ mod tests {
         };
         let content = vec![0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let schema = read_schema(Arc::from("UTC"));
+        let schema = read_schema();
         let reader = BinaryFileReader::new(metadata, content, schema);
 
         let batch = reader.read()?;
@@ -144,6 +138,7 @@ mod tests {
             .as_any()
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
+        assert_eq!(time_col.timezone(), Some("UTC"));
         assert_eq!(time_col.value(0), 1234567890000000);
 
         let length_col = batch
@@ -172,7 +167,7 @@ mod tests {
         };
         let png_content = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-        let schema = read_schema(Arc::from("UTC"));
+        let schema = read_schema();
         let png_reader = BinaryFileReader::new(png_metadata, png_content.clone(), schema);
         let png_batch = png_reader.read()?;
 
@@ -197,7 +192,7 @@ mod tests {
         };
         let pdf_content = vec![0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A];
 
-        let schema = read_schema(Arc::from("UTC"));
+        let schema = read_schema();
         let pdf_reader = BinaryFileReader::new(pdf_metadata, pdf_content.clone(), schema);
         let pdf_batch = pdf_reader.read()?;
 
@@ -231,7 +226,7 @@ mod tests {
             0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
         ];
 
-        let schema = read_schema(Arc::from("UTC"));
+        let schema = read_schema();
         let jpeg_reader = BinaryFileReader::new(jpeg_metadata, jpeg_content.clone(), schema);
         let jpeg_batch = jpeg_reader.read()?;
 
@@ -268,7 +263,7 @@ mod tests {
         };
         let content = vec![];
 
-        let schema = read_schema(Arc::from("UTC"));
+        let schema = read_schema();
         let reader = BinaryFileReader::new(metadata, content, schema);
         let batch = reader.read()?;
 

@@ -57,24 +57,14 @@ impl TableFormat for RateTableFormat {
 
         let schema = match schema {
             Some(schema) if !schema.fields.is_empty() => schema,
-            _ => {
-                let tz = Arc::from(
-                    ctx.config()
-                        .options()
-                        .execution
-                        .time_zone
-                        .clone()
-                        .unwrap_or_else(|| "UTC".to_string()),
-                );
-                Schema::new(vec![
-                    Arc::new(Field::new(
-                        "timestamp",
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
-                        true,
-                    )),
-                    Arc::new(Field::new("value", DataType::Int64, true)),
-                ])
-            }
+            _ => Schema::new(vec![
+                Arc::new(Field::new(
+                    "timestamp",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+                    true,
+                )),
+                Arc::new(Field::new("value", DataType::Int64, true)),
+            ]),
         };
         let options = RateReadOptions::resolve(ctx, options)?;
         let source = RateStreamSource::try_new(options, Arc::new(schema))?;

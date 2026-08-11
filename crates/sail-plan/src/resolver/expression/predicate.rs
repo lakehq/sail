@@ -4,6 +4,7 @@ use datafusion_expr_common::operator::Operator;
 use sail_common::spec;
 
 use crate::error::PlanResult;
+use crate::function::{coerce_temporal_comparison, coerce_temporal_in_list};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -19,11 +20,12 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
+        let expr = self.resolve_expression(expr, schema, state).await?;
         let list = self.resolve_expressions(list, schema, state).await?;
+        let (expr, list) = coerce_temporal_in_list(expr, list, schema, &self.config)?;
         Ok(NamedExpr::new(
             vec!["in_list".to_string()],
-            expr::Expr::InList(expr::InList::new(expr, list, negated)),
+            expr::Expr::InList(expr::InList::new(Box::new(expr), list, negated)),
         ))
     }
 
@@ -143,15 +145,18 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let low = self.resolve_expression(low, schema, state).await?;
         let high = self.resolve_expression(high, schema, state).await?;
+        let (greater_expr, low) =
+            coerce_temporal_comparison(expr.clone(), low, schema, &self.config)?;
+        let (less_expr, high) = coerce_temporal_comparison(expr, high, schema, &self.config)?;
 
         // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
         let greater_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(expr.clone()),
+            Box::new(greater_expr),
             Operator::GtEq,
             Box::new(low),
         ));
         let less_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(expr),
+            Box::new(less_expr),
             Operator::LtEq,
             Box::new(high),
         ));
@@ -177,6 +182,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
+        let (left, right) = coerce_temporal_comparison(left, right, schema, &self.config)?;
         Ok(NamedExpr::new(
             vec!["is_distinct_from".to_string()],
             expr::Expr::BinaryExpr(BinaryExpr {
@@ -196,6 +202,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
+        let (left, right) = coerce_temporal_comparison(left, right, schema, &self.config)?;
         Ok(NamedExpr::new(
             vec!["is_not_distinct_from".to_string()],
             expr::Expr::BinaryExpr(BinaryExpr {

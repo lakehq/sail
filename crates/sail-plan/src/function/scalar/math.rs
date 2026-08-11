@@ -12,6 +12,8 @@ use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_timestamp_interval::SparkTimestampInterval;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -35,6 +37,94 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+fn greatest(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let indices = (0..arguments.len()).collect::<Vec<_>>();
+    let arguments =
+        super::conditional::coerce_temporal_values(arguments, &indices, &function_context)?;
+    Ok(expr_fn::greatest(arguments))
+}
+
+fn least(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let indices = (0..arguments.len()).collect::<Vec<_>>();
+    let arguments =
+        super::conditional::coerce_temporal_values(arguments, &indices, &function_context)?;
+    Ok(expr_fn::least(arguments))
+}
+
+fn is_timestamp_interval(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Duration(_)
+            | DataType::Interval(
+                IntervalUnit::YearMonth | IntervalUnit::DayTime | IntervalUnit::MonthDayNano
+            )
+    )
+}
+
+fn is_day_time_interval(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Duration(_) | DataType::Interval(IntervalUnit::DayTime)
+    )
+}
+
+fn timestamp_interval(
+    timestamp: Expr,
+    interval: Expr,
+    session_timezone: Arc<str>,
+    subtract: bool,
+    safe: bool,
+) -> Expr {
+    ScalarUDF::from(SparkTimestampInterval::new(
+        session_timezone,
+        subtract,
+        safe,
+    ))
+    .call(vec![timestamp, interval])
+}
+
+fn local_timestamp(timestamp: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {
+    ScalarUDF::from(SparkTimezoneCast::new(
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        session_timezone,
+        safe,
+    ))
+    .call(vec![timestamp])
+}
+
+fn date_timestamp(date: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {
+    ScalarUDF::from(SparkTimezoneCast::new(
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+        session_timezone,
+        safe,
+    ))
+    .call(vec![date])
+}
+
+fn timestamp_difference(left: Expr, right: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {
+    let left = local_timestamp(left, Arc::clone(&session_timezone), safe);
+    let right = local_timestamp(right, session_timezone, safe);
+    if safe {
+        cast(
+            ScalarUDF::from(SparkTrySubtract::new()).call(vec![
+                cast(left, DataType::Int64),
+                cast(right, DataType::Int64),
+            ]),
+            DataType::Duration(TimeUnit::Microsecond),
+        )
+    } else {
+        left - right
+    }
+}
 
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
@@ -63,17 +153,57 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
-            (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+            (Ok(DataType::Date32), Ok(right_type)) if is_day_time_interval(&right_type) => {
+                timestamp_interval(
+                    date_timestamp(
+                        left,
+                        function_context.plan_config.session_timezone.clone(),
+                        false,
+                    ),
+                    right,
+                    function_context.plan_config.session_timezone.clone(),
+                    false,
+                    false,
+                )
             }
-            (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
-                cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+            (Ok(left_type), Ok(DataType::Date32)) if is_day_time_interval(&left_type) => {
+                timestamp_interval(
+                    date_timestamp(
+                        right,
+                        function_context.plan_config.session_timezone.clone(),
+                        false,
+                    ),
+                    left,
+                    function_context.plan_config.session_timezone.clone(),
+                    false,
+                    false,
+                )
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) + right, DataType::Date32)
+            }
+            (Ok(DataType::Timestamp(_, _)), Ok(right_type))
+                if is_timestamp_interval(&right_type) =>
+            {
+                timestamp_interval(
+                    left,
+                    right,
+                    function_context.plan_config.session_timezone.clone(),
+                    false,
+                    false,
+                )
+            }
+            (Ok(left_type), Ok(DataType::Timestamp(_, _))) if is_timestamp_interval(&left_type) => {
+                timestamp_interval(
+                    right,
+                    left,
+                    function_context.plan_config.session_timezone.clone(),
+                    false,
+                    false,
+                )
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
@@ -120,12 +250,39 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
-            (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-                left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+            (Ok(DataType::Date32), Ok(right_type)) if is_day_time_interval(&right_type) => {
+                timestamp_interval(
+                    date_timestamp(
+                        left,
+                        function_context.plan_config.session_timezone.clone(),
+                        false,
+                    ),
+                    right,
+                    function_context.plan_config.session_timezone.clone(),
+                    true,
+                    false,
+                )
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
             }
+            (Ok(DataType::Timestamp(_, _)), Ok(right_type))
+                if is_timestamp_interval(&right_type) =>
+            {
+                timestamp_interval(
+                    left,
+                    right,
+                    function_context.plan_config.session_timezone.clone(),
+                    true,
+                    false,
+                )
+            }
+            (Ok(DataType::Timestamp(_, _)), Ok(DataType::Timestamp(_, _))) => timestamp_difference(
+                left,
+                right,
+                function_context.plan_config.session_timezone.clone(),
+                false,
+            ),
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
             (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left - right,
@@ -659,6 +816,104 @@ fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     ))
 }
 
+fn spark_try_add(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let left_type = left.get_type(function_context.schema)?;
+    let right_type = right.get_type(function_context.schema)?;
+    if matches!(&left_type, DataType::Date32) && is_day_time_interval(&right_type) {
+        return Ok(timestamp_interval(
+            date_timestamp(
+                left,
+                function_context.plan_config.session_timezone.clone(),
+                true,
+            ),
+            right,
+            function_context.plan_config.session_timezone.clone(),
+            false,
+            true,
+        ));
+    }
+    if is_day_time_interval(&left_type) && matches!(&right_type, DataType::Date32) {
+        return Ok(timestamp_interval(
+            date_timestamp(
+                right,
+                function_context.plan_config.session_timezone.clone(),
+                true,
+            ),
+            left,
+            function_context.plan_config.session_timezone.clone(),
+            false,
+            true,
+        ));
+    }
+    if matches!(&left_type, DataType::Timestamp(_, _)) && is_timestamp_interval(&right_type) {
+        return Ok(timestamp_interval(
+            left,
+            right,
+            function_context.plan_config.session_timezone.clone(),
+            false,
+            true,
+        ));
+    }
+    if is_timestamp_interval(&left_type) && matches!(&right_type, DataType::Timestamp(_, _)) {
+        return Ok(timestamp_interval(
+            right,
+            left,
+            function_context.plan_config.session_timezone.clone(),
+            false,
+            true,
+        ));
+    }
+    Ok(ScalarUDF::from(SparkTryAdd::new()).call(vec![left, right]))
+}
+
+fn spark_try_subtract(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let left_type = left.get_type(function_context.schema)?;
+    let right_type = right.get_type(function_context.schema)?;
+    if matches!(&left_type, DataType::Date32) && is_day_time_interval(&right_type) {
+        return Ok(timestamp_interval(
+            date_timestamp(
+                left,
+                function_context.plan_config.session_timezone.clone(),
+                true,
+            ),
+            right,
+            function_context.plan_config.session_timezone.clone(),
+            true,
+            true,
+        ));
+    }
+    if matches!(&left_type, DataType::Timestamp(_, _)) && is_timestamp_interval(&right_type) {
+        return Ok(timestamp_interval(
+            left,
+            right,
+            function_context.plan_config.session_timezone.clone(),
+            true,
+            true,
+        ));
+    }
+    if matches!(&left_type, DataType::Timestamp(_, _))
+        && matches!(&right_type, DataType::Timestamp(_, _))
+    {
+        return Ok(timestamp_difference(
+            left,
+            right,
+            function_context.plan_config.session_timezone.clone(),
+            true,
+        ));
+    }
+    Ok(ScalarUDF::from(SparkTrySubtract::new()).call(vec![left, right]))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -693,10 +948,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        ("greatest", F::custom(greatest)),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        ("least", F::custom(least)),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
@@ -724,11 +979,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("sqrt", F::unary(double(expr_fn::sqrt))),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
-        ("try_add", F::udf(SparkTryAdd::new())),
+        ("try_add", F::custom(spark_try_add)),
         ("try_divide", F::udf(SparkTryDiv::new())),
         ("try_multiply", F::udf(SparkTryMult::new())),
         ("try_mod", F::udf(SparkTryMod::new())),
-        ("try_subtract", F::udf(SparkTrySubtract::new())),
+        ("try_subtract", F::custom(spark_try_subtract)),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),

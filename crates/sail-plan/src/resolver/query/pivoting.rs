@@ -142,7 +142,7 @@ impl PlanResolver<'_> {
             let value_name = match alias {
                 Some(alias) => alias,
                 None if is_null => "null".to_string(),
-                None => pivot_value_name(&scalar)?,
+                None => pivot_value_name(&scalar, &self.config.session_timezone)?,
             };
             let predicate = if is_null {
                 pivot_column.clone().is_null()
@@ -443,11 +443,12 @@ impl PlanResolver<'_> {
 
 /// Formats a pivot value into its output column name via Sail's `CAST(... AS STRING)` arrow
 /// formatter (keeps `.0` on whole doubles, formats decimals) rather than `ScalarValue::Display`.
-fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
+fn pivot_value_name(scalar: &ScalarValue, session_timezone: &str) -> PlanResult<String> {
     let array = scalar
         .to_array()
         .map_err(|e| PlanError::invalid(e.to_string()))?;
-    let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
+    let options = FormatOptions::default().with_timestamp_timezone(Some(session_timezone));
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &options)
         .map_err(|e| PlanError::invalid(e.to_string()))?;
     formatter
         .value(0)

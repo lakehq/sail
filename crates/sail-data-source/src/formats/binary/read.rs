@@ -27,19 +27,11 @@ impl ReadFormat for BinaryReadFormat {
 
     async fn infer_schema(
         &self,
-        ctx: &dyn Session,
+        _ctx: &dyn Session,
         _files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let tz = Arc::from(
-            ctx.config()
-                .options()
-                .execution
-                .time_zone
-                .clone()
-                .unwrap_or_else(|| "UTC".to_string()),
-        );
-        Ok(super::read_schema(tz))
+        Ok(super::read_schema())
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {

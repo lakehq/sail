@@ -1011,7 +1011,7 @@ fn validate_merge_clause_order(clauses: &[spec::MergeClause]) -> PlanResult<()> 
     Ok(())
 }
 
-fn store_assignment_compatible(
+pub(crate) fn store_assignment_compatible(
     write_type: &DataType,
     target_type: &DataType,
     policy: StoreAssignmentPolicy,

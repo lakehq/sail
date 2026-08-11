@@ -88,6 +88,60 @@ def test_arrow_udf_receives_spark_boundary_types(spark, view_type_df, use_large)
         spark.conf.set(key, previous)
 
 
+@pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_arrow_timestamp_boundaries_use_session_timezone(spark, session_timezone):
+    from pyspark.sql.functions import arrow_udf, arrow_udtf
+
+    assert session_timezone is None
+    expected_micros = 1_555_109_401_000_000
+    df = spark.sql("SELECT TIMESTAMP '2019-04-12 15:50:01' AS ts")
+
+    def assert_session_timestamp(values: pa.Array) -> None:
+        assert values.type == pa.timestamp("us", tz="America/Los_Angeles")
+        assert values[0].as_py().isoformat() == "2019-04-12T15:50:01-07:00"
+
+    @arrow_udf("timestamp")
+    def identity(values: pa.Array) -> pa.Array:
+        assert_session_timestamp(values)
+        return values
+
+    scalar_micros = df.select(F.unix_micros(identity("ts")).alias("micros")).first().micros
+    assert scalar_micros == expected_micros
+
+    def map_identity(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        for batch in batches:
+            assert_session_timestamp(batch.column("ts"))
+            yield batch
+
+    map_micros = df.mapInArrow(map_identity, df.schema).select(F.unix_micros("ts").alias("micros")).first().micros
+    assert map_micros == expected_micros
+
+    @arrow_udtf(returnType="ts timestamp")
+    class Echo:
+        def eval(self, batch: pa.RecordBatch | pa.StructArray) -> Iterator[pa.Table]:
+            values = batch.field("ts") if isinstance(batch, pa.StructArray) else batch.column("ts")
+            assert_session_timestamp(values)
+            yield pa.table({"ts": values})
+
+    spark.udtf.register("arrow_timestamp_echo", Echo)
+    df.createOrReplaceTempView("arrow_timestamp_input")
+    try:
+        udtf_micros = (
+            spark.sql(
+                """
+            SELECT unix_micros(ts) AS micros
+            FROM arrow_timestamp_echo(TABLE (SELECT ts FROM arrow_timestamp_input))
+            """
+            )
+            .first()
+            .micros
+        )
+        assert udtf_micros == expected_micros
+    finally:
+        spark.catalog.dropTempView("arrow_timestamp_input")
+
+
 def test_pandas_udfs_normalize_view_types(view_type_df):
     @pandas_udf("binary")
     def identity(value: pd.Series) -> pd.Series:

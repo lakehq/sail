@@ -73,7 +73,11 @@ impl PySparkUdfPayload {
                 if eval_type == spec::PySparkUdfType::ArrowBatched {
                     eval_conf.push((
                         "input_type".to_string(),
-                        build_input_types_json(input_types, config.arrow_use_large_var_types)?,
+                        build_input_types_json(
+                            input_types,
+                            config.arrow_use_large_var_types,
+                            &config.session_timezone,
+                        )?,
                     ))
                 }
                 write_conf(&mut data, eval_conf);
@@ -88,8 +92,11 @@ impl PySparkUdfPayload {
                 if pyspark_version == PySparkVersion::V4_1
                     && eval_type == spec::PySparkUdfType::ArrowBatched
                 {
-                    let schema_json =
-                        build_input_types_json(input_types, config.arrow_use_large_var_types)?;
+                    let schema_json = build_input_types_json(
+                        input_types,
+                        config.arrow_use_large_var_types,
+                        &config.session_timezone,
+                    )?;
                     data.extend((schema_json.len() as i32).to_be_bytes());
                     data.extend(schema_json.as_bytes());
                 }

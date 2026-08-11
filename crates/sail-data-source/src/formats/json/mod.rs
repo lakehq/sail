@@ -1,6 +1,7 @@
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_function::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
 
 use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::ResolveOptions;
@@ -35,7 +36,15 @@ impl FormatFactory for JsonFormatFactory {
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let timestamp_format = super::effective_string_option(
+            &options,
+            &["timestamp_format", "timestampFormat"],
+            SPARK_FILE_TIMESTAMP_FORMAT,
+        );
         let options = JsonWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
-        Ok(JsonWriteFormat { options })
+        Ok(JsonWriteFormat {
+            options,
+            timestamp_format,
+        })
     }
 }

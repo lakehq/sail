@@ -18,6 +18,7 @@ use crate::scalar::csv::options::{
 use crate::scalar::datetime::format::{
     DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
 };
+use crate::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
 
 fn default_timestamp_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
@@ -33,7 +34,7 @@ fn default_date_format() -> DateTimeFormat {
 
 fn default_ltz_format() -> DateTimeFormat {
     #[expect(clippy::expect_used)]
-    DateTimeFormat::for_formatting("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+    DateTimeFormat::for_formatting(SPARK_FILE_TIMESTAMP_FORMAT)
         .expect("default timestamp LTZ format should be valid")
 }
 
@@ -1471,6 +1472,41 @@ mod tests {
         )?;
 
         assert_eq!(result, "26/08/2015");
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_second_precision_offset_default_and_custom() -> Result<()> {
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            false,
+        ))]);
+        let timestamp =
+            Arc::new(TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("UTC"))
+                as ArrayRef;
+        let struct_array = make_struct_array(fields, vec![timestamp], None);
+        let output = spark_to_csv_inner(&[Arc::clone(&struct_array)], "+01:02:03")?;
+        assert_eq!(
+            output.as_string::<i32>().value(0),
+            "1970-01-01T00:00:00.000+01:02:03"
+        );
+
+        let options = SparkToCsvOptions {
+            timestamp_format: DateTimeFormat::for_formatting("yyyy/MM/dd HH:mm:ss XXXXX")?,
+            ..SparkToCsvOptions::default()
+        };
+        let struct_array = struct_array.as_struct();
+        assert_eq!(
+            format_field_to_csv(
+                &struct_array.columns()[0],
+                0,
+                struct_array.fields()[0].data_type(),
+                &options,
+                "+01:02:03",
+            )?,
+            "1970/01/01 00:00:00 +01:02:03"
+        );
         Ok(())
     }
 

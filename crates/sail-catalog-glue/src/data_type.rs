@@ -236,7 +236,10 @@ pub fn glue_type_to_arrow(type_str: &str) -> CatalogResult<DataType> {
         "string" | "varchar" | "char" => Ok(DataType::Utf8),
         "binary" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
-        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "timestamp" => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from("UTC")),
+        )),
         _ => Err(CatalogError::InvalidArgument(format!(
             "Unknown Glue type: {type_str}"
         ))),
@@ -406,7 +409,7 @@ mod tests {
             DataType::Utf8,
             DataType::Binary,
             DataType::Date32,
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             DataType::Decimal128(18, 5),
             DataType::Null,
         ];

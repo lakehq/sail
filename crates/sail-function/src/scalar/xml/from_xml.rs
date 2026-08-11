@@ -351,7 +351,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
             to_time_unit(time_unit),
             match timestamp_type {
                 spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
+                    Some(Arc::from("UTC"))
                 }
                 spec::TimestampType::WithoutTimeZone => None,
             },

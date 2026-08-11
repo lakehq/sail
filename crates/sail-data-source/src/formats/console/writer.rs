@@ -1,7 +1,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::array::{Array, ArrayRef, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
@@ -10,15 +12,17 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, plan_err};
 use futures::StreamExt;
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
     input: Arc<dyn ExecutionPlan>,
+    session_timezone: Arc<str>,
     properties: Arc<PlanProperties>,
 }
 
 impl ConsoleSinkExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, session_timezone: Arc<str>) -> Self {
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             Partitioning::UnknownPartitioning(
@@ -28,11 +32,19 @@ impl ConsoleSinkExec {
             // The node returns no data, so it is bounded.
             Boundedness::Bounded,
         ));
-        Self { input, properties }
+        Self {
+            input,
+            session_timezone,
+            properties,
+        }
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn session_timezone(&self) -> &Arc<str> {
+        &self.session_timezone
     }
 }
 
@@ -64,7 +76,10 @@ impl ExecutionPlan for ConsoleSinkExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match (children.pop(), children.is_empty()) {
-            (Some(child), true) => Ok(Arc::new(ConsoleSinkExec::new(child))),
+            (Some(child), true) => Ok(Arc::new(ConsoleSinkExec::new(
+                child,
+                Arc::clone(&self.session_timezone),
+            ))),
             _ => plan_err!("{} should have exactly one child", self.name()),
         }
     }
@@ -75,24 +90,28 @@ impl ExecutionPlan for ConsoleSinkExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition, context)?;
+        let session_timezone = Arc::clone(&self.session_timezone);
         let output = futures::stream::once(async move {
             stream
                 .enumerate()
-                .for_each(|(i, batch)| async move {
-                    let text = match batch {
-                        Ok(batch) => match pretty_format_batches(&[batch]) {
-                            Ok(batch) => format!("{batch}"),
+                .for_each(|(i, batch)| {
+                    let session_timezone = Arc::clone(&session_timezone);
+                    async move {
+                        let text = match batch {
+                            Ok(batch) => match format_console_batch(&batch, &session_timezone) {
+                                Ok(batch) => batch,
+                                Err(e) => {
+                                    format!("error formatting batch: {e}")
+                                }
+                            },
                             Err(e) => {
-                                format!("error formatting batch: {e}")
+                                format!("error: {e}")
                             }
-                        },
-                        Err(e) => {
-                            format!("error: {e}")
-                        }
-                    };
-                    let mut stdout = std::io::stdout().lock();
-                    let _ = writeln!(stdout, "partition {partition} batch {i}");
-                    let _ = writeln!(stdout, "{text}");
+                        };
+                        let mut stdout = std::io::stdout().lock();
+                        let _ = writeln!(stdout, "partition {partition} batch {i}");
+                        let _ = writeln!(stdout, "{text}");
+                    }
                 })
                 .await;
             futures::stream::empty()
@@ -102,5 +121,68 @@ impl ExecutionPlan for ConsoleSinkExec {
             self.schema(),
             output,
         )))
+    }
+}
+
+fn format_console_batch(batch: &RecordBatch, session_timezone: &str) -> Result<String> {
+    let options = FormatOptions::default().with_timestamp_timezone(Some(session_timezone));
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|array| {
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
+            let values = (0..array.len())
+                .map(|row| {
+                    if array.is_null(row) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(formatter.value(row).try_to_string()?))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(StringArray::from(values)) as ArrayRef)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let schema = Arc::new(Schema::new(
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| Field::new(field.name(), DataType::Utf8, field.is_nullable()))
+            .collect::<Vec<_>>(),
+    ));
+    let batch = RecordBatch::try_new(schema, columns)?;
+    Ok(pretty_format_batches(&[batch])?.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::TimestampMicrosecondArray;
+    use datafusion::arrow::datatypes::TimeUnit;
+
+    use super::*;
+
+    #[test]
+    fn formats_ltz_in_session_timezone() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "t",
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+                false,
+            )])),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("UTC"),
+            )],
+        )?;
+
+        assert_eq!(
+            format_console_batch(&batch, "+01:02:03")?,
+            "+---------------------+\n\
+             | t                   |\n\
+             +---------------------+\n\
+             | 1970-01-01 00:00:00 |\n\
+             +---------------------+"
+        );
+        Ok(())
     }
 }

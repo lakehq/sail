@@ -235,6 +235,7 @@ impl PlanResolver<'_> {
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
+            session_timezone: Arc::clone(&self.config.session_timezone),
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             partition_by: partition_by.clone(),
@@ -798,13 +799,14 @@ impl PlanResolver<'_> {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
-            Self::rewrite_standard_write_input(input, column_match, info)
+            self.rewrite_standard_write_input(input, column_match, info)
         }
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
     /// no defaults, no identity). Pure schema coercion with alias/cast.
     fn rewrite_standard_write_input(
+        &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
@@ -825,7 +827,12 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr = col(column).cast_to(field.data_type(), input.schema())?;
+                        let expr = self.cast_store_assignment(
+                            col(column),
+                            field.data_type(),
+                            input.schema(),
+                            false,
+                        )?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -844,8 +851,12 @@ impl PlanResolver<'_> {
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
-                                let expr =
-                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                let expr = self.cast_store_assignment(
+                                    col(f.name()),
+                                    field.data_type(),
+                                    input.schema(),
+                                    true,
+                                )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
@@ -881,7 +892,7 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
+                self.rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
             }
         }
     }
@@ -912,6 +923,7 @@ impl PlanResolver<'_> {
         info: &TableInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let struct_by_name = !matches!(&column_match, WriteColumnMatch::ByPosition);
         let table_field_count = info.columns.len();
         let optional_count = info
             .columns
@@ -965,9 +977,12 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_store_assignment(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                        struct_by_name,
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -981,9 +996,12 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_store_assignment(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                        struct_by_name,
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -998,7 +1016,12 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr = input_expr.cast_to(col.field().data_type(), input.schema())?;
+            let cast_expr = self.cast_store_assignment(
+                input_expr,
+                col.field().data_type(),
+                input.schema(),
+                struct_by_name,
+            )?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)
@@ -1066,12 +1089,18 @@ impl PlanResolver<'_> {
                     // Cast both sides to the target column type so that type-compatible
                     // values (e.g. INT 2024 vs BIGINT 2024) are not treated as mismatches.
                     let user_value = col(Column::from_name(check_id));
-                    let user_value_cast = user_value
-                        .clone()
-                        .cast_to(field.data_type(), &intermediate_schema)?;
-                    let gen_expr_cast = gen_expr
-                        .clone()
-                        .cast_to(field.data_type(), &intermediate_schema)?;
+                    let user_value_cast = self.cast_store_assignment(
+                        user_value.clone(),
+                        field.data_type(),
+                        &intermediate_schema,
+                        struct_by_name,
+                    )?;
+                    let gen_expr_cast = self.cast_store_assignment(
+                        gen_expr.clone(),
+                        field.data_type(),
+                        &intermediate_schema,
+                        struct_by_name,
+                    )?;
                     let check = user_value
                         .clone()
                         .is_null()
@@ -1091,11 +1120,20 @@ impl PlanResolver<'_> {
                 } else {
                     gen_expr
                 };
-                final_expr.cast_to(field.data_type(), &intermediate_schema)?
+                self.cast_store_assignment(
+                    final_expr,
+                    field.data_type(),
+                    &intermediate_schema,
+                    struct_by_name,
+                )?
             } else if let Some(identity) = &table_col.identity {
                 if provided_by_input[idx].is_some() {
-                    col(Column::from_name(&field_ids[idx]))
-                        .cast_to(field.data_type(), &intermediate_schema)?
+                    self.cast_store_assignment(
+                        col(Column::from_name(&field_ids[idx])),
+                        field.data_type(),
+                        &intermediate_schema,
+                        struct_by_name,
+                    )?
                 } else {
                     let row_number_alias = identity_row_number.as_deref().ok_or_else(|| {
                         PlanError::internal(format!(
@@ -1103,18 +1141,27 @@ impl PlanResolver<'_> {
                             table_col.name
                         ))
                     })?;
-                    Self::make_identity_value_expr(
+                    let value = Self::make_identity_value_expr(
                         &table_col.name,
                         identity,
                         row_number_alias,
                         &intermediate_schema,
+                    )?;
+                    self.cast_store_assignment(
+                        value,
+                        field.data_type(),
+                        &intermediate_schema,
+                        struct_by_name,
                     )?
-                    .cast_to(field.data_type(), &intermediate_schema)?
                 }
             } else {
                 // Regular column: reference the aliased field in intermediate plan.
-                col(Column::from_name(&field_ids[idx]))
-                    .cast_to(field.data_type(), &intermediate_schema)?
+                self.cast_store_assignment(
+                    col(Column::from_name(&field_ids[idx])),
+                    field.data_type(),
+                    &intermediate_schema,
+                    struct_by_name,
+                )?
             };
             let expr = Self::make_nullable_if_needed(expr, &field, &intermediate_schema)?;
             let field_meta = Self::make_column_field_metadata(

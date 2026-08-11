@@ -34,11 +34,16 @@ pub enum ShowStringStyle {
 pub struct ShowStringFormat {
     style: ShowStringStyle,
     truncate: usize,
+    session_timezone: Arc<str>,
 }
 
 impl ShowStringFormat {
-    pub fn new(style: ShowStringStyle, truncate: usize) -> Self {
-        Self { style, truncate }
+    pub fn new(style: ShowStringStyle, truncate: usize, session_timezone: Arc<str>) -> Self {
+        Self {
+            style,
+            truncate,
+            session_timezone,
+        }
     }
 
     pub fn style(&self) -> ShowStringStyle {
@@ -47,6 +52,10 @@ impl ShowStringFormat {
 
     pub fn truncate(&self) -> usize {
         self.truncate
+    }
+
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -60,7 +69,8 @@ impl ShowStringFormat {
     }
 
     fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
-        let options = FormatOptions::default();
+        let options =
+            FormatOptions::default().with_timestamp_timezone(Some(&self.session_timezone));
         Ok(batch
             .columns()
             .iter()

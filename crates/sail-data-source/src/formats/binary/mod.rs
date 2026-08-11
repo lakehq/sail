@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::listing::source::{FormatFactory, ListingTableFormat};
@@ -43,26 +43,15 @@ impl FormatFactory for BinaryFormatFactory {
     }
 }
 
-fn read_schema(tz: Arc<str>) -> SchemaRef {
+fn read_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("path", DataType::Utf8, false),
         Field::new(
             "modificationTime",
-            DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             false,
         ),
         Field::new("length", DataType::Int64, false),
         Field::new("content", DataType::Binary, false),
     ]))
-}
-
-fn time_zone_from_read_schema(schema: &Schema) -> Result<Arc<str>> {
-    let Ok(field) = schema.field_with_name("modificationTime") else {
-        return internal_err!("schema must contain a 'modificationTime' field");
-    };
-    if let DataType::Timestamp(_, Some(tz)) = field.data_type() {
-        Ok(tz.clone())
-    } else {
-        internal_err!("'modificationTime' field must be of type Timestamp with time zone")
-    }
 }

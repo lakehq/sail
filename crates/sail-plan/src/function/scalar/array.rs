@@ -23,7 +23,9 @@ use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceL
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -37,6 +39,17 @@ fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         &expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?,
     );
     array_repeat_with_nullable_element(element, count, output_type, schema)
+}
+
+fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let indices = (0..arguments.len()).collect::<Vec<_>>();
+    let arguments =
+        super::conditional::coerce_temporal_values(arguments, &indices, &function_context)?;
+    Ok(ScalarUDF::from(SparkArray::new()).call(arguments))
 }
 
 fn array_repeat_with_nullable_element(
@@ -56,6 +69,61 @@ fn array_repeat_with_nullable_element(
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
     ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
+}
+
+fn array_join(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    if let Some(array) = arguments.first_mut() {
+        let data_type = array.get_type(function_context.schema)?;
+        let target_type = match &data_type {
+            DataType::List(field) if contains_ltz(field.data_type()) => Some(DataType::List(
+                Arc::new(field.as_ref().clone().with_data_type(DataType::Utf8)),
+            )),
+            DataType::LargeList(field) if contains_ltz(field.data_type()) => {
+                Some(DataType::LargeList(Arc::new(
+                    field.as_ref().clone().with_data_type(DataType::Utf8),
+                )))
+            }
+            _ => None,
+        };
+        if let Some(target_type) = target_type {
+            *array = ScalarUDF::from(SparkTimezoneCast::new(
+                target_type,
+                function_context.plan_config.session_timezone.clone(),
+                false,
+            ))
+            .call(vec![array.clone()]);
+        }
+    }
+    for argument in arguments.iter_mut().skip(1) {
+        if matches!(
+            argument.get_type(function_context.schema)?,
+            DataType::Timestamp(_, Some(_))
+        ) {
+            *argument = ScalarUDF::from(SparkToUtf8::new(
+                function_context.plan_config.session_timezone.clone(),
+            ))
+            .call(vec![argument.clone()]);
+        }
+    }
+    Ok(ScalarUDF::from(ArrayToString::new()).call(arguments))
+}
+
+fn contains_ltz(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Timestamp(_, Some(_)) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => contains_ltz(field.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|field| contains_ltz(field.data_type())),
+        DataType::Map(field, _) => contains_ltz(field.data_type()),
+        _ => false,
+    }
 }
 
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -130,8 +198,14 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
-    let (array, element) = input.arguments.two()?;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let schema = function_context.schema;
+    let (array, element) = arguments.two()?;
+    let (array, element) =
+        super::conditional::coerce_temporal_collection_value(array, element, &function_context)?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let appended = expr_fn::array_append(array_input, element);
     let output_type = with_list_value_nullability(&appended.get_type(schema.as_ref())?, true);
@@ -140,8 +214,14 @@ fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn array_prepend(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
-    let (array, element) = input.arguments.two()?;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let schema = function_context.schema;
+    let (array, element) = arguments.two()?;
+    let (array, element) =
+        super::conditional::coerce_temporal_collection_value(array, element, &function_context)?;
     let array = cast_list_value_nullability(array, schema, true)?;
     Ok(when(
         array.clone().is_not_null(),
@@ -154,20 +234,35 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element + lit(1_i64))
 }
 
-fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
+fn array_contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, element) = input.arguments.two()?;
+    let (array, element) = super::conditional::coerce_temporal_collection_value(
+        array,
+        element,
+        &input.function_context,
+    )?;
     Ok(coalesce(vec![
         expr_fn::array_has(array.clone(), element),
         when(array.is_not_null(), lit(false)).end()?,
     ]))
 }
 
-fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
-    nvl(expr_fn::array_has_all(array, element), lit(false))
+fn array_contains_all(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) =
+        super::conditional::coerce_temporal_collections(left, right, &input.function_context)?;
+    Ok(nvl(expr_fn::array_has_all(left, right), lit(false)))
 }
 
 fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
-    let (array, position, value) = input.arguments.three()?;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let schema = function_context.schema;
+    let (array, position, value) = arguments.three()?;
+    let (array, value) =
+        super::conditional::coerce_temporal_collection_value(array, value, &function_context)?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let output_type = array_update_output_type(&array_input, &value, schema)?;
     let array_input = cast(array_input, output_type.clone());
@@ -248,6 +343,8 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
+    let (left, right) =
+        super::conditional::coerce_temporal_collections(left, right, &function_context)?;
 
     let nullable_array_type =
         with_list_value_nullability(&left.get_type(function_context.schema.as_ref())?, true);
@@ -274,6 +371,47 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
     .when(lit(true), expr_fn::array_has_any(left, right))
     .end()?)
+}
+
+fn array_except(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) =
+        super::conditional::coerce_temporal_collections(left, right, &input.function_context)?;
+    Ok(expr_fn::array_except(left, right))
+}
+
+fn array_intersect(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) =
+        super::conditional::coerce_temporal_collections(left, right, &input.function_context)?;
+    Ok(ScalarUDF::from(ArrayIntersect::new()).call(vec![left, right]))
+}
+
+fn array_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, value) = input.arguments.two()?;
+    let (array, value) = super::conditional::coerce_temporal_collection_value(
+        array,
+        value,
+        &input.function_context,
+    )?;
+    Ok(ScalarUDF::from(SparkArrayPosition::new()).call(vec![array, value]))
+}
+
+fn array_remove(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, value) = input.arguments.two()?;
+    let (array, value) = super::conditional::coerce_temporal_collection_value(
+        array,
+        value,
+        &input.function_context,
+    )?;
+    Ok(expr_fn::array_remove_all(array, value))
+}
+
+fn array_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let (left, right) =
+        super::conditional::coerce_temporal_collections(left, right, &input.function_context)?;
+    Ok(expr_fn::array_union(left, right))
 }
 
 fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -316,7 +454,7 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
     ]);
     cast(
         cast(instant, DataType::Int64),
-        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
     )
 }
 
@@ -365,12 +503,16 @@ fn sequence_cast(
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![sequence_trim_string(argument)]),
+        ) => ScalarUDF::from(SparkTimestamp::try_new(
+            timezone.as_ref().map(|_| Arc::clone(session_timezone)),
+            ansi_mode,
+            false,
+        )?)
+        .call(vec![sequence_trim_string(argument)]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
-        ) => sequence_timestamp_ltz_cast(argument, timezone),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+        ) => sequence_timestamp_ltz_cast(argument, session_timezone),
         _ => cast(argument, target_type.clone()),
     })
 }
@@ -503,27 +645,27 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("array", F::udf(SparkArray::new())),
+        ("array", F::custom(array)),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(array_contains)),
-        ("array_contains_all", F::binary(array_contains_all)),
+        ("array_contains", F::custom(array_contains)),
+        ("array_contains_all", F::custom(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
-        ("array_except", F::binary(expr_fn::array_except)),
+        ("array_except", F::custom(array_except)),
         ("array_insert", F::custom(array_insert)),
-        ("array_intersect", F::udf(ArrayIntersect::new())),
-        ("array_join", F::udf(ArrayToString::new())),
+        ("array_intersect", F::custom(array_intersect)),
+        ("array_join", F::custom(array_join)),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
-        ("array_position", F::udf(SparkArrayPosition::new())),
+        ("array_position", F::custom(array_position)),
         ("array_prepend", F::custom(array_prepend)),
-        ("array_remove", F::binary(expr_fn::array_remove_all)),
+        ("array_remove", F::custom(array_remove)),
         ("array_repeat", F::custom(array_repeat)),
         (
             "array_size",
             F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
         ),
-        ("array_union", F::binary(expr_fn::array_union)),
+        ("array_union", F::custom(array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),

@@ -228,6 +228,11 @@ message ExtendedScalarUdf {
     SparkDateFormatUdf spark_date_format = 36;
     SparkSequenceUdf spark_sequence = 37;
     SparkTimezoneCastUdf spark_timezone_cast = 38;
+    SparkTimestampIntervalUdf spark_timestamp_interval = 39;
+    SparkDateTruncUdf spark_date_trunc = 40;
+    SparkToStringUdf spark_to_string = 41;
+    SparkToJsonUdf spark_to_json = 42;
+    SparkFileTimestampUdf spark_file_timestamp = 43;
   }
 }
 
@@ -427,6 +432,33 @@ message SparkTimezoneCastUdf {
   bytes target_type = 1;
   string session_timezone = 2;
   bool safe = 3;
+  bool struct_by_name = 4;
+  bool case_sensitive = 5;
+}
+
+message SparkTimestampIntervalUdf {
+  string session_timezone = 1;
+  bool subtract = 2;
+  bool safe = 3;
+  optional string timestampadd_unit = 4;
+}
+
+message SparkDateTruncUdf {
+  string session_timezone = 1;
+}
+
+message SparkToStringUdf {
+  string name = 1;
+  string session_timezone = 2;
+}
+
+message SparkToJsonUdf {
+  string session_timezone = 1;
+}
+
+message SparkFileTimestampUdf {
+  string session_timezone = 1;
+  string timestamp_format = 2;
 }
 
 message StandardUdaf {}
@@ -605,6 +637,7 @@ message ShowStringExecNode {
   ShowStringStyle style = 4;
   uint64 truncate = 5;
   bytes schema = 6;
+  string session_timezone = 7;
 }
 
 enum ShowStringStyle {
@@ -842,6 +875,7 @@ message DeltaRemoveActionsExecNode {
 
 message ConsoleSinkExecNode {
   bytes input = 1;
+  string session_timezone = 2;
 }
 
 message NoopSinkExecNode {
@@ -1104,6 +1138,8 @@ message PythonDataSourceWriteExecNode {
   bool is_arrow = 3;
   // Input plan that generates data to write
   bytes input = 4;
+  // Spark session zone exposed at the Python Arrow/row writer boundary
+  string session_timezone = 5;
 }
 
 message PythonDataSourceWriteCommitExecNode {

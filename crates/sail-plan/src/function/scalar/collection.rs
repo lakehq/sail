@@ -7,6 +7,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -54,12 +55,76 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
                 .when(lit(true), expr_fn::array_element(collection, element)).end()?
         }
         DataType::Map(..) => {
+            let (collection, element) = super::conditional::coerce_temporal_collection_value(
+                collection,
+                element,
+                &input.function_context,
+            )?;
             expr_fn::array_element(expr_fn::map_extract(collection, element), lit(1))
         }
         wrong_type => ScalarUDF::from(RaiseError::new()).call(vec![lit(format!(
             "{name} expects List or Map type as first argument, got {wrong_type:?}",
         ))]),
     })
+}
+
+fn concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let all_nested = arguments.iter().try_fold(true, |all_nested, argument| {
+        Ok::<_, PlanError>(all_nested && argument.get_type(function_context.schema)?.is_nested())
+    })?;
+    let arguments = if all_nested {
+        super::conditional::coerce_temporal_collection_values(arguments, &function_context)?
+    } else {
+        arguments
+            .into_iter()
+            .map(|argument| {
+                if matches!(
+                    argument.get_type(function_context.schema),
+                    Ok(DataType::Timestamp(_, Some(_)))
+                ) {
+                    ScalarUDF::from(SparkToUtf8::new(
+                        function_context.plan_config.session_timezone.clone(),
+                    ))
+                    .call(vec![argument])
+                } else {
+                    argument
+                }
+            })
+            .collect()
+    };
+    Ok(ScalarUDF::from(SparkConcat::new()).call(arguments))
+}
+
+fn array_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arguments = super::conditional::coerce_temporal_collection_values(
+        input.arguments,
+        &input.function_context,
+    )?;
+    Ok(ScalarUDF::from(SparkConcat::new()).call(arguments))
+}
+
+fn reverse(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let argument = arguments.one()?;
+    let argument = if matches!(
+        argument.get_type(function_context.schema)?,
+        DataType::Timestamp(_, Some(_))
+    ) {
+        ScalarUDF::from(SparkToUtf8::new(
+            function_context.plan_config.session_timezone.clone(),
+        ))
+        .call(vec![argument])
+    } else {
+        argument
+    };
+    Ok(ScalarUDF::from(SparkReverse::new()).call(vec![argument]))
 }
 
 pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -73,9 +138,9 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
         ("deep_size", F::unary(expr_fn::cardinality)),
         ("element_at", F::custom(|input| element_at(input, false))),
         ("size", F::custom(size)),
-        ("array_concat", F::udf(SparkConcat::new())),
-        ("concat", F::udf(SparkConcat::new())),
-        ("reverse", F::udf(SparkReverse::new())),
+        ("array_concat", F::custom(array_concat)),
+        ("concat", F::custom(concat)),
+        ("reverse", F::custom(reverse)),
         ("try_element_at", F::custom(|input| element_at(input, true))),
     ]
 }

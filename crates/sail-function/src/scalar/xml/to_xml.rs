@@ -11,6 +11,7 @@ use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -48,7 +49,7 @@ impl SparkToXmlOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
     // Standard Spark Java DateTimeFormatter defaults
-    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = SPARK_FILE_TIMESTAMP_FORMAT;
     pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
@@ -1136,5 +1137,33 @@ mod tests {
         assert_eq!(format_single(0.1), "0.1");
         assert_eq!(format_single(123.456), "123.456");
         assert_eq!(format_single(10000000.0), "1.0E7");
+    }
+
+    #[test]
+    fn test_timestamp_second_precision_offset_default_and_custom() -> Result<()> {
+        let array =
+            Arc::new(TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("UTC"))
+                as ArrayRef;
+        let timezone = Some(Arc::<str>::from("UTC"));
+        let default = SparkToXmlOptions {
+            session_timezone: "+01:02:03".to_string(),
+            ..SparkToXmlOptions::default()
+        };
+        assert_eq!(
+            format_timestamp_field(&array, 0, &TimeUnit::Microsecond, &timezone, &default,)?,
+            "1970-01-01T00:00:00.000+01:02:03"
+        );
+
+        let custom = SparkToXmlOptions {
+            timestamp_ltz_format: Some(DateTimeFormat::for_formatting(
+                "yyyy/MM/dd HH:mm:ss XXXXX",
+            )?),
+            ..default
+        };
+        assert_eq!(
+            format_timestamp_field(&array, 0, &TimeUnit::Microsecond, &timezone, &custom,)?,
+            "1970/01/01 00:00:00 +01:02:03"
+        );
+        Ok(())
     }
 }

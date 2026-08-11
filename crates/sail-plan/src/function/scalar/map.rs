@@ -24,7 +24,19 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let schema = input.function_context.schema;
-    let (pairs, remainder) = input.arguments.as_chunks::<2>();
+    let key_indices = (0..input.arguments.len()).step_by(2).collect::<Vec<_>>();
+    let value_indices = (1..input.arguments.len()).step_by(2).collect::<Vec<_>>();
+    let arguments = super::conditional::coerce_temporal_values(
+        input.arguments,
+        &key_indices,
+        &input.function_context,
+    )?;
+    let arguments = super::conditional::coerce_temporal_values(
+        arguments,
+        &value_indices,
+        &input.function_context,
+    )?;
+    let (pairs, remainder) = arguments.as_chunks::<2>();
     debug_assert!(remainder.is_empty());
     let (keys, values): (Vec<_>, Vec<_>) = pairs
         .iter()
@@ -237,6 +249,11 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         })
         .unzip();
 
+    let keys =
+        super::conditional::coerce_temporal_collection_values(keys, &input.function_context)?;
+    let values =
+        super::conditional::coerce_temporal_collection_values(values, &input.function_context)?;
+
     let keys = expr_fn::array_concat(keys);
     let values = expr_fn::array_concat(values);
     let result = F::udf(MapFromArrays::new())(ScalarFunctionInput {
@@ -265,8 +282,11 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
-    expr_fn::array_has(expr_fn::map_keys(map), key)
+fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, key) = input.arguments.two()?;
+    let (map, key) =
+        super::conditional::coerce_temporal_collection_value(map, key, &input.function_context)?;
+    Ok(expr_fn::array_has(expr_fn::map_keys(map), key))
 }
 
 fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -289,7 +309,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("map", F::custom(map)),
         ("map_concat", F::custom(map_concat)),
-        ("map_contains_key", F::binary(map_contains_key)),
+        ("map_contains_key", F::custom(map_contains_key)),
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),

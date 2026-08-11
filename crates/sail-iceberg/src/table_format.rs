@@ -119,6 +119,7 @@ impl TableFormat for IcebergTableFormat {
         };
         let SinkInfo {
             input,
+            session_timezone: _,
             mode,
             partition_by,
             bucket_by,

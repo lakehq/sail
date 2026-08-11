@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use datafusion_expr::{ExprSchemable, ScalarUDF, ScalarUDFImpl, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
@@ -13,6 +15,7 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -65,6 +68,171 @@ fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> 
     })
 }
 
+fn stringify_ltz(
+    expression: expr::Expr,
+    schema: &DFSchema,
+    session_timezone: &Arc<str>,
+) -> PlanResult<expr::Expr> {
+    if matches!(
+        expression.get_type(schema)?,
+        DataType::Timestamp(_, Some(_))
+    ) {
+        Ok(ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![expression]))
+    } else {
+        Ok(expression)
+    }
+}
+
+fn stringify_ltz_indices(
+    mut arguments: Vec<expr::Expr>,
+    indices: impl IntoIterator<Item = usize>,
+    schema: &DFSchema,
+    session_timezone: &Arc<str>,
+) -> PlanResult<Vec<expr::Expr>> {
+    for index in indices {
+        if index < arguments.len() {
+            arguments[index] = stringify_ltz(arguments[index].clone(), schema, session_timezone)?;
+        }
+    }
+    Ok(arguments)
+}
+
+pub(super) fn with_ltz_string_arguments(
+    input: ScalarFunctionInput,
+    indices: impl IntoIterator<Item = usize>,
+    build: impl FnOnce(Vec<expr::Expr>) -> PlanResult<expr::Expr>,
+) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = stringify_ltz_indices(
+        arguments,
+        indices,
+        function_context.schema,
+        &function_context.plan_config.session_timezone,
+    )?;
+    build(arguments)
+}
+
+fn string_arguments(
+    indices: &'static [usize],
+    build: impl Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+) -> ScalarFunction {
+    Arc::new(move |input| {
+        with_ltz_string_arguments(input, indices.iter().copied(), |arguments| build(arguments))
+    })
+}
+
+fn all_string_arguments(
+    build: impl Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+) -> ScalarFunction {
+    Arc::new(move |input| {
+        let count = input.arguments.len();
+        with_ltz_string_arguments(input, 0..count, |arguments| build(arguments))
+    })
+}
+
+fn string_udf(
+    indices: &'static [usize],
+    udf: impl ScalarUDFImpl + Send + Sync + 'static,
+) -> ScalarFunction {
+    let udf = ScalarUDF::from(udf);
+    string_arguments(indices, move |arguments| Ok(udf.call(arguments)))
+}
+
+fn all_string_udf(udf: impl ScalarUDFImpl + Send + Sync + 'static) -> ScalarFunction {
+    let udf = ScalarUDF::from(udf);
+    all_string_arguments(move |arguments| Ok(udf.call(arguments)))
+}
+
+fn list_with_string_items(data_type: &DataType) -> Option<DataType> {
+    match data_type {
+        DataType::List(field) => Some(DataType::List(Arc::new(
+            field.as_ref().clone().with_data_type(DataType::Utf8),
+        ))),
+        DataType::LargeList(field) => Some(DataType::LargeList(Arc::new(
+            field.as_ref().clone().with_data_type(DataType::Utf8),
+        ))),
+        _ => None,
+    }
+}
+
+fn contains_ltz(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Timestamp(_, Some(_)) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => contains_ltz(field.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|field| contains_ltz(field.data_type())),
+        DataType::Map(field, _) => contains_ltz(field.data_type()),
+        _ => false,
+    }
+}
+
+fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| {
+            let data_type = argument.get_type(function_context.schema)?;
+            if matches!(data_type, DataType::Timestamp(_, Some(_))) {
+                stringify_ltz(
+                    argument,
+                    function_context.schema,
+                    &function_context.plan_config.session_timezone,
+                )
+            } else if contains_ltz(&data_type)
+                && let Some(target_type) = list_with_string_items(&data_type)
+            {
+                Ok(ScalarUDF::from(SparkTimezoneCast::new(
+                    target_type,
+                    function_context.plan_config.session_timezone.clone(),
+                    false,
+                ))
+                .call(vec![argument]))
+            } else {
+                Ok(argument)
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(ScalarUDF::from(SparkConcatWs::new()).call(arguments))
+}
+
+fn elt(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let indices = 1..arguments.len();
+    let arguments = stringify_ltz_indices(
+        arguments,
+        indices,
+        function_context.schema,
+        &function_context.plan_config.session_timezone,
+    )?;
+    Ok(ScalarUDF::from(SparkElt::new()).call(arguments))
+}
+
+fn format_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = stringify_ltz_indices(
+        arguments,
+        [0],
+        function_context.schema,
+        &function_context.plan_config.session_timezone,
+    )?;
+    Ok(ScalarUDF::from(FormatStringFunc::new()).call(arguments))
+}
+
 fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
     if is_single_capture_extract(&pattern, &replacement) {
         regex_fn::regexp_replace(string, pattern, lit("${1}"), None)
@@ -74,8 +242,17 @@ fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Ex
 }
 
 fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (string, pattern) = input
-        .arguments
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = stringify_ltz_indices(
+        arguments,
+        [0, 1],
+        function_context.schema,
+        &function_context.plan_config.session_timezone,
+    )?;
+    let (string, pattern) = arguments
         .two()
         .map_err(|_| PlanError::invalid("regexp_substr requires 2 arguments"))?;
     let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
@@ -92,7 +269,12 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, position) = arguments
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
-    let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    let string = cast_to_logical_string_or_try(
+        string,
+        function_context.schema,
+        false,
+        &function_context.plan_config.session_timezone,
+    )?;
     // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
     // For negative positions, Spark counts from the end of the string.
     // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
@@ -145,7 +327,14 @@ fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let start_opt = (arguments.len() == 3).then(|| arguments.pop()).flatten();
     let (substr, str) = arguments
         .into_iter()
-        .map(|expr| cast_to_logical_string_or_try(expr, function_context.schema, false))
+        .map(|expr| {
+            cast_to_logical_string_or_try(
+                expr,
+                function_context.schema,
+                false,
+                &function_context.plan_config.session_timezone,
+            )
+        })
         .collect::<PlanResult<Vec<_>>>()?
         .two()
         .map_err(|_| PlanError::invalid("position requires 2 or 3 arguments"))?;
@@ -227,7 +416,10 @@ fn length_argument(input: ScalarFunctionInput, name: &str) -> PlanResult<expr::E
         | DataType::Union(_, _) => Err(PlanError::invalid(format!(
             "`{name}` does not support {data_type} input"
         ))),
-        _ => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])),
+        _ => Ok(ScalarUDF::from(SparkToUtf8::new(
+            function_context.plan_config.session_timezone.clone(),
+        ))
+        .call(vec![arg])),
     }
 }
 
@@ -254,7 +446,11 @@ fn cast_to_logical_string_or_try(
     arg: expr::Expr,
     schema: &DFSchema,
     is_try: bool,
+    session_timezone: &Arc<str>,
 ) -> PlanResult<expr::Expr> {
+    if matches!(arg.get_type(schema)?, DataType::Timestamp(_, Some(_))) {
+        return Ok(ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![arg]));
+    }
     let data_type = match arg.get_type(schema)? {
         DataType::LargeBinary | DataType::LargeUtf8 => DataType::LargeUtf8,
         DataType::Utf8View => DataType::Utf8View,
@@ -272,6 +468,7 @@ fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<
         input.arguments.one()?,
         input.function_context.schema,
         is_try,
+        &input.function_context.plan_config.session_timezone,
     )
 }
 
@@ -294,7 +491,14 @@ fn in_str_str_out_bool(
         let (arg1, arg2) = input
             .arguments
             .into_iter()
-            .map(|expr| cast_to_logical_string_or_try(expr, input.function_context.schema, false))
+            .map(|expr| {
+                cast_to_logical_string_or_try(
+                    expr,
+                    input.function_context.schema,
+                    false,
+                    &input.function_context.plan_config.session_timezone,
+                )
+            })
             .collect::<PlanResult<Vec<_>>>()?
             .two()?;
         Ok(func(arg1, arg2))
@@ -372,76 +576,171 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("ascii", F::custom(ascii)),
         ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::custom(bit_length)),
-        ("btrim", F::var_arg(expr_fn::btrim)),
+        (
+            "btrim",
+            all_string_arguments(|args| Ok(expr_fn::btrim(args))),
+        ),
         ("char", F::unary(expr_fn::chr)),
         ("char_length", F::custom(length)),
         ("character_length", F::custom(length)),
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::udf(SparkConcatWs::new())),
+        ("concat_ws", F::custom(concat_ws)),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
-        ("elt", F::udf(SparkElt::new())),
-        ("encode", F::udf(SparkEncode::new())),
+        ("elt", F::custom(elt)),
+        ("encode", string_udf(&[0, 1], SparkEncode::new())),
         ("endswith", F::custom(endswith)),
-        ("find_in_set", F::binary(expr_fn::find_in_set)),
+        (
+            "find_in_set",
+            string_arguments(&[0, 1], |arguments| {
+                let (left, right) = arguments.two()?;
+                Ok(expr_fn::find_in_set(left, right))
+            }),
+        ),
         ("format_number", F::udf(FormatNumber::new())),
-        ("format_string", F::udf(FormatStringFunc::new())),
-        ("initcap", F::unary(expr_fn::initcap)),
-        ("instr", F::binary(expr_fn::instr)),
+        ("format_string", F::custom(format_string)),
+        (
+            "initcap",
+            F::custom(|input| Ok(expr_fn::initcap(validate_utf8(input)?))),
+        ),
+        (
+            "instr",
+            string_arguments(&[0, 1], |arguments| {
+                let (left, right) = arguments.two()?;
+                Ok(expr_fn::instr(left, right))
+            }),
+        ),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
-        ("left", F::binary(expr_fn::left)),
+        (
+            "left",
+            string_arguments(&[0], |arguments| {
+                let (string, length) = arguments.two()?;
+                Ok(expr_fn::left(string, length))
+            }),
+        ),
         ("len", F::custom(length)),
         ("length", F::custom(length)),
-        ("levenshtein", F::udf(Levenshtein::new())),
+        ("levenshtein", string_udf(&[0, 1], Levenshtein::new())),
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),
-        ("lpad", F::var_arg(expr_fn::lpad)),
-        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
-        ("luhn_check", F::unary(string_fn::luhn_check)),
-        ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
-        ("mask", F::udf(SparkMask::new())),
+        (
+            "lpad",
+            string_arguments(&[0, 2], |args| Ok(expr_fn::lpad(args))),
+        ),
+        (
+            "ltrim",
+            all_string_arguments(|args| Ok(rev_args(expr_fn::ltrim)(args))),
+        ),
+        (
+            "luhn_check",
+            string_arguments(&[0], |arguments| {
+                Ok(string_fn::luhn_check(arguments.one()?))
+            }),
+        ),
+        ("make_valid_utf8", string_udf(&[0], MakeValidUtf8::new())),
+        ("mask", string_udf(&[0], SparkMask::new())),
         ("octet_length", F::custom(octet_length)),
-        ("overlay", F::var_arg(overlay)),
+        ("overlay", string_arguments(&[0, 1], overlay)),
         ("position", F::custom(position)),
-        ("printf", F::udf(FormatStringFunc::new())),
-        ("quote", F::udf(SparkQuote::new())),
+        ("printf", F::custom(format_string)),
+        ("quote", string_udf(&[0], SparkQuote::new())),
         ("randstr", F::udf(Randstr::new())),
-        ("regexp_count", F::udf(RegexpCountFunc::new())),
-        ("regexp_extract", F::udf(SparkRegexpExtract::new())),
-        ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
-        ("regexp_instr", F::udf(RegexpInstrFunc::new())),
-        ("regexp_replace", F::ternary(regexp_replace)),
+        ("regexp_count", string_udf(&[0, 1], RegexpCountFunc::new())),
+        (
+            "regexp_extract",
+            string_udf(&[0, 1], SparkRegexpExtract::new()),
+        ),
+        (
+            "regexp_extract_all",
+            string_udf(&[0, 1], SparkRegexpExtractAll::new()),
+        ),
+        ("regexp_instr", string_udf(&[0, 1], RegexpInstrFunc::new())),
+        (
+            "regexp_replace",
+            string_arguments(&[0, 1, 2], |arguments| {
+                let (string, pattern, replacement) = arguments.three()?;
+                Ok(regexp_replace(string, pattern, replacement))
+            }),
+        ),
         ("regexp_substr", F::custom(regexp_substr)),
-        ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::var_arg(replace)),
-        ("right", F::binary(expr_fn::right)),
-        ("rpad", F::var_arg(expr_fn::rpad)),
-        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
-        ("sentences", F::udf(SparkSentences::new())),
-        ("soundex", F::udf(Soundex::new())),
+        (
+            "repeat",
+            string_arguments(&[0], |arguments| {
+                let (string, count) = arguments.two()?;
+                Ok(expr_fn::repeat(string, count))
+            }),
+        ),
+        ("replace", all_string_arguments(replace)),
+        (
+            "right",
+            string_arguments(&[0], |arguments| {
+                let (string, length) = arguments.two()?;
+                Ok(expr_fn::right(string, length))
+            }),
+        ),
+        (
+            "rpad",
+            string_arguments(&[0, 2], |args| Ok(expr_fn::rpad(args))),
+        ),
+        (
+            "rtrim",
+            all_string_arguments(|args| Ok(rev_args(expr_fn::rtrim)(args))),
+        ),
+        ("sentences", all_string_udf(SparkSentences::new())),
+        ("soundex", string_udf(&[0], Soundex::new())),
         ("space", F::unary(space)),
-        ("split", F::udf(SparkSplit::new())),
-        ("split_part", F::ternary(expr_fn::split_part)),
+        ("split", string_udf(&[0, 1], SparkSplit::new())),
+        (
+            "split_part",
+            string_arguments(&[0, 1], |arguments| {
+                let (string, delimiter, index) = arguments.three()?;
+                Ok(expr_fn::split_part(string, delimiter, index))
+            }),
+        ),
         ("startswith", F::custom(startswith)),
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
-        ("substring_index", F::ternary(expr_fn::substr_index)),
-        ("to_binary", F::udf(SparkToBinary::new())),
+        (
+            "substring_index",
+            string_arguments(&[0, 1], |arguments| {
+                let (string, delimiter, count) = arguments.three()?;
+                Ok(expr_fn::substr_index(string, delimiter, count))
+            }),
+        ),
+        ("to_binary", all_string_udf(SparkToBinary::new())),
         ("to_char", F::custom(to_char)),
-        ("to_number", F::udf(SparkToNumber::new(false))),
+        ("to_number", string_udf(&[0, 1], SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
-        ("translate", F::ternary(expr_fn::translate)),
-        ("trim", F::var_arg(rev_args(expr_fn::trim))),
-        ("try_to_binary", F::udf(SparkTryToBinary::new())),
-        ("try_to_number", F::udf(SparkToNumber::new(true))),
+        (
+            "translate",
+            string_arguments(&[0, 1, 2], |arguments| {
+                let (string, from, to) = arguments.three()?;
+                Ok(expr_fn::translate(string, from, to))
+            }),
+        ),
+        (
+            "trim",
+            all_string_arguments(|args| Ok(rev_args(expr_fn::trim)(args))),
+        ),
+        ("try_to_binary", all_string_udf(SparkTryToBinary::new())),
+        (
+            "try_to_number",
+            string_udf(&[0, 1], SparkToNumber::new(true)),
+        ),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::custom(upper)),
-        ("unbase64", F::udf(SparkUnbase64::new())),
+        ("unbase64", string_udf(&[0], SparkUnbase64::new())),
         ("upper", F::custom(upper)),
         ("validate_utf8", F::custom(validate_utf8)),
-        ("strpos", F::binary(expr_fn::strpos)),
+        (
+            "strpos",
+            string_arguments(&[0, 1], |arguments| {
+                let (string, substring) = arguments.two()?;
+                Ok(expr_fn::strpos(string, substring))
+            }),
+        ),
     ]
 }

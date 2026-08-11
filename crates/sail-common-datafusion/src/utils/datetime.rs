@@ -37,6 +37,31 @@ pub fn localize_with_fallback(
     }
 }
 
+/// Localizes a wall-clock datetime while retaining an existing UTC offset
+/// when that offset is valid during an overlap. This matches Java
+/// `ZonedDateTime` calendar operations used by Spark.
+pub fn localize_with_preferred_offset(
+    timezone: &SparkTimeZone,
+    datetime: &NaiveDateTime,
+    preferred_offset_seconds: i32,
+) -> Result<DateTime<SparkTimeZone>> {
+    match timezone.from_local_datetime(datetime) {
+        MappedLocalTime::Single(datetime) => Ok(datetime),
+        MappedLocalTime::Ambiguous(first, second) => Ok(
+            if first.offset().fix().local_minus_utc() == preferred_offset_seconds {
+                first
+            } else if second.offset().fix().local_minus_utc() == preferred_offset_seconds {
+                second
+            } else {
+                first.min(second)
+            },
+        ),
+        MappedLocalTime::None => {
+            Ok(localize_with_fallback(timezone, datetime)?.with_timezone(timezone))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SparkTimeZone {
     Named(Tz),

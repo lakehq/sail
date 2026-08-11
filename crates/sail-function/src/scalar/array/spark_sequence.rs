@@ -1,10 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use chrono::{
-    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta,
-    TimeZone, Utc,
-};
+use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
     ListArray, NullArray, NullBufferBuilder, TimestampMicrosecondArray, UInt64Array,
@@ -26,7 +23,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::{
-    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+    SparkTimeZone, localize_with_fallback, localize_with_preferred_offset, parse_spark_timezone,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -292,7 +289,7 @@ impl ScalarUDFImpl for SparkSequence {
 
         let mut coerced = arg_types
             .iter()
-            .map(|data_type| normalize_sequence_type(data_type, &self.session_timezone))
+            .map(normalize_sequence_type)
             .collect::<Result<Vec<_>>>()?;
 
         let mut selected = vec![0, 1];
@@ -333,7 +330,7 @@ fn wrong_sequence_input_types<T>(arg_types: &[DataType]) -> Result<T> {
     Err(sequence_wrong_input_types_error(arg_types))
 }
 
-fn normalize_sequence_type(data_type: &DataType, session_timezone: &Arc<str>) -> Result<DataType> {
+fn normalize_sequence_type(data_type: &DataType) -> Result<DataType> {
     match data_type {
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::Null => {
             Ok(data_type.clone())
@@ -345,7 +342,7 @@ fn normalize_sequence_type(data_type: &DataType, session_timezone: &Arc<str>) ->
         DataType::Timestamp(_, None) => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         DataType::Timestamp(_, Some(_)) => Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some(Arc::clone(session_timezone)),
+            Some(Arc::from("UTC")),
         )),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(DataType::Utf8),
         DataType::Duration(_) => Ok(DataType::Duration(TimeUnit::Microsecond)),
@@ -937,28 +934,6 @@ fn add_calendar_interval_wide(
     NaiveDate::from_ymd_opt(year, month, day).map(|date| date.and_time(datetime.time()))
 }
 
-fn localize_with_preferred_offset(
-    timezone: SparkTimeZone,
-    datetime: NaiveDateTime,
-    preferred_offset: i32,
-) -> Result<DateTime<SparkTimeZone>> {
-    match timezone.from_local_datetime(&datetime) {
-        LocalResult::Single(value) => Ok(value),
-        LocalResult::Ambiguous(first, second) => {
-            if first.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(first)
-            } else if second.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(second)
-            } else {
-                Ok(first)
-            }
-        }
-        LocalResult::None => {
-            Ok(localize_with_fallback(&timezone, &datetime)?.with_timezone(&timezone))
-        }
-    }
-}
-
 fn add_ltz_interval(
     start: i64,
     months: i32,
@@ -988,13 +963,13 @@ fn add_ltz_interval(
             let preferred_offset = datetime.offset().fix().local_minus_utc();
             let local = checked_add_months(datetime.naive_local(), months)
                 .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+            datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
         }
         if days != 0 {
             let preferred_offset = datetime.offset().fix().local_minus_utc();
             let local = checked_add_days(datetime.naive_local(), days)
                 .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
-            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+            datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
         }
     } else {
         let preferred_offset = datetime.offset().fix().local_minus_utc();
@@ -1002,7 +977,7 @@ fn add_ltz_interval(
             add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
                 exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
             })?;
-        datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
+        datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
     }
 
     datetime
@@ -1017,6 +992,21 @@ fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i
     i64::try_from(result).map_err(|_| exec_datafusion_err!("cannot add interval to {start}"))
 }
 
+pub(crate) fn add_timestamp_interval(
+    start: i64,
+    months: i32,
+    days: i32,
+    micros: i64,
+    timezone: SparkTimeZone,
+    timestamp_ntz: bool,
+) -> Result<i64> {
+    if timestamp_ntz {
+        add_ntz_interval(start, months, days, micros)
+    } else {
+        add_ltz_interval(start, months, days, micros, timezone)
+    }
+}
+
 fn add_temporal_interval(
     start: i64,
     index: usize,
@@ -1029,11 +1019,7 @@ fn add_temporal_interval(
     let months = scaled_i32(months, index, "month")?;
     let days = scaled_i32(days, index, "day")?;
     let micros = scaled_i64(micros, index, "microsecond")?;
-    if timestamp_ntz {
-        add_ntz_interval(start, months, days, micros)
-    } else {
-        add_ltz_interval(start, months, days, micros, timezone)
-    }
+    add_timestamp_interval(start, months, days, micros, timezone, timestamp_ntz)
 }
 
 fn temporal_timestamp_row(

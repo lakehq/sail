@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue;
 use pyo3::exceptions::PyValueError;
@@ -5,6 +7,7 @@ use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
 use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python, intern};
 use sail_common::spec;
+use sail_common_datafusion::array::record_batch::retag_timestamp_data_type;
 use sail_pyarrow::FromPyArrow;
 
 use crate::cereal::{
@@ -76,6 +79,7 @@ impl PySparkUdtfPayload {
         kwargs: &[Option<String>],
         argument_is_tables: &[bool],
         large_var_types: bool,
+        session_timezone: &str,
     ) -> PyUdfResult<DataType> {
         check_python_udf_version(python_version)?;
         let _ = eval_type; // eval_type is not needed for the analyze call itself
@@ -95,7 +99,7 @@ impl PySparkUdtfPayload {
             let mut arguments: Vec<Bound<'_, PyAny>> = Vec::with_capacity(argument_types.len());
             for (i, dt) in argument_types.iter().enumerate() {
                 let arrow_type = dt
-                    .try_to_py(py, large_var_types)
+                    .try_to_py(py, large_var_types, Some(session_timezone))
                     .map_err(PyUdfError::PythonError)?;
                 let (is_constant, value_array) = match argument_literals.get(i) {
                     Some(Some(sv)) => {
@@ -107,7 +111,7 @@ impl PySparkUdtfPayload {
                             .map_err(|e| PyValueError::new_err(e.to_string()))
                             .map_err(PyUdfError::PythonError)?;
                         let pyarrow_array = array
-                            .try_to_py(py, large_var_types)
+                            .try_to_py(py, large_var_types, Some(session_timezone))
                             .map_err(PyUdfError::PythonError)?;
                         (true, Some(pyarrow_array))
                     }
@@ -136,7 +140,11 @@ impl PySparkUdtfPayload {
             // Convert PyArrow schema back to Arrow schema
             let schema =
                 Schema::from_pyarrow_bound(&schema_pyarrow).map_err(PyUdfError::PythonError)?;
-            Ok(DataType::Struct(schema.fields().clone()))
+            retag_timestamp_data_type(
+                &DataType::Struct(schema.fields().clone()),
+                &Arc::from("UTC"),
+            )
+            .map_err(|error| PyUdfError::internal(error.to_string()))
         })
     }
 
@@ -173,7 +181,11 @@ impl PySparkUdtfPayload {
                         })?;
                     eval_conf.push((
                         "input_type".to_string(),
-                        build_input_types_json(argument_types, config.arrow_use_large_var_types)?,
+                        build_input_types_json(
+                            argument_types,
+                            config.arrow_use_large_var_types,
+                            &config.session_timezone,
+                        )?,
                     ))
                 }
                 write_conf(&mut data, eval_conf);
@@ -196,8 +208,11 @@ impl PySparkUdtfPayload {
                                 input_types.len()
                             ))
                         })?;
-                    let schema_json =
-                        build_input_types_json(argument_types, config.arrow_use_large_var_types)?;
+                    let schema_json = build_input_types_json(
+                        argument_types,
+                        config.arrow_use_large_var_types,
+                        &config.session_timezone,
+                    )?;
                     data.extend((schema_json.len() as i32).to_be_bytes());
                     data.extend(schema_json.as_bytes());
                 }
@@ -240,7 +255,11 @@ impl PySparkUdtfPayload {
         data.extend_from_slice(command);
 
         let type_string = Python::attach(|py| -> PyResult<String> {
-            let return_type = return_type.try_to_py(py, config.arrow_use_large_var_types)?;
+            let return_type = return_type.try_to_py(
+                py,
+                config.arrow_use_large_var_types,
+                Some(&config.session_timezone),
+            )?;
             PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?
                 .call1((return_type,))?

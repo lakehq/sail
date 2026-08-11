@@ -6,6 +6,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
 
+use super::{align_expr_to_ltz_type, contains_ltz, widen_ltz_types};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -23,6 +24,7 @@ impl PlanResolver<'_> {
                 let value = self.resolve_expressions(value, &schema, state).await?;
                 results.push(value);
             }
+            self.resolve_values_ltz_types(&mut results, &schema)?;
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
             let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
             Ok::<_, PlanError>(results)
@@ -42,6 +44,57 @@ impl PlanResolver<'_> {
             expr,
             Arc::new(plan),
         )?))
+    }
+
+    fn resolve_values_ltz_types(
+        &self,
+        values: &mut [Vec<Expr>],
+        schema: &DFSchemaRef,
+    ) -> PlanResult<()> {
+        let Some(width) = values.first().map(Vec::len) else {
+            return Ok(());
+        };
+        for index in 0..width {
+            let types = values
+                .iter()
+                .map(|row| {
+                    row.get(index)
+                        .ok_or_else(|| PlanError::invalid("VALUES rows have different lengths"))?
+                        .get_type(schema)
+                        .map_err(PlanError::from)
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            let Some(first_type) = types.first() else {
+                continue;
+            };
+            let Some((target_type, has_ltz)) = types.iter().skip(1).try_fold(
+                (first_type.clone(), contains_ltz(first_type)),
+                |(target_type, has_ltz), source_type| {
+                    let (target_type, pair_has_ltz) = widen_ltz_types(
+                        &target_type,
+                        source_type,
+                        self.config.ansi_mode,
+                        false,
+                        self.config.case_sensitive,
+                    )?;
+                    Some((target_type, has_ltz || pair_has_ltz))
+                },
+            ) else {
+                continue;
+            };
+            if has_ltz {
+                for (row, source_type) in values.iter_mut().zip(types) {
+                    row[index] = align_expr_to_ltz_type(
+                        row[index].clone(),
+                        &source_type,
+                        &target_type,
+                        &self.config,
+                        !self.config.ansi_mode,
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn resolve_values_nan_types(
@@ -135,10 +188,17 @@ impl PlanResolver<'_> {
                 })
                 .collect::<Result<Vec<_>, PlanError>>()?;
 
-            if let Some(target_type) = override_types
-                .into_iter()
-                .flatten()
-                .reduce(merge_map_value_nullability)
+            let non_null_types = override_types.into_iter().flatten().collect::<Vec<_>>();
+            let compatible = non_null_types.first().is_none_or(|first| {
+                non_null_types
+                    .iter()
+                    .skip(1)
+                    .all(|data_type| map_key_value_types_match(first, data_type))
+            });
+            if compatible
+                && let Some(target_type) = non_null_types
+                    .into_iter()
+                    .reduce(merge_map_value_nullability)
             {
                 for value in &mut *values {
                     value[idx] = cast(value[idx].clone(), target_type.clone());
@@ -148,6 +208,24 @@ impl PlanResolver<'_> {
 
         Ok(map_positions)
     }
+}
+
+fn map_key_value_types_match(left: &DataType, right: &DataType) -> bool {
+    let (DataType::Map(left_entries, _), DataType::Map(right_entries, _)) = (left, right) else {
+        return false;
+    };
+    let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
+        (left_entries.data_type(), right_entries.data_type())
+    else {
+        return false;
+    };
+    let ([left_key, left_value], [right_key, right_value]) =
+        (left_fields.as_ref(), right_fields.as_ref())
+    else {
+        return false;
+    };
+    left_key.data_type() == right_key.data_type()
+        && left_value.data_type() == right_value.data_type()
 }
 
 fn merge_map_value_nullability(left: DataType, right: DataType) -> DataType {

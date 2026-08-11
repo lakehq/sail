@@ -7,7 +7,7 @@ use datafusion_expr::{EmptyRelation, Expr, Extension, LogicalPlan, UNNAMED_TABLE
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, read_record_batches,
+    cast_record_batch_positionally, read_record_batches, retag_record_batch_timestamp_timezone,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
@@ -115,6 +115,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let batches = if let Some(data) = data {
             read_record_batches(&data)?
+                .into_iter()
+                .map(|batch| Ok(retag_record_batch_timestamp_timezone(&batch, "UTC")?))
+                .collect::<PlanResult<Vec<_>>>()?
         } else {
             vec![]
         };

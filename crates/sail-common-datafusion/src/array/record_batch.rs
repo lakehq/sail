@@ -3,17 +3,127 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, LargeListArray, ListArray, MapArray, PrimitiveArray, RecordBatch,
-    RecordBatchOptions, StructArray, new_null_array,
+    RecordBatchOptions, StructArray, make_array, new_null_array,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, FieldRef, Fields, Schema, SchemaRef, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType,
+    TimestampSecondType, UnionFields,
 };
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion_common::{DataFusionError, Result};
+
+fn retag_timestamp_field(field: &FieldRef, timezone: &Arc<str>) -> Result<FieldRef> {
+    Ok(Arc::new(field.as_ref().clone().with_data_type(
+        retag_timestamp_data_type(field.data_type(), timezone)?,
+    )))
+}
+
+pub fn retag_timestamp_data_type(data_type: &DataType, timezone: &Arc<str>) -> Result<DataType> {
+    Ok(match data_type {
+        DataType::Timestamp(unit, Some(_)) => {
+            DataType::Timestamp(*unit, Some(Arc::clone(timezone)))
+        }
+        DataType::List(field) => DataType::List(retag_timestamp_field(field, timezone)?),
+        DataType::ListView(field) => DataType::ListView(retag_timestamp_field(field, timezone)?),
+        DataType::FixedSizeList(field, length) => {
+            DataType::FixedSizeList(retag_timestamp_field(field, timezone)?, *length)
+        }
+        DataType::LargeList(field) => DataType::LargeList(retag_timestamp_field(field, timezone)?),
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(retag_timestamp_field(field, timezone)?)
+        }
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| retag_timestamp_field(field, timezone))
+                .collect::<Result<Vec<_>>>()?
+                .into(),
+        ),
+        DataType::Map(field, sorted) => {
+            DataType::Map(retag_timestamp_field(field, timezone)?, *sorted)
+        }
+        DataType::Union(fields, mode) => {
+            let mut type_ids = Vec::with_capacity(fields.len());
+            let mut output_fields = Vec::with_capacity(fields.len());
+            for (type_id, field) in fields.iter() {
+                type_ids.push(type_id);
+                output_fields.push(retag_timestamp_field(field, timezone)?);
+            }
+            DataType::Union(UnionFields::try_new(type_ids, output_fields)?, *mode)
+        }
+        DataType::Dictionary(key, value) => DataType::Dictionary(
+            Box::new(retag_timestamp_data_type(key, timezone)?),
+            Box::new(retag_timestamp_data_type(value, timezone)?),
+        ),
+        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
+            retag_timestamp_field(run_ends, timezone)?,
+            retag_timestamp_field(values, timezone)?,
+        ),
+        _ => data_type.clone(),
+    })
+}
+
+pub fn retag_timestamp_array(array: &ArrayRef, timezone: &Arc<str>) -> Result<ArrayRef> {
+    let data_type = retag_timestamp_data_type(array.data_type(), timezone)?;
+    if &data_type == array.data_type() {
+        return Ok(Arc::clone(array));
+    }
+    let data = array.to_data();
+    let child_data = data
+        .child_data()
+        .iter()
+        .map(|child| {
+            let child = make_array(child.clone());
+            Ok(retag_timestamp_array(&child, timezone)?.to_data())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(make_array(
+        data.into_builder()
+            .data_type(data_type)
+            .child_data(child_data)
+            .build()?,
+    ))
+}
+
+pub fn retag_schema_timestamp_timezone(schema: &Schema, timezone: &str) -> Result<Schema> {
+    let timezone = Arc::<str>::from(timezone);
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| retag_timestamp_field(field, &timezone))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+pub fn retag_record_batch_timestamp_timezone(
+    batch: &RecordBatch,
+    timezone: &str,
+) -> Result<RecordBatch> {
+    let timezone = Arc::<str>::from(timezone);
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|array| retag_timestamp_array(array, &timezone))
+        .collect::<Result<Vec<_>>>()?;
+    let fields = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| retag_timestamp_field(field, &timezone))
+        .collect::<Result<Vec<_>>>()?;
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        batch.schema().metadata().clone(),
+    ));
+    Ok(RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+    )?)
+}
 
 pub fn cast_record_batch_positionally(
     batch: RecordBatch,
@@ -158,6 +268,26 @@ fn cast_array_positionally_recursively(src: &ArrayRef, target_type: &DataType) -
     let src_type = src.data_type();
     if src_type == target_type {
         return Ok(src.clone());
+    }
+
+    if let (DataType::Timestamp(src_unit, _), DataType::Timestamp(target_unit, target_tz)) =
+        (src_type, target_type)
+        && src_unit == target_unit
+    {
+        return match src_unit {
+            TimeUnit::Second => {
+                adjust_timestamp_timezone::<TimestampSecondType>(src, target_tz.clone())
+            }
+            TimeUnit::Millisecond => {
+                adjust_timestamp_timezone::<TimestampMillisecondType>(src, target_tz.clone())
+            }
+            TimeUnit::Microsecond => {
+                adjust_timestamp_timezone::<TimestampMicrosecondType>(src, target_tz.clone())
+            }
+            TimeUnit::Nanosecond => {
+                adjust_timestamp_timezone::<TimestampNanosecondType>(src, target_tz.clone())
+            }
+        };
     }
 
     match (src_type, target_type) {
@@ -383,7 +513,7 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
+    use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::{Field, Fields};
 
     use super::*;
@@ -392,6 +522,64 @@ mod tests {
         let field_refs_vec: Vec<FieldRef> = fields.into_iter().map(Arc::new).collect();
         let field_refs: Fields = field_refs_vec.into();
         StructArray::new(field_refs, columns, None)
+    }
+
+    #[test]
+    fn retag_timestamp_timezone_recursively_without_changing_values() {
+        let timestamp: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![Some(-3_723_000_000)]).with_timezone("+01:02:03"),
+        );
+        let nested_fields: Fields = vec![Arc::new(Field::new(
+            "ts",
+            timestamp.data_type().clone(),
+            true,
+        ))]
+        .into();
+        let payload: ArrayRef = Arc::new(StructArray::new(
+            nested_fields.clone(),
+            vec![timestamp],
+            None,
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "payload",
+                DataType::Struct(nested_fields),
+                true,
+            )])),
+            vec![payload],
+        )
+        .unwrap();
+
+        let internal = retag_record_batch_timestamp_timezone(&batch, "UTC").unwrap();
+        let internal_schema = internal.schema();
+        let DataType::Struct(fields) = internal_schema.field(0).data_type() else {
+            panic!("expected struct");
+        };
+        assert_eq!(
+            fields[0].data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
+        let payload = internal
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let timestamp = payload
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(timestamp.value(0), -3_723_000_000);
+
+        let external = retag_record_batch_timestamp_timezone(&internal, "+01:02:03").unwrap();
+        let external_schema = external.schema();
+        let DataType::Struct(fields) = external_schema.field(0).data_type() else {
+            panic!("expected struct");
+        };
+        assert_eq!(
+            fields[0].data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+01:02:03")),)
+        );
     }
 
     #[test]

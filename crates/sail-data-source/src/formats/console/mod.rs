@@ -41,6 +41,7 @@ impl TableFormat for ConsoleTableFormat {
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
+            session_timezone,
             mode,
             partition_by,
             bucket_by,
@@ -59,7 +60,7 @@ impl TableFormat for ConsoleTableFormat {
         }
         let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve(ctx, options)?;
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(ConsoleWriteNode::new(Arc::new(input))),
+            node: Arc::new(ConsoleWriteNode::new(Arc::new(input), session_timezone)),
         }))
     }
 }
@@ -68,20 +69,26 @@ impl TableFormat for ConsoleTableFormat {
 #[educe(PartialOrd)]
 pub struct ConsoleWriteNode {
     input: Arc<LogicalPlan>,
+    session_timezone: Arc<str>,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
 impl ConsoleWriteNode {
-    pub fn new(input: Arc<LogicalPlan>) -> Self {
+    pub fn new(input: Arc<LogicalPlan>, session_timezone: Arc<str>) -> Self {
         Self {
             input,
+            session_timezone,
             schema: Arc::new(DFSchema::empty()),
         }
     }
 
     pub fn name(&self) -> &str {
         "ConsoleWrite"
+    }
+
+    pub fn session_timezone(&self) -> &Arc<str> {
+        &self.session_timezone
     }
 }
 
@@ -108,7 +115,10 @@ impl UserDefinedLogicalNodeCore for ConsoleWriteNode {
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
-        Ok(Self::new(Arc::new(inputs.one()?)))
+        Ok(Self::new(
+            Arc::new(inputs.one()?),
+            Arc::clone(&self.session_timezone),
+        ))
     }
 }
 
@@ -125,15 +135,18 @@ impl ExtensionPlanner for ConsolePhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if !node.as_any().is::<ConsoleWriteNode>() {
+        let Some(node) = node.as_any().downcast_ref::<ConsoleWriteNode>() else {
             return Ok(None);
-        }
+        };
         let [input] = physical_inputs else {
             return internal_err!("ConsoleWriteNode requires exactly one physical input");
         };
         if !is_flow_event_schema(input.schema().as_ref()) {
             return plan_err!("the console table format only supports streaming data");
         }
-        Ok(Some(Arc::new(ConsoleSinkExec::new(input.clone()))))
+        Ok(Some(Arc::new(ConsoleSinkExec::new(
+            input.clone(),
+            Arc::clone(node.session_timezone()),
+        ))))
     }
 }
