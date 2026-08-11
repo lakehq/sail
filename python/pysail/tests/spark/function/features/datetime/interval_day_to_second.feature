@@ -67,6 +67,64 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
         | case                  | expr                                                                      | result                              |
         | addition of intervals | INTERVAL '0 23:00:00' DAY TO SECOND + INTERVAL '0 02:00:00' DAY TO SECOND | INTERVAL '1 01:00:00' DAY TO SECOND |
 
+    Scenario Outline: string and day-time interval addition with <operand order>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS result
+        FROM VALUES
+          ('2026-01-01 00:00:00'),
+          ('2026-03-15 12:30:00'),
+          ('not-a-timestamp'),
+          (CAST(NULL AS STRING))
+        AS t(ts_str)
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:05 |
+        | 2026-03-15 12:30:05 |
+        | NULL                |
+        | NULL                |
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | operand order  | expr                                  |
+        | string first   | ts_str + INTERVAL 1 SECOND * 5         |
+        | interval first | INTERVAL 1 SECOND * 5 + ts_str         |
+
+    Scenario: string and day-time interval addition under ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT ts_str + INTERVAL 1 SECOND * 5 AS result
+        FROM VALUES
+          ('2026-01-01 00:00:00'),
+          (CAST(NULL AS STRING))
+        AS t(ts_str)
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:05 |
+        | NULL                |
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+    Scenario: invalid string and day-time interval addition errors under ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT ts_str + INTERVAL 1 SECOND * 5 AS result
+        FROM VALUES ('not-a-timestamp') AS t(ts_str)
+        """
+      Then query error (?i)(timestamp|CAST_INVALID_INPUT|found n at 0:1)
+
     # Same field validation as above: Spark will not even parse `INTERVAL '1 24:00:00'`, so the
     # normalized-equality comparison never runs. Sail normalizes and answers `true`.
     @sail-bug
