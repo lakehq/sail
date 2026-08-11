@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
@@ -5,12 +6,14 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::{self, Expr};
+use datafusion_expr::expr::{self, Expr, FieldMetadata};
 use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
+use sail_common::spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY;
 use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -865,11 +868,103 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(to_session_local_timestamp(timestamp, &session_timezone))
 }
 
+fn evaluate_current_time_precision(argument: &Expr) -> PlanResult<i32> {
+    let string_literal = match argument {
+        Expr::Literal(value, _) => value.try_as_str().flatten(),
+        Expr::Cast(cast)
+            if cast.field.data_type() == &DataType::Int32
+                && let Expr::Literal(value, _) = cast.expr.as_ref() =>
+        {
+            value.try_as_str().flatten()
+        }
+        _ => None,
+    };
+    if let Some(value) = string_literal {
+        return value.trim().parse::<i32>().map_err(|error| {
+            PlanError::invalid(format!("cannot evaluate current_time precision: {error}"))
+        });
+    }
+
+    match LiteralEvaluator::new().evaluate(&cast(argument.clone(), DataType::Int32)) {
+        Ok(ScalarValue::Int32(Some(precision))) => Ok(precision),
+        Ok(ScalarValue::Int32(None) | ScalarValue::Null) => Err(PlanError::invalid(
+            "current_time precision must not be null",
+        )),
+        Ok(value) => Err(PlanError::invalid(format!(
+            "current_time precision must be an integer, got {value}"
+        ))),
+        Err(error) => Err(PlanError::invalid(format!(
+            "cannot evaluate current_time precision: {error}"
+        ))),
+    }
+}
+
 fn current_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    Ok(cast(
-        current_localtimestamp_microseconds(input)?,
+    const DEFAULT_PRECISION: i32 = 6;
+
+    let precision = match input.arguments.as_slice() {
+        [] => DEFAULT_PRECISION,
+        [argument] => {
+            if argument.any_column_refs() || argument.contains_outer() || argument.is_volatile() {
+                return Err(PlanError::invalid(
+                    "current_time precision must be a foldable expression",
+                ));
+            }
+
+            let data_type = argument.get_type(input.function_context.schema)?;
+            if !data_type.is_numeric()
+                && !matches!(
+                    &data_type,
+                    DataType::Null | DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                )
+            {
+                return Err(PlanError::invalid(format!(
+                    "current_time precision must have integer-compatible type, got {data_type}"
+                )));
+            }
+
+            evaluate_current_time_precision(argument)?
+        }
+        arguments => {
+            return Err(PlanError::invalid(format!(
+                "current_time takes 0 or 1 arguments, got {}",
+                arguments.len()
+            )));
+        }
+    };
+    if !(0..=6).contains(&precision) {
+        return Err(PlanError::invalid(format!(
+            "current_time precision must be between 0 and 6, got {precision}"
+        )));
+    }
+
+    let data_type = match precision {
+        0 => DataType::Time32(TimeUnit::Second),
+        1..=3 => DataType::Time32(TimeUnit::Millisecond),
+        4..=6 => DataType::Time64(TimeUnit::Microsecond),
+        _ => unreachable!("current_time precision was validated above"),
+    };
+
+    let session_timezone = &input.function_context.plan_config.session_timezone;
+    let time = cast(
+        to_session_local_timestamp(current_timestamp(session_timezone), session_timezone),
         DataType::Time64(TimeUnit::Microsecond),
-    ))
+    );
+    let factor = 10_i64.pow((6 - precision) as u32);
+    let time = if factor == 1 {
+        time
+    } else {
+        let micros = cast(time, DataType::Int64);
+        cast(
+            micros.clone() - micros % lit(factor),
+            DataType::Time64(TimeUnit::Microsecond),
+        )
+    };
+    let metadata = FieldMetadata::from(HashMap::from([(
+        SAIL_SPARK_TIME_PRECISION_METADATA_KEY.to_string(),
+        precision.to_string(),
+    )]));
+    Ok(cast(time, data_type).alias_with_metadata("current_time", Some(metadata)))
 }
 
 fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr, classic: bool) -> Expr {

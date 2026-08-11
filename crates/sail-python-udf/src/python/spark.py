@@ -622,7 +622,7 @@ def _python_values_to_arrow_array(
         return pa.array(converted).cast(target_type=arrow_type, safe=safecheck)
 
 
-def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
+def _arrow_array_to_output_type(data, data_type: pa.DataType, *, assign_columns_by_name: bool) -> pa.Array:
     if not isinstance(data, list):
         data = list(data)
     if len(data) == 0:
@@ -642,7 +642,9 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
             target_name = target_field.name
             target_type = target_field.type
 
-            source_array = batch[target_name] if target_name in batch.schema.names else batch.column(i)
+            source_array = (
+                batch[target_name] if assign_columns_by_name and target_name in batch.schema.names else batch.column(i)
+            )
 
             if source_array.type != target_type:
                 source_array = source_array.cast(target_type)
@@ -923,6 +925,7 @@ class PySparkGroupMapUdf:
         self._input_names = input_names
         self.is_pandas = is_pandas
         self.is_iter = is_iter
+        self._assign_columns_by_name = config.assign_columns_by_name
         self._max_records_per_batch = config.arrow_max_records_per_batch
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
@@ -985,7 +988,11 @@ class PySparkGroupMapUdf:
         else:
             batches = [rb]
         [(output, output_type)] = list(self._udf(None, (batches,)))
-        return _arrow_array_to_output_type(output, output_type)
+        return _arrow_array_to_output_type(
+            output,
+            output_type,
+            assign_columns_by_name=self._assign_columns_by_name,
+        )
 
 
 class PySparkCoGroupMapUdf:
@@ -1001,6 +1008,7 @@ class PySparkCoGroupMapUdf:
         self._left_names = left_names
         self._right_names = right_names
         self.is_pandas = is_pandas
+        self._assign_columns_by_name = config.assign_columns_by_name
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -1026,7 +1034,11 @@ class PySparkCoGroupMapUdf:
             [pa.RecordBatch.from_arrays(right, self._right_names)],
         ]
         [(output, output_type)] = list(self._udf(None, (inputs,)))
-        return _arrow_array_to_output_type(output, output_type)
+        return _arrow_array_to_output_type(
+            output,
+            output_type,
+            assign_columns_by_name=self._assign_columns_by_name,
+        )
 
 
 class PySparkMapPandasIterUdf:

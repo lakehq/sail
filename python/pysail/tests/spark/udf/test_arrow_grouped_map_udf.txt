@@ -15,3 +15,13 @@
 |  1| 0.5|
 |  2| 0.0|
 +---+----+
+>>>
+>>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", False)
+>>> def positional(_):
+...     return pa.Table.from_pydict({"b": ["first"], "a": ["second"]})
+...
+>>> spark.range(1).groupBy("id").applyInArrow(
+...     positional, schema="a string, b string"
+... ).select("a", "b").collect()
+[Row(a='first', b='second')]
+>>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", True)

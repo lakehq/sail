@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
+use datafusion_expr::{Expr, ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -108,6 +110,12 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(name, expr));
         }
+        let cast_time_precision = match &cast_to_type {
+            DataType::Time32(TimeUnit::Second) => Some(0),
+            DataType::Time32(TimeUnit::Millisecond) => Some(3),
+            DataType::Time64(TimeUnit::Microsecond) => Some(6),
+            _ => None,
+        };
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
@@ -226,8 +234,20 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
+        let expr = match cast_time_precision {
+            Some(precision) => with_spark_time_precision(expr, precision),
+            None => expr,
+        };
         Ok(NamedExpr::new(name, expr))
     }
+}
+
+fn with_spark_time_precision(expr: Expr, precision: i32) -> Expr {
+    let metadata = FieldMetadata::from(HashMap::from([(
+        spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY.to_string(),
+        precision.to_string(),
+    )]));
+    expr.alias_with_metadata("cast", Some(metadata))
 }
 
 pub(crate) fn needs_spark_timezone_cast(from: &DataType, to: &DataType) -> bool {
@@ -372,6 +392,16 @@ fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
 
 fn need_rename_cast(expr: &expr::Expr) -> bool {
     match expr {
+        expr::Expr::Alias(alias)
+            if matches!(alias.name.as_str(), "current_time" | "cast")
+                && alias.metadata.as_ref().is_some_and(|metadata| {
+                    metadata
+                        .inner()
+                        .contains_key(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+                }) =>
+        {
+            need_rename_cast(alias.expr.as_ref())
+        }
         expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..) => {
             false
         }

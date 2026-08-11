@@ -7,7 +7,9 @@ use datafusion_common::Result;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use pyo3::{Py, PyAny, Python};
-use sail_common_datafusion::array::record_batch::cast_array_recursively;
+use sail_common_datafusion::array::record_batch::{
+    cast_array_positionally_recursively, cast_array_recursively,
+};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::array::{build_singleton_list_array, get_list_field};
@@ -141,6 +143,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
         let aggregator = Box::new(PySparkGroupMapper {
             udf,
             field,
+            assign_columns_by_name: self.config.pandas_grouped_map_assign_columns_by_name,
             large_var_types: self.config.arrow_use_large_var_types,
             session_timezone: self.config.session_timezone.clone(),
         });
@@ -160,8 +163,21 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 struct PySparkGroupMapper {
     udf: Py<PyAny>,
     field: FieldRef,
+    assign_columns_by_name: bool,
     large_var_types: bool,
     session_timezone: String,
+}
+
+pub(super) fn cast_group_map_output(
+    array: &ArrayRef,
+    target_type: &DataType,
+    assign_columns_by_name: bool,
+) -> Result<ArrayRef> {
+    if assign_columns_by_name {
+        cast_array_recursively(array, target_type)
+    } else {
+        cast_array_positionally_recursively(array, target_type)
+    }
 }
 
 impl BatchAggregator for PySparkGroupMapper {
@@ -173,7 +189,65 @@ impl BatchAggregator for PySparkGroupMapper {
             )?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
-        let array = cast_array_recursively(&make_array(data), self.field.data_type())?;
+        let array = cast_group_map_output(
+            &make_array(data),
+            self.field.data_type(),
+            self.assign_columns_by_name,
+        )?;
         Ok(build_singleton_list_array(array))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::array::{Int64Array, StringArray, StructArray};
+    use datafusion::arrow::datatypes::{Field, Fields};
+
+    use super::*;
+
+    fn target_type() -> DataType {
+        DataType::Struct(
+            vec![
+                Arc::new(Field::new("a", DataType::Utf8, true)),
+                Arc::new(Field::new("b", DataType::Int64, true)),
+            ]
+            .into(),
+        )
+    }
+
+    #[test]
+    fn output_columns_are_assigned_positionally_when_configured() {
+        let fields: Fields = vec![
+            Arc::new(Field::new("x", DataType::Utf8, false)),
+            Arc::new(Field::new("y", DataType::Int64, false)),
+        ]
+        .into();
+        let input: ArrayRef = Arc::new(StructArray::new(
+            fields,
+            vec![
+                Arc::new(StringArray::from(vec!["hi"])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+            None,
+        ));
+
+        let output = cast_group_map_output(&input, &target_type(), false).unwrap();
+        let output = output.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = output
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let b = output
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(a.value(0), "hi");
+        assert_eq!(b.value(0), 1);
     }
 }

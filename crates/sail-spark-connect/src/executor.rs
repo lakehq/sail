@@ -7,14 +7,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, FieldRef, Schema, SchemaRef, TimeUnit,
+};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::Stream;
 use futures::stream::StreamExt;
-use sail_common_datafusion::array::record_batch::retag_record_batch_timestamp_timezone;
+use sail_common::spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY;
+use sail_common_datafusion::array::record_batch::{
+    cast_record_batch_positionally, retag_record_batch_timestamp_timezone,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -472,6 +477,7 @@ pub(crate) fn to_arrow_batch(
     session_timezone: &str,
 ) -> SparkResult<ArrowBatch> {
     let batch = retag_record_batch_timestamp_timezone(batch, session_timezone)?;
+    let batch = normalize_time_for_spark_connect(&batch)?;
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
@@ -481,4 +487,63 @@ pub(crate) fn to_arrow_batch(
         writer.finish()?;
     }
     Ok(output)
+}
+
+fn normalize_time_for_spark_connect(batch: &RecordBatch) -> SparkResult<RecordBatch> {
+    let input_schema = batch.schema();
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(spark_connect_arrow_field)
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    ));
+    if schema == input_schema {
+        return Ok(batch.clone());
+    }
+    Ok(cast_record_batch_positionally(batch.clone(), schema)?)
+}
+
+fn spark_connect_arrow_field(field: &FieldRef) -> FieldRef {
+    let mut metadata = field.metadata().clone();
+    metadata.remove(SAIL_SPARK_TIME_PRECISION_METADATA_KEY);
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(spark_connect_arrow_data_type(field.data_type()))
+            .with_metadata(metadata),
+    )
+}
+
+fn spark_connect_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Time32(_) | ArrowDataType::Time64(_) => {
+            ArrowDataType::Time64(TimeUnit::Nanosecond)
+        }
+        ArrowDataType::List(field) => ArrowDataType::List(spark_connect_arrow_field(field)),
+        ArrowDataType::LargeList(field) => {
+            ArrowDataType::LargeList(spark_connect_arrow_field(field))
+        }
+        ArrowDataType::FixedSizeList(field, size) => {
+            ArrowDataType::FixedSizeList(spark_connect_arrow_field(field), *size)
+        }
+        ArrowDataType::ListView(field) => ArrowDataType::ListView(spark_connect_arrow_field(field)),
+        ArrowDataType::LargeListView(field) => {
+            ArrowDataType::LargeListView(spark_connect_arrow_field(field))
+        }
+        ArrowDataType::Struct(fields) => ArrowDataType::Struct(
+            fields
+                .iter()
+                .map(spark_connect_arrow_field)
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        ArrowDataType::Map(field, sorted) => {
+            ArrowDataType::Map(spark_connect_arrow_field(field), *sorted)
+        }
+        _ => data_type.clone(),
+    }
 }

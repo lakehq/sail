@@ -8,7 +8,6 @@ use datafusion_common::arrow::array::make_array;
 use datafusion_common::exec_err;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use pyo3::{Py, PyAny, Python};
-use sail_common_datafusion::array::record_batch::cast_array_recursively;
 
 use crate::array::{build_list_array, get_list_field, get_struct_array_type};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -17,6 +16,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::udf::pyspark_group_map_udf::cast_group_map_output;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
@@ -191,7 +191,11 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                     )?;
                     Ok(ArrayData::try_from_py(py, &output)?)
                 })?;
-                let array = cast_array_recursively(&make_array(data), field.data_type())?;
+                let array = cast_group_map_output(
+                    &make_array(data),
+                    field.data_type(),
+                    self.config.pandas_grouped_map_assign_columns_by_name,
+                )?;
                 Ok(array)
             })
             .collect::<Result<Vec<_>>>()?;

@@ -69,6 +69,32 @@ impl SparkGeoMetadata {
     }
 }
 
+fn spark_time_precision(field: &adt::Field) -> SparkResult<Option<i32>> {
+    if !matches!(
+        field.data_type(),
+        adt::DataType::Time32(_) | adt::DataType::Time64(_)
+    ) {
+        return Ok(None);
+    }
+    let Some(value) = field
+        .metadata()
+        .get(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+    else {
+        return Ok(None);
+    };
+    let precision = value.parse::<i32>().map_err(|error| {
+        SparkError::invalid(format!(
+            "invalid Spark TIME precision metadata {value:?}: {error}"
+        ))
+    })?;
+    if !(0..=6).contains(&precision) {
+        return Err(SparkError::invalid(format!(
+            "Spark TIME precision metadata must be between 0 and 6, got {precision}"
+        )));
+    }
+    Ok(Some(precision))
+}
+
 impl TryFrom<adt::Field> for sdt::StructField {
     type Error = SparkError;
 
@@ -108,6 +134,13 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else if is_variant_storage_field(&field) {
             DataType {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
+                    type_variation_reference: 0,
+                })),
+            }
+        } else if let Some(precision) = spark_time_precision(&field)? {
+            DataType {
+                kind: Some(sdt::Kind::Time(sdt::Time {
+                    precision: Some(precision),
                     type_variation_reference: 0,
                 })),
             }
@@ -491,6 +524,53 @@ mod tests {
     }
 
     #[test]
+    fn test_time_precision_metadata_to_proto() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Kind, Time};
+
+        for precision in 0..=6 {
+            let arrow_type = match precision {
+                0 => adt::DataType::Time32(adt::TimeUnit::Second),
+                1..=3 => adt::DataType::Time32(adt::TimeUnit::Millisecond),
+                4..=6 => adt::DataType::Time64(adt::TimeUnit::Microsecond),
+                _ => unreachable!(),
+            };
+            let field =
+                adt::Field::new("value", arrow_type, false).with_metadata(HashMap::from([(
+                    spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY.to_string(),
+                    precision.to_string(),
+                )]));
+            let field = sdt::StructField::try_from(field)?;
+            assert_eq!(
+                field.data_type,
+                Some(DataType {
+                    kind: Some(Kind::Time(Time {
+                        precision: Some(precision),
+                        type_variation_reference: 0,
+                    })),
+                })
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_precision_metadata_is_ignored_for_non_time_field() -> SparkResult<()> {
+        let field =
+            adt::Field::new("value", adt::DataType::Utf8, false).with_metadata(HashMap::from([(
+                spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY.to_string(),
+                "2".to_string(),
+            )]));
+        let field = sdt::StructField::try_from(field)?;
+        assert!(matches!(
+            field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::String(_))
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn test_time_arrow_to_proto_unsupported() {
         // Invalid Arrow Time32 combinations (only Second and Millisecond are valid)
         let arrow_type = adt::DataType::Time32(adt::TimeUnit::Microsecond);
@@ -506,7 +586,7 @@ mod tests {
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Millisecond);
         assert!(DataType::try_from(arrow_type).is_err());
 
-        // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
+        // Time64 Nanosecond is valid Arrow but not used as Sail's internal TIME representation.
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
     }

@@ -26,7 +26,7 @@ impl PlanResolver<'_> {
             }
             self.resolve_values_ltz_types(&mut results, &schema)?;
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
-            let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
+            let _map_column_indices = self.resolve_values_map_types(&mut results, &schema)?;
             Ok::<_, PlanError>(results)
         }
         .await?;
@@ -158,6 +158,7 @@ impl PlanResolver<'_> {
     }
 
     fn resolve_values_map_types(
+        &self,
         values: &mut Vec<Vec<Expr>>,
         schema: &DFSchemaRef,
     ) -> PlanResult<HashSet<usize>> {
@@ -173,33 +174,23 @@ impl PlanResolver<'_> {
         for idx in map_positions.clone() {
             let override_types = values
                 .iter()
-                .map(|result| {
-                    let cur_map_type = result[idx].get_type(&schema)?;
-                    Ok(
-                        if matches!(cur_map_type.clone(), DataType::Map(inner_type, _)
-                        if matches!(inner_type.data_type(), DataType::Struct(fields)
-                            if matches!(fields.first().map(|f| f.data_type()), Some(DataType::Null))
-                        )) {
-                            None
-                        } else {
-                            Some(cur_map_type)
-                        },
-                    )
-                })
+                .map(|result| result[idx].get_type(&schema).map_err(PlanError::from))
                 .collect::<Result<Vec<_>, PlanError>>()?;
 
-            let non_null_types = override_types.into_iter().flatten().collect::<Vec<_>>();
-            let compatible = non_null_types.first().is_none_or(|first| {
-                non_null_types
-                    .iter()
-                    .skip(1)
-                    .all(|data_type| map_key_value_types_match(first, data_type))
-            });
-            if compatible
-                && let Some(target_type) = non_null_types
+            let target_type =
+                override_types
                     .into_iter()
-                    .reduce(merge_map_value_nullability)
-            {
+                    .try_fold(DataType::Null, |target_type, source_type| {
+                        widen_ltz_types(
+                            &target_type,
+                            &source_type,
+                            self.config.ansi_mode,
+                            false,
+                            self.config.case_sensitive,
+                        )
+                        .map(|(data_type, _)| data_type)
+                    });
+            if let Some(target_type) = target_type.filter(|data_type| !data_type.is_null()) {
                 for value in &mut *values {
                     value[idx] = cast(value[idx].clone(), target_type.clone());
                 }
@@ -208,59 +199,4 @@ impl PlanResolver<'_> {
 
         Ok(map_positions)
     }
-}
-
-fn map_key_value_types_match(left: &DataType, right: &DataType) -> bool {
-    let (DataType::Map(left_entries, _), DataType::Map(right_entries, _)) = (left, right) else {
-        return false;
-    };
-    let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
-        (left_entries.data_type(), right_entries.data_type())
-    else {
-        return false;
-    };
-    let ([left_key, left_value], [right_key, right_value]) =
-        (left_fields.as_ref(), right_fields.as_ref())
-    else {
-        return false;
-    };
-    left_key.data_type() == right_key.data_type()
-        && left_value.data_type() == right_value.data_type()
-}
-
-fn merge_map_value_nullability(left: DataType, right: DataType) -> DataType {
-    let (DataType::Map(left_entries, left_sorted), DataType::Map(right_entries, _)) =
-        (&left, &right)
-    else {
-        return left;
-    };
-    let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
-        (left_entries.data_type(), right_entries.data_type())
-    else {
-        return left;
-    };
-    let (Some(left_value), Some(right_value)) = (left_fields.get(1), right_fields.get(1)) else {
-        return left;
-    };
-    let value_nullable = left_value.is_nullable() || right_value.is_nullable();
-    if value_nullable == left_value.is_nullable() {
-        return left;
-    }
-    let Some(left_key) = left_fields.first() else {
-        return left;
-    };
-    let fields = vec![
-        left_key.clone(),
-        Arc::new(left_value.as_ref().clone().with_nullable(value_nullable)),
-    ]
-    .into();
-    DataType::Map(
-        Arc::new(
-            left_entries
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::Struct(fields)),
-        ),
-        *left_sorted,
-    )
 }

@@ -252,7 +252,9 @@ impl PlanResolver<'_> {
         // to individual column names so the output header matches Spark JVM behavior
         // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
         let argument_display_names =
-            if is_distinct && argument_display_names.iter().any(|n| n == "*") {
+            if canonical_function_name == "current_time" && argument_display_names.is_empty() {
+                vec!["6".to_string()]
+            } else if is_distinct && argument_display_names.iter().any(|n| n == "*") {
                 schema
                     .columns()
                     .iter()
