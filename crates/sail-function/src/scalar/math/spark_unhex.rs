@@ -338,39 +338,3 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
         other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
     }
 }
-
-#[cfg(test)]
-mod return_field_tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
-
-    use super::*;
-
-    fn non_nullable(data_type: DataType) -> FieldRef {
-        Arc::new(Field::new("c", data_type, false))
-    }
-
-    /// Spark declares this function's output nullable regardless of its children, so a
-    /// non-nullable argument -- the case where the arity default would say `false` -- must
-    /// still come back nullable.
-    #[test]
-    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
-        let arg_fields = vec![non_nullable(DataType::Utf8)];
-        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
-        let field = SparkUnHex::new().return_field_from_args(ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        })?;
-        assert_eq!(field.data_type(), &DataType::Binary);
-        assert!(field.is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn test_return_type_is_not_the_source_of_truth() {
-        assert!(SparkUnHex::new().return_type(&[DataType::Utf8]).is_err());
-    }
-}

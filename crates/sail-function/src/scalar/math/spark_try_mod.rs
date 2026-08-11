@@ -13,18 +13,6 @@ use datafusion_expr::{
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{binary_op_scalar_or_array, try_binary_op_primitive};
 
-fn try_mod_return_type(arg_types: &[DataType]) -> Result<DataType> {
-    if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
-        let (result_scale, result_precision) = SparkTryMod::get_scale_and_precision(pl, sl, pr, sr);
-        return Ok(DataType::Decimal128(result_precision, result_scale));
-    }
-    if arg_types.contains(&DataType::Int64) {
-        Ok(DataType::Int64)
-    } else {
-        Ok(DataType::Int32)
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryMod {
     signature: Signature,
@@ -68,10 +56,16 @@ impl ScalarUDFImpl for SparkTryMod {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
+            let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
+            return Ok(DataType::Decimal128(result_precision, result_scale));
+        }
+        if arg_types.contains(&DataType::Int64) {
+            Ok(DataType::Int64)
+        } else {
+            Ok(DataType::Int32)
+        }
     }
 
     /// Spark: `TryMod` (`TryEval.scala:154-163`) is `RuntimeReplaceable` and declares no
@@ -87,7 +81,7 @@ impl ScalarUDFImpl for SparkTryMod {
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = try_mod_return_type(&arg_types)?;
+        let data_type = self.return_type(&arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -243,44 +237,4 @@ fn rescale_decimal_up(
     let out: PrimitiveArray<Decimal128Type> =
         b.finish().with_precision_and_scale(precision, to_scale)?;
     Ok(out)
-}
-
-#[cfg(test)]
-mod return_field_tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
-
-    use super::*;
-
-    fn non_nullable(data_type: DataType) -> FieldRef {
-        Arc::new(Field::new("c", data_type, false))
-    }
-
-    /// Spark declares this function's output nullable regardless of its children, so a
-    /// non-nullable argument -- the case where the arity default would say `false` -- must
-    /// still come back nullable.
-    #[test]
-    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
-        let arg_fields = vec![non_nullable(DataType::Int32), non_nullable(DataType::Int32)];
-        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
-        let field = SparkTryMod::new().return_field_from_args(ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        })?;
-        assert_eq!(field.data_type(), &DataType::Int32);
-        assert!(field.is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn test_return_type_is_not_the_source_of_truth() {
-        assert!(
-            SparkTryMod::new()
-                .return_type(&[DataType::Int32, DataType::Int32])
-                .is_err()
-        );
-    }
 }

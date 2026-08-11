@@ -19,37 +19,6 @@ use crate::scalar::math::utils::try_op::{
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
-fn try_add_return_type(arg_types: &[DataType]) -> Result<DataType> {
-    match arg_types {
-        [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
-        [DataType::Int64, DataType::Int64]
-        | [DataType::Int32, DataType::Int64]
-        | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
-        [DataType::Date32, _] | [_, DataType::Date32] => Ok(DataType::Date32),
-        [DataType::Interval(YearMonth), _] | [_, DataType::Interval(YearMonth)] => {
-            Ok(DataType::Interval(YearMonth))
-        }
-        [DataType::Interval(MonthDayNano), DataType::Int32]
-        | [DataType::Int32, DataType::Interval(MonthDayNano)]
-        | [DataType::Interval(MonthDayNano), DataType::Int64]
-        | [DataType::Int64, DataType::Interval(MonthDayNano)]
-        | [
-            DataType::Interval(MonthDayNano),
-            DataType::Interval(MonthDayNano),
-        ] => Ok(DataType::Interval(MonthDayNano)),
-        [
-            DataType::Timestamp(Microsecond, _),
-            DataType::Duration(Microsecond),
-        ] => Ok(DataType::Timestamp(Microsecond, None)),
-
-        _ => Err(unsupported_data_types_exec_err(
-            "try_add",
-            "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
-            arg_types,
-        )),
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryAdd {
     signature: Signature,
@@ -78,10 +47,35 @@ impl ScalarUDFImpl for SparkTryAdd {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match arg_types {
+            [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            [DataType::Date32, _] | [_, DataType::Date32] => Ok(DataType::Date32),
+            [DataType::Interval(YearMonth), _] | [_, DataType::Interval(YearMonth)] => {
+                Ok(DataType::Interval(YearMonth))
+            }
+            [DataType::Interval(MonthDayNano), DataType::Int32]
+            | [DataType::Int32, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Int64]
+            | [DataType::Int64, DataType::Interval(MonthDayNano)]
+            | [
+                DataType::Interval(MonthDayNano),
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
+            [
+                DataType::Timestamp(Microsecond, _),
+                DataType::Duration(Microsecond),
+            ] => Ok(DataType::Timestamp(Microsecond, None)),
+
+            _ => Err(unsupported_data_types_exec_err(
+                "try_add",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                arg_types,
+            )),
+        }
     }
 
     /// Spark: `TryAdd` (`TryEval.scala:79-88`) is `RuntimeReplaceable` and declares no
@@ -97,7 +91,7 @@ impl ScalarUDFImpl for SparkTryAdd {
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = try_add_return_type(&arg_types)?;
+        let data_type = self.return_type(&arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -237,45 +231,5 @@ impl ScalarUDFImpl for SparkTryAdd {
                 types,
             ))
         }
-    }
-}
-
-#[cfg(test)]
-mod return_field_tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
-
-    use super::*;
-
-    fn non_nullable(data_type: DataType) -> FieldRef {
-        Arc::new(Field::new("c", data_type, false))
-    }
-
-    /// Spark declares this function's output nullable regardless of its children, so a
-    /// non-nullable argument -- the case where the arity default would say `false` -- must
-    /// still come back nullable.
-    #[test]
-    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
-        let arg_fields = vec![non_nullable(DataType::Int32), non_nullable(DataType::Int32)];
-        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
-        let field = SparkTryAdd::new().return_field_from_args(ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        })?;
-        assert_eq!(field.data_type(), &DataType::Int32);
-        assert!(field.is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn test_return_type_is_not_the_source_of_truth() {
-        assert!(
-            SparkTryAdd::new()
-                .return_type(&[DataType::Int32, DataType::Int32])
-                .is_err()
-        );
     }
 }

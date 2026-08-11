@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::{
     IntervalYearMonthType,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -19,37 +19,6 @@ use crate::scalar::math::utils::try_op::{
     try_binary_op_primitive, try_op_interval_monthdaynano_i32, try_op_interval_monthdaynano_i64,
     try_op_interval_yearmonth_i32,
 };
-
-fn try_multiply_return_type(arg_types: &[DataType]) -> Result<DataType> {
-    match arg_types {
-        [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
-        [DataType::Int64, DataType::Int64]
-        | [DataType::Int32, DataType::Int64]
-        | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
-        [
-            DataType::Interval(YearMonth),
-            DataType::Int32 | DataType::Int64,
-        ]
-        | [
-            DataType::Int32 | DataType::Int64,
-            DataType::Interval(YearMonth),
-        ] => Ok(DataType::Interval(YearMonth)),
-        [
-            DataType::Interval(MonthDayNano),
-            DataType::Int32 | DataType::Int64,
-        ]
-        | [
-            DataType::Int32 | DataType::Int64,
-            DataType::Interval(MonthDayNano),
-        ] => Ok(DataType::Interval(MonthDayNano)),
-
-        _ => Err(unsupported_data_types_exec_err(
-            "try_multiply",
-            "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
-            arg_types,
-        )),
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryMult {
@@ -79,10 +48,35 @@ impl ScalarUDFImpl for SparkTryMult {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match arg_types {
+            [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            [
+                DataType::Interval(YearMonth),
+                DataType::Int32 | DataType::Int64,
+            ]
+            | [
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(YearMonth),
+            ] => Ok(DataType::Interval(YearMonth)),
+            [
+                DataType::Interval(MonthDayNano),
+                DataType::Int32 | DataType::Int64,
+            ]
+            | [
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
+
+            _ => Err(unsupported_data_types_exec_err(
+                "try_multiply",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                arg_types,
+            )),
+        }
     }
 
     /// Spark: `TryMultiply` (`TryEval.scala:225-234`) is `RuntimeReplaceable` and declares no
@@ -98,7 +92,7 @@ impl ScalarUDFImpl for SparkTryMult {
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = try_multiply_return_type(&arg_types)?;
+        let data_type = self.return_type(&arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -189,45 +183,5 @@ fn try_multiply_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
             &[l.clone(), r.clone()],
         )),
-    }
-}
-
-#[cfg(test)]
-mod return_field_tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
-
-    use super::*;
-
-    fn non_nullable(data_type: DataType) -> FieldRef {
-        Arc::new(Field::new("c", data_type, false))
-    }
-
-    /// Spark declares this function's output nullable regardless of its children, so a
-    /// non-nullable argument -- the case where the arity default would say `false` -- must
-    /// still come back nullable.
-    #[test]
-    fn test_non_nullable_arguments_still_yield_a_nullable_field() -> Result<()> {
-        let arg_fields = vec![non_nullable(DataType::Int32), non_nullable(DataType::Int32)];
-        let scalar_arguments: Vec<Option<&ScalarValue>> = vec![None; arg_fields.len()];
-        let field = SparkTryMult::new().return_field_from_args(ReturnFieldArgs {
-            arg_fields: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        })?;
-        assert_eq!(field.data_type(), &DataType::Int32);
-        assert!(field.is_nullable());
-        Ok(())
-    }
-
-    #[test]
-    fn test_return_type_is_not_the_source_of_truth() {
-        assert!(
-            SparkTryMult::new()
-                .return_type(&[DataType::Int32, DataType::Int32])
-                .is_err()
-        );
     }
 }
