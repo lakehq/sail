@@ -7,8 +7,8 @@ use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::{debug, error, warn};
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -190,7 +190,7 @@ impl TaskRunnerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         key: TaskKey,
-        num_mappers: usize,
+        mappers: usize,
         channels: usize,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
@@ -198,7 +198,7 @@ impl TaskRunnerActor {
         if let Some(streams) = self.extensions.celeborn_streams.clone() {
             ctx.spawn(async move {
                 let output = streams
-                    .create_stream(key, num_mappers, channels, schema)
+                    .create_stream(key, mappers, channels, schema)
                     .await
                     .map_err(ExecutionError::from);
                 let _ = result.send(output);
@@ -354,10 +354,11 @@ impl TaskRunnerActor {
         job_id: JobId,
         stage: Option<usize>,
     ) -> ActorAction {
-        if let (Some(streams), Some(stage)) = (self.extensions.celeborn_streams.clone(), stage) {
+        if let Some(streams) = self.extensions.celeborn_streams.clone() {
+            let unregister = matches!(self.placement, TaskRunnerPlacement::Driver { .. });
             ctx.spawn(async move {
-                if let Err(error) = streams.clear_stream(job_id, stage).await {
-                    warn!("failed to clear Celeborn shuffle cache for job {job_id} stage {stage}: {error}");
+                if let Err(error) = streams.remove_streams(job_id, stage, unregister).await {
+                    warn!("failed to remove Celeborn shuffle data for job {job_id}: {error}");
                 }
             });
         }
@@ -445,12 +446,12 @@ impl TaskRunnerActor {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let input_plan = plan.clone();
+        let mappers = plan.output_partitioning().partition_count();
         let streams = TaskStreamFactory::new(
             ctx.handle().clone(),
             context.clone(),
             &self.extensions,
-            input_plan.as_ref(),
+            mappers,
         );
         let result = {
             let streams = streams.clone();

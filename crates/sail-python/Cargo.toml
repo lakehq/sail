@@ -18,6 +18,7 @@ pyo3 = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
+futures = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]

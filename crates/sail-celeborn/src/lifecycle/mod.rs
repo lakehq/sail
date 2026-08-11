@@ -11,9 +11,12 @@ use crate::master::SlotReservation;
 #[tonic::async_trait]
 pub trait LifecycleManager: Send + Sync + 'static {
     /// Get the stable shuffle ID associated with a Sail shuffle.
-    async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32>;
+    async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32>;
 
-    async fn request_slots(
+    /// Get all known shuffle IDs for a Sail job, paired with their stage IDs.
+    async fn get_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>>;
+
+    async fn register_shuffle(
         &self,
         shuffle_id: i32,
         partition_ids: Vec<i32>,

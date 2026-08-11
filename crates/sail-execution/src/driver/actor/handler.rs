@@ -522,29 +522,16 @@ impl DriverActor {
                             .await;
                     });
                 }
-                for stage in self.task_assigner.untrack_external_streams(job_id, stage) {
-                    if let Some(streams) = self.extensions.celeborn_streams.clone() {
-                        ctx.spawn(async move {
-                            if let Err(error) = streams.remove_stream(job_id, stage).await {
-                                warn!(
-                                    "failed to remove Celeborn shuffle data for job {job_id} stage {stage}: {error}"
-                                );
-                            }
-                        });
-                    }
+                if self.task_assigner.untrack_external_streams(job_id, stage) {
                     if let Some(task_runner) = self.task_runner.clone() {
                         ctx.spawn(async move {
                             let _ = task_runner
-                                .send(TaskRunnerMessage::CleanUpCelebornStreams {
-                                    job_id,
-                                    stage: Some(stage),
-                                })
+                                .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
                                 .await;
                         });
                     }
                     for worker_id in self.task_assigner.active_worker_ids() {
-                        self.worker_pool
-                            .clean_up_job(ctx, worker_id, job_id, Some(stage));
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
                     }
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {

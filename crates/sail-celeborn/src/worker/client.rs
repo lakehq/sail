@@ -169,7 +169,7 @@ impl WorkerClient {
     pub async fn read_partition_stream(
         &self,
         shuffle_key: &str,
-    ) -> CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>> {
+    ) -> BoxStream<'static, CelebornResult<Vec<u8>>> {
         let request = PbOpenStream {
             shuffle_key: shuffle_key.to_string(),
             file_name: format!("{}-{}-0", self.location.id, self.location.epoch),
@@ -178,17 +178,26 @@ impl WorkerClient {
             initial_credit: 0,
             read_local_shuffle: false,
         };
-        let response = self
+        let response = match self
             .request_fetch(MessageType::OPEN_STREAM, request.encode_to_vec())
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return Box::pin(stream::once(async move { Err(error) })),
+        };
         if response.message_type != MessageType::STREAM_HANDLER {
-            return Err(CelebornError::Protocol(
-                "invalid open stream response".to_string(),
-            ));
+            return Box::pin(stream::once(async {
+                Err(CelebornError::Protocol(
+                    "invalid open stream response".to_string(),
+                ))
+            }));
         }
-        let handler = PbStreamHandler::decode(response.payload.as_slice())?;
+        let handler = match PbStreamHandler::decode(response.payload.as_slice()) {
+            Ok(handler) => handler,
+            Err(error) => return Box::pin(stream::once(async move { Err(error.into()) })),
+        };
         let client = self.clone();
-        Ok(Box::pin(stream::try_unfold(
+        Box::pin(stream::try_unfold(
             (client, handler.stream_id, 0, handler.num_chunks, Vec::new()),
             |(client, stream_id, mut chunk_index, num_chunks, mut buffered)| async move {
                 loop {
@@ -209,12 +218,12 @@ impl WorkerClient {
                     chunk_index += 1;
                 }
             },
-        )))
+        ))
     }
 
     /// Fetch all committed batches for this primary partition.
     pub async fn read_partition(&self, shuffle_key: &str) -> CelebornResult<Vec<u8>> {
-        let mut stream = self.read_partition_stream(shuffle_key).await?;
+        let mut stream = self.read_partition_stream(shuffle_key).await;
         let mut data = vec![];
         while let Some(batch) = stream.try_next().await? {
             data.extend(batch);

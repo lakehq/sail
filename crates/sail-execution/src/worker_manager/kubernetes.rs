@@ -291,7 +291,6 @@ impl KubernetesWorkerService {
             ..
         } = &shuffle_backend
         {
-            let endpoint_overrides = shuffle_backend.celeborn_endpoint_overrides_string();
             env.extend([
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_HOST.to_string(),
@@ -306,7 +305,7 @@ impl KubernetesWorkerService {
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES
                         .to_string(),
-                    value: Some(endpoint_overrides),
+                    value: Some(shuffle_backend.celeborn_endpoint_overrides_string()),
                     value_from: None,
                 },
             ]);

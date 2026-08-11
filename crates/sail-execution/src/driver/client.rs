@@ -44,12 +44,12 @@ impl CelebornLifecycleManagerClient {
         }
     }
 
-    pub async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> ExecutionResult<i32> {
+    pub async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> ExecutionResult<i32> {
         Ok(self
             .inner
             .get()
             .await?
-            .create_shuffle_id(Request::new(r#gen::CelebornCreateShuffleIdRequest {
+            .get_or_create_shuffle_id(Request::new(r#gen::CelebornGetOrCreateShuffleIdRequest {
                 driver_id: self.driver_id.into(),
                 job_id,
                 stage,
@@ -59,18 +59,35 @@ impl CelebornLifecycleManagerClient {
             .shuffle_id)
     }
 
-    pub async fn request_slots(
+    pub async fn get_shuffle_ids(&self, job_id: u64) -> ExecutionResult<Vec<(u64, i32)>> {
+        Ok(self
+            .inner
+            .get()
+            .await?
+            .get_shuffle_ids(Request::new(r#gen::CelebornGetShuffleIdsRequest {
+                driver_id: self.driver_id.into(),
+                job_id,
+            }))
+            .await?
+            .into_inner()
+            .shuffle_ids
+            .into_iter()
+            .map(|id| (id.stage, id.shuffle_id))
+            .collect())
+    }
+
+    pub async fn register_shuffle(
         &self,
         shuffle_id: i32,
         partition_ids: Vec<i32>,
         should_replicate: bool,
         max_workers: i32,
-    ) -> ExecutionResult<r#gen::CelebornRequestSlotsResponse> {
+    ) -> ExecutionResult<r#gen::CelebornRegisterShuffleResponse> {
         Ok(self
             .inner
             .get()
             .await?
-            .request_slots(Request::new(r#gen::CelebornRequestSlotsRequest {
+            .register_shuffle(Request::new(r#gen::CelebornRegisterShuffleRequest {
                 driver_id: self.driver_id.into(),
                 shuffle_id,
                 partition_ids,

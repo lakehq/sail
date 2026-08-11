@@ -47,6 +47,20 @@ impl Actor for WorkerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let worker = ctx.handle().clone();
+        let local_streams = LocalStreamManager::new((&self.options).into());
+        let storage_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(StorageStreamManager::new(
+                path.clone(),
+                self.options.session_id.clone(),
+                *max_file_size,
+                *compression,
+            )),
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+        };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn { .. } => {
                 let application_id = celeborn_application_id(&self.options.session_id);
@@ -64,24 +78,11 @@ impl Actor for WorkerActor {
             }
             ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
         };
-        let storage_streams = match &self.options.shuffle_backend {
-            ShuffleBackendKind::Storage {
-                path,
-                max_file_size,
-                compression,
-            } => Some(StorageStreamManager::new(
-                path.clone(),
-                self.options.session_id.clone(),
-                *max_file_size,
-                *compression,
-            )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
-        };
         let task_runner = ctx
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
                 extensions: TaskRunnerExtensions {
-                    local_streams: LocalStreamManager::new((&self.options).into()),
+                    local_streams,
                     storage_streams,
                     celeborn_streams,
                 },
@@ -117,13 +118,14 @@ impl Actor for WorkerActor {
         }
     }
 
-    async fn stop(mut self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         if let Some(task_runner) = self.task_runner.take() {
             let _ = task_runner
                 .send(crate::task_runner::TaskRunnerMessage::Shutdown)
                 .await;
         }
         self.server.stop().await;
+        ctx.children_mut().join().await;
         info!("worker {} server has stopped", self.options.worker_id);
     }
 }

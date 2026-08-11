@@ -15,6 +15,7 @@ impl Actor for ShuffleClientActor {
     fn new(options: Self::Options) -> Self {
         Self {
             options,
+            shuffle_ids: Default::default(),
             locations: Default::default(),
             batch_ids: Default::default(),
         }
@@ -22,11 +23,25 @@ impl Actor for ShuffleClientActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            ShuffleClientMessage::CreateShuffleId {
+            ShuffleClientMessage::GetOrCreateShuffleId {
                 job_id,
                 stage,
                 result,
-            } => self.handle_create_shuffle_id(ctx, job_id, stage, result),
+            } => self.handle_get_or_create_shuffle_id(ctx, job_id, stage, result),
+            ShuffleClientMessage::GetOrCreateShuffleIdComplete {
+                job_id,
+                stage,
+                result,
+                reply,
+            } => self.handle_get_or_create_shuffle_id_complete(job_id, stage, result, reply),
+            ShuffleClientMessage::GetShuffleIds { job_id, result } => {
+                self.handle_get_shuffle_ids(ctx, job_id, result)
+            }
+            ShuffleClientMessage::GetShuffleIdsComplete {
+                job_id,
+                result,
+                reply,
+            } => self.handle_get_shuffle_ids_complete(job_id, result, reply),
             ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,
@@ -41,11 +56,11 @@ impl Actor for ShuffleClientActor {
                 max_workers,
                 result,
             ),
-            ShuffleClientMessage::RegisterShuffleEnd {
+            ShuffleClientMessage::RegisterShuffleComplete {
                 shuffle_id,
                 result,
                 reply,
-            } => self.handle_register_shuffle_end(shuffle_id, result, reply),
+            } => self.handle_register_shuffle_complete(shuffle_id, result, reply),
             ShuffleClientMessage::PushData {
                 shuffle_id,
                 partition_id,
@@ -72,8 +87,13 @@ impl Actor for ShuffleClientActor {
             ShuffleClientMessage::UnregisterShuffle { shuffle_id, result } => {
                 self.handle_unregister_shuffle(ctx, shuffle_id, result)
             }
-            ShuffleClientMessage::ClearShuffle { shuffle_id, result } => {
-                self.handle_clear_shuffle(shuffle_id, result)
+            ShuffleClientMessage::UnregisterShuffleComplete {
+                shuffle_id,
+                result,
+                reply,
+            } => self.handle_unregister_shuffle_complete(shuffle_id, result, reply),
+            ShuffleClientMessage::CleanUpShuffle { shuffle_id, result } => {
+                self.handle_clean_up_shuffle(shuffle_id, result)
             }
             ShuffleClientMessage::ReadPartitionStream {
                 shuffle_id,

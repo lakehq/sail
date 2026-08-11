@@ -8,10 +8,25 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum ShuffleClientMessage {
-    CreateShuffleId {
+    GetOrCreateShuffleId {
         job_id: u64,
         stage: u64,
         result: oneshot::Sender<CelebornResult<i32>>,
+    },
+    GetOrCreateShuffleIdComplete {
+        job_id: u64,
+        stage: u64,
+        result: CelebornResult<i32>,
+        reply: oneshot::Sender<CelebornResult<i32>>,
+    },
+    GetShuffleIds {
+        job_id: u64,
+        result: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
+    },
+    GetShuffleIdsComplete {
+        job_id: u64,
+        result: CelebornResult<Vec<(u64, i32)>>,
+        reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
     },
     RegisterShuffle {
         shuffle_id: i32,
@@ -20,7 +35,7 @@ pub enum ShuffleClientMessage {
         max_workers: i32,
         result: oneshot::Sender<CelebornResult<SlotReservation>>,
     },
-    RegisterShuffleEnd {
+    RegisterShuffleComplete {
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
@@ -44,14 +59,20 @@ pub enum ShuffleClientMessage {
         shuffle_id: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
-    ClearShuffle {
+    UnregisterShuffleComplete {
+        shuffle_id: i32,
+        result: CelebornResult<()>,
+        reply: oneshot::Sender<CelebornResult<()>>,
+    },
+    /// Remove local client state for a shuffle without unregistering it.
+    CleanUpShuffle {
         shuffle_id: i32,
         result: oneshot::Sender<CelebornResult<()>>,
     },
     ReadPartitionStream {
         shuffle_id: i32,
         partition_id: i32,
-        result: oneshot::Sender<CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>>>,
+        result: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
     },
     Stop {
         result: oneshot::Sender<()>,
@@ -61,13 +82,17 @@ pub enum ShuffleClientMessage {
 impl SpanAssociation for ShuffleClientMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
-            Self::CreateShuffleId { .. } => "CreateShuffleId",
+            Self::GetOrCreateShuffleId { .. } => "GetOrCreateShuffleId",
+            Self::GetOrCreateShuffleIdComplete { .. } => "GetOrCreateShuffleIdComplete",
+            Self::GetShuffleIds { .. } => "GetShuffleIds",
+            Self::GetShuffleIdsComplete { .. } => "GetShuffleIdsComplete",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
-            Self::RegisterShuffleEnd { .. } => "RegisterShuffleEnd",
+            Self::RegisterShuffleComplete { .. } => "RegisterShuffleComplete",
             Self::PushData { .. } => "PushData",
             Self::MapperEnd { .. } => "MapperEnd",
             Self::UnregisterShuffle { .. } => "UnregisterShuffle",
-            Self::ClearShuffle { .. } => "ClearShuffle",
+            Self::UnregisterShuffleComplete { .. } => "UnregisterShuffleComplete",
+            Self::CleanUpShuffle { .. } => "CleanUpShuffle",
             Self::ReadPartitionStream { .. } => "ReadPartitionStream",
             Self::Stop { .. } => "Stop",
         }

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -16,9 +15,6 @@ if TYPE_CHECKING:
 
 
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
-
-
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,

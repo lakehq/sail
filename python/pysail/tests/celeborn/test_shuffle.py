@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -19,9 +18,6 @@ ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 _DATA = b"hello Celeborn"
 _REPLICATION_WORKER_COUNT = 2
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
-
-
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,
@@ -64,7 +60,7 @@ def test_shuffle_client_pushes_and_reads_partition(
     shuffle_client.register_shuffle(2, [0], False, 1)
     assert shuffle_client.push_data(2, 0, 0, 0, _DATA) == len(_DATA) + 16
     shuffle_client.mapper_end(2, 0, 0, 1)
-    assert shuffle_client.read_partition(2, 0) == _DATA
+    assert b"".join(shuffle_client.read_partition_stream(2, 0)) == _DATA
     lifecycle_manager.unregister_shuffle(2)
 
 
@@ -77,7 +73,7 @@ def test_shuffle_client_commits_after_all_mappers_end(
     shuffle_client.mapper_end(3, 0, 0, 2)
     shuffle_client.push_data(3, 0, 1, 0, b"second map")
     shuffle_client.mapper_end(3, 1, 0, 2)
-    assert shuffle_client.read_partition(3, 0) == b"first mapsecond map"
+    assert b"".join(shuffle_client.read_partition_stream(3, 0)) == b"first mapsecond map"
     lifecycle_manager.unregister_shuffle(3)
 
 
@@ -100,7 +96,7 @@ def test_shuffle_client_replicates_data(
         assert len(workers) == _REPLICATION_WORKER_COUNT
         assert client.push_data(4, 0, 0, 0, _DATA) == len(_DATA) + 16
         client.mapper_end(4, 0, 0, 1)
-        assert client.read_partition(4, 0) == _DATA
+        assert b"".join(client.read_partition_stream(4, 0)) == _DATA
         manager.unregister_shuffle(4)
 
 

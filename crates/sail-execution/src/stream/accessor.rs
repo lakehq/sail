@@ -5,7 +5,6 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::ExecutionPlanProperties;
 use futures::future::try_join_all;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -24,7 +23,7 @@ pub struct TaskStreamFactory<'a> {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
     extensions: &'a TaskRunnerExtensions,
-    plan: &'a dyn datafusion::physical_plan::ExecutionPlan,
+    mappers: usize,
 }
 
 impl Clone for TaskStreamFactory<'_> {
@@ -33,7 +32,7 @@ impl Clone for TaskStreamFactory<'_> {
             handle: self.handle.clone(),
             context: self.context.clone(),
             extensions: self.extensions,
-            plan: self.plan,
+            mappers: self.mappers,
         }
     }
 }
@@ -43,13 +42,13 @@ impl<'a> TaskStreamFactory<'a> {
         handle: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
         extensions: &'a TaskRunnerExtensions,
-        plan: &'a dyn datafusion::physical_plan::ExecutionPlan,
+        mappers: usize,
     ) -> Self {
         Self {
             handle,
             context,
             extensions,
-            plan,
+            mappers,
         }
     }
 
@@ -83,7 +82,7 @@ impl<'a> TaskStreamFactory<'a> {
                 key,
                 output.channels(),
                 schema,
-                self.plan.output_partitioning().partition_count(),
+                self.mappers,
             ))
         } else {
             Arc::new(MultiChannelTaskStreamWriter::new(
@@ -160,7 +159,7 @@ impl TaskStreamAccessor {
     async fn create_celeborn_stream(
         &self,
         key: TaskKey,
-        num_mappers: usize,
+        mappers: usize,
         channels: usize,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
@@ -168,7 +167,7 @@ impl TaskStreamAccessor {
         self.receive(
             TaskRunnerMessage::CreateCelebornStream {
                 key,
-                num_mappers,
+                mappers,
                 channels,
                 schema,
                 result,

@@ -1,5 +1,4 @@
-use futures::TryStreamExt;
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
@@ -14,14 +13,23 @@ pub struct ShuffleClient {
 }
 
 impl ShuffleClient {
-    pub async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+    pub async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::CreateShuffleId {
+            .send(ShuffleClientMessage::GetOrCreateShuffleId {
                 job_id,
                 stage,
                 result,
             })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    pub async fn get_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(ShuffleClientMessage::GetShuffleIds { job_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
@@ -84,10 +92,10 @@ impl ShuffleClient {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    pub async fn clear_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
+    pub async fn clean_up_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::ClearShuffle { shuffle_id, result })
+            .send(ShuffleClientMessage::CleanUpShuffle { shuffle_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
@@ -97,30 +105,23 @@ impl ShuffleClient {
         &self,
         shuffle_id: i32,
         partition_id: i32,
-    ) -> CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>> {
+    ) -> BoxStream<'static, CelebornResult<Vec<u8>>> {
         let (result, receiver) = oneshot::channel();
-        self.handle
+        if self
+            .handle
             .send(ShuffleClientMessage::ReadPartitionStream {
                 shuffle_id,
                 partition_id,
                 result,
             })
             .await
-            .map_err(|_| CelebornError::ActorStopped)?;
-        receiver.await.map_err(|_| CelebornError::ActorStopped)?
-    }
-
-    pub async fn read_partition(
-        &self,
-        shuffle_id: i32,
-        partition_id: i32,
-    ) -> CelebornResult<Vec<u8>> {
-        let mut stream = self.read_partition_stream(shuffle_id, partition_id).await?;
-        let mut data = vec![];
-        while let Some(batch) = stream.try_next().await? {
-            data.extend(batch);
+            .is_err()
+        {
+            return Box::pin(stream::once(async { Err(CelebornError::ActorStopped) }));
         }
-        Ok(data)
+        receiver
+            .await
+            .unwrap_or_else(|_| Box::pin(stream::once(async { Err(CelebornError::ActorStopped) })))
     }
 
     /// Register a shuffle and reserve slots for its reduce partitions.

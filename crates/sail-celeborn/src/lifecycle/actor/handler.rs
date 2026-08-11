@@ -9,7 +9,7 @@ use crate::master::{SlotReservation, UserIdentifier};
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl LifecycleManagerActor {
-    pub(super) fn handle_create_shuffle_id(
+    pub(super) fn handle_get_or_create_shuffle_id(
         &mut self,
         job_id: u64,
         stage: u64,
@@ -33,7 +33,23 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_request_slots_begin(
+    pub(super) fn handle_get_shuffle_ids(
+        &mut self,
+        job_id: u64,
+        reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
+    ) -> ActorAction {
+        let shuffle_ids = self
+            .shuffle_ids
+            .iter()
+            .filter_map(|(key, &shuffle_id)| {
+                (key.job_id == job_id).then_some((key.stage, shuffle_id))
+            })
+            .collect();
+        let _ = reply.send(Ok(shuffle_ids));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_register_shuffle(
         &mut self,
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
@@ -104,13 +120,13 @@ impl LifecycleManagerActor {
             }
             .await;
             let _ = handle
-                .send(LifecycleManagerMessage::RequestSlotsEnd { shuffle_id, result })
+                .send(LifecycleManagerMessage::RegisterShuffleComplete { shuffle_id, result })
                 .await;
         });
         ActorAction::Continue
     }
 
-    pub(super) fn handle_request_slots_end(
+    pub(super) fn handle_register_shuffle_complete(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
@@ -134,7 +150,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_mapper_end_begin(
+    pub(super) fn handle_mapper_end(
         &mut self,
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
@@ -227,7 +243,7 @@ impl LifecycleManagerActor {
             }
             .await;
             let _ = handle
-                .send(LifecycleManagerMessage::MapperEndCommitEnd {
+                .send(LifecycleManagerMessage::MapperEndComplete {
                     shuffle_id,
                     result,
                     reply,
@@ -237,7 +253,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_mapper_end_commit_end(
+    pub(super) fn handle_mapper_end_complete(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<()>,
@@ -251,7 +267,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_unregister_shuffle_begin(
+    pub(super) fn handle_unregister_shuffle(
         &mut self,
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
@@ -267,7 +283,7 @@ impl LifecycleManagerActor {
         ctx.spawn(async move {
             let result = client.unregister_shuffle(application_id, shuffle_id).await;
             let _ = handle
-                .send(LifecycleManagerMessage::UnregisterShuffleEnd {
+                .send(LifecycleManagerMessage::UnregisterShuffleComplete {
                     shuffle_id,
                     result,
                     reply,
@@ -277,13 +293,14 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_unregister_shuffle_end(
+    pub(super) fn handle_unregister_shuffle_complete(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<()>,
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         if result.is_ok() {
+            self.shuffle_ids.retain(|_, id| *id != shuffle_id);
             self.registered_shuffles.remove(&shuffle_id);
             self.reservations.remove(&shuffle_id);
             self.mapper_attempts.remove(&shuffle_id);
@@ -315,7 +332,7 @@ impl LifecycleManagerActor {
                 }
             }
             let _ = handle
-                .send(LifecycleManagerMessage::StopEnd { result })
+                .send(LifecycleManagerMessage::StopComplete { result })
                 .await;
         });
         ActorAction::Continue
