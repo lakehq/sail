@@ -1190,6 +1190,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
     }
 }
 
+#[expect(clippy::only_used_in_recursion)]
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     use spec::DataType as SDT;
 

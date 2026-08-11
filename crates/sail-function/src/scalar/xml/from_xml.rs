@@ -309,6 +309,7 @@ fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
+#[expect(clippy::only_used_in_recursion)]
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     use spec::DataType as SDT;
 

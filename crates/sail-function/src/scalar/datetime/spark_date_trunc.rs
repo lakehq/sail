@@ -316,6 +316,7 @@ fn truncate_local_time(local: NaiveDateTime, granularity: Granularity) -> Result
 }
 
 #[cfg(test)]
+#[expect(clippy::expect_used)]
 mod tests {
     use chrono::{NaiveDate, TimeZone};
 

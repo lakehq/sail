@@ -573,6 +573,7 @@ fn parse_data_type_with_session_timezone(raw: &str, session_timezone: &str) -> R
     spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
+#[expect(clippy::only_used_in_recursion)]
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     use spec::DataType as SDT;
 

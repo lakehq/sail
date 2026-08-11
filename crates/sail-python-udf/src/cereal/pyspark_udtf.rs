@@ -68,8 +68,8 @@ impl PySparkUdtfPayload {
     /// * `argument_literals` - For each argument, `Some(sv)` if it's a constant expression
     ///   with value `sv` (which may be null), and `None` if it's not a constant expression.
     /// * `kwargs` - The keyword argument names for each argument (None for positional).
-    /// * `argument_is_tables` - Whether each argument originated from Spark's `TABLE (...)`
-    ///   UDTF syntax.
+    /// * `argument_is_tables` - Whether each argument originated from Spark's `TABLE (...)` UDTF syntax.
+    #[expect(clippy::too_many_arguments)]
     pub fn analyze(
         python_version: &str,
         command: &[u8],

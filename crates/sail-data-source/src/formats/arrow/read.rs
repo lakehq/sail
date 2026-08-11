@@ -234,6 +234,7 @@ async fn extend_bytes_to_n_length_from_stream(
 }
 
 #[cfg(test)]
+#[expect(clippy::panic)]
 mod tests {
     use datafusion::arrow::array::{AsArray, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::{DataType, Field, TimeUnit, TimestampMicrosecondType};

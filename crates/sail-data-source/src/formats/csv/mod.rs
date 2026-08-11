@@ -110,6 +110,7 @@ impl FormatFactory for CsvFormatFactory {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::prelude::SessionContext;
 

@@ -662,45 +662,6 @@ fn format_date64_value(value: i64, format: &DateTimeFormat) -> Result<String> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::datatypes::Field;
-    use datafusion_common::config::ConfigOptions;
-
-    use super::*;
-
-    #[test]
-    fn test_dynamic_format_uses_session_timezone_for_scalar_ltz() -> Result<()> {
-        let udf = SparkDateFormat::new(Arc::from("+01:02:03"));
-        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
-        let result = udf.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    Some(0),
-                    Some(Arc::from("UTC")),
-                )),
-                ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                    "yyyy-MM-dd HH:mm:ss",
-                    "HH:mm:ss",
-                ]))),
-            ],
-            arg_fields: vec![
-                Arc::new(Field::new("timestamp", timestamp_type, false)),
-                Arc::new(Field::new("format", DataType::Utf8, false)),
-            ],
-            number_rows: 2,
-            return_field: Arc::new(Field::new("result", DataType::Utf8, true)),
-            config_options: Arc::new(ConfigOptions::default()),
-        })?;
-        let result = result.into_array(2)?;
-        let result = as_string_array(&result)?;
-
-        assert_eq!(result.value(0), "1970-01-01 01:02:03");
-        assert_eq!(result.value(1), "01:02:03");
-        Ok(())
-    }
-}
-
 fn format_date32_array(
     array: &Arc<dyn datafusion::arrow::array::Array>,
     format: &DateTimeFormat,
@@ -841,4 +802,43 @@ fn format_timestamp_array_nanosecond(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(StringArray::from(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    #[test]
+    fn test_dynamic_format_uses_session_timezone_for_scalar_ltz() -> Result<()> {
+        let udf = SparkDateFormat::new(Arc::from("+01:02:03"));
+        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+        let result = udf.invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    Some(0),
+                    Some(Arc::from("UTC")),
+                )),
+                ColumnarValue::Array(Arc::new(StringArray::from(vec![
+                    "yyyy-MM-dd HH:mm:ss",
+                    "HH:mm:ss",
+                ]))),
+            ],
+            arg_fields: vec![
+                Arc::new(Field::new("timestamp", timestamp_type, false)),
+                Arc::new(Field::new("format", DataType::Utf8, false)),
+            ],
+            number_rows: 2,
+            return_field: Arc::new(Field::new("result", DataType::Utf8, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+        let result = result.into_array(2)?;
+        let result = as_string_array(&result)?;
+
+        assert_eq!(result.value(0), "1970-01-01 01:02:03");
+        assert_eq!(result.value(1), "01:02:03");
+        Ok(())
+    }
 }

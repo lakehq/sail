@@ -155,6 +155,7 @@ impl PyMapStream {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn run_python_task(
         py: Python,
         function: Py<PyAny>,

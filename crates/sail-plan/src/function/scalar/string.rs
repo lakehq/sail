@@ -119,9 +119,7 @@ fn string_arguments(
     indices: &'static [usize],
     build: impl Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
 ) -> ScalarFunction {
-    Arc::new(move |input| {
-        with_ltz_string_arguments(input, indices.iter().copied(), |arguments| build(arguments))
-    })
+    Arc::new(move |input| with_ltz_string_arguments(input, indices.iter().copied(), &build))
 }
 
 fn all_string_arguments(
@@ -129,19 +127,16 @@ fn all_string_arguments(
 ) -> ScalarFunction {
     Arc::new(move |input| {
         let count = input.arguments.len();
-        with_ltz_string_arguments(input, 0..count, |arguments| build(arguments))
+        with_ltz_string_arguments(input, 0..count, &build)
     })
 }
 
-fn string_udf(
-    indices: &'static [usize],
-    udf: impl ScalarUDFImpl + Send + Sync + 'static,
-) -> ScalarFunction {
+fn string_udf(indices: &'static [usize], udf: impl ScalarUDFImpl + 'static) -> ScalarFunction {
     let udf = ScalarUDF::from(udf);
     string_arguments(indices, move |arguments| Ok(udf.call(arguments)))
 }
 
-fn all_string_udf(udf: impl ScalarUDFImpl + Send + Sync + 'static) -> ScalarFunction {
+fn all_string_udf(udf: impl ScalarUDFImpl + 'static) -> ScalarFunction {
     let udf = ScalarUDF::from(udf);
     all_string_arguments(move |arguments| Ok(udf.call(arguments)))
 }

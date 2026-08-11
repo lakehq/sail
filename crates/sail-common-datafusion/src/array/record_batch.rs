@@ -520,7 +520,7 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use datafusion::arrow::array::{
         ArrayData, ArrayRef, DictionaryArray, Int8Array, Int16Array, Int32Array, RunArray,

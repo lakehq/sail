@@ -343,7 +343,7 @@ pub(super) fn coerce_temporal_collection_values(
     let Some(item_types) = item_types else {
         return Ok(arguments);
     };
-    if !item_types.iter().all(|item| is_temporal_type(item)) {
+    if !item_types.iter().all(is_temporal_type) {
         return Ok(arguments);
     }
     let Some(target_type) = common_temporal_type(&item_types) else {
