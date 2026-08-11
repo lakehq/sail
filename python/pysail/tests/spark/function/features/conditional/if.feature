@@ -1,5 +1,28 @@
 Feature: if output schema
 
+  Rule: Spark-compatible coercion for mixed string and temporal branches
+
+    Scenario: IF coerces date branches to string when ANSI is disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          if(use_override, '2026-03-31', period_end) AS result,
+          typeof(if(use_override, '2026-03-31', period_end)) AS result_type
+        FROM VALUES
+          (1, true, DATE '2026-02-20'),
+          (2, false, DATE '2025-12-01'),
+          (3, false, CAST(NULL AS DATE))
+        AS t(id, use_override, period_end)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     | result_type |
+        | 1  | 2026-03-31 | string      |
+        | 2  | 2025-12-01 | string      |
+        | 3  | NULL       | string      |
+
   @function(nullability)
   Rule: Output schema
 
