@@ -12,7 +12,7 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -87,6 +87,16 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let supports_linear_rewrite =
         !distinct && ignore_nulls.is_none() && filter.is_none() && order_by.is_empty();
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| {
+            coerce_string_sum_argument(
+                argument,
+                function_context.schema.as_ref(),
+                function_context.plan_config.ansi_mode,
+            )
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
     let arguments = if supports_linear_rewrite {
         arguments
             .into_iter()
@@ -108,6 +118,23 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment: get_null_treatment(ignore_nulls),
         },
     }))
+}
+
+fn coerce_string_sum_argument(
+    argument: expr::Expr,
+    schema: &datafusion_common::DFSchema,
+    ansi_mode: bool,
+) -> PlanResult<expr::Expr> {
+    match argument.get_type(schema)? {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            if ansi_mode {
+                Ok(cast(argument, DataType::Float64))
+            } else {
+                Ok(try_cast(argument, DataType::Float64))
+            }
+        }
+        _ => Ok(argument),
+    }
 }
 
 fn widen_safe_linear_sum_argument(
