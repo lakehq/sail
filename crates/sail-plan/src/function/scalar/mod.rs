@@ -1,4 +1,5 @@
-pub(crate) use datetime::{current_timestamp, to_session_local_timestamp};
+pub(crate) use conversion::timezone_cast;
+pub(crate) use datetime::{current_date, current_timestamp};
 pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
 
 use crate::function::common::ScalarFunction;

@@ -88,7 +88,7 @@ impl DriverResource {
             .collect();
         self.external_streams
             .retain(|(stream_job_id, stream_stage)| {
-                *stream_job_id != job_id || !stage.is_none_or(|stage| stage == *stream_stage)
+                *stream_job_id != job_id || stage.is_some_and(|stage| stage != *stream_stage)
             });
         streams
     }
