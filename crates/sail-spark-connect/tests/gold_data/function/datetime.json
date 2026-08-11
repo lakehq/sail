@@ -392,7 +392,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [Literal(Int32(0), None)]"
+        "failure": "invalid argument: current_timestamp takes 0 arguments, got [Literal(Int32(0), None)]"
       }
     },
     {
@@ -414,7 +414,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [BinaryExpr(BinaryExpr { left: Literal(Int32(1), None), op: Plus, right: Literal(Int32(1), None) })]"
+        "failure": "invalid argument: current_timestamp takes 0 arguments, got [BinaryExpr(BinaryExpr { left: Literal(Int32(1), None), op: Plus, right: Literal(Int32(1), None) })]"
       }
     },
     {
@@ -436,7 +436,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [Literal(Int32(3), None)]"
+        "failure": "invalid argument: current_timestamp takes 0 arguments, got [Literal(Int32(3), None)]"
       }
     },
     {
