@@ -39,7 +39,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
-    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata,
+    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -152,14 +152,24 @@ impl LakeSource for IcebergLakeSource {
         })
     }
 
-    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let DeleteInfo {
-            table_name,
-            path,
-            condition,
-            lakehouse_table,
-            options,
-        } = info;
+    async fn plan_row_level_operation(
+        &self,
+        ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let DeleteInfo { target, condition } = match operation {
+            RowLevelOperation::Delete(info) => *info,
+            RowLevelOperation::Update(_) => {
+                return not_impl_err!("UPDATE is not yet implemented for Iceberg");
+            }
+            RowLevelOperation::Merge(info) => {
+                return crate::logical::merge::expand_merge_node(*info);
+            }
+        };
+        let table_name = target.table_name.clone();
+        let path = target.location.clone();
+        let options = target.options.clone();
+        let lakehouse_table = target.lakehouse_table.clone();
 
         let read_lakehouse_table = lakehouse_table
             .as_ref()
@@ -173,7 +183,7 @@ impl LakeSource for IcebergLakeSource {
             bucket_by: None,
             sort_order: vec![],
             options: options.clone(),
-            // TODO: Thread resolver session case-sensitivity into LakeSource::create_deleter.
+            // TODO: Thread resolver session case-sensitivity into row-level planning.
             read_case_sensitive: true,
         };
         let provider = build_iceberg_provider(ctx, source_info).await?;
@@ -192,29 +202,17 @@ impl LakeSource for IcebergLakeSource {
             None,
         )?);
 
-        let write_node = sail_logical_plan::merge::RowLevelWriteNode::new_delete(
+        let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
             raw_input_schema,
             condition,
-            self.name().to_string(),
-            path,
-            table_name,
-            options,
-            lakehouse_table,
+            target,
         )
         .with_expected_snapshot_id(expected_snapshot_id);
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
         }))
-    }
-
-    async fn create_merger(
-        &self,
-        _ctx: &dyn Session,
-        info: sail_common_datafusion::datasource::MergeInfo,
-    ) -> Result<LogicalPlan> {
-        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn create_table_metadata(

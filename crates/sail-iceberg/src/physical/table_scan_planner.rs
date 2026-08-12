@@ -8,7 +8,8 @@ use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
+use sail_logical_plan::merge::MergeCardinalityCheckNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
