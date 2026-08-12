@@ -40,6 +40,33 @@ Feature: when output schema
          |-- result: string (nullable = true)
         """
 
+    Scenario Outline: ANSI CASE widens mixed temporal branches independently of branch order: <case>
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT CASE
+          WHEN id = 0 THEN DATE '2024-01-01'
+          <first_branch>
+          <second_branch>
+          ELSE '2024-01-01 12:34:56+02:00'
+        END AS result
+        FROM VALUES (3) AS t(id)
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 02:34:56 |
+      And query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+      Examples:
+        | case      | first_branch                                                     | second_branch                                                   |
+        | NTZ first | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'             | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'      |
+        | LTZ first | WHEN id = 2 THEN TIMESTAMP_LTZ '2024-01-01 00:00:00+00:00'        | WHEN id = 1 THEN TIMESTAMP_NTZ '2024-01-01 00:00:00'            |
+
   @function(nullability)
   Rule: Output schema
 

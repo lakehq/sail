@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -77,7 +79,8 @@ fn coerce_string_temporal_values(
         .map(|arg| arg.get_type(function_context.schema))
         .collect::<Result<Vec<_>, _>>()?;
     let has_string = data_types.iter().any(is_string_type);
-    let temporal_type = common_temporal_type(&data_types);
+    let temporal_type =
+        common_temporal_type(&data_types, &function_context.plan_config.session_timezone);
     let arguments = if has_string {
         if let Some(temporal_type) = temporal_type {
             if function_context.plan_config.ansi_mode {
@@ -135,21 +138,26 @@ fn coerce_to_temporal(
     }
 }
 
-fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
-    data_types
+fn common_temporal_type(data_types: &[DataType], session_timezone: &Arc<str>) -> Option<DataType> {
+    if data_types
         .iter()
-        .find_map(|data_type| match data_type {
-            DataType::Timestamp(_, timezone) => {
-                Some(DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()))
-            }
-            _ => None,
-        })
-        .or_else(|| {
-            data_types
-                .iter()
-                .any(is_date_type)
-                .then_some(DataType::Date32)
-        })
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
+    {
+        Some(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::clone(session_timezone)),
+        ))
+    } else if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
+    {
+        Some(DataType::Timestamp(TimeUnit::Microsecond, None))
+    } else {
+        data_types
+            .iter()
+            .any(is_date_type)
+            .then_some(DataType::Date32)
+    }
 }
 
 fn is_string_type(data_type: &DataType) -> bool {
