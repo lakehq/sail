@@ -15,6 +15,8 @@ use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
 use datafusion::prelude::Expr;
 
+use crate::error::invalid_arg_count_exec_err;
+
 #[derive(Debug)]
 struct MaxMinByAccumulator {
     value: ScalarValue,
@@ -108,11 +110,42 @@ impl MaxByFunction {
     }
 }
 
-fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-    match &input_types[0] {
+/// Spark 4.2 accepts `[2, 3]` arguments: the 3-argument form is the top-k variant
+/// (`MaxMinByK`), which returns an array and is not implemented here, so only the
+/// 2-argument form is accepted and `max_by(x, y, k)` is reported as an arity error.
+const MAX_MIN_BY_ARG_COUNT: (i32, i32) = (2, 2);
+
+/// Splits the arguments into the value and the ordering one.
+///
+/// The signature is `user_defined`, so DataFusion runs no arity check of its own. Every
+/// hook that reaches for the ordering argument must go through here, or it indexes a
+/// short slice and panics instead of reporting an error.
+fn max_min_by_args<'a, T>(
+    function_name: &str,
+    args: &'a [T],
+) -> Result<(&'a T, &'a T), DataFusionError> {
+    match args {
+        [value, ordering] => Ok((value, ordering)),
+        _ => Err(invalid_arg_count_exec_err(
+            function_name,
+            MAX_MIN_BY_ARG_COUNT,
+            args.len(),
+        )),
+    }
+}
+
+fn get_min_max_by_result_type(
+    function_name: &str,
+    input_types: &[DataType],
+) -> Result<Vec<DataType>, DataFusionError> {
+    let (value_type, ordering_type) = max_min_by_args(function_name, input_types)?;
+    match value_type {
+        // The ordering type is carried over so that the coerced list keeps both arguments;
+        // returning the value type alone left the hooks below indexing a one-element slice.
+        // Not covered by a scenario because a `Dictionary` column cannot be built from SQL.
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type
-            Ok(vec![dict_value_type.deref().clone()])
+            Ok(vec![dict_value_type.deref().clone(), ordering_type.clone()])
         }
         _ => Ok(input_types.to_vec()),
     }
@@ -128,7 +161,8 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        Ok(arg_types[0].to_owned())
+        let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
+        Ok(value_type.to_owned())
     }
 
     fn accumulator(
@@ -136,7 +170,8 @@ impl AggregateUDFImpl for MaxByFunction {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>, DataFusionError> {
         let value_type = acc_args.return_field.data_type().clone();
-        let ordering_type = acc_args.exprs[1].data_type(acc_args.schema)?;
+        let (_, ordering) = max_min_by_args(self.name(), acc_args.exprs)?;
+        let ordering_type = ordering.data_type(acc_args.schema)?;
         Ok(Box::new(MaxMinByAccumulator::new(
             &value_type,
             &ordering_type,
@@ -146,7 +181,8 @@ impl AggregateUDFImpl for MaxByFunction {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
         let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
+        let (_, ordering) = max_min_by_args(self.name(), args.input_fields)?;
+        let ordering_type = ordering.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "value"), value_type, true).into(),
             Field::new(
@@ -160,6 +196,10 @@ impl AggregateUDFImpl for MaxByFunction {
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+            // `coerce_types` already rejects any other arity during analysis, so this is
+            // belt-and-braces before the `remove` calls below; it goes through the same
+            // helper as the other hooks so that the two cannot drift apart.
+            max_min_by_args(aggr_func.func.name(), &aggr_func.params.args)?;
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
@@ -187,7 +227,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        get_min_max_by_result_type(arg_types)
+        get_min_max_by_result_type(self.name(), arg_types)
     }
 }
 
@@ -230,7 +270,8 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        Ok(arg_types[0].to_owned())
+        let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
+        Ok(value_type.to_owned())
     }
 
     fn accumulator(
@@ -238,7 +279,8 @@ impl AggregateUDFImpl for MinByFunction {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>, DataFusionError> {
         let value_type = acc_args.return_field.data_type().clone();
-        let ordering_type = acc_args.exprs[1].data_type(acc_args.schema)?;
+        let (_, ordering) = max_min_by_args(self.name(), acc_args.exprs)?;
+        let ordering_type = ordering.data_type(acc_args.schema)?;
         Ok(Box::new(MaxMinByAccumulator::new(
             &value_type,
             &ordering_type,
@@ -248,7 +290,8 @@ impl AggregateUDFImpl for MinByFunction {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
         let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
+        let (_, ordering) = max_min_by_args(self.name(), args.input_fields)?;
+        let ordering_type = ordering.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "value"), value_type, true).into(),
             Field::new(
@@ -262,6 +305,10 @@ impl AggregateUDFImpl for MinByFunction {
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+            // `coerce_types` already rejects any other arity during analysis, so this is
+            // belt-and-braces before the `remove` calls below; it goes through the same
+            // helper as the other hooks so that the two cannot drift apart.
+            max_min_by_args(aggr_func.func.name(), &aggr_func.params.args)?;
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
@@ -289,6 +336,6 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        get_min_max_by_result_type(arg_types)
+        get_min_max_by_result_type(self.name(), arg_types)
     }
 }
