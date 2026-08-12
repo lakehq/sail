@@ -208,7 +208,7 @@ impl TaskAssigner {
         self.driver.untrack_storage_streams(job_id, stage)
     }
 
-    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> Vec<usize> {
+    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         self.driver.untrack_external_streams(job_id, stage)
     }
 

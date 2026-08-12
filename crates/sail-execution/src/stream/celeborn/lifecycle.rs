@@ -19,14 +19,21 @@ impl RemoteLifecycleManager {
 
 #[tonic::async_trait]
 impl LifecycleManager for RemoteLifecycleManager {
-    async fn create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+    async fn get_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         self.client
-            .create_shuffle_id(job_id, stage)
+            .get_shuffle_id(job_id, stage)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))
     }
 
-    async fn request_slots(
+    async fn get_job_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+        self.client
+            .get_job_shuffle_ids(job_id)
+            .await
+            .map_err(|error| CelebornError::Application(error.to_string()))
+    }
+
+    async fn register_shuffle(
         &self,
         shuffle_id: i32,
         partition_ids: Vec<i32>,
@@ -35,7 +42,7 @@ impl LifecycleManager for RemoteLifecycleManager {
     ) -> CelebornResult<SlotReservation> {
         let response = self
             .client
-            .request_slots(shuffle_id, partition_ids, should_replicate, max_workers)
+            .register_shuffle(shuffle_id, partition_ids, should_replicate, max_workers)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))?;
         let primary_locations = response

@@ -8078,6 +8078,7 @@ name = "sail-python"
 version = "0.7.0"
 dependencies = [
  "fastrace",
+ "futures",
  "log",
  "pyo3",
  "sail-celeborn",

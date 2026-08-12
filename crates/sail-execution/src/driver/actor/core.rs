@@ -55,6 +55,20 @@ impl Actor for DriverActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let driver = ctx.handle().clone();
+        let local_streams = LocalStreamManager::new((&self.options).into());
+        let storage_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(StorageStreamManager::new(
+                path.clone(),
+                self.options.session_id.clone(),
+                *max_file_size,
+                *compression,
+            )),
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+        };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn {
                 master_host,
@@ -81,28 +95,14 @@ impl Actor for DriverActor {
                     ),
                 ));
                 let streams = CelebornStreamManager::new(client);
-                self.extensions.celeborn_streams = Some(streams.clone());
                 Some(streams)
             }
             ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
         };
-        let storage_streams = match &self.options.shuffle_backend {
-            ShuffleBackendKind::Storage {
-                path,
-                max_file_size,
-                compression,
-            } => Some(StorageStreamManager::new(
-                path.clone(),
-                self.options.session_id.clone(),
-                *max_file_size,
-                *compression,
-            )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
-        };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
                 extensions: TaskRunnerExtensions {
-                    local_streams: LocalStreamManager::new((&self.options).into()),
+                    local_streams,
                     storage_streams,
                     celeborn_streams,
                 },
@@ -176,9 +176,6 @@ impl Actor for DriverActor {
             error!("encountered error while stopping workers: {e}");
         }
         if let Some(lifecycle_manager) = self.extensions.lifecycle_manager.take() {
-            if let Some(streams) = self.extensions.celeborn_streams.take() {
-                streams.stop().await;
-            }
             let _ = lifecycle_manager.stop().await;
         }
         ctx.children_mut().join().await;
