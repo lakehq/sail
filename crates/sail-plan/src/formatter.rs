@@ -514,11 +514,11 @@ impl PlanFormatter for SparkPlanFormatter {
             "theta_union" => Ok(format_function_with_default_argument(
                 name, arguments, 2, "12",
             )),
-            "dateadd" => {
-                let name = if arguments.len() == 3 {
-                    "timestampadd"
-                } else {
-                    "date_add"
+            "date_add" | "dateadd" => {
+                let name = match arguments.len() {
+                    2 => "date_add",
+                    3 => "timestampadd",
+                    _ => name,
                 };
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))

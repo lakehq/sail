@@ -38,16 +38,21 @@ Feature: dateadd function
   @function(nullability)
   Rule: Output schema
 
-    Scenario: three-argument dateadd with a date returns a timestamp
+    Scenario Outline: three-argument <function> with a date returns a timestamp
       When query
         """
-        SELECT dateadd(WEEK, 1, DATE '2024-01-15')
+        SELECT <function>(WEEK, 1, DATE '2024-01-15')
         """
       Then query schema
         """
         root
          |-- timestampadd(WEEK, 1, DATE '2024-01-15'): timestamp (nullable = false)
         """
+
+      Examples:
+        | function |
+        | dateadd  |
+        | date_add |
 
     Scenario: two-argument dateadd returns a date
       When query
