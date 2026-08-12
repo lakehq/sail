@@ -383,12 +383,22 @@ def test_iceberg_sql_delete_copy_on_write_rewrites_only_touched_files(spark, tmp
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1, 'drop', true), (2, 'keep', false), (3, 'unknown', NULL)")
         spark.sql(f"INSERT INTO {table_name} VALUES (4, 'untouched', false)")
-        before_manifests = _current_manifest_list(_find_latest_metadata(table_path))["manifests"]
+        before_noop_metadata = _find_latest_metadata(table_path)
+        before_manifests = _current_manifest_list(before_noop_metadata)["manifests"]
         before_manifest_paths = {manifest["manifest-path"] for manifest in before_manifests}
         before_noop_metadata_path = _latest_metadata_path(table_path)
+        before_manifest_files = set((table_path / "metadata").glob("manifest-*.avro"))
 
         spark.sql(f"DELETE FROM {table_name} WHERE id = 999").collect()
-        assert _latest_metadata_path(table_path) == before_noop_metadata_path
+        noop_metadata = _find_latest_metadata(table_path)
+        noop_snapshot = _current_snapshot(noop_metadata)
+        assert _latest_metadata_path(table_path) != before_noop_metadata_path
+        assert len(noop_metadata["snapshots"]) == len(before_noop_metadata["snapshots"]) + 1
+        assert noop_snapshot["summary"]["operation"] == "overwrite"
+        assert {
+            manifest["manifest-path"] for manifest in _current_manifest_list(noop_metadata)["manifests"]
+        } == before_manifest_paths
+        assert set((table_path / "metadata").glob("manifest-*.avro")) == before_manifest_files
 
         spark.sql(f"DELETE FROM {table_name} AS target WHERE target.selected").collect()
 
@@ -400,7 +410,7 @@ def test_iceberg_sql_delete_copy_on_write_rewrites_only_touched_files(spark, tmp
         ]
         metadata = _find_latest_metadata(table_path)
         snapshot = _current_snapshot(metadata)
-        assert snapshot["summary"]["operation"] == "delete"
+        assert snapshot["summary"]["operation"] == "overwrite"
         assert snapshot["summary"]["deleted-data-files"] == "1"
         assert snapshot["summary"]["deleted-records"] == "3"
         assert snapshot["summary"]["added-records"] == "2"

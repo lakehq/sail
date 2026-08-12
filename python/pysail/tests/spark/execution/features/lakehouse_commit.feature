@@ -75,3 +75,34 @@ Feature: Lakehouse commits in distributed execution
       Then query result
         | count |
         | 400   |
+
+    Scenario: Iceberg copy-on-write keeps rewriting on workers and commit on the driver
+      Given statement
+        """
+        INSERT INTO distributed_iceberg_commit
+        SELECT id FROM range(0, 400, 1, 4)
+        """
+      When query
+        """
+        EXPLAIN CODEGEN
+        UPDATE distributed_iceberg_commit
+        SET id = id + 1000
+        WHERE id < 10
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        UPDATE distributed_iceberg_commit
+        SET id = id + 1000
+        WHERE id < 10
+        """
+      When query
+        """
+        SELECT
+          COUNT(*) AS count,
+          SUM(CASE WHEN id >= 1000 THEN 1 ELSE 0 END) AS updated
+        FROM distributed_iceberg_commit
+        """
+      Then query result
+        | count | updated |
+        | 400   | 10      |

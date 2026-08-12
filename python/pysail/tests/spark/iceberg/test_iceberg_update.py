@@ -10,6 +10,7 @@ from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
     _current_snapshot,
     _find_latest_metadata,
+    _latest_metadata_path,
     _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -21,6 +22,10 @@ def _uri_sql(path: Path) -> str:
 
 def _drop_table(spark, name: str) -> None:
     spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _parquet_file_paths(table_path: Path) -> set[Path]:
+    return {path.relative_to(table_path) for path in table_path.rglob("*.parquet")}
 
 
 @pytest.mark.parametrize("update_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
@@ -166,7 +171,7 @@ def test_iceberg_copy_on_write_rewrites_live_rows_after_merge_on_read_delete(spa
         _drop_table(spark, table_name)
 
 
-@pytest.mark.parametrize("format_version", ["1", "2", "3"])
+@pytest.mark.parametrize("format_version", ["1", "2"])
 def test_iceberg_copy_on_write_operations_support_table_format_versions(spark, tmp_path, format_version):
     table_name = f"iceberg_cow_format_v{format_version}"
     table_path = tmp_path / table_name
@@ -199,6 +204,11 @@ def test_iceberg_copy_on_write_operations_support_table_format_versions(spark, t
         assert rows == [(1, "updated"), (3, "inserted")]
         metadata = _find_latest_metadata(table_path)
         snapshot = _current_snapshot(metadata)
+        if format_version == "1":
+            assert "last-sequence-number" not in metadata
+            assert all("sequence-number" not in item for item in metadata["snapshots"])
+        else:
+            assert metadata["last-sequence-number"] == snapshot["sequence-number"]
         io = PyArrowFileIO()
         entries = [
             entry
@@ -209,5 +219,57 @@ def test_iceberg_copy_on_write_operations_support_table_format_versions(spark, t
         assert sum(
             entry.data_file.record_count for entry in entries if entry.status != ManifestEntryStatus.DELETED
         ) == len(rows)
+        assert all(entry.snapshot_id for entry in entries)
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_v3_copy_on_write_rejects_target_rewrites_without_side_effects(spark, tmp_path):
+    table_name = "iceberg_cow_v3_row_lineage_reject"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '3')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'old')")
+        spark.sql("CREATE OR REPLACE TEMP VIEW iceberg_cow_v3_insert_source AS SELECT 2 AS id, 'inserted' AS value")
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS target
+            USING iceberg_cow_v3_insert_source AS source
+            ON target.id = source.id
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        ).collect()
+        assert _current_snapshot(_find_latest_metadata(table_path))["summary"]["operation"] == "append"
+
+        spark.sql("CREATE OR REPLACE TEMP VIEW iceberg_cow_v3_match_source AS SELECT 1 AS id, 'new' AS value")
+        before_metadata_path = _latest_metadata_path(table_path)
+        before_parquet_files = _parquet_file_paths(table_path)
+        statements = [
+            f"UPDATE {table_name} SET value = 'updated' WHERE id = 1",
+            f"DELETE FROM {table_name} WHERE id = 1",
+            f"""
+            MERGE INTO {table_name} AS target
+            USING iceberg_cow_v3_match_source AS source
+            ON target.id = source.id
+            WHEN MATCHED THEN UPDATE SET value = source.value
+            """,
+        ]
+        for statement in statements:
+            with pytest.raises(Exception, match=r"v3 copy-on-write.*row lineage"):
+                spark.sql(statement).collect()
+            assert _latest_metadata_path(table_path) == before_metadata_path
+            assert _parquet_file_paths(table_path) == before_parquet_files
+
+        rows = [tuple(row) for row in spark.sql(f"SELECT id, value FROM {table_name} ORDER BY id").collect()]
+        assert rows == [(1, "old"), (2, "inserted")]
     finally:
         _drop_table(spark, table_name)

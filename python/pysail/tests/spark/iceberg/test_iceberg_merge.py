@@ -484,6 +484,49 @@ def test_iceberg_merge_copy_on_write_runtime_insert_only_uses_append_snapshot(sp
         _drop_table(spark, table_name)
 
 
+def test_iceberg_merge_copy_on_write_empty_insert_only_uses_overwrite_snapshot(spark, tmp_path):
+    table_name = "iceberg_merge_copy_on_write_empty_insert"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2', 'write.merge.mode' = 'copy-on-write')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'keep')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_copy_on_write_empty_source AS
+            SELECT 2 AS id, 'missing' AS value WHERE false
+            """
+        )
+        before_metadata = _find_latest_metadata(table_path)
+        before_manifest_paths = {manifest["manifest-path"] for manifest in _current_manifests(table_path)}
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_copy_on_write_empty_source AS s
+            ON t.id = s.id
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        ).collect()
+
+        after_metadata = _find_latest_metadata(table_path)
+        after_snapshot = _current_snapshot(after_metadata)
+        assert len(after_metadata["snapshots"]) == len(before_metadata["snapshots"]) + 1
+        assert after_snapshot["summary"]["operation"] == "overwrite"
+        assert {manifest["manifest-path"] for manifest in _current_manifests(table_path)} == before_manifest_paths
+        assert [tuple(row) for row in spark.table(table_name).collect()] == [(1, "keep")]
+    finally:
+        _drop_table(spark, table_name)
+
+
 def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
     table_name = "iceberg_merge_v1_position_delete"
     table_path = tmp_path / table_name
@@ -915,7 +958,8 @@ def test_iceberg_merge_row_delta_snapshot_operation_tracks_written_files(spark, 
         _drop_table(spark, table_name)
 
 
-def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path):
+@pytest.mark.parametrize("merge_mode", ["merge-on-read", "copy-on-write"], ids=["mor", "cow"])
+def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path, merge_mode):
     table_name = "iceberg_merge_noop_snapshot"
     table_path = tmp_path / table_name
 
@@ -931,7 +975,7 @@ def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spar
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES (
               'format-version' = '2',
-              'write.merge.mode' = 'merge-on-read'
+              'write.merge.mode' = '{merge_mode}'
             )
             """
         )
