@@ -7558,6 +7558,7 @@ version = "0.7.0"
 dependencies = [
  "futures",
  "log",
+ "num_enum",
  "prost",
  "readonly",
  "sail-common",

@@ -17,6 +17,7 @@ impl Actor for ShuffleClientActor {
             options,
             shuffle_ids: Default::default(),
             locations: Default::default(),
+            worker_clients: Default::default(),
             batch_ids: Default::default(),
         }
     }
