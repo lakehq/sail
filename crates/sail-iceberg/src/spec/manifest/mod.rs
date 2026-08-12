@@ -179,7 +179,7 @@ impl Manifest {
         let builder = ManifestWriterBuilder::new(None, None, self.metadata.clone());
         let mut w = builder.build();
         for e in &self.entries {
-            w.add(e.data_file.clone());
+            w.add_entry(e.as_ref().clone());
         }
         w.to_avro_bytes_v2()
     }
