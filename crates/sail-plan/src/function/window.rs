@@ -882,9 +882,10 @@ mod tests {
         let argument_display_names = ["value".to_string()];
 
         for ansi_mode in [false, true] {
-            let mut plan_config = PlanConfig::default();
-            plan_config.ansi_mode = ansi_mode;
-            let plan_config = Arc::new(plan_config);
+            let plan_config = Arc::new(PlanConfig {
+                ansi_mode,
+                ..PlanConfig::default()
+            });
             let partition_by = vec![col("group_name")];
             let order_by = vec![col("id").sort(true, true)];
             let window_frame = WindowFrame::new(Some(true));
