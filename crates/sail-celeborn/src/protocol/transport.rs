@@ -331,28 +331,35 @@ impl TransportConnection {
     }
 
     async fn request(&self, frame: TransportFrame) -> CelebornResult<TransportFrame> {
-        tokio::time::timeout(self.timeout, async {
-            let mut stream = self.stream.lock().await;
+        // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
+        // not time out and clear the connection that the active transaction is using.
+        let mut stream = self.stream.lock().await;
+        let result = tokio::time::timeout(self.timeout, async {
             if stream.is_none() {
                 *stream = Some(TcpStream::connect((&*self.host, self.port)).await?);
             }
-            let result = async {
-                let stream = stream.as_mut().ok_or_else(|| {
-                    CelebornError::Protocol("connection was not initialized".to_string())
-                })?;
-                frame.write(stream).await?;
-                TransportFrame::read(stream).await
-            }
-            .await;
-            if result.is_err() {
+            let stream = stream.as_mut().ok_or_else(|| {
+                CelebornError::Protocol("connection was not initialized".to_string())
+            })?;
+            frame.write(stream).await?;
+            TransportFrame::read(stream).await
+        })
+        .await;
+        match result {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
                 // A failed transaction can leave unread bytes in the socket. Starting fresh is
                 // safer than allowing the next request to interpret those bytes as its reply.
                 *stream = None;
+                Err(error)
             }
-            result
-        })
-        .await
-        .map_err(|_| CelebornError::Timeout)?
+            Err(_) => {
+                // `timeout` cancels its future before it can run error cleanup. Discard the
+                // socket here, otherwise a late response can be mistaken for the next request.
+                *stream = None;
+                Err(CelebornError::Timeout)
+            }
+        }
     }
 }
 
