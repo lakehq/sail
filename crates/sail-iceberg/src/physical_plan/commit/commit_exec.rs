@@ -523,6 +523,7 @@ impl ExecutionPlan for IcebergCommitExec {
             let mut data = input_stream;
             let mut added_data_files: Vec<DataFile> = Vec::new();
             let mut added_delete_files: Vec<DataFile> = Vec::new();
+            let mut removed_data_file_paths = BTreeSet::new();
             let mut commit_meta = None;
             let input_result: Result<()> = async {
                 while let Some(batch_result) = data.next().await {
@@ -530,10 +531,11 @@ impl ExecutionPlan for IcebergCommitExec {
                     if batch.num_rows() == 0 {
                         continue;
                     }
-                    let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
-                    added_data_files.extend(adds);
-                    added_delete_files.extend(deletes);
-                    if let Some(meta) = meta {
+                    let decoded = decode_actions_and_meta_from_batch(&batch)?;
+                    added_data_files.extend(decoded.added_data_files);
+                    added_delete_files.extend(decoded.added_delete_files);
+                    removed_data_file_paths.extend(decoded.removed_data_file_paths);
+                    if let Some(meta) = decoded.commit_meta {
                         Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
                     }
                 }
@@ -551,7 +553,10 @@ impl ExecutionPlan for IcebergCommitExec {
             let commit_result: Result<RecordBatch> = async {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
-            if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
+            if commit_meta.is_none()
+                && added_data_files.is_empty()
+                && added_delete_files.is_empty()
+                && removed_data_file_paths.is_empty()
             {
                 return commit_count_batch(schema, 0);
             }
@@ -567,6 +572,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 row_count: commit_meta.row_count,
                 data_files: added_data_files,
                 delete_files: added_delete_files,
+                removed_data_file_paths: removed_data_file_paths.into_iter().collect(),
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
@@ -717,6 +723,15 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
+                if matches!(
+                    commit_info.snapshot_update_kind,
+                    SnapshotUpdateKind::CopyOnWriteDelete | SnapshotUpdateKind::CopyOnWrite
+                ) && commit_info.data_files.is_empty()
+                    && commit_info.delete_files.is_empty()
+                    && commit_info.removed_data_file_paths.is_empty()
+                {
+                    return commit_count_batch(schema, commit_info.row_count);
+                }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
                 if let Some(new_schema) = commit_info.schema.clone() {
@@ -963,6 +978,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(manifest_meta),
                 )
                 .with_added_delete_files(commit_info.delete_files.clone())
+                .with_removed_data_file_paths(commit_info.removed_data_file_paths.clone())
                 .with_partition_specs(table_meta.partition_specs.clone())
                 .with_row_lineage_start_row_id(row_lineage_start_row_id)
                 .prepare(commit_info.snapshot_update_kind)
