@@ -172,7 +172,7 @@ impl PlanResolver<'_> {
             &resolved_target_field_names,
         )?;
         let check_constraint_exprs = self
-            .resolve_delta_merge_check_constraints(
+            .resolve_delta_row_level_check_constraints(
                 &target_metadata.format,
                 &target_metadata.options,
                 target_schema,
@@ -868,7 +868,7 @@ impl PlanResolver<'_> {
         self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)
     }
 
-    fn validate_store_assignment_type(
+    pub(super) fn validate_store_assignment_type(
         &self,
         write_type: &DataType,
         target_type: &DataType,

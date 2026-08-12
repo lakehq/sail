@@ -364,6 +364,20 @@ impl OperationMetrics {
                     self.num_deletion_vectors_removed = self.num_deletion_vectors_updated;
                 }
             }
+            DeltaOperation::Update { .. } => {
+                if self.num_copied_rows.is_none() {
+                    self.num_copied_rows = self.num_output_rows;
+                }
+                if self.num_updated_rows.is_none()
+                    && let (Some(touched), Some(copied)) =
+                        (self.num_touched_rows, self.num_copied_rows)
+                {
+                    self.num_updated_rows = Some(touched.saturating_sub(copied));
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
             DeltaOperation::Merge { .. } => {
                 if self.num_target_files_added.is_none() {
                     self.num_target_files_added = self.num_added_files;
@@ -434,8 +448,6 @@ impl OperationMetrics {
             | DeltaOperation::AddConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
                                                        //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,

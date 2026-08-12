@@ -1,16 +1,23 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, plan_err};
+use datafusion_expr::{
+    Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNodeCore, cast, col, lit, when,
+};
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
-    MergeIntoOptions, OptionLayer, RowLevelCommand, RowLevelTarget,
+    DeleteInfo, DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer,
+    RowLevelCommand, RowLevelOperationType, RowLevelTarget, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+
+use crate::check_constraints::apply_delta_check_constraint_filter;
 
 /// A logical effect produced by a row-level operation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
@@ -140,6 +147,37 @@ impl RowLevelWriteNode {
             },
             expected_snapshot_id: None,
             schema: Arc::new(DFSchema::empty()),
+        }
+    }
+
+    pub fn new_delete_with_effects(
+        raw_target: Arc<LogicalPlan>,
+        raw_input_schema: DFSchemaRef,
+        write_plan: Arc<LogicalPlan>,
+        touched_files_plan: Arc<LogicalPlan>,
+        row_index_delete_plan: Option<Arc<LogicalPlan>>,
+        condition: Option<ExprWithSource>,
+        target: RowLevelTarget,
+        schema: DFSchemaRef,
+    ) -> Self {
+        let mut effects = vec![
+            RowLevelEffect::WriteRows(write_plan),
+            RowLevelEffect::TouchFiles(touched_files_plan),
+        ];
+        if let Some(plan) = row_index_delete_plan {
+            effects.push(RowLevelEffect::DeleteRows(plan));
+        }
+        Self {
+            target,
+            raw_target,
+            raw_source: None,
+            raw_input_schema,
+            effects,
+            commit: RowLevelCommitInfo::Delete {
+                predicate: condition,
+            },
+            expected_snapshot_id: None,
+            schema,
         }
     }
 
@@ -352,6 +390,407 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
         None
+    }
+}
+
+struct NormalizedRowLevelTarget {
+    plan: LogicalPlan,
+    field_names: Vec<String>,
+    rename_map: HashMap<String, String>,
+}
+
+fn normalize_row_level_target(
+    plan: LogicalPlan,
+    input_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<NormalizedRowLevelTarget> {
+    if input_schema.fields().len() != resolved_field_names.len() {
+        return plan_err!(
+            "row-level target schema has {} fields but {} resolved names",
+            input_schema.fields().len(),
+            resolved_field_names.len()
+        );
+    }
+    if plan.schema().fields().len() < resolved_field_names.len() {
+        return plan_err!(
+            "row-level target plan has {} fields but {} data columns are required",
+            plan.schema().fields().len(),
+            resolved_field_names.len()
+        );
+    }
+
+    let mut rename_map = HashMap::new();
+    let mut projections = Vec::with_capacity(
+        resolved_field_names.len() + 1 + usize::from(row_index_column.is_some()),
+    );
+    for ((input_field, plan_field), resolved_name) in input_schema
+        .fields()
+        .iter()
+        .zip(plan.schema().fields())
+        .zip(resolved_field_names)
+    {
+        rename_map.insert(input_field.name().clone(), resolved_name.clone());
+        rename_map.insert(plan_field.name().clone(), resolved_name.clone());
+        rename_map.insert(resolved_name.clone(), resolved_name.clone());
+        projections.push(
+            Expr::Column(Column::from_name(plan_field.name().clone())).alias(resolved_name.clone()),
+        );
+    }
+
+    append_metadata_projection(&plan, &mut projections, path_column)?;
+    if let Some(row_index_column) = row_index_column {
+        append_metadata_projection(&plan, &mut projections, row_index_column)?;
+    }
+
+    let plan = LogicalPlanBuilder::from(plan)
+        .project(projections)?
+        .build()?;
+    Ok(NormalizedRowLevelTarget {
+        plan,
+        field_names: resolved_field_names.to_vec(),
+        rename_map,
+    })
+}
+
+fn append_metadata_projection(
+    plan: &LogicalPlan,
+    projections: &mut Vec<Expr>,
+    column: &str,
+) -> Result<()> {
+    if plan
+        .schema()
+        .index_of_column_by_name(None, column)
+        .is_none()
+    {
+        return plan_err!("row-level target plan is missing required metadata column {column}");
+    }
+    projections.push(col(column).alias(column));
+    Ok(())
+}
+
+fn rewrite_target_expr(expr: Expr, rename_map: &HashMap<String, String>) -> Result<Expr> {
+    expr.transform(|expr| {
+        if let Expr::Column(column) = &expr
+            && let Some(name) = rename_map.get(&column.name)
+        {
+            return Ok(Transformed::yes(Expr::Column(Column {
+                relation: None,
+                name: name.clone(),
+                spans: column.spans.clone(),
+            })));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .map(|transformed| transformed.data)
+}
+
+pub fn expand_delete(
+    info: DeleteInfo,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<RowLevelWriteNode> {
+    let DeleteInfo {
+        target_plan,
+        target,
+        condition,
+        input_schema,
+        resolved_target_field_names,
+    } = info;
+    let normalized = normalize_row_level_target(
+        target_plan.as_ref().clone(),
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+    )?;
+    let condition = condition
+        .map(|condition| -> Result<_> {
+            Ok(ExprWithSource::new(
+                rewrite_target_expr(condition.expr, &normalized.rename_map)?,
+                condition.source,
+            ))
+        })
+        .transpose()?;
+    let predicate = condition
+        .as_ref()
+        .map(|condition| condition.expr.clone())
+        .unwrap_or_else(|| lit(true));
+
+    let mut write_projection = normalized
+        .field_names
+        .iter()
+        .map(|name| col(name).alias(name))
+        .collect::<Vec<_>>();
+    write_projection.push(col(path_column).alias(path_column));
+    write_projection.push(
+        when(
+            predicate.clone(),
+            lit(RowLevelOperationType::Delete.as_i32()),
+        )
+        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
+        .alias(OPERATION_COLUMN),
+    );
+    let write_rows = LogicalPlanBuilder::from(normalized.plan.clone())
+        .project(write_projection)?
+        .build()?;
+
+    let touched_files = LogicalPlanBuilder::from(normalized.plan.clone())
+        .filter(predicate.clone())?
+        .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
+        .project(vec![col(path_column).alias(path_column)])?
+        .build()?;
+
+    let delete_rows = row_index_column
+        .map(|row_index_column| {
+            LogicalPlanBuilder::from(normalized.plan)
+                .filter(predicate)?
+                .project(vec![
+                    col(path_column).alias(path_column),
+                    col(row_index_column).alias(row_index_column),
+                ])?
+                .build()
+        })
+        .transpose()?
+        .map(Arc::new);
+
+    Ok(RowLevelWriteNode::new_delete_with_effects(
+        target_plan,
+        input_schema,
+        Arc::new(write_rows),
+        Arc::new(touched_files),
+        delete_rows,
+        condition,
+        target,
+        Arc::new(DFSchema::empty()),
+    ))
+}
+
+pub fn expand_update(
+    info: UpdateInfo,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<RowLevelWriteNode> {
+    let UpdateInfo {
+        target_plan,
+        target,
+        condition,
+        assignments,
+        input_schema,
+        resolved_target_field_names,
+        case_sensitive,
+        generated_column_exprs,
+        check_constraint_exprs,
+    } = info;
+    let normalized = normalize_row_level_target(
+        target_plan.as_ref().clone(),
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+    )?;
+    let condition = condition
+        .map(|condition| -> Result<_> {
+            Ok(ExprWithSource::new(
+                rewrite_target_expr(condition.expr, &normalized.rename_map)?,
+                condition.source,
+            ))
+        })
+        .transpose()?;
+    let predicate = condition
+        .as_ref()
+        .map(|condition| condition.expr.clone())
+        .unwrap_or_else(|| lit(true));
+
+    let assignments = rewrite_assignments(
+        assignments,
+        &normalized.rename_map,
+        &normalized.field_names,
+        case_sensitive,
+    )?;
+    let assignment_map = assignments
+        .into_iter()
+        .map(|assignment| {
+            (
+                row_level_name_key(&assignment.column, case_sensitive),
+                assignment.value,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut write_projection = Vec::with_capacity(normalized.field_names.len() + 2);
+    for (index, name) in normalized.field_names.iter().enumerate() {
+        let current = col(name);
+        let value = assignment_map
+            .get(&row_level_name_key(name, case_sensitive))
+            .map(|value| {
+                let target_type = input_schema
+                    .fields()
+                    .get(index)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "UPDATE target field is missing during projection".to_string(),
+                        )
+                    })?
+                    .data_type()
+                    .clone();
+                when(predicate.clone(), cast(value.clone(), target_type))
+                    .otherwise(current.clone())
+                    .map(|expr| expr.alias(name))
+            })
+            .transpose()?
+            .unwrap_or_else(|| current.alias(name));
+        write_projection.push(value);
+    }
+    write_projection.push(col(path_column).alias(path_column));
+    write_projection.push(
+        when(
+            predicate.clone(),
+            lit(RowLevelOperationType::Update.as_i32()),
+        )
+        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
+        .alias(OPERATION_COLUMN),
+    );
+    let write_rows = LogicalPlanBuilder::from(normalized.plan.clone())
+        .project(write_projection)?
+        .build()?;
+
+    let generated_column_exprs = generated_column_exprs
+        .into_iter()
+        .map(|(name, expression)| {
+            Ok((
+                name,
+                rewrite_target_expr(expression, &normalized.rename_map)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let write_rows = apply_update_generation(write_rows, &generated_column_exprs, case_sensitive)?;
+    let constraints = check_constraint_exprs
+        .into_iter()
+        .map(|constraint| {
+            Ok(DeltaCheckConstraintExpr {
+                name: constraint.name,
+                expression: constraint.expression,
+                expr: rewrite_target_expr(constraint.expr, &normalized.rename_map)?,
+                violation: constraint.violation,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let write_rows = apply_delta_check_constraint_filter(
+        write_rows,
+        &constraints,
+        Some(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()))),
+    )?;
+
+    let touched_files = LogicalPlanBuilder::from(normalized.plan.clone())
+        .filter(predicate.clone())?
+        .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
+        .project(vec![col(path_column).alias(path_column)])?
+        .build()?;
+    let delete_rows = row_index_column
+        .map(|row_index_column| {
+            LogicalPlanBuilder::from(normalized.plan)
+                .filter(predicate)?
+                .project(vec![
+                    col(path_column).alias(path_column),
+                    col(row_index_column).alias(row_index_column),
+                ])?
+                .build()
+        })
+        .transpose()?
+        .map(Arc::new);
+
+    Ok(RowLevelWriteNode::new_update(
+        target_plan,
+        input_schema,
+        Arc::new(write_rows),
+        Arc::new(touched_files),
+        delete_rows,
+        condition,
+        target,
+        Arc::new(DFSchema::empty()),
+    ))
+}
+
+fn rewrite_assignments(
+    assignments: Vec<UpdateAssignment>,
+    rename_map: &HashMap<String, String>,
+    field_names: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<UpdateAssignment>> {
+    assignments
+        .into_iter()
+        .map(|assignment| {
+            let UpdateAssignment { column, value } = assignment;
+            let column = rename_map.get(&column).cloned().unwrap_or(column);
+            let column =
+                resolve_assignment_column(&column, field_names, case_sensitive)?.to_string();
+            Ok(UpdateAssignment {
+                column,
+                value: rewrite_target_expr(value, rename_map)?,
+            })
+        })
+        .collect()
+}
+
+fn apply_update_generation(
+    plan: LogicalPlan,
+    generated_column_exprs: &[(String, Expr)],
+    case_sensitive: bool,
+) -> Result<LogicalPlan> {
+    if generated_column_exprs.is_empty() {
+        return Ok(plan);
+    }
+    let generated = generated_column_exprs
+        .iter()
+        .map(|(name, expression)| (row_level_name_key(name, case_sensitive), expression))
+        .collect::<HashMap<_, _>>();
+    let update_row = col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()));
+    let projection = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| {
+            let name = field.name();
+            if let Some(generation_expr) = generated.get(&row_level_name_key(name, case_sensitive))
+            {
+                when(update_row.clone(), (*generation_expr).clone())
+                    .otherwise(col(name))
+                    .map(|expr| expr.alias(name))
+            } else {
+                Ok(col(name))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    LogicalPlanBuilder::from(plan).project(projection)?.build()
+}
+
+fn resolve_assignment_column<'a>(
+    column: &str,
+    field_names: &'a [String],
+    case_sensitive: bool,
+) -> Result<&'a str> {
+    let matches = field_names
+        .iter()
+        .filter(|field| {
+            if case_sensitive {
+                field.as_str() == column
+            } else {
+                field.eq_ignore_ascii_case(column)
+            }
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return plan_err!("unable to resolve column {column} in UPDATE target projection");
+    }
+    Ok(matches[0])
+}
+
+fn row_level_name_key(name: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        name.to_string()
+    } else {
+        name.to_ascii_lowercase()
     }
 }
 

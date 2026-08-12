@@ -139,6 +139,47 @@ Feature: Delta Lake Merge
         """
       Then query error Cannot resolve source column `keep` for MERGE \* action without schema evolution
 
+    Scenario: WITH SCHEMA EVOLUTION appends source-only columns for star actions
+      Given variable location for temporary directory delta_merge_schema_evolution
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_schema_evolution
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_schema_evolution (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_schema_evolution VALUES (1, 'old'), (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_schema_evolution_source AS
+        SELECT * FROM VALUES
+          (1, 'new', 10),
+          (3, 'insert', 30)
+        AS source(id, value, extra)
+        """
+      Given statement
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_schema_evolution AS target
+        USING delta_merge_schema_evolution_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      When query
+        """
+        SELECT id, value, extra FROM delta_merge_schema_evolution ORDER BY id
+        """
+      Then query result ordered
+        | id | value  | extra |
+        | 1  | new    | 10    |
+        | 2  | keep   | NULL  |
+        | 3  | insert | 30    |
+
     Scenario: Assignments cast to target types and reject overflow
       Given config spark.sql.ansi.enabled = true
       Given variable location for temporary directory delta_merge_assignment_cast
@@ -866,8 +907,8 @@ Feature: Delta Lake Merge
         | 3  | stay     | target |
         | 4  | inserted | insert |
 
-    Scenario: Matched updates are rejected for Merge-on-Read MERGE
-      When query
+    Scenario: Matched updates fall back to copy-on-write on a deletion-vector table
+      Given statement
         """
         MERGE INTO delta_merge_dv AS t
         USING src_merge_dv AS s
@@ -875,7 +916,20 @@ Feature: Delta Lake Merge
         WHEN MATCHED THEN
           UPDATE SET value = s.value
         """
-      Then query error Merge-on-Read strategy for MERGE UPDATE clauses
+      Then delta log latest commit info contains
+        | path                                               | value    |
+        | operation                                          | "MERGE"  |
+        | operationParameters.matchedPredicates[0].actionType | "update" |
+        | operationMetrics.numTargetRowsUpdated              | 1        |
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value  | flag   |
+        | 1  | keep   | target |
+        | 2  | remove | target |
+        | 3  | stay   | target |
 
 
   Rule: Updates for rows not matched by source and explicit insert columns
