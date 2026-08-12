@@ -133,14 +133,17 @@ impl ShuffleClientActor {
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     ) -> ActorAction {
         if let Ok(reservation) = &result {
-            self.locations.extend(
-                reservation
-                    .primary_locations
-                    .iter()
-                    .map(|(&partition_id, location)| {
-                        ((shuffle_id, partition_id), location.clone())
-                    }),
-            );
+            for (&partition_id, location) in &reservation.primary_locations {
+                let key = (shuffle_id, partition_id);
+                self.locations.insert(key, location.clone());
+                self.worker_clients.insert(
+                    key,
+                    WorkerClient::new(
+                        WorkerClientOptions::new(location.clone())
+                            .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
+                    ),
+                );
+            }
         }
         let _ = reply.send(result);
         ActorAction::Continue
@@ -156,7 +159,11 @@ impl ShuffleClientActor {
         data: Vec<u8>,
         reply: oneshot::Sender<CelebornResult<usize>>,
     ) -> ActorAction {
-        let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
+        let Some(client) = self
+            .worker_clients
+            .get(&(shuffle_id, partition_id))
+            .cloned()
+        else {
             let _ = reply.send(Err(CelebornError::Application(format!(
                 "shuffle {shuffle_id} partition {partition_id} is not registered"
             ))));
@@ -169,13 +176,10 @@ impl ShuffleClientActor {
         let current_batch_id = *batch_id;
         *batch_id += 1;
         let shuffle_key = self.shuffle_key(shuffle_id);
-        let endpoint_resolver = self.options.endpoint_resolver.clone();
         ctx.spawn(async move {
-            let result = WorkerClient::new(
-                WorkerClientOptions::new(location).with_endpoint_resolver(endpoint_resolver),
-            )
-            .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
-            .await;
+            let result = client
+                .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
+                .await;
             let _ = reply.send(result);
         });
         ActorAction::Continue
@@ -230,6 +234,9 @@ impl ShuffleClientActor {
     ) -> ActorAction {
         if result.is_ok() {
             self.shuffle_ids.retain(|_, id| *id != shuffle_id);
+            self.locations.retain(|(id, _), _| *id != shuffle_id);
+            self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
+            self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         }
         let _ = reply.send(result);
         ActorAction::Continue
@@ -241,6 +248,7 @@ impl ShuffleClientActor {
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         self.locations.retain(|(id, _), _| *id != shuffle_id);
+        self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
         self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         self.shuffle_ids.retain(|_, id| *id != shuffle_id);
         let _ = reply.send(Ok(()));
@@ -254,7 +262,11 @@ impl ShuffleClientActor {
         partition_id: i32,
         reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
     ) -> ActorAction {
-        let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
+        let Some(client) = self
+            .worker_clients
+            .get(&(shuffle_id, partition_id))
+            .cloned()
+        else {
             let _ = reply.send(Box::pin(stream::once(async move {
                 Err(CelebornError::Application(format!(
                     "shuffle {shuffle_id} partition {partition_id} is not registered"
@@ -263,13 +275,8 @@ impl ShuffleClientActor {
             return ActorAction::Continue;
         };
         let shuffle_key = self.shuffle_key(shuffle_id);
-        let endpoint_resolver = self.options.endpoint_resolver.clone();
         ctx.spawn(async move {
-            let stream = WorkerClient::new(
-                WorkerClientOptions::new(location).with_endpoint_resolver(endpoint_resolver),
-            )
-            .read_partition_stream(&shuffle_key)
-            .await;
+            let stream = client.read_partition_stream(&shuffle_key).await;
             let _ = reply.send(stream);
         });
         ActorAction::Continue

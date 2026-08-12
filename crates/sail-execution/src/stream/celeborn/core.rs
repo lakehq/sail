@@ -190,7 +190,7 @@ impl TaskStreamChannelSink for CelebornStreamSink {
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let length = u32::try_from(payload.len())
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let mut data = length.to_le_bytes().to_vec();
+        let mut data = length.to_be_bytes().to_vec();
         data.extend_from_slice(&payload);
         self.client
             .push_data(
@@ -269,7 +269,7 @@ fn decode_batches(data: Vec<u8>, _schema: &SchemaRef) -> Result<Vec<RecordBatch>
             ));
         };
         let length =
-            u32::from_le_bytes(header.try_into().map_err(|_| {
+            u32::from_be_bytes(header.try_into().map_err(|_| {
                 DataFusionError::Execution("invalid Celeborn frame header".to_string())
             })?) as usize;
         offset += size_of::<u32>();
