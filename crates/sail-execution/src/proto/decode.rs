@@ -18,7 +18,6 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -150,11 +149,5 @@ pub(super) fn try_decode_higher_order_udf(
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
             }
         }
-        HigherOrderUdfKind::Sequence(r#gen::SparkSequenceUdf {
-            session_timezone,
-            ansi_mode,
-        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(
-            SparkSequence::new(Arc::from(session_timezone), ansi_mode),
-        ))),
     })
 }

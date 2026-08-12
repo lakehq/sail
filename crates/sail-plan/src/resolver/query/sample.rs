@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::select_expr::SelectExpr;
@@ -9,6 +8,7 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
+use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -16,8 +16,6 @@ use sail_logical_plan::sort::SortWithinPartitionsNode;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
-
-const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
 
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {
@@ -70,6 +68,11 @@ impl PlanResolver<'_> {
             seed,
             deterministic_order,
         } = sample;
+        if lower_bound >= upper_bound {
+            return Err(PlanError::invalid(format!(
+                "invalid sample bounds: [{lower_bound}, {upper_bound})"
+            )));
+        }
         // if defined seed use these values otherwise use random seed
         // to generate the random values in with_replacement mode, in lambda value
         let seed: i64 = seed.unwrap_or_else(|| {
@@ -147,29 +150,12 @@ impl PlanResolver<'_> {
         seed: i64,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let fraction = upper_bound - lower_bound;
-        let valid_fraction = if with_replacement {
-            fraction >= -SAMPLE_ROUNDING_EPSILON
-        } else {
-            (-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction)
-        };
-        if !valid_fraction {
-            let requirement = if with_replacement {
-                "nonnegative with replacement"
-            } else {
-                "on interval [0, 1] without replacement"
-            };
-            return Err(PlanError::invalid(format!(
-                "Sampling fraction ({fraction}) must be {requirement}"
-            )));
-        }
-
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
                 args: vec![
-                    Expr::Literal(ScalarValue::Float64(Some(fraction.max(0.0))), None),
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
                     Expr::Literal(ScalarValue::Int64(Some(seed)), None),
                 ],
             })
@@ -243,8 +229,14 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
         let array_column_name: String = state.register_field_name("array_value");
-        let arr_expr =
-            expr_fn::array_repeat(lit(1_i64), col(rand_column_name)).alias(&array_column_name);
+        let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(Some(1)), None),
+                col(rand_column_name),
+            ],
+        })
+        .alias(&array_column_name);
         let plan = LogicalPlanBuilder::from(plan_with_rand)
             .project(
                 init_exprs_aux

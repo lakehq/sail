@@ -1,17 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::arrow::datatypes::DataType;
+use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, cast, expr, is_null, lit, not, or,
-    when,
-};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, is_null, lit, not, or, when};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
-use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
@@ -19,15 +15,11 @@ use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::function::special_datetime::foldable_special_datetime_cast;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
@@ -307,126 +299,6 @@ fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> expr::Expr {
-    let timestamp_ntz = cast(argument, DataType::Timestamp(TimeUnit::Microsecond, None));
-    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
-        lit(timezone.to_string()),
-        lit("UTC"),
-        timestamp_ntz,
-    ]);
-    cast(
-        cast(instant, DataType::Int64),
-        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
-    )
-}
-
-fn sequence_trim_string(argument: expr::Expr) -> expr::Expr {
-    btrim(vec![
-        argument,
-        lit(SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS),
-    ])
-}
-
-fn sequence_cast(
-    argument: expr::Expr,
-    source_type: &DataType,
-    target_type: &DataType,
-    ansi_mode: bool,
-    session_timezone: &Arc<str>,
-) -> PlanResult<expr::Expr> {
-    if source_type == target_type {
-        return Ok(argument);
-    }
-
-    if matches!(
-        source_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) && let Some(special) =
-        foldable_special_datetime_cast(&argument, target_type, session_timezone)
-    {
-        return Ok(special);
-    }
-
-    Ok(match (source_type, target_type) {
-        (
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64,
-        ) => cast(sequence_trim_string(argument), DataType::Int64),
-        (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
-            ScalarUDF::from(SparkDate::new(false)).call(vec![sequence_trim_string(argument)])
-        }
-        (
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![sequence_trim_string(argument)]),
-        (
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
-        ) => sequence_timestamp_ltz_cast(argument, timezone),
-        _ => cast(argument, target_type.clone()),
-    })
-}
-
-fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput {
-        arguments,
-        function_context,
-    } = input;
-
-    if !matches!(arguments.len(), 2 | 3) {
-        return Err(PlanError::invalid(format!(
-            "sequence requires 2 or 3 arguments, got {}",
-            arguments.len()
-        )));
-    }
-
-    let config = function_context.plan_config;
-    let udf = SparkSequence::new(Arc::clone(&config.session_timezone), config.ansi_mode);
-
-    let argument_types = arguments
-        .iter()
-        .map(|argument| argument.get_type(function_context.schema.as_ref()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let target_types = udf.coerce_types(&argument_types)?;
-
-    let arguments = arguments
-        .into_iter()
-        .zip(argument_types)
-        .zip(target_types)
-        .map(|((argument, source_type), target_type)| {
-            sequence_cast(
-                argument,
-                &source_type,
-                &target_type,
-                config.ansi_mode,
-                &config.session_timezone,
-            )
-        })
-        .collect::<PlanResult<Vec<_>>>()?;
-
-    let arguments = arguments
-        .into_iter()
-        .map(|argument| {
-            expr::Expr::Lambda(expr::Lambda::new(vec!["_sequence".to_owned()], argument))
-        })
-        .collect::<Vec<_>>();
-
-    Ok(expr::Expr::HigherOrderFunction(
-        expr::HigherOrderFunction::new(
-            Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(udf))),
-            arguments,
-        ),
-    ))
-}
-
 fn array_update_output_type(
     array: &expr::Expr,
     element: &expr::Expr,
@@ -528,7 +400,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
-        ("sequence", F::custom(sequence)),
+        ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unary(array_fn::shuffle)),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),

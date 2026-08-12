@@ -36,7 +36,6 @@ test = [
     "pandas<3",
     "duckdb>=1.0,<2",
     "pytest>=9.1,<10",
-    "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
@@ -98,7 +97,6 @@ dependencies = [
     "ibis-framework>=12,<13",
     "pandas<3",
     "pytest>=9.1,<10",
-    "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
@@ -155,7 +153,6 @@ skip-install = true
 dependencies = [
     "pandas<3",
     "pytest>=9.1,<10",
-    "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
