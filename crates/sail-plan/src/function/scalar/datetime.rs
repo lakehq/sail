@@ -242,6 +242,14 @@ fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
     ) + interval)
 }
 
+fn dateadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    match input.arguments.len() {
+        2 => interval_arithmetic(input, "days", Operator::Plus),
+        3 => timestampadd(input),
+        _ => Err(PlanError::invalid("dateadd requires 2 or 3 arguments")),
+    }
+}
+
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
     match (&year, &month, &day) {
         (Expr::Literal(ScalarValue::Null, metadata), _, _)
@@ -1182,10 +1190,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
         ("date_trunc", F::custom(date_trunc)),
-        (
-            "dateadd",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("dateadd", F::custom(dateadd)),
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),

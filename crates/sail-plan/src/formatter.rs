@@ -515,8 +515,13 @@ impl PlanFormatter for SparkPlanFormatter {
                 name, arguments, 2, "12",
             )),
             "dateadd" => {
+                let name = if arguments.len() == 3 {
+                    "timestampadd"
+                } else {
+                    "date_add"
+                };
                 let arguments = arguments.join(", ");
-                Ok(format!("date_add({arguments})"))
+                Ok(format!("{name}({arguments})"))
             }
             "sum" => {
                 let mut args = arguments.join(", ");
