@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -150,21 +151,21 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
 #[derive(Debug, Default)]
 pub struct DeleteFileIndex {
     /// Unpartitioned equality delete files apply to every data file.
-    global_eq: Vec<DeleteFileRef>,
+    global_eq: Vec<Arc<DeleteFileRef>>,
     /// Partitioned equality delete files keyed by the writer's partition tuple.
-    eq_by_partition: HashMap<PartitionKey, Vec<DeleteFileRef>>,
+    eq_by_partition: HashMap<PartitionKey, Vec<Arc<DeleteFileRef>>>,
     /// Partition-scoped position delete files (applied to every data file in the same
     /// partition whose sequence number is ≤ the delete's).
-    pos_by_partition: HashMap<PartitionKey, Vec<DeleteFileRef>>,
+    pos_by_partition: HashMap<PartitionKey, Vec<Arc<DeleteFileRef>>>,
     /// Position delete files targeting a specific data file path (`referenced_data_file`).
-    pos_by_path: HashMap<String, Vec<DeleteFileRef>>,
+    pos_by_path: HashMap<String, Vec<Arc<DeleteFileRef>>>,
 }
 
 /// Result of looking up applicable deletes for a data file.
 #[derive(Debug, Default, Clone)]
 pub struct MatchedDeletes {
-    pub positional: Vec<DeleteFileRef>,
-    pub equality: Vec<DeleteFileRef>,
+    pub positional: Vec<Arc<DeleteFileRef>>,
+    pub equality: Vec<Arc<DeleteFileRef>>,
 }
 
 impl MatchedDeletes {
@@ -194,11 +195,13 @@ impl DeleteFileIndex {
                 file_ref.data_file.file_path.clone(),
             ));
         }
-        match file_ref.data_file.content {
+        let content = file_ref.data_file.content;
+        match content {
             DataContentType::Data => Err(DeleteIndexError::NotADeleteFile(
                 file_ref.data_file.file_path.clone(),
             )),
             DataContentType::EqualityDeletes => {
+                let file_ref = Arc::new(file_ref);
                 if file_ref.is_unpartitioned_spec {
                     self.global_eq.push(file_ref);
                 } else {
@@ -211,7 +214,8 @@ impl DeleteFileIndex {
                 Ok(())
             }
             DataContentType::PositionDeletes => {
-                if let Some(ref path) = file_ref.data_file.referenced_data_file {
+                let file_ref = Arc::new(file_ref);
+                if let Some(path) = &file_ref.data_file.referenced_data_file {
                     self.pos_by_path
                         .entry(path.clone())
                         .or_default()
@@ -230,44 +234,97 @@ impl DeleteFileIndex {
 
     /// Return all delete files applicable to `data_file` at `data_sequence_number`.
     pub fn for_data_file(&self, data_file: &DataFile, data_sequence_number: i64) -> MatchedDeletes {
-        let mut matched = MatchedDeletes::default();
-        let key = PartitionKey::new(data_file.partition_spec_id, &data_file.partition);
+        if self.is_empty() {
+            return MatchedDeletes::default();
+        }
+
+        let key = if self.pos_by_partition.is_empty() && self.eq_by_partition.is_empty() {
+            None
+        } else {
+            Some(PartitionKey::new(
+                data_file.partition_spec_id,
+                &data_file.partition,
+            ))
+        };
+        let positional_by_path = self.pos_by_path.get(&data_file.file_path);
+        let positional_by_partition = key.as_ref().and_then(|key| self.pos_by_partition.get(key));
+        let equality_by_partition = key.as_ref().and_then(|key| self.eq_by_partition.get(key));
+        let mut matched = MatchedDeletes {
+            positional: Vec::with_capacity(
+                positional_by_path.map_or(0, Vec::len)
+                    + positional_by_partition.map_or(0, Vec::len),
+            ),
+            equality: Vec::with_capacity(
+                equality_by_partition.map_or(0, Vec::len) + self.global_eq.len(),
+            ),
+        };
 
         // Positional deletes that reference this path.
-        if let Some(refs) = self.pos_by_path.get(&data_file.file_path) {
-            for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
-                    matched.positional.push(r.clone());
+        if let Some(refs) = positional_by_path {
+            for file_ref in refs {
+                if data_sequence_number <= file_ref.data_sequence_number {
+                    matched.positional.push(Arc::clone(file_ref));
                 }
             }
         }
 
         // Positional deletes scoped to the same partition.
-        if let Some(refs) = self.pos_by_partition.get(&key) {
-            for r in refs {
-                if data_sequence_number <= r.data_sequence_number {
-                    matched.positional.push(r.clone());
+        if let Some(refs) = positional_by_partition {
+            for file_ref in refs {
+                if data_sequence_number <= file_ref.data_sequence_number {
+                    matched.positional.push(Arc::clone(file_ref));
                 }
             }
         }
 
         // Equality deletes scoped to the same partition.
-        if let Some(refs) = self.eq_by_partition.get(&key) {
-            for r in refs {
-                if data_sequence_number < r.data_sequence_number {
-                    matched.equality.push(r.clone());
+        if let Some(refs) = equality_by_partition {
+            for file_ref in refs {
+                if data_sequence_number < file_ref.data_sequence_number {
+                    matched.equality.push(Arc::clone(file_ref));
                 }
             }
         }
 
         // Global (unpartitioned) equality deletes.
-        for r in &self.global_eq {
-            if data_sequence_number < r.data_sequence_number {
-                matched.equality.push(r.clone());
+        for file_ref in &self.global_eq {
+            if data_sequence_number < file_ref.data_sequence_number {
+                matched.equality.push(Arc::clone(file_ref));
             }
         }
 
         matched
+    }
+
+    /// Partition data files into files with and without applicable deletes.
+    ///
+    /// The input is consumed so clean files can move directly into scan planning
+    /// without cloning their metrics and partition values.
+    pub fn partition_data_files(
+        &self,
+        data_files: Vec<(DataFile, i64)>,
+    ) -> (Vec<DataFile>, Vec<(DataFile, MatchedDeletes)>) {
+        if self.is_empty() {
+            return (
+                data_files
+                    .into_iter()
+                    .map(|(data_file, _)| data_file)
+                    .collect(),
+                Vec::new(),
+            );
+        }
+
+        let mut clean = Vec::with_capacity(data_files.len());
+        let mut dirty = Vec::new();
+        for (data_file, sequence_number) in data_files {
+            let matched = self.for_data_file(&data_file, sequence_number);
+            if matched.is_empty() {
+                clean.push(data_file);
+            } else {
+                dirty.push((data_file, matched));
+            }
+        }
+        (clean, dirty)
     }
 }
 
@@ -395,6 +452,8 @@ mod tests {
         let m = idx.for_data_file(&df, 5);
         assert_eq!(m.positional.len(), 1);
         assert!(m.equality.is_empty());
+        let repeated = idx.for_data_file(&df, 5);
+        assert!(Arc::ptr_eq(&m.positional[0], &repeated.positional[0]));
 
         // data_seq > delete_seq → does not apply
         let m = idx.for_data_file(&df, 6);

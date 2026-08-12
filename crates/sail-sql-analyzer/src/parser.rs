@@ -10,8 +10,8 @@ use sail_sql_parser::lexer::create_lexer;
 use sail_sql_parser::options::ParserOptions;
 use sail_sql_parser::parser::{
     create_data_type_parser, create_expression_parser, create_interval_literal_parser,
-    create_named_expression_parser, create_object_name_parser, create_parser,
-    create_qualified_wildcard_parser,
+    create_named_expression_parser, create_object_name_parser, create_one_statement_parser,
+    create_parser, create_qualified_wildcard_parser,
 };
 use sail_sql_parser::token::{Punctuation, Token};
 
@@ -87,10 +87,16 @@ pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
 
 /// Parses a SQL string containing exactly one statement into an AST.
 pub fn parse_one_statement(s: &str) -> SqlResult<Statement> {
-    let mut plan = parse_statements(s)?;
-    match (plan.pop(), plan.is_empty()) {
-        (Some(x), true) => Ok(x),
-        _ => Err(SqlError::invalid("expected one statement")),
+    match parse!(s, create_one_statement_parser) {
+        Ok(statement) => Ok(statement),
+        Err(_) => {
+            // Preserve the established cardinality and parser errors on the cold path.
+            let mut statements = parse_statements(s)?;
+            match (statements.pop(), statements.is_empty()) {
+                (Some(statement), true) => Ok(statement),
+                _ => Err(SqlError::invalid("expected one statement")),
+            }
+        }
     }
 }
 
@@ -132,7 +138,7 @@ mod tests {
     use sail_sql_parser::ast::statement::Statement;
     use sail_sql_parser::tree::TreeText;
 
-    use crate::error::SqlResult;
+    use crate::error::{SqlError, SqlResult};
     use crate::parser::{parse_one_statement, parse_statements};
 
     #[test]
@@ -147,6 +153,20 @@ mod tests {
             ]
         ));
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_one_statement_cardinality() {
+        for sql in ["", ";; /* comment */", "SELECT 1; SELECT 2"] {
+            assert!(matches!(
+                parse_one_statement(sql),
+                Err(SqlError::InvalidArgument(message)) if message == "expected one statement"
+            ));
+        }
+        assert!(matches!(
+            parse_one_statement(";; SELECT 1;;"),
+            Ok(Statement::Query(Query { .. }))
+        ));
     }
 
     #[test]

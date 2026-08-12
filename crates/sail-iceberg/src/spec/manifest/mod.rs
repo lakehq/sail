@@ -140,7 +140,6 @@ impl Manifest {
             .partition_spec
             .partition_type(&metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
         for value in reader {
             let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
             let entry: _serde::ManifestEntryV2 =

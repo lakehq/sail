@@ -52,3 +52,24 @@ It runs the server in release mode without debug logs.
 ```shell
 env RUST_LOG=info BENCHMARK=1 scripts/spark-tests/run-server.sh
 ```
+
+## Rust Hot-Path Microbenchmarks
+
+The Rust workspace contains focused benchmarks for object-store caching, the SQL frontend, and Iceberg metadata planning. Run them with Cargo's optimized benchmark profile:
+
+```shell
+cargo bench -p sail-object-store --bench object_store_cache
+cargo bench -p sail-sql-analyzer --bench sql_frontend
+cargo bench -p sail-iceberg --bench metadata_updates
+cargo bench -p sail-iceberg --bench manifest_parsing
+cargo bench -p sail-iceberg --bench delete_index
+cargo bench -p sail-iceberg --bench metadata_discovery
+```
+
+Each executable performs warm-up iterations and reports the minimum, median, and maximum time across repeated samples. Benchmarks that process bytes also report throughput. Set `SAIL_BENCH_FILTER` to run only cases whose names contain a substring:
+
+```shell
+SAIL_BENCH_FILTER=metadata_parse cargo bench -p sail-iceberg --bench metadata_updates
+```
+
+For before-and-after comparisons, build both revisions with the same Rust toolchain, target CPU flags, benchmark profile, container resource limits, and machine load. Report medians rather than a single run, retain the raw output, and include the exact commit IDs so another contributor can reproduce the result.
