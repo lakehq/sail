@@ -41,14 +41,14 @@ def test_basic_query_execution(spark):
 
 @pytest.mark.timeout(30)
 def test_sequence_with_column_bound_in_cluster_mode(spark):
+    assert spark.sql("SELECT sequence(1, 3) AS s").collect()[0]["s"] == [1, 2, 3]
+
     df = spark.createDataFrame([(1,), (3,), (12,)], ["n"])
-
-    rows = df.select("n", F.expr("sequence(1, n)").alias("s")).collect()
-
+    rows = df.withColumn("s", F.expr("sequence(1, n)")).collect()
     assert {row.n: row.s for row in rows} == {
         1: [1],
         3: [1, 2, 3],
-        12: list(range(1, 13)),
+        12: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     }
 
 
