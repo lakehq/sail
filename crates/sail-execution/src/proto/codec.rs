@@ -264,7 +264,8 @@ use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkN
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergPartitionTransformExpr, IcebergRemoveDataFilesExec, IcebergScanByDataFilesExec,
+    IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
@@ -1594,6 +1595,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         ),
                 ))
             }
+            NodeKind::IcebergRemoveDataFiles(r#gen::IcebergRemoveDataFilesExecNode {
+                input,
+                file_path_column,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                Ok(Arc::new(IcebergRemoveDataFilesExec::try_new(
+                    input,
+                    file_path_column,
+                )?))
+            }
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
                 snapshot_json,
@@ -2706,6 +2717,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_update_kind: Self::try_encode_iceberg_snapshot_update_kind(
                     iceberg_commit_exec.snapshot_update_kind(),
                 ),
+            })
+        } else if let Some(remove_data_files) = node.downcast_ref::<IcebergRemoveDataFilesExec>() {
+            let input = try_encode_physical_plan(self, remove_data_files.input().clone())?;
+            NodeKind::IcebergRemoveDataFiles(r#gen::IcebergRemoveDataFilesExecNode {
+                input,
+                file_path_column: remove_data_files.file_path_column().to_string(),
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -4548,6 +4565,10 @@ impl RemoteExecutionCodec {
                 Ok(SnapshotUpdateKind::FullOverwrite)
             }
             r#gen::IcebergSnapshotUpdateKind::RowDelta => Ok(SnapshotUpdateKind::RowDelta),
+            r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete => {
+                Ok(SnapshotUpdateKind::CopyOnWriteDelete)
+            }
+            r#gen::IcebergSnapshotUpdateKind::CopyOnWrite => Ok(SnapshotUpdateKind::CopyOnWrite),
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -4559,6 +4580,10 @@ impl RemoteExecutionCodec {
             SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
+            SnapshotUpdateKind::CopyOnWriteDelete => {
+                r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete
+            }
+            SnapshotUpdateKind::CopyOnWrite => r#gen::IcebergSnapshotUpdateKind::CopyOnWrite,
         }) as i32
     }
 
@@ -5692,6 +5717,52 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("Missing write_context"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_copy_on_write_commit_plan() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                "__sail_file_path",
+                DataType::Utf8,
+                false,
+            )]))));
+        let remove_actions: Arc<dyn ExecutionPlan> = Arc::new(IcebergRemoveDataFilesExec::try_new(
+            input,
+            "__sail_file_path",
+        )?);
+        let plan = Arc::new(
+            IcebergCommitExec::new(
+                remove_actions,
+                Url::parse("file:///tmp/iceberg-codec/")
+                    .map_err(|error| plan_datafusion_err!("{error}"))?,
+                None,
+                SnapshotUpdateKind::CopyOnWriteDelete,
+            )
+            .with_expected_snapshot_id(Some(Some(41))),
+        );
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let commit = decoded
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an Iceberg commit"))?;
+        assert_eq!(
+            commit.snapshot_update_kind(),
+            SnapshotUpdateKind::CopyOnWriteDelete
+        );
+        assert_eq!(commit.expected_snapshot_id(), Some(Some(41)));
+        let remove_actions = commit
+            .input()
+            .downcast_ref::<IcebergRemoveDataFilesExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded child is not a remove-data-files exec"))?;
+        assert_eq!(remove_actions.file_path_column(), "__sail_file_path");
         Ok(())
     }
 

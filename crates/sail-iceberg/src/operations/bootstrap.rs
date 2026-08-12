@@ -713,6 +713,7 @@ mod tests {
                 row_count: 0,
                 data_files: vec![],
                 delete_files: vec![],
+                removed_data_file_paths: vec![],
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
