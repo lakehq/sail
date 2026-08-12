@@ -36,6 +36,7 @@ use crate::physical_plan::{
     IcebergWriterExec, IcebergWriterExecOptions, prepare_iceberg_write_context,
 };
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
+use crate::spec::FormatVersion;
 use crate::table::Table;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +319,12 @@ fn plan_iceberg_copy_on_write(
                 && options.not_matched_by_source_clauses.is_empty()
                 && !options.not_matched_by_target_clauses.is_empty()
         });
+    if table.metadata().format_version >= FormatVersion::V3 && !insert_only_merge {
+        return not_impl_err!(
+            "Iceberg v3 copy-on-write {:?} is not supported until row lineage can be preserved",
+            node.command()
+        );
+    }
 
     let writer_input = if insert_only_merge {
         write_plan
@@ -352,7 +359,7 @@ fn plan_iceberg_copy_on_write(
     )?);
 
     let (commit_input, snapshot_update_kind): (Arc<dyn ExecutionPlan>, _) = if insert_only_merge {
-        (writer, SnapshotUpdateKind::FastAppend)
+        (writer, snapshot_update_kind)
     } else {
         let touched_plan = reset_plan_states(Arc::clone(&physical_inputs[1]))?;
         let remove_actions: Arc<dyn ExecutionPlan> = Arc::new(IcebergRemoveDataFilesExec::try_new(
