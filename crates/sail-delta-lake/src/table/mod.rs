@@ -756,6 +756,7 @@ async fn load_delta_read_state(
     metadata_only: bool,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
+    let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
     let storage_config = StorageConfig;
@@ -792,6 +793,9 @@ async fn load_delta_read_state(
         enable_parquet_pushdown: true,
         schema: match schema {
             Some(ref s) if s.fields().is_empty() => None,
+            Some(s) if reads_catalog_table => {
+                Some(Arc::new(refresh_catalog_delta_schema(s, snapshot.schema())))
+            }
             Some(s) => Some(Arc::new(s)),
             None => None,
         },
@@ -801,6 +805,19 @@ async fn load_delta_read_state(
     };
 
     Ok((snapshot, log_store, scan_config))
+}
+
+fn refresh_catalog_delta_schema(catalog_schema: Schema, snapshot_schema: &Schema) -> Schema {
+    let mut fields = catalog_schema.fields().iter().cloned().collect::<Vec<_>>();
+    for snapshot_field in snapshot_schema.fields() {
+        if !fields
+            .iter()
+            .any(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
+        {
+            fields.push(snapshot_field.clone());
+        }
+    }
+    Schema::new_with_metadata(fields, catalog_schema.metadata().clone())
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
@@ -927,7 +944,33 @@ fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_catalog_commit_end_version, next_catalog_commit_start_version};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+
+    use super::{
+        effective_catalog_commit_end_version, next_catalog_commit_start_version,
+        refresh_catalog_delta_schema,
+    };
+
+    #[test]
+    fn catalog_schema_refresh_appends_snapshot_fields_without_replacing_existing_types() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let catalog_schema = Schema::new(vec![Field::new(
+            "event_time",
+            catalog_timestamp.clone(),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![
+            Field::new("event_time", snapshot_timestamp, true),
+            Field::new("extra", DataType::Int32, true),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(refreshed.fields().len(), 2);
+        assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
+        assert_eq!(refreshed.field(1).name(), "extra");
+    }
 
     #[test]
     fn effective_catalog_commit_end_version_caps_requested_version() {
