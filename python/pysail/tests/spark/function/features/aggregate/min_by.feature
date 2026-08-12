@@ -231,7 +231,7 @@ Feature: min_by function
     # returns an ARRAY of the k values, sorted ascending by the ordering column.
     # The array is joined so that the assertion stays plain SQL; the element order is
     # part of what is asserted, and it is deterministic here because every `y` differs.
-    @spark-4.2 @sail-bug
+    @spark-4.2
     Scenario: min_by returns the bottom k values as an array
       When query
         """

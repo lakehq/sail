@@ -300,7 +300,7 @@ Feature: max_by function
     # returns an ARRAY of the k values, sorted descending by the ordering column.
     # The array is joined so that the assertion stays plain SQL; the element order is
     # part of what is asserted, and it is deterministic here because every `y` differs.
-    @spark-4.2 @sail-bug
+    @spark-4.2
     Scenario: max_by returns the top k values as an array
       When query
         """
@@ -313,7 +313,7 @@ Feature: max_by function
     # The scenario above joins the array, so it asserts a STRING and would stay green
     # against a wrong element type. `MaxMinByK.dataType` is
     # `ArrayType(valueExpr.dataType, containsNull = true)`; pin it separately.
-    @spark-4.2 @sail-bug
+    @spark-4.2
     Scenario: max_by returns the top k values with an array output type
       When query
         """
@@ -325,3 +325,70 @@ Feature: max_by function
          |-- result: array (nullable = true)
          |    |-- element: string (containsNull = true)
         """
+
+    # Spark's rule for `k` is FOLDABILITY, not "is a literal", so a constant-folded
+    # expression qualifies and must behave exactly like the literal it folds to.
+    @spark-4.2
+    Scenario: max_by accepts a foldable expression as k
+      When query
+        """
+        SELECT array_join(max_by(x, y, 1 + 1), ',') AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | b,c    |
+
+    @spark-4.2
+    Scenario: max_by rejects a non-foldable k
+      When query
+        """
+        SELECT max_by(x, y, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error should be a foldable
+
+    # `MaxMinByK.MAX_K` is 100000 and `k` must be at least 1.
+    @spark-4.2
+    Scenario Outline: max_by rejects k outside [1, 100000] (<case>)
+      When query
+        """
+        SELECT max_by(x, y, <k>) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error must be between \[1, 100000\]
+
+      Examples:
+        | case      | k      |
+        | too small | 0      |
+        | too large | 100001 |
+
+    # A `k` larger than the group returns every row, not a padded array.
+    @spark-4.2
+    Scenario: max_by returns every value when k exceeds the row count
+      When query
+        """
+        SELECT array_join(max_by(x, y, 10), ',') AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | b,c,a  |
+
+    # An empty group yields NULL rather than an empty array (`eval` returns null when the
+    # heap is empty), and NULL orderings are skipped while NULL VALUES are kept.
+    @spark-4.2
+    Scenario: max_by returns NULL for an empty group
+      When query
+        """
+        SELECT max_by(x, y, 2) AS result FROM VALUES ('a', 10), ('b', 50) AS t(x, y) WHERE y > 999
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @spark-4.2
+    Scenario: max_by skips NULL orderings but keeps NULL values
+      When query
+        """
+        SELECT max_by(x, y, 2) AS result FROM VALUES (CAST(NULL AS STRING), 9), ('b', 5), ('c', CAST(NULL AS INT)) AS t(x, y)
+        """
+      Then query result collected
+        | result      |
+        | [None, 'b'] |
