@@ -4,8 +4,12 @@ use tonic::Request;
 use crate::driver::r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
 use crate::driver::r#gen::driver_service_client::DriverServiceClient;
 use crate::driver::r#gen::{
+    CelebornGetJobShuffleIdsRequest, CelebornGetShuffleIdRequest, CelebornMapperEndRequest,
+    CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
+    CelebornReviveRequest, CelebornReviveResponse, CelebornUnregisterShuffleRequest,
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse,
+    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
+    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -49,7 +53,7 @@ impl CelebornLifecycleManagerClient {
             .inner
             .get()
             .await?
-            .get_shuffle_id(Request::new(r#gen::CelebornGetShuffleIdRequest {
+            .get_shuffle_id(Request::new(CelebornGetShuffleIdRequest {
                 driver_id: self.driver_id.into(),
                 job_id,
                 stage,
@@ -64,7 +68,7 @@ impl CelebornLifecycleManagerClient {
             .inner
             .get()
             .await?
-            .get_job_shuffle_ids(Request::new(r#gen::CelebornGetJobShuffleIdsRequest {
+            .get_job_shuffle_ids(Request::new(CelebornGetJobShuffleIdsRequest {
                 driver_id: self.driver_id.into(),
                 job_id,
             }))
@@ -82,12 +86,12 @@ impl CelebornLifecycleManagerClient {
         partition_ids: Vec<i32>,
         should_replicate: bool,
         max_workers: i32,
-    ) -> ExecutionResult<r#gen::CelebornRegisterShuffleResponse> {
+    ) -> ExecutionResult<CelebornRegisterShuffleResponse> {
         Ok(self
             .inner
             .get()
             .await?
-            .register_shuffle(Request::new(r#gen::CelebornRegisterShuffleRequest {
+            .register_shuffle(Request::new(CelebornRegisterShuffleRequest {
                 driver_id: self.driver_id.into(),
                 shuffle_id,
                 partition_ids,
@@ -104,14 +108,14 @@ impl CelebornLifecycleManagerClient {
         partition_id: i32,
         map_id: i32,
         attempt_id: i32,
-        old_location: r#gen::CelebornPartitionLocation,
+        old_location: CelebornPartitionLocation,
         cause: i32,
-    ) -> ExecutionResult<r#gen::CelebornReviveResponse> {
+    ) -> ExecutionResult<CelebornReviveResponse> {
         Ok(self
             .inner
             .get()
             .await?
-            .revive(Request::new(r#gen::CelebornReviveRequest {
+            .revive(Request::new(CelebornReviveRequest {
                 driver_id: self.driver_id.into(),
                 shuffle_id,
                 partition_id,
@@ -134,7 +138,7 @@ impl CelebornLifecycleManagerClient {
         self.inner
             .get()
             .await?
-            .mapper_end(Request::new(r#gen::CelebornMapperEndRequest {
+            .mapper_end(Request::new(CelebornMapperEndRequest {
                 driver_id: self.driver_id.into(),
                 shuffle_id,
                 map_id,
@@ -149,7 +153,7 @@ impl CelebornLifecycleManagerClient {
         self.inner
             .get()
             .await?
-            .unregister_shuffle(Request::new(r#gen::CelebornUnregisterShuffleRequest {
+            .unregister_shuffle(Request::new(CelebornUnregisterShuffleRequest {
                 driver_id: self.driver_id.into(),
                 shuffle_id,
             }))
@@ -190,7 +194,7 @@ impl DriverClient {
     }
 
     pub async fn report_worker_heartbeat(&self, worker_id: WorkerId) -> ExecutionResult<()> {
-        let request = Request::new(r#gen::ReportWorkerHeartbeatRequest {
+        let request = Request::new(ReportWorkerHeartbeatRequest {
             driver_id: self.driver_id.into(),
             worker_id: worker_id.into(),
         });
@@ -200,7 +204,7 @@ impl DriverClient {
             .await?
             .report_worker_heartbeat(request)
             .await?;
-        let r#gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
+        let ReportWorkerHeartbeatResponse {} = response.into_inner();
         Ok(())
     }
 
@@ -209,7 +213,7 @@ impl DriverClient {
         worker_id: WorkerId,
         peer_worker_ids: Vec<WorkerId>,
     ) -> ExecutionResult<()> {
-        let request = Request::new(r#gen::ReportWorkerKnownPeersRequest {
+        let request = Request::new(ReportWorkerKnownPeersRequest {
             driver_id: self.driver_id.into(),
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|id| id.into()).collect(),
@@ -220,7 +224,7 @@ impl DriverClient {
             .await?
             .report_worker_known_peers(request)
             .await?;
-        let r#gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
+        let ReportWorkerKnownPeersResponse {} = response.into_inner();
         Ok(())
     }
 

@@ -14,8 +14,8 @@ pub enum CelebornError {
     Protocol(String),
     #[error("master error: status {status}")]
     Master { status: i32 },
-    #[error("push data failed with status {status}")]
-    PushData { status: i32 },
+    #[error("worker error: status {status}")]
+    Worker { status: i32 },
     #[error("application error: {0}")]
     Application(String),
     #[error("actor has stopped")]

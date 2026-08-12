@@ -295,16 +295,16 @@ def celeborn_workers(
                 future.result()
 
 
-def _endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]]) -> object:
+def _celeborn_endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]]) -> object:
     from pysail import _native  # noqa: PLC0415
 
     return _native._celeborn.StaticEndpointResolver(overrides)  # noqa: SLF001
 
 
 @pytest.fixture(scope="session")
-def endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
+def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""
-    return _endpoint_resolver(
+    return _celeborn_endpoint_resolver(
         {
             (name, port): (worker.host, mapped_port)
             for name, worker in celeborn_workers.items()
@@ -317,19 +317,21 @@ def endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
     )
 
 
-@pytest.fixture(scope="session")
-def push_fault_controller() -> PushFaultController:
+@pytest.fixture
+def celeborn_push_fault_controller() -> PushFaultController:
     return PushFaultController()
 
 
-@pytest.fixture(scope="session")
-def push_fault_proxies(
+@pytest.fixture
+def celeborn_push_fault_proxies(
     celeborn_workers: dict[str, WorkerService],
-    push_fault_controller: PushFaultController,
+    celeborn_push_fault_controller: PushFaultController,
 ) -> Generator[dict[str, FaultInjectingTcpProxy], None, None]:
     """Forward worker push traffic while allowing a test to drop one connection."""
     proxies = {
-        name: FaultInjectingTcpProxy(name, worker.host, worker.push_port, push_fault_controller)
+        name: FaultInjectingTcpProxy(
+            name, worker.host, worker.push_port, celeborn_push_fault_controller
+        )
         for name, worker in celeborn_workers.items()
     }
     for proxy in proxies.values():
@@ -342,13 +344,19 @@ def push_fault_proxies(
 
 
 @pytest.fixture
-def recovery_endpoint_resolver(
+def celeborn_push_fault_endpoint_resolver(
     celeborn_workers: dict[str, WorkerService],
-    push_fault_proxies: dict[str, FaultInjectingTcpProxy],
+    celeborn_push_fault_proxies: dict[str, FaultInjectingTcpProxy],
 ) -> object:
     """Resolve worker endpoints through fault-injectable push proxies."""
-    return _endpoint_resolver(
+    return _celeborn_endpoint_resolver(
         {(name, 12000): (worker.host, worker.rpc_port) for name, worker in celeborn_workers.items()}
-        | {(name, 12001): (push_fault_proxies[name].host, push_fault_proxies[name].port) for name in celeborn_workers}
+        | {
+            (name, 12001): (
+                celeborn_push_fault_proxies[name].host,
+                celeborn_push_fault_proxies[name].port,
+            )
+            for name in celeborn_workers
+        }
         | {(name, 12002): (worker.host, worker.fetch_port) for name, worker in celeborn_workers.items()}
     )

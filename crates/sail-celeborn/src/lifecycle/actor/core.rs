@@ -82,7 +82,7 @@ impl Actor for LifecycleManagerActor {
                 shuffle_id,
                 partition_id,
                 result,
-            } => self.handle_revive_complete(shuffle_id, partition_id, result),
+            } => self.handle_revive_complete(ctx, shuffle_id, partition_id, result),
             LifecycleManagerMessage::MapperEnd {
                 shuffle_id,
                 map_id,

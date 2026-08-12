@@ -263,7 +263,7 @@ impl TransportConnection {
             {
                 Ok(())
             }
-            Some(status) => Err(CelebornError::PushData {
+            Some(status) => Err(CelebornError::Worker {
                 status: i32::from(status),
             }),
         }

@@ -265,6 +265,7 @@ impl LifecycleManagerActor {
 
     pub(super) fn handle_revive_complete(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
         result: CelebornResult<SlotReservation>,
@@ -285,18 +286,34 @@ impl LifecycleManagerActor {
                     }
                     return ActorAction::Continue;
                 };
-                if let Some(reservation) = self.reservations.get_mut(&shuffle_id) {
-                    reservation
-                        .primary_locations
-                        .insert(partition_id, location.clone());
-                    merge_worker_locations(
-                        &mut reservation.worker_locations,
-                        replacement.worker_locations.clone(),
-                    );
-                    reservation.worker_ids.extend(replacement.worker_ids);
-                    reservation.worker_ids.sort();
-                    reservation.worker_ids.dedup();
-                }
+                let Some(reservation) = self.reservations.get_mut(&shuffle_id) else {
+                    let client = self.client.clone();
+                    let application_id = self.options.application_id.clone();
+                    ctx.spawn(async move {
+                        if let Err(error) = client.unregister_shuffle(application_id, shuffle_id).await {
+                            warn!(
+                                "failed to clean up Celeborn shuffle {shuffle_id} after a cancelled revive: {error}"
+                            );
+                        }
+                    });
+                    let error = CelebornError::Application(format!(
+                        "revive for shuffle {shuffle_id} partition {partition_id} was cancelled"
+                    ));
+                    for reply in replies {
+                        let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+                    }
+                    return ActorAction::Continue;
+                };
+                reservation
+                    .primary_locations
+                    .insert(partition_id, location.clone());
+                merge_worker_locations(
+                    &mut reservation.worker_locations,
+                    replacement.worker_locations.clone(),
+                );
+                reservation.worker_ids.extend(replacement.worker_ids);
+                reservation.worker_ids.sort();
+                reservation.worker_ids.dedup();
                 if let Some(registered) = self.registered_shuffles.get_mut(&shuffle_id) {
                     merge_worker_locations(registered, replacement.worker_locations);
                 }
@@ -514,7 +531,8 @@ impl LifecycleManagerActor {
                 if status == StatusCode::PushDataWriteFailPrimary as i32
                     || status == StatusCode::PushDataCreateConnectionFailPrimary as i32
                     || status == StatusCode::PushDataConnectionExceptionPrimary as i32
-                    || status == StatusCode::PushDataTimeoutPrimary as i32 =>
+                    || status == StatusCode::PushDataTimeoutPrimary as i32
+                    || status == StatusCode::PushDataPrimaryWorkerExcluded as i32 =>
             {
                 vec![request.old_location.clone()]
             }
@@ -522,7 +540,8 @@ impl LifecycleManagerActor {
                 if status == StatusCode::PushDataWriteFailReplica as i32
                     || status == StatusCode::PushDataCreateConnectionFailReplica as i32
                     || status == StatusCode::PushDataConnectionExceptionReplica as i32
-                    || status == StatusCode::PushDataTimeoutReplica as i32 =>
+                    || status == StatusCode::PushDataTimeoutReplica as i32
+                    || status == StatusCode::PushDataReplicaWorkerExcluded as i32 =>
             {
                 request
                     .old_location
@@ -535,44 +554,26 @@ impl LifecycleManagerActor {
         };
         for location in failed_locations {
             self.excluded_workers
-                .entry(worker_id(&location))
+                .entry(location.worker_id())
                 .or_insert(location);
         }
     }
 }
 
-fn worker_id(location: &PartitionLocation) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        location.host,
-        location.rpc_port,
-        location.push_port,
-        location.fetch_port,
-        location.replicate_port,
-    )
-}
-
 impl SlotReservation {
     fn with_epoch(mut self, epoch: i32) -> Self {
         for location in self.primary_locations.values_mut() {
-            set_epoch(location, epoch);
+            location.set_epoch(epoch);
         }
         for locations in self.worker_locations.values_mut() {
             for location in &mut locations.primary_locations {
-                set_epoch(location, epoch);
+                location.set_epoch(epoch);
             }
             for location in &mut locations.replica_locations {
-                set_epoch(location, epoch);
+                location.set_epoch(epoch);
             }
         }
         self
-    }
-}
-
-fn set_epoch(location: &mut PartitionLocation, epoch: i32) {
-    location.epoch = epoch;
-    if let Some(peer) = &mut location.peer {
-        set_epoch(peer, epoch);
     }
 }
 

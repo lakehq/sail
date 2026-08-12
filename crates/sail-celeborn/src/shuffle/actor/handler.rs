@@ -454,7 +454,7 @@ impl ShuffleClientActor {
 
 fn push_failure_cause(error: &CelebornError) -> Option<i32> {
     match error {
-        CelebornError::PushData { status } => Some(*status),
+        CelebornError::Worker { status } => Some(*status),
         CelebornError::Io(_) => Some(StatusCode::PushDataCreateConnectionFailPrimary as i32),
         CelebornError::Timeout => Some(StatusCode::PushDataTimeoutPrimary as i32),
         _ => None,

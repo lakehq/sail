@@ -21,14 +21,14 @@ LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 def lifecycle_manager(
     celeborn_master: MasterService,
     celeborn_workers: dict[str, WorkerService],
-    endpoint_resolver: object,
+    celeborn_endpoint_resolver: object,
 ) -> Generator[LifecycleManager, None, None]:
     assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
     with LifecycleManager(
         celeborn_master.host,
         celeborn_master.port,
         "sail-celeborn-integration",
-        endpoint_resolver,
+        celeborn_endpoint_resolver,
     ) as manager:
         yield manager
 
@@ -38,7 +38,7 @@ def test_lifecycle_manager_registers_shuffles_and_unregisters(
 ) -> None:
     assert lifecycle_manager.running
     workers = lifecycle_manager.register_shuffle(1, [0, 1], False, 1)
-    assert workers == [
+    assert sorted(workers) == [
         "celeborn-worker-1:12000:12001:12002:12003",
         "celeborn-worker-2:12000:12001:12002:12003",
     ]

@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tonic::codec::CompressionEncoding;
 use tonic::{Status, async_trait};
 
-use crate::driver::celeborn::CelebornLifecycleManagerServer;
+use crate::driver::celeborn::service::CelebornLifecycleManagerServer;
 use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLifecycleManagerServiceServer;
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
