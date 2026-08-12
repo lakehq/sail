@@ -57,6 +57,10 @@ impl IcebergMergeRowProjection {
         Arc::clone(&self.data_schema)
     }
 
+    pub(crate) fn data_indices(&self) -> &[usize] {
+        &self.data_indices
+    }
+
     pub(crate) fn project_data_rows(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mask = merge_operation_mask(batch, self.operation_index, merge_operation_writes_data)?;
         let filtered = filter_record_batch(batch, &mask)
