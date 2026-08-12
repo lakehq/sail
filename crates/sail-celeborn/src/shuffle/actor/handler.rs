@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
-use crate::master::SlotReservation;
+use crate::lifecycle::ReviveRequest;
+use crate::master::{PartitionLocation, SlotReservation};
+use crate::protocol::StatusCode;
 use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::ShuffleClientActor;
 use crate::worker::{WorkerClient, WorkerClientOptions};
@@ -133,16 +136,16 @@ impl ShuffleClientActor {
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     ) -> ActorAction {
         if let Ok(reservation) = &result {
-            for (&partition_id, location) in &reservation.primary_locations {
-                let key = (shuffle_id, partition_id);
-                self.locations.insert(key, location.clone());
-                self.worker_clients.insert(
-                    key,
-                    WorkerClient::new(
-                        WorkerClientOptions::new(location.clone())
-                            .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
-                    ),
-                );
+            let mut locations = reservation
+                .worker_locations
+                .values()
+                .flat_map(|locations| locations.primary_locations.iter().cloned())
+                .collect::<Vec<_>>();
+            if locations.is_empty() {
+                locations.extend(reservation.primary_locations.values().cloned());
+            }
+            for location in locations {
+                self.update_partition_location(shuffle_id, location);
             }
         }
         let _ = reply.send(result);
@@ -159,6 +162,12 @@ impl ShuffleClientActor {
         data: Vec<u8>,
         reply: oneshot::Sender<CelebornResult<usize>>,
     ) -> ActorAction {
+        let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
+            let _ = reply.send(Err(CelebornError::Application(format!(
+                "shuffle {shuffle_id} partition {partition_id} is not registered"
+            ))));
+            return ActorAction::Continue;
+        };
         let Some(client) = self
             .worker_clients
             .get(&(shuffle_id, partition_id))
@@ -176,12 +185,67 @@ impl ShuffleClientActor {
         let current_batch_id = *batch_id;
         *batch_id += 1;
         let shuffle_key = self.shuffle_key(shuffle_id);
+        let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let result = client
+            let push_result = client
                 .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
                 .await;
-            let _ = reply.send(result);
+            let (location, result) = match push_result {
+                Ok(result) => (None, Ok(result)),
+                Err(error) => match push_failure_cause(&error) {
+                    Some(cause) => match lifecycle_manager
+                        .revive(ReviveRequest {
+                            shuffle_id,
+                            partition_id,
+                            map_id,
+                            attempt_id,
+                            old_location: location,
+                            cause,
+                        })
+                        .await
+                    {
+                        Ok(location) => {
+                            let retry = WorkerClient::new(
+                                WorkerClientOptions::new(location.clone())
+                                    .with_endpoint_resolver(endpoint_resolver),
+                            )
+                            .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
+                            .await;
+                            (Some(location), retry)
+                        }
+                        Err(error) => (None, Err(error)),
+                    },
+                    None => (None, Err(error)),
+                },
+            };
+            let _ = handle
+                .send(ShuffleClientMessage::PushDataComplete {
+                    shuffle_id,
+                    partition_id,
+                    location,
+                    result,
+                    reply,
+                })
+                .await;
         });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_push_data_complete(
+        &mut self,
+        shuffle_id: i32,
+        partition_id: i32,
+        location: Option<PartitionLocation>,
+        result: CelebornResult<usize>,
+        reply: oneshot::Sender<CelebornResult<usize>>,
+    ) -> ActorAction {
+        if let Some(location) = location {
+            debug_assert_eq!(location.id, partition_id);
+            self.update_partition_location(shuffle_id, location);
+        }
+        let _ = reply.send(result);
         ActorAction::Continue
     }
 
@@ -235,6 +299,7 @@ impl ShuffleClientActor {
         if result.is_ok() {
             self.shuffle_ids.retain(|_, id| *id != shuffle_id);
             self.locations.retain(|(id, _), _| *id != shuffle_id);
+            self.location_history.retain(|(id, _), _| *id != shuffle_id);
             self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
             self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         }
@@ -248,6 +313,7 @@ impl ShuffleClientActor {
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         self.locations.retain(|(id, _), _| *id != shuffle_id);
+        self.location_history.retain(|(id, _), _| *id != shuffle_id);
         self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
         self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         self.shuffle_ids.retain(|_, id| *id != shuffle_id);
@@ -262,8 +328,62 @@ impl ShuffleClientActor {
         partition_id: i32,
         reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
     ) -> ActorAction {
-        let Some(client) = self
-            .worker_clients
+        if !self
+            .location_history
+            .contains_key(&(shuffle_id, partition_id))
+        {
+            let _ = reply.send(Box::pin(stream::once(async move {
+                Err(CelebornError::Application(format!(
+                    "shuffle {shuffle_id} partition {partition_id} is not registered"
+                )))
+            })));
+            return ActorAction::Continue;
+        }
+        let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            let result = lifecycle_manager
+                .register_shuffle(shuffle_id, vec![partition_id], false, 0)
+                .await;
+            let _ = handle
+                .send(ShuffleClientMessage::ReadPartitionStreamComplete {
+                    shuffle_id,
+                    partition_id,
+                    result,
+                    reply,
+                })
+                .await;
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_read_partition_stream_complete(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        shuffle_id: i32,
+        partition_id: i32,
+        result: CelebornResult<SlotReservation>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+    ) -> ActorAction {
+        let reservation = match result {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = reply.send(Box::pin(stream::once(async move { Err(error) })));
+                return ActorAction::Continue;
+            }
+        };
+        for locations in reservation.worker_locations.values() {
+            for location in locations
+                .primary_locations
+                .iter()
+                .filter(|location| location.id == partition_id)
+                .cloned()
+            {
+                self.update_partition_location(shuffle_id, location);
+            }
+        }
+        let Some(locations) = self
+            .location_history
             .get(&(shuffle_id, partition_id))
             .cloned()
         else {
@@ -275,9 +395,23 @@ impl ShuffleClientActor {
             return ActorAction::Continue;
         };
         let shuffle_key = self.shuffle_key(shuffle_id);
+        let endpoint_resolver = self.options.endpoint_resolver.clone();
         ctx.spawn(async move {
-            let stream = client.read_partition_stream(&shuffle_key).await;
-            let _ = reply.send(stream);
+            let stream = stream::iter(locations)
+                .then(move |location| {
+                    let shuffle_key = shuffle_key.clone();
+                    let endpoint_resolver = endpoint_resolver.clone();
+                    async move {
+                        WorkerClient::new(
+                            WorkerClientOptions::new(location)
+                                .with_endpoint_resolver(endpoint_resolver),
+                        )
+                        .read_partition_stream(&shuffle_key)
+                        .await
+                    }
+                })
+                .flatten();
+            let _ = reply.send(Box::pin(stream));
         });
         ActorAction::Continue
     }
@@ -289,5 +423,40 @@ impl ShuffleClientActor {
 
     fn shuffle_key(&self, shuffle_id: i32) -> String {
         format!("{}-{shuffle_id}", self.options.application_id)
+    }
+
+    fn update_partition_location(&mut self, shuffle_id: i32, location: PartitionLocation) {
+        let key = (shuffle_id, location.id);
+        let history = self.location_history.entry(key).or_default();
+        if !history
+            .iter()
+            .any(|existing| existing.unique_id() == location.unique_id())
+        {
+            history.push(location.clone());
+            history.sort_by_key(|location| location.epoch);
+        }
+        let update_latest = self
+            .locations
+            .get(&key)
+            .is_none_or(|current| current.epoch <= location.epoch);
+        if update_latest {
+            self.locations.insert(key, location.clone());
+            self.worker_clients.insert(
+                key,
+                WorkerClient::new(
+                    WorkerClientOptions::new(location)
+                        .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
+                ),
+            );
+        }
+    }
+}
+
+fn push_failure_cause(error: &CelebornError) -> Option<i32> {
+    match error {
+        CelebornError::PushData { status } => Some(*status),
+        CelebornError::Io(_) => Some(StatusCode::PushDataCreateConnectionFailPrimary as i32),
+        CelebornError::Timeout => Some(StatusCode::PushDataTimeoutPrimary as i32),
+        _ => None,
     }
 }

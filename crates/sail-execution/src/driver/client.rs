@@ -98,6 +98,32 @@ impl CelebornLifecycleManagerClient {
             .into_inner())
     }
 
+    pub async fn revive(
+        &self,
+        shuffle_id: i32,
+        partition_id: i32,
+        map_id: i32,
+        attempt_id: i32,
+        old_location: r#gen::CelebornPartitionLocation,
+        cause: i32,
+    ) -> ExecutionResult<r#gen::CelebornReviveResponse> {
+        Ok(self
+            .inner
+            .get()
+            .await?
+            .revive(Request::new(r#gen::CelebornReviveRequest {
+                driver_id: self.driver_id.into(),
+                shuffle_id,
+                partition_id,
+                map_id,
+                attempt_id,
+                old_location: Some(old_location),
+                cause,
+            }))
+            .await?
+            .into_inner())
+    }
+
     pub async fn mapper_end(
         &self,
         shuffle_id: i32,

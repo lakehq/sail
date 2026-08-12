@@ -8,7 +8,7 @@ use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
 use crate::protocol::proto::{
     MessageType, PbRegisterApplicationInfo, PbRequestSlots, PbRequestSlotsResponse,
-    PbUnregisterShuffle, PbUnregisterShuffleResponse,
+    PbUnregisterShuffle, PbUnregisterShuffleResponse, PbWorkerInfo,
 };
 use crate::protocol::transport::{TransportConnection, TransportMessage};
 
@@ -79,6 +79,7 @@ impl MasterClient {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub async fn request_slots(
         &self,
         application_id: String,
@@ -88,6 +89,7 @@ impl MasterClient {
         should_replicate: bool,
         max_workers: i32,
         user_identifier: UserIdentifier,
+        excluded_workers: Vec<PartitionLocation>,
     ) -> CelebornResult<SlotReservation> {
         let request = PbRequestSlots {
             application_id,
@@ -101,7 +103,20 @@ impl MasterClient {
             should_rack_aware: false,
             max_workers,
             available_storage_types: 0,
-            excluded_worker_set: Vec::new(),
+            excluded_worker_set: excluded_workers
+                .into_iter()
+                .map(|worker| PbWorkerInfo {
+                    host: worker.host,
+                    rpc_port: i32::from(worker.rpc_port),
+                    push_port: i32::from(worker.push_port),
+                    fetch_port: i32::from(worker.fetch_port),
+                    replicate_port: i32::from(worker.replicate_port),
+                    disks: Vec::new(),
+                    user_resource_consumption: HashMap::new(),
+                    internal_port: 0,
+                    network_location: String::new(),
+                })
+                .collect(),
             // Keep locations unpacked so the native client can address the selected worker.
             packed: false,
             tags_expr: String::new(),

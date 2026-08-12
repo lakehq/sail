@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage};
+use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest};
 use sail_celeborn::master::PartitionLocation;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -13,7 +13,8 @@ use crate::driver::r#gen::{
     CelebornGetJobShuffleIdsRequest, CelebornGetJobShuffleIdsResponse, CelebornGetShuffleIdRequest,
     CelebornGetShuffleIdResponse, CelebornMapperEndRequest, CelebornMapperEndResponse,
     CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
-    CelebornShuffleId, CelebornUnregisterShuffleRequest, CelebornUnregisterShuffleResponse,
+    CelebornReviveRequest, CelebornReviveResponse, CelebornShuffleId,
+    CelebornUnregisterShuffleRequest, CelebornUnregisterShuffleResponse,
 };
 use crate::error::ExecutionError;
 use crate::id::DriverId;
@@ -59,6 +60,27 @@ fn location(partition: PartitionLocation) -> CelebornPartitionLocation {
         peer: partition.peer.map(|peer| Box::new(location(*peer))),
         mode: partition.mode,
     }
+}
+
+fn partition_location(partition: CelebornPartitionLocation) -> Result<PartitionLocation, Status> {
+    Ok(PartitionLocation {
+        id: partition.id,
+        epoch: partition.epoch,
+        host: partition.host,
+        rpc_port: u16::try_from(partition.rpc_port)
+            .map_err(|_| Status::invalid_argument("invalid Celeborn RPC port"))?,
+        push_port: u16::try_from(partition.push_port)
+            .map_err(|_| Status::invalid_argument("invalid Celeborn push port"))?,
+        fetch_port: u16::try_from(partition.fetch_port)
+            .map_err(|_| Status::invalid_argument("invalid Celeborn fetch port"))?,
+        replicate_port: u16::try_from(partition.replicate_port)
+            .map_err(|_| Status::invalid_argument("invalid Celeborn replication port"))?,
+        peer: partition
+            .peer
+            .map(|peer| partition_location(*peer).map(Box::new))
+            .transpose()?,
+        mode: partition.mode,
+    })
 }
 
 #[tonic::async_trait]
@@ -107,9 +129,48 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
         Ok(Response::new(CelebornRegisterShuffleResponse {
             primary_locations: reservation
                 .primary_locations
-                .into_values()
+                .values()
+                .cloned()
                 .map(location)
                 .collect(),
+            all_primary_locations: reservation
+                .worker_locations
+                .values()
+                .flat_map(|locations| locations.primary_locations.iter().cloned())
+                .map(location)
+                .collect(),
+        }))
+    }
+
+    async fn revive(
+        &self,
+        request: Request<CelebornReviveRequest>,
+    ) -> Result<Response<CelebornReviveResponse>, Status> {
+        let request = request.into_inner();
+        let manager = self
+            .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
+            .await?;
+        let old_location = request
+            .old_location
+            .ok_or_else(|| Status::invalid_argument("missing old Celeborn partition location"))?;
+        let (result, receiver) = oneshot::channel();
+        manager
+            .send(LifecycleManagerMessage::Revive {
+                request: ReviveRequest {
+                    shuffle_id: request.shuffle_id,
+                    partition_id: request.partition_id,
+                    map_id: request.map_id,
+                    attempt_id: request.attempt_id,
+                    old_location: partition_location(old_location)?,
+                    cause: request.cause,
+                },
+                result,
+            })
+            .await
+            .map_err(ExecutionError::from)?;
+        let new_location = receiver.await.map_err(status)?.map_err(status)?;
+        Ok(Response::new(CelebornReviveResponse {
+            location: Some(location(new_location)),
         }))
     }
 

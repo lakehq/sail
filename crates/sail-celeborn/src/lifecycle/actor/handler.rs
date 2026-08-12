@@ -3,9 +3,10 @@ use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
-use crate::lifecycle::LifecycleManagerMessage;
 use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
-use crate::master::{SlotReservation, UserIdentifier};
+use crate::lifecycle::{LifecycleManagerMessage, ReviveRequest};
+use crate::master::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
+use crate::protocol::StatusCode;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl LifecycleManagerActor {
@@ -92,6 +93,7 @@ impl LifecycleManagerActor {
                         should_replicate,
                         max_workers,
                         user_identifier.clone(),
+                        Vec::new(),
                     )
                     .await?;
                 for locations in reservation.worker_locations.values() {
@@ -145,6 +147,167 @@ impl LifecycleManagerActor {
         } else if let Err(error) = result {
             for reply in replies {
                 let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_revive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        request: ReviveRequest,
+        reply: oneshot::Sender<CelebornResult<PartitionLocation>>,
+    ) -> ActorAction {
+        if let Some(error) = self.application_registration.error() {
+            let _ = reply.send(Err(error));
+            return ActorAction::Continue;
+        }
+        if self.committing_shuffles.contains(&request.shuffle_id)
+            || self.committed_shuffles.contains(&request.shuffle_id)
+        {
+            let _ = reply.send(Err(CelebornError::Application(format!(
+                "shuffle {} has already ended",
+                request.shuffle_id
+            ))));
+            return ActorAction::Continue;
+        }
+        let Some(current) = self
+            .reservations
+            .get(&request.shuffle_id)
+            .and_then(|reservation| reservation.primary_locations.get(&request.partition_id))
+            .cloned()
+        else {
+            let _ = reply.send(Err(CelebornError::Application(format!(
+                "shuffle {} partition {} is not registered",
+                request.shuffle_id, request.partition_id
+            ))));
+            return ActorAction::Continue;
+        };
+        if current.epoch > request.old_location.epoch {
+            let _ = reply.send(Ok(current));
+            return ActorAction::Continue;
+        }
+        if current.epoch != request.old_location.epoch {
+            let _ = reply.send(Err(CelebornError::Application(format!(
+                "shuffle {} partition {} has an unexpected epoch",
+                request.shuffle_id, request.partition_id
+            ))));
+            return ActorAction::Continue;
+        }
+        self.exclude_failed_workers(&request);
+        let key = (request.shuffle_id, request.partition_id);
+        if let Some(replies) = self.pending_revives.get_mut(&key) {
+            replies.push(reply);
+            return ActorAction::Continue;
+        }
+        self.pending_revives.insert(key, vec![reply]);
+
+        let client = self.client.clone();
+        let application_id = self.options.application_id.clone();
+        let hostname = self.options.hostname.clone();
+        let user_identifier = self.user_identifier();
+        let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let excluded_workers = self.excluded_workers.values().cloned().collect();
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            let result = async {
+                let reservation = client
+                    .request_slots(
+                        application_id.clone(),
+                        request.shuffle_id,
+                        vec![request.partition_id],
+                        hostname,
+                        current.peer.is_some(),
+                        1,
+                        user_identifier.clone(),
+                        excluded_workers,
+                    )
+                    .await?;
+                let reservation =
+                    reservation.with_epoch(current.epoch.checked_add(1).ok_or_else(|| {
+                        CelebornError::Application("partition epoch is exhausted".to_string())
+                    })?);
+                for locations in reservation.worker_locations.values() {
+                    let Some(location) = locations
+                        .primary_locations
+                        .first()
+                        .or_else(|| locations.replica_locations.first())
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    WorkerClient::new(
+                        WorkerClientOptions::new(location)
+                            .with_endpoint_resolver(endpoint_resolver.clone()),
+                    )
+                    .reserve_slots(
+                        application_id.clone(),
+                        request.shuffle_id,
+                        locations.primary_locations.clone(),
+                        locations.replica_locations.clone(),
+                        user_identifier.clone(),
+                    )
+                    .await?;
+                }
+                Ok(reservation)
+            }
+            .await;
+            let _ = handle
+                .send(LifecycleManagerMessage::ReviveComplete {
+                    shuffle_id: request.shuffle_id,
+                    partition_id: request.partition_id,
+                    result,
+                })
+                .await;
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_revive_complete(
+        &mut self,
+        shuffle_id: i32,
+        partition_id: i32,
+        result: CelebornResult<SlotReservation>,
+    ) -> ActorAction {
+        let replies = self
+            .pending_revives
+            .remove(&(shuffle_id, partition_id))
+            .unwrap_or_default();
+        match result {
+            Ok(replacement) => {
+                let Some(location) = replacement.primary_locations.get(&partition_id).cloned()
+                else {
+                    let error = CelebornError::Application(format!(
+                        "revive for shuffle {shuffle_id} partition {partition_id} returned no location"
+                    ));
+                    for reply in replies {
+                        let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+                    }
+                    return ActorAction::Continue;
+                };
+                if let Some(reservation) = self.reservations.get_mut(&shuffle_id) {
+                    reservation
+                        .primary_locations
+                        .insert(partition_id, location.clone());
+                    merge_worker_locations(
+                        &mut reservation.worker_locations,
+                        replacement.worker_locations.clone(),
+                    );
+                    reservation.worker_ids.extend(replacement.worker_ids);
+                    reservation.worker_ids.sort();
+                    reservation.worker_ids.dedup();
+                }
+                if let Some(registered) = self.registered_shuffles.get_mut(&shuffle_id) {
+                    merge_worker_locations(registered, replacement.worker_locations);
+                }
+                for reply in replies {
+                    let _ = reply.send(Ok(location.clone()));
+                }
+            }
+            Err(error) => {
+                for reply in replies {
+                    let _ = reply.send(Err(CelebornError::Application(error.to_string())));
+                }
             }
         }
         ActorAction::Continue
@@ -342,6 +505,106 @@ impl LifecycleManagerActor {
         UserIdentifier {
             tenant_id: self.options.tenant_id.clone(),
             name: self.options.user_name.clone(),
+        }
+    }
+
+    fn exclude_failed_workers(&mut self, request: &ReviveRequest) {
+        let failed_locations = match request.cause {
+            status
+                if status == StatusCode::PushDataWriteFailPrimary as i32
+                    || status == StatusCode::PushDataCreateConnectionFailPrimary as i32
+                    || status == StatusCode::PushDataConnectionExceptionPrimary as i32
+                    || status == StatusCode::PushDataTimeoutPrimary as i32 =>
+            {
+                vec![request.old_location.clone()]
+            }
+            status
+                if status == StatusCode::PushDataWriteFailReplica as i32
+                    || status == StatusCode::PushDataCreateConnectionFailReplica as i32
+                    || status == StatusCode::PushDataConnectionExceptionReplica as i32
+                    || status == StatusCode::PushDataTimeoutReplica as i32 =>
+            {
+                request
+                    .old_location
+                    .peer
+                    .iter()
+                    .map(|peer| (**peer).clone())
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        for location in failed_locations {
+            self.excluded_workers
+                .entry(worker_id(&location))
+                .or_insert(location);
+        }
+    }
+}
+
+fn worker_id(location: &PartitionLocation) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        location.host,
+        location.rpc_port,
+        location.push_port,
+        location.fetch_port,
+        location.replicate_port,
+    )
+}
+
+impl SlotReservation {
+    fn with_epoch(mut self, epoch: i32) -> Self {
+        for location in self.primary_locations.values_mut() {
+            set_epoch(location, epoch);
+        }
+        for locations in self.worker_locations.values_mut() {
+            for location in &mut locations.primary_locations {
+                set_epoch(location, epoch);
+            }
+            for location in &mut locations.replica_locations {
+                set_epoch(location, epoch);
+            }
+        }
+        self
+    }
+}
+
+fn set_epoch(location: &mut PartitionLocation, epoch: i32) {
+    location.epoch = epoch;
+    if let Some(peer) = &mut location.peer {
+        set_epoch(peer, epoch);
+    }
+}
+
+fn merge_worker_locations(
+    target: &mut std::collections::HashMap<String, WorkerSlotLocations>,
+    source: std::collections::HashMap<String, WorkerSlotLocations>,
+) {
+    for (worker_id, locations) in source {
+        let target_locations = target
+            .entry(worker_id)
+            .or_insert_with(|| WorkerSlotLocations {
+                primary_locations: Vec::new(),
+                replica_locations: Vec::new(),
+            });
+        append_locations(
+            &mut target_locations.primary_locations,
+            locations.primary_locations,
+        );
+        append_locations(
+            &mut target_locations.replica_locations,
+            locations.replica_locations,
+        );
+    }
+}
+
+fn append_locations(target: &mut Vec<PartitionLocation>, source: Vec<PartitionLocation>) {
+    for location in source {
+        if !target
+            .iter()
+            .any(|existing| existing.unique_id() == location.unique_id())
+        {
+            target.push(location);
         }
     }
 }

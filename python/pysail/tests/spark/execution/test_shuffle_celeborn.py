@@ -27,18 +27,14 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def remote(
     celeborn_master: MasterService,
-    celeborn_worker: WorkerService,
-    celeborn_replica_worker: WorkerService,
+    celeborn_workers: dict[str, WorkerService],
 ) -> Generator[str, None, None]:
     """Run Spark Connect with a Celeborn shuffle backend."""
     endpoint_overrides = "[{}]".format(
         ", ".join(
             f'{{ internal_host = "{hostname}", internal_port = {port}, '
             f'external_host = "{worker.host}", external_port = {mapped_port} }}'
-            for hostname, worker in [
-                ("celeborn-worker", celeborn_worker),
-                ("celeborn-replica-worker", celeborn_replica_worker),
-            ]
+            for hostname, worker in celeborn_workers.items()
             for port, mapped_port in [
                 (12000, worker.rpc_port),
                 (12001, worker.push_port),

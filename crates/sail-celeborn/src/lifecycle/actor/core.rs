@@ -19,9 +19,11 @@ impl Actor for LifecycleManagerActor {
         Self {
             options,
             client,
+            excluded_workers: Default::default(),
             registered_shuffles: Default::default(),
             reservations: Default::default(),
             pending_slot_requests: Default::default(),
+            pending_revives: Default::default(),
             mapper_attempts: Default::default(),
             committing_shuffles: Default::default(),
             committed_shuffles: Default::default(),
@@ -73,6 +75,14 @@ impl Actor for LifecycleManagerActor {
             LifecycleManagerMessage::RegisterShuffleComplete { shuffle_id, result } => {
                 self.handle_register_shuffle_complete(shuffle_id, result)
             }
+            LifecycleManagerMessage::Revive { request, result } => {
+                self.handle_revive(ctx, request, result)
+            }
+            LifecycleManagerMessage::ReviveComplete {
+                shuffle_id,
+                partition_id,
+                result,
+            } => self.handle_revive_complete(shuffle_id, partition_id, result),
             LifecycleManagerMessage::MapperEnd {
                 shuffle_id,
                 map_id,

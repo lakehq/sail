@@ -5,7 +5,7 @@ use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
 use crate::error::CelebornResult;
-use crate::master::SlotReservation;
+use crate::master::{PartitionLocation, SlotReservation};
 
 pub enum ShuffleClientMessage {
     GetShuffleId {
@@ -48,6 +48,13 @@ pub enum ShuffleClientMessage {
         data: Vec<u8>,
         result: oneshot::Sender<CelebornResult<usize>>,
     },
+    PushDataComplete {
+        shuffle_id: i32,
+        partition_id: i32,
+        location: Option<PartitionLocation>,
+        result: CelebornResult<usize>,
+        reply: oneshot::Sender<CelebornResult<usize>>,
+    },
     MapperEnd {
         shuffle_id: i32,
         map_id: i32,
@@ -74,6 +81,12 @@ pub enum ShuffleClientMessage {
         partition_id: i32,
         result: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
     },
+    ReadPartitionStreamComplete {
+        shuffle_id: i32,
+        partition_id: i32,
+        result: CelebornResult<SlotReservation>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+    },
     Stop {
         result: oneshot::Sender<()>,
     },
@@ -89,11 +102,13 @@ impl SpanAssociation for ShuffleClientMessage {
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleComplete { .. } => "RegisterShuffleComplete",
             Self::PushData { .. } => "PushData",
+            Self::PushDataComplete { .. } => "PushDataComplete",
             Self::MapperEnd { .. } => "MapperEnd",
             Self::UnregisterShuffle { .. } => "UnregisterShuffle",
             Self::UnregisterShuffleComplete { .. } => "UnregisterShuffleComplete",
             Self::CleanUpShuffle { .. } => "CleanUpShuffle",
             Self::ReadPartitionStream { .. } => "ReadPartitionStream",
+            Self::ReadPartitionStreamComplete { .. } => "ReadPartitionStreamComplete",
             Self::Stop { .. } => "Stop",
         }
         .into()

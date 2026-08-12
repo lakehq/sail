@@ -4,7 +4,8 @@ use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
 use crate::error::CelebornResult;
-use crate::master::SlotReservation;
+use crate::lifecycle::ReviveRequest;
+use crate::master::{PartitionLocation, SlotReservation};
 
 pub enum LifecycleManagerMessage {
     GetShuffleId {
@@ -25,6 +26,15 @@ pub enum LifecycleManagerMessage {
     },
     RegisterShuffleComplete {
         shuffle_id: i32,
+        result: CelebornResult<SlotReservation>,
+    },
+    Revive {
+        request: ReviveRequest,
+        result: oneshot::Sender<CelebornResult<PartitionLocation>>,
+    },
+    ReviveComplete {
+        shuffle_id: i32,
+        partition_id: i32,
         result: CelebornResult<SlotReservation>,
     },
     MapperEnd {
@@ -63,6 +73,8 @@ impl SpanAssociation for LifecycleManagerMessage {
             Self::GetJobShuffleIds { .. } => "GetJobShuffleIds",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleComplete { .. } => "RegisterShuffleComplete",
+            Self::Revive { .. } => "Revive",
+            Self::ReviveComplete { .. } => "ReviveComplete",
             Self::MapperEnd { .. } => "MapperEnd",
             Self::MapperEndComplete { .. } => "MapperEndComplete",
             Self::UnregisterShuffle { .. } => "UnregisterShuffle",
