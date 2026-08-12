@@ -16,13 +16,11 @@ use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
 use crate::driver::worker_pool::WorkerPool;
 use crate::id::TaskKey;
-use crate::stream::celeborn::CelebornStreamManager;
 use crate::task_runner::TaskRunnerActor;
 
 #[derive(Default)]
 pub struct DriverExtensions {
     pub(crate) lifecycle_manager: Option<LocalLifecycleManager>,
-    pub(crate) celeborn_streams: Option<CelebornStreamManager>,
 }
 
 pub struct DriverActor {

@@ -77,20 +77,13 @@ impl DriverResource {
         count != self.storage_streams.len()
     }
 
-    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> Vec<usize> {
-        let streams = self
-            .external_streams
-            .iter()
-            .filter_map(|(stream_job_id, stream_stage)| {
-                (*stream_job_id == job_id && stage.is_none_or(|stage| stage == *stream_stage))
-                    .then_some(*stream_stage)
-            })
-            .collect();
+    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        let count = self.external_streams.len();
         self.external_streams
             .retain(|(stream_job_id, stream_stage)| {
                 *stream_job_id != job_id || stage.is_some_and(|stage| stage != *stream_stage)
             });
-        streams
+        count != self.external_streams.len()
     }
 }
 

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -16,7 +15,6 @@ if TYPE_CHECKING:
 
 
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
 
 @pytest.fixture(scope="module")
@@ -35,11 +33,11 @@ def lifecycle_manager(
         yield manager
 
 
-def test_lifecycle_manager_registers_requests_slots_and_unregisters(
+def test_lifecycle_manager_registers_shuffles_and_unregisters(
     lifecycle_manager: LifecycleManager,
 ) -> None:
     assert lifecycle_manager.running
-    workers = lifecycle_manager.request_slots(1, [0, 1], False, 1)
+    workers = lifecycle_manager.register_shuffle(1, [0, 1], False, 1)
     assert len(workers) == 1
     assert workers == ["celeborn-worker:12000:12001:12002:12003"]
     lifecycle_manager.unregister_shuffle(1)
@@ -50,4 +48,4 @@ def test_lifecycle_manager_returns_registration_failure() -> None:
         LifecycleManager("127.0.0.1", 0, "sail-celeborn-unavailable") as manager,
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
-        manager.request_slots(1, [0], False, 1)
+        manager.register_shuffle(1, [0], False, 1)

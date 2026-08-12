@@ -1,38 +1,28 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::TryStreamExt;
 use futures::stream::{self, BoxStream};
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use crate::endpoint::EndpointResolver;
 use crate::error::{CelebornError, CelebornResult};
-use crate::master::{MasterClient, MasterClientOptions, PartitionLocation, UserIdentifier};
-use crate::protocol::MessageType;
+use crate::master::{PartitionLocation, UserIdentifier};
+use crate::protocol::StatusCode;
 use crate::protocol::proto::{
-    PbCommitFiles, PbCommitFilesResponse, PbOpenStream, PbReserveSlots, PbReserveSlotsResponse,
-    PbStreamHandler,
+    MessageType, PbCommitFiles, PbCommitFilesResponse, PbOpenStream, PbReserveSlots,
+    PbReserveSlotsResponse, PbStreamHandler,
 };
-use crate::protocol::transport::TransportResponse;
+use crate::protocol::transport::{TransportConnection, TransportMessage};
 
-const PUSH_DATA: u8 = 11;
-const RPC_REQUEST: u8 = 3;
-const RPC_RESPONSE: u8 = 4;
-const CHUNK_FETCH_REQUEST: u8 = 0;
-const CHUNK_FETCH_SUCCESS: u8 = 1;
-const MAP_ENDED: u8 = 15;
-const PUSH_DATA_SUCCESS_PRIMARY_CONGESTED: u8 = 30;
-const PUSH_DATA_SUCCESS_REPLICA_CONGESTED: u8 = 31;
 const WORKER_ENDPOINT_NAME: &str = "WorkerEndpoint";
 
 /// A small async client for a Celeborn worker endpoint.
 #[derive(Clone)]
 pub struct WorkerClient {
     location: PartitionLocation,
-    endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
-    timeout: Duration,
+    rpc: TransportConnection,
+    push: TransportConnection,
+    fetch: TransportConnection,
 }
 
 /// Options for a [`WorkerClient`].
@@ -63,10 +53,26 @@ impl WorkerClientOptions {
 
 impl WorkerClient {
     pub fn new(options: WorkerClientOptions) -> Self {
+        let (rpc_host, rpc_port) = endpoint(
+            &options.location,
+            options.endpoint_resolver.as_ref(),
+            options.location.rpc_port,
+        );
+        let (push_host, push_port) = endpoint(
+            &options.location,
+            options.endpoint_resolver.as_ref(),
+            options.location.push_port,
+        );
+        let (fetch_host, fetch_port) = endpoint(
+            &options.location,
+            options.endpoint_resolver.as_ref(),
+            options.location.fetch_port,
+        );
         Self {
             location: options.location,
-            endpoint_resolver: options.endpoint_resolver,
-            timeout: options.timeout,
+            rpc: TransportConnection::new(rpc_host, rpc_port, options.timeout),
+            push: TransportConnection::new(push_host, push_port, options.timeout),
+            fetch: TransportConnection::new(fetch_host, fetch_port, options.timeout),
         }
     }
 
@@ -79,8 +85,6 @@ impl WorkerClient {
         replica_locations: Vec<PartitionLocation>,
         user_identifier: UserIdentifier,
     ) -> CelebornResult<()> {
-        let (host, port) = self.endpoint(self.location.rpc_port);
-        let client = MasterClient::new(MasterClientOptions::new(host, port));
         let request = PbReserveSlots {
             application_id,
             shuffle_id,
@@ -97,20 +101,16 @@ impl WorkerClient {
             partition_locations_pair: None,
             is_segment_granularity_visible: false,
         };
-        let response = client
-            .request_endpoint(
-                WORKER_ENDPOINT_NAME,
-                MessageType::RESERVE_SLOTS,
-                request.encode_to_vec(),
-            )
+        let response = self
+            .request_worker(MessageType::ReserveSlots, request.encode_to_vec())
             .await?;
-        if response.message_type != MessageType::RESERVE_SLOTS_RESPONSE {
+        if response.message_type != MessageType::ReserveSlotsResponse {
             return Err(CelebornError::Protocol(
                 "invalid reserve slots response".to_string(),
             ));
         }
         let response = PbReserveSlotsResponse::decode(response.payload.as_slice())?;
-        if response.status != 0 {
+        if response.status != i32::from(StatusCode::Success as u8) {
             return Err(CelebornError::Master {
                 status: response.status,
             });
@@ -127,8 +127,6 @@ impl WorkerClient {
         replica_locations: Vec<PartitionLocation>,
         map_attempts: Vec<i32>,
     ) -> CelebornResult<()> {
-        let (host, port) = self.endpoint(self.location.rpc_port);
-        let client = MasterClient::new(MasterClientOptions::new(host, port));
         let request = PbCommitFiles {
             application_id,
             shuffle_id,
@@ -144,20 +142,16 @@ impl WorkerClient {
             epoch: 0,
             mock_failure: false,
         };
-        let response = client
-            .request_endpoint(
-                WORKER_ENDPOINT_NAME,
-                MessageType::COMMIT_FILES,
-                request.encode_to_vec(),
-            )
+        let response = self
+            .request_worker(MessageType::CommitFiles, request.encode_to_vec())
             .await?;
-        if response.message_type != MessageType::COMMIT_FILES_RESPONSE {
+        if response.message_type != MessageType::CommitFilesResponse {
             return Err(CelebornError::Protocol(
                 "invalid commit files response".to_string(),
             ));
         }
         let response = PbCommitFilesResponse::decode(response.payload.as_slice())?;
-        if response.status != 0 {
+        if response.status != i32::from(StatusCode::Success as u8) {
             return Err(CelebornError::Master {
                 status: response.status,
             });
@@ -169,7 +163,7 @@ impl WorkerClient {
     pub async fn read_partition_stream(
         &self,
         shuffle_key: &str,
-    ) -> CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>> {
+    ) -> BoxStream<'static, CelebornResult<Vec<u8>>> {
         let request = PbOpenStream {
             shuffle_key: shuffle_key.to_string(),
             file_name: format!("{}-{}-0", self.location.id, self.location.epoch),
@@ -178,17 +172,26 @@ impl WorkerClient {
             initial_credit: 0,
             read_local_shuffle: false,
         };
-        let response = self
-            .request_fetch(MessageType::OPEN_STREAM, request.encode_to_vec())
-            .await?;
-        if response.message_type != MessageType::STREAM_HANDLER {
-            return Err(CelebornError::Protocol(
-                "invalid open stream response".to_string(),
-            ));
+        let response = match self
+            .request_fetch(MessageType::OpenStream, request.encode_to_vec())
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return Box::pin(stream::once(async move { Err(error) })),
+        };
+        if response.message_type != MessageType::StreamHandler {
+            return Box::pin(stream::once(async {
+                Err(CelebornError::Protocol(
+                    "invalid open stream response".to_string(),
+                ))
+            }));
         }
-        let handler = PbStreamHandler::decode(response.payload.as_slice())?;
+        let handler = match PbStreamHandler::decode(response.payload.as_slice()) {
+            Ok(handler) => handler,
+            Err(error) => return Box::pin(stream::once(async move { Err(error.into()) })),
+        };
         let client = self.clone();
-        Ok(Box::pin(stream::try_unfold(
+        Box::pin(stream::try_unfold(
             (client, handler.stream_id, 0, handler.num_chunks, Vec::new()),
             |(client, stream_id, mut chunk_index, num_chunks, mut buffered)| async move {
                 loop {
@@ -205,110 +208,28 @@ impl WorkerClient {
                             Err(CelebornError::Protocol("truncated batch data".to_string()))
                         };
                     }
-                    buffered.extend(client.fetch_chunk(stream_id, chunk_index).await?);
+                    buffered.extend(
+                        client
+                            .fetch
+                            .fetch_chunk(stream_id, chunk_index, 0, i32::MAX)
+                            .await?,
+                    );
                     chunk_index += 1;
                 }
             },
-        )))
-    }
-
-    /// Fetch all committed batches for this primary partition.
-    pub async fn read_partition(&self, shuffle_key: &str) -> CelebornResult<Vec<u8>> {
-        let mut stream = self.read_partition_stream(shuffle_key).await?;
-        let mut data = vec![];
-        while let Some(batch) = stream.try_next().await? {
-            data.extend(batch);
-        }
-        Ok(data)
-    }
-
-    async fn fetch_chunk(&self, stream_id: i64, chunk_index: i32) -> CelebornResult<Vec<u8>> {
-        tokio::time::timeout(self.timeout, async {
-            let (host, port) = self.endpoint(self.location.fetch_port);
-            let mut stream = TcpStream::connect((&*host, port)).await?;
-            stream.write_i32(20).await?;
-            stream.write_u8(CHUNK_FETCH_REQUEST).await?;
-            stream.write_i32(0).await?;
-            stream.write_i64(stream_id).await?;
-            stream.write_i32(chunk_index).await?;
-            stream.write_i32(0).await?;
-            stream.write_i32(i32::MAX).await?;
-            stream.flush().await?;
-            let encoded_length = stream.read_i32().await?;
-            let message_type = stream.read_u8().await?;
-            let body_length = stream.read_i32().await?;
-            if encoded_length != 20 || message_type != CHUNK_FETCH_SUCCESS || body_length < 0 {
-                return Err(CelebornError::Protocol(
-                    "invalid chunk fetch response".to_string(),
-                ));
-            }
-            if stream.read_i64().await? != stream_id || stream.read_i32().await? != chunk_index {
-                return Err(CelebornError::Protocol(
-                    "chunk response does not match request".to_string(),
-                ));
-            }
-            if stream.read_i32().await? != 0 || stream.read_i32().await? < 0 {
-                return Err(CelebornError::Protocol(
-                    "invalid chunk response slice".to_string(),
-                ));
-            }
-            let mut body = vec![
-                0;
-                usize::try_from(body_length).map_err(
-                    |_| CelebornError::Protocol("invalid chunk response length".to_string())
-                )?
-            ];
-            stream.read_exact(&mut body).await?;
-            Ok(body)
-        })
-        .await
-        .map_err(|_| CelebornError::Timeout)?
+        ))
     }
 
     async fn request_fetch(
         &self,
-        message_type: i32,
+        message_type: MessageType,
         payload: Vec<u8>,
-    ) -> CelebornResult<TransportResponse> {
-        tokio::time::timeout(self.timeout, async {
-            let (host, port) = self.endpoint(self.location.fetch_port);
-            let mut stream = TcpStream::connect((&*host, port)).await?;
-            let transport = encode_transport_message(message_type, payload)?;
-            let body_length = i32::try_from(transport.len())
-                .map_err(|_| CelebornError::Protocol("fetch request is too large".to_string()))?;
-
-            stream.write_i32(12).await?;
-            stream.write_u8(RPC_REQUEST).await?;
-            stream.write_i32(body_length).await?;
-            stream.write_i64(0).await?;
-            stream.write_i32(body_length).await?;
-            stream.write_all(&transport).await?;
-            stream.flush().await?;
-
-            let encoded_length = stream.read_i32().await?;
-            let response_type = stream.read_u8().await?;
-            let response_body_length = stream.read_i32().await?;
-            if encoded_length != 12 || response_type != RPC_RESPONSE || response_body_length < 0 {
-                return Err(CelebornError::Protocol(
-                    "invalid open stream response".to_string(),
-                ));
-            }
-            if stream.read_i64().await? != 0 || stream.read_i32().await? != response_body_length {
-                return Err(CelebornError::Protocol(
-                    "open stream response does not match request".to_string(),
-                ));
-            }
-            let mut response = vec![
-                0;
-                usize::try_from(response_body_length).map_err(|_| {
-                    CelebornError::Protocol("invalid open stream response length".to_string())
-                })?
-            ];
-            stream.read_exact(&mut response).await?;
-            decode_transport_message(&response)
-        })
-        .await
-        .map_err(|_| CelebornError::Timeout)?
+    ) -> CelebornResult<TransportMessage> {
+        let response = self
+            .fetch
+            .send_rpc(TransportMessage::new(message_type, payload).encode()?)
+            .await?;
+        TransportMessage::decode(&response)
     }
 
     /// Push one Celeborn map-data batch to this primary partition location.
@@ -320,92 +241,35 @@ impl WorkerClient {
         batch_id: i32,
         data: &[u8],
     ) -> CelebornResult<usize> {
-        tokio::time::timeout(self.timeout, async {
-            let (host, port) = self.endpoint(self.location.push_port);
-            let mut stream = TcpStream::connect((&*host, port)).await?;
-            let body_length = 16 + data.len();
-            let shuffle_key = shuffle_key.as_bytes();
-            let location_id = self.location.unique_id();
-            let location_id = location_id.as_bytes();
-            let encoded_length = 8 + 1 + 4 + shuffle_key.len() + 4 + location_id.len();
-            let encoded_length = i32::try_from(encoded_length)
-                .map_err(|_| CelebornError::Protocol("push header is too large".to_string()))?;
-            let body_length = i32::try_from(body_length)
-                .map_err(|_| CelebornError::Protocol("push body is too large".to_string()))?;
-
-            stream.write_i32(encoded_length).await?;
-            stream.write_u8(PUSH_DATA).await?;
-            stream.write_i32(body_length).await?;
-            stream.write_i64(0).await?;
-            stream.write_u8(0).await?;
-            write_bytes(&mut stream, shuffle_key).await?;
-            write_bytes(&mut stream, location_id).await?;
-            stream.write_i32(map_id).await?;
-            stream.write_i32(attempt_id).await?;
-            stream.write_i32(batch_id).await?;
-            stream
-                .write_i32(
-                    i32::try_from(data.len()).map_err(|_| {
-                        CelebornError::Protocol("push data is too large".to_string())
-                    })?,
-                )
-                .await?;
-            stream.write_all(data).await?;
-            stream.flush().await?;
-
-            let response_length = stream.read_i32().await?;
-            let response_type = stream.read_u8().await?;
-            let response_body_length = stream.read_i32().await?;
-            if response_length != 12 || response_type != RPC_RESPONSE || response_body_length < 0 {
-                return Err(CelebornError::Protocol("invalid push response".to_string()));
-            }
-            if stream.read_i64().await? != 0 {
-                return Err(CelebornError::Protocol(
-                    "push response ID does not match request".to_string(),
-                ));
-            }
-            let declared_body_length = stream.read_i32().await?;
-            if declared_body_length != response_body_length {
-                return Err(CelebornError::Protocol(
-                    "invalid push response length".to_string(),
-                ));
-            }
-            let mut response = vec![
-                0;
-                usize::try_from(response_body_length).map_err(|_| {
-                    CelebornError::Protocol("invalid push response length".to_string())
-                })?
-            ];
-            stream.read_exact(&mut response).await?;
-            match response.first().copied() {
-                // Celeborn normally returns an empty response on success. It can also return a
-                // success status, MAP_ENDED, or a congestion notification after accepting the
-                // batch.
-                None
-                | Some(
-                    0
-                    | MAP_ENDED
-                    | PUSH_DATA_SUCCESS_PRIMARY_CONGESTED
-                    | PUSH_DATA_SUCCESS_REPLICA_CONGESTED,
-                ) => {}
-                Some(status) => {
-                    return Err(CelebornError::Application(format!(
-                        "worker requested push recovery with status {status}"
-                    )));
-                }
-            }
-            usize::try_from(body_length)
-                .map_err(|_| CelebornError::Protocol("invalid push body length".to_string()))
-        })
-        .await
-        .map_err(|_| CelebornError::Timeout)?
+        let location_id = self.location.unique_id();
+        self.push
+            .push_data(
+                shuffle_key,
+                &location_id,
+                map_id,
+                attempt_id,
+                batch_id,
+                data,
+            )
+            .await?;
+        Ok(data.len() + 16)
     }
 
-    fn endpoint(&self, port: u16) -> (String, u16) {
-        self.endpoint_resolver
-            .as_ref()
-            .map(|resolver| resolver.resolve(&self.location.host, port))
-            .unwrap_or_else(|| (self.location.host.clone(), port))
+    async fn request_worker(
+        &self,
+        message_type: MessageType,
+        payload: Vec<u8>,
+    ) -> CelebornResult<TransportMessage> {
+        let payload = TransportMessage::new(message_type, payload)
+            .into_rpc_envelope(
+                &self.location.host,
+                &self.location.host,
+                self.location.rpc_port,
+                WORKER_ENDPOINT_NAME,
+            )
+            .encode()?;
+        let response = self.rpc.send_rpc(payload).await?;
+        TransportMessage::decode_java(&response)
     }
 }
 
@@ -431,49 +295,12 @@ fn take_batch(buffered: &mut Vec<u8>) -> CelebornResult<Option<Vec<u8>>> {
     Ok(Some(batch.split_off(HEADER_LENGTH)))
 }
 
-async fn write_bytes(stream: &mut TcpStream, bytes: &[u8]) -> CelebornResult<()> {
-    stream
-        .write_i32(
-            i32::try_from(bytes.len())
-                .map_err(|_| CelebornError::Protocol("string is too large".to_string()))?,
-        )
-        .await?;
-    stream.write_all(bytes).await?;
-    Ok(())
-}
-
-fn encode_transport_message(message_type: i32, payload: Vec<u8>) -> CelebornResult<Vec<u8>> {
-    let payload_length = i32::try_from(payload.len())
-        .map_err(|_| CelebornError::Protocol("transport payload is too large".to_string()))?;
-    let mut message = Vec::with_capacity(payload.len() + 8);
-    message.extend_from_slice(&message_type.to_be_bytes());
-    message.extend_from_slice(&payload_length.to_be_bytes());
-    message.extend_from_slice(&payload);
-    Ok(message)
-}
-
-fn decode_transport_message(bytes: &[u8]) -> CelebornResult<TransportResponse> {
-    if bytes.len() < 8 {
-        return Err(CelebornError::Protocol(
-            "truncated transport response".to_string(),
-        ));
-    }
-    let message_type = i32::from_be_bytes(bytes[..4].try_into().map_err(|_| {
-        CelebornError::Protocol("invalid transport response message type".to_string())
-    })?);
-    let payload_length = i32::from_be_bytes(bytes[4..8].try_into().map_err(|_| {
-        CelebornError::Protocol("invalid transport response payload length".to_string())
-    })?);
-    let payload_length = usize::try_from(payload_length).map_err(|_| {
-        CelebornError::Protocol("invalid transport response payload length".to_string())
-    })?;
-    if bytes.len() != payload_length + 8 {
-        return Err(CelebornError::Protocol(
-            "invalid transport response payload length".to_string(),
-        ));
-    }
-    Ok(TransportResponse {
-        message_type,
-        payload: bytes[8..].to_vec(),
-    })
+fn endpoint(
+    location: &PartitionLocation,
+    endpoint_resolver: Option<&Arc<dyn EndpointResolver>>,
+    port: u16,
+) -> (String, u16) {
+    endpoint_resolver
+        .map(|resolver| resolver.resolve(&location.host, port))
+        .unwrap_or_else(|| (location.host.clone(), port))
 }

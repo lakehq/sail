@@ -1188,13 +1188,7 @@ mod tests {
             None,
         ));
 
-        let graph = JobGraph::try_new(
-            commit,
-            JobGraphOptions {
-                shuffle_backend: ShuffleBackendKind::Flight,
-            },
-        )
-        .unwrap();
+        let graph = JobGraph::try_new(commit, flight_shuffle_options()).unwrap();
 
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);

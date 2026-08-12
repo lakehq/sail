@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -11,17 +11,92 @@ use crate::shuffle::actor::ShuffleClientActor;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl ShuffleClientActor {
-    pub(super) fn handle_create_shuffle_id(
+    pub(super) fn handle_get_shuffle_id(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: u64,
         stage: u64,
         reply: oneshot::Sender<CelebornResult<i32>>,
     ) -> ActorAction {
+        if let Some(&shuffle_id) = self.shuffle_ids.get(&(job_id, stage)) {
+            let _ = reply.send(Ok(shuffle_id));
+            return ActorAction::Continue;
+        }
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let _ = reply.send(lifecycle_manager.create_shuffle_id(job_id, stage).await);
+            let result = lifecycle_manager.get_shuffle_id(job_id, stage).await;
+            let _ = handle
+                .send(ShuffleClientMessage::GetShuffleIdComplete {
+                    job_id,
+                    stage,
+                    result,
+                    reply,
+                })
+                .await;
         });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_get_shuffle_id_complete(
+        &mut self,
+        job_id: u64,
+        stage: u64,
+        result: CelebornResult<i32>,
+        reply: oneshot::Sender<CelebornResult<i32>>,
+    ) -> ActorAction {
+        if let Ok(shuffle_id) = result {
+            self.shuffle_ids.insert((job_id, stage), shuffle_id);
+            let _ = reply.send(Ok(shuffle_id));
+        } else {
+            let _ = reply.send(result);
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_get_job_shuffle_ids(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: u64,
+        reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
+    ) -> ActorAction {
+        let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            let result = lifecycle_manager.get_job_shuffle_ids(job_id).await;
+            let _ = handle
+                .send(ShuffleClientMessage::GetJobShuffleIdsComplete {
+                    job_id,
+                    result,
+                    reply,
+                })
+                .await;
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_get_job_shuffle_ids_complete(
+        &mut self,
+        job_id: u64,
+        result: CelebornResult<Vec<(u64, i32)>>,
+        reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
+    ) -> ActorAction {
+        if let Ok(shuffle_ids) = result {
+            self.shuffle_ids.extend(
+                shuffle_ids
+                    .iter()
+                    .map(|&(stage, shuffle_id)| ((job_id, stage), shuffle_id)),
+            );
+            let _ = reply.send(Ok(self
+                .shuffle_ids
+                .iter()
+                .filter_map(|(&(cached_job_id, stage), &shuffle_id)| {
+                    (cached_job_id == job_id).then_some((stage, shuffle_id))
+                })
+                .collect()));
+        } else {
+            let _ = reply.send(result);
+        }
         ActorAction::Continue
     }
 
@@ -38,10 +113,10 @@ impl ShuffleClientActor {
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let result = lifecycle_manager
-                .request_slots(shuffle_id, partition_ids, should_replicate, max_workers)
+                .register_shuffle(shuffle_id, partition_ids, should_replicate, max_workers)
                 .await;
             let _ = handle
-                .send(ShuffleClientMessage::RegisterShuffleEnd {
+                .send(ShuffleClientMessage::RegisterShuffleComplete {
                     shuffle_id,
                     result,
                     reply,
@@ -51,21 +126,24 @@ impl ShuffleClientActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_register_shuffle_end(
+    pub(super) fn handle_register_shuffle_complete(
         &mut self,
         shuffle_id: i32,
         result: CelebornResult<SlotReservation>,
         reply: oneshot::Sender<CelebornResult<SlotReservation>>,
     ) -> ActorAction {
         if let Ok(reservation) = &result {
-            self.locations.extend(
-                reservation
-                    .primary_locations
-                    .iter()
-                    .map(|(&partition_id, location)| {
-                        ((shuffle_id, partition_id), location.clone())
-                    }),
-            );
+            for (&partition_id, location) in &reservation.primary_locations {
+                let key = (shuffle_id, partition_id);
+                self.locations.insert(key, location.clone());
+                self.worker_clients.insert(
+                    key,
+                    WorkerClient::new(
+                        WorkerClientOptions::new(location.clone())
+                            .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
+                    ),
+                );
+            }
         }
         let _ = reply.send(result);
         ActorAction::Continue
@@ -81,7 +159,11 @@ impl ShuffleClientActor {
         data: Vec<u8>,
         reply: oneshot::Sender<CelebornResult<usize>>,
     ) -> ActorAction {
-        let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
+        let Some(client) = self
+            .worker_clients
+            .get(&(shuffle_id, partition_id))
+            .cloned()
+        else {
             let _ = reply.send(Err(CelebornError::Application(format!(
                 "shuffle {shuffle_id} partition {partition_id} is not registered"
             ))));
@@ -94,13 +176,10 @@ impl ShuffleClientActor {
         let current_batch_id = *batch_id;
         *batch_id += 1;
         let shuffle_key = self.shuffle_key(shuffle_id);
-        let endpoint_resolver = self.options.endpoint_resolver.clone();
         ctx.spawn(async move {
-            let result = WorkerClient::new(
-                WorkerClientOptions::new(location).with_endpoint_resolver(endpoint_resolver),
-            )
-            .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
-            .await;
+            let result = client
+                .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
+                .await;
             let _ = reply.send(result);
         });
         ActorAction::Continue
@@ -133,19 +212,45 @@ impl ShuffleClientActor {
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
+        let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let _ = reply.send(lifecycle_manager.unregister_shuffle(shuffle_id).await);
+            let result = lifecycle_manager.unregister_shuffle(shuffle_id).await;
+            let _ = handle
+                .send(ShuffleClientMessage::UnregisterShuffleComplete {
+                    shuffle_id,
+                    result,
+                    reply,
+                })
+                .await;
         });
         ActorAction::Continue
     }
 
-    pub(super) fn handle_clear_shuffle(
+    pub(super) fn handle_unregister_shuffle_complete(
+        &mut self,
+        shuffle_id: i32,
+        result: CelebornResult<()>,
+        reply: oneshot::Sender<CelebornResult<()>>,
+    ) -> ActorAction {
+        if result.is_ok() {
+            self.shuffle_ids.retain(|_, id| *id != shuffle_id);
+            self.locations.retain(|(id, _), _| *id != shuffle_id);
+            self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
+            self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
+        }
+        let _ = reply.send(result);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_clean_up_shuffle(
         &mut self,
         shuffle_id: i32,
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         self.locations.retain(|(id, _), _| *id != shuffle_id);
+        self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
         self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
+        self.shuffle_ids.retain(|_, id| *id != shuffle_id);
         let _ = reply.send(Ok(()));
         ActorAction::Continue
     }
@@ -155,23 +260,24 @@ impl ShuffleClientActor {
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
-        reply: oneshot::Sender<CelebornResult<BoxStream<'static, CelebornResult<Vec<u8>>>>>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
     ) -> ActorAction {
-        let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
-            let _ = reply.send(Err(CelebornError::Application(format!(
-                "shuffle {shuffle_id} partition {partition_id} is not registered"
-            ))));
+        let Some(client) = self
+            .worker_clients
+            .get(&(shuffle_id, partition_id))
+            .cloned()
+        else {
+            let _ = reply.send(Box::pin(stream::once(async move {
+                Err(CelebornError::Application(format!(
+                    "shuffle {shuffle_id} partition {partition_id} is not registered"
+                )))
+            })));
             return ActorAction::Continue;
         };
         let shuffle_key = self.shuffle_key(shuffle_id);
-        let endpoint_resolver = self.options.endpoint_resolver.clone();
         ctx.spawn(async move {
-            let result = WorkerClient::new(
-                WorkerClientOptions::new(location).with_endpoint_resolver(endpoint_resolver),
-            )
-            .read_partition_stream(&shuffle_key)
-            .await;
-            let _ = reply.send(result);
+            let stream = client.read_partition_stream(&shuffle_key).await;
+            let _ = reply.send(stream);
         });
         ActorAction::Continue
     }
