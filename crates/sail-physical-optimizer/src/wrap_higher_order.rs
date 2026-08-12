@@ -6,12 +6,10 @@ use datafusion::error::Result;
 use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::aggregates::AggregateExec;
-use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
-};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
@@ -48,7 +46,10 @@ impl WrapHigherOrderFunctions {
 }
 
 /// Wraps higher-order functions in ProjectionExec
-fn wrap_projection(projection: &ProjectionExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_projection(
+    projection: &ProjectionExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = projection.input().schema();
     let mut changed = false;
     let exprs = projection
@@ -65,7 +66,7 @@ fn wrap_projection(projection: &ProjectionExec, node: Arc<dyn ExecutionPlan>) ->
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    
+
     if changed {
         let new_projection = ProjectionExec::try_new(exprs, Arc::clone(projection.input()))?;
         Ok(Transformed::yes(Arc::new(new_projection) as _))
@@ -75,10 +76,13 @@ fn wrap_projection(projection: &ProjectionExec, node: Arc<dyn ExecutionPlan>) ->
 }
 
 /// Wraps higher-order functions in FilterExec
-fn wrap_filter(filter: &FilterExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_filter(
+    filter: &FilterExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = filter.input().schema();
     let wrapped = wrap_distributed_higher_order(Arc::clone(filter.predicate()), &input_schema)?;
-    
+
     if Arc::ptr_eq(&wrapped, filter.predicate()) {
         Ok(Transformed::no(node))
     } else {
@@ -89,11 +93,14 @@ fn wrap_filter(filter: &FilterExec, node: Arc<dyn ExecutionPlan>) -> Result<Tran
 }
 
 /// Wraps higher-order functions in SortExec
-fn wrap_sort(sort: &SortExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_sort(
+    sort: &SortExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = sort.input().schema();
     let mut changed = false;
     let mut sort_exprs = Vec::with_capacity(sort.expr().len());
-    
+
     for se in sort.expr().iter() {
         let wrapped = wrap_distributed_higher_order(Arc::clone(&se.expr), &input_schema)?;
         if !Arc::ptr_eq(&wrapped, &se.expr) {
@@ -101,7 +108,7 @@ fn wrap_sort(sort: &SortExec, node: Arc<dyn ExecutionPlan>) -> Result<Transforme
         }
         sort_exprs.push(PhysicalSortExpr::new(wrapped, se.options));
     }
-    
+
     if changed {
         let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
             datafusion::error::DataFusionError::Internal(
@@ -118,18 +125,21 @@ fn wrap_sort(sort: &SortExec, node: Arc<dyn ExecutionPlan>) -> Result<Transforme
 }
 
 /// Wraps higher-order functions in AggregateExec
-fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_aggregate(
+    aggregate: &AggregateExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     use datafusion::physical_plan::aggregates::AggregateMode;
-    
+
     // Only wrap in Partial or Single mode
     match aggregate.mode() {
         AggregateMode::Partial | AggregateMode::Single => {}
         _ => return Ok(Transformed::no(node)),
     }
-    
+
     let input_schema = aggregate.input().schema();
     let mut changed = false;
-    
+
     // Wrap group expressions
     let group_expr = aggregate.group_expr();
     let mut new_group_exprs = Vec::new();
@@ -140,14 +150,14 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
         }
         new_group_exprs.push((wrapped, name.clone()));
     }
-    
+
     // Wrap aggregate expressions
     let mut new_aggr_exprs = Vec::new();
     for aggr in aggregate.aggr_expr() {
         let args = aggr.expressions();
         let mut new_args = Vec::new();
         let mut args_changed = false;
-        
+
         for arg in &args {
             let wrapped = wrap_distributed_higher_order(Arc::clone(arg), &input_schema)?;
             if !Arc::ptr_eq(&wrapped, arg) {
@@ -155,7 +165,7 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
             }
             new_args.push(wrapped);
         }
-        
+
         if args_changed {
             changed = true;
             // Try to create new aggregate expression with wrapped arguments
@@ -170,7 +180,7 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
             new_aggr_exprs.push(Arc::clone(aggr) as _);
         }
     }
-    
+
     // Wrap filter expressions
     let mut new_filter_exprs = Vec::new();
     for filter_opt in aggregate.filter_expr() {
@@ -184,11 +194,12 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
             new_filter_exprs.push(None);
         }
     }
-    
+
     if changed {
         // Reconstruct the AggregateExec with wrapped expressions
-        let new_group_by = datafusion::physical_plan::aggregates::PhysicalGroupBy::new_single(new_group_exprs);
-        
+        let new_group_by =
+            datafusion::physical_plan::aggregates::PhysicalGroupBy::new_single(new_group_exprs);
+
         let new_aggregate = AggregateExec::try_new(
             *aggregate.mode(),
             new_group_by,
@@ -197,7 +208,7 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
             Arc::clone(aggregate.input()),
             Arc::new(aggregate.schema().as_ref().clone()),
         )?;
-        
+
         Ok(Transformed::yes(Arc::new(new_aggregate) as _))
     } else {
         Ok(Transformed::no(node))
@@ -205,15 +216,18 @@ fn wrap_aggregate(aggregate: &AggregateExec, node: Arc<dyn ExecutionPlan>) -> Re
 }
 
 /// Wraps higher-order functions in WindowAggExec
-fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_window(
+    window: &WindowAggExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = window.input().schema();
     let mut changed = false;
-    
+
     let mut new_window_exprs = Vec::new();
     for window_expr in window.window_expr() {
         let expressions = window_expr.all_expressions();
         let mut args_changed = false;
-        
+
         // Wrap args
         let mut new_args = Vec::new();
         for arg in &expressions.args {
@@ -223,7 +237,7 @@ fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<T
             }
             new_args.push(wrapped);
         }
-        
+
         // Wrap partition_by
         let mut new_partition_by = Vec::new();
         for part in &expressions.partition_by_exprs {
@@ -233,7 +247,7 @@ fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<T
             }
             new_partition_by.push(wrapped);
         }
-        
+
         // Wrap order_by - need to extract the expr from PhysicalSortExpr
         let mut new_order_by = Vec::new();
         for order in &expressions.order_by_exprs {
@@ -243,10 +257,12 @@ fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<T
             }
             new_order_by.push(wrapped);
         }
-        
+
         if args_changed {
             changed = true;
-            if let Some(new_expr) = window_expr.with_new_expressions(new_args, new_partition_by, new_order_by) {
+            if let Some(new_expr) =
+                window_expr.with_new_expressions(new_args, new_partition_by, new_order_by)
+            {
                 new_window_exprs.push(new_expr);
             } else {
                 new_window_exprs.push(Arc::clone(window_expr) as _);
@@ -255,7 +271,7 @@ fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<T
             new_window_exprs.push(Arc::clone(window_expr) as _);
         }
     }
-    
+
     if changed {
         let new_window = WindowAggExec::try_new(
             new_window_exprs,
@@ -269,15 +285,18 @@ fn wrap_window(window: &WindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<T
 }
 
 /// Wraps higher-order functions in BoundedWindowAggExec
-fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_bounded_window(
+    window: &BoundedWindowAggExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = window.input().schema();
     let mut changed = false;
-    
+
     let mut new_window_exprs = Vec::new();
     for window_expr in window.window_expr() {
         let expressions = window_expr.all_expressions();
         let mut args_changed = false;
-        
+
         // Wrap args
         let mut new_args = Vec::new();
         for arg in &expressions.args {
@@ -287,7 +306,7 @@ fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPla
             }
             new_args.push(wrapped);
         }
-        
+
         // Wrap partition_by
         let mut new_partition_by = Vec::new();
         for part in &expressions.partition_by_exprs {
@@ -297,7 +316,7 @@ fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPla
             }
             new_partition_by.push(wrapped);
         }
-        
+
         // Wrap order_by - need to extract the expr from PhysicalSortExpr
         let mut new_order_by = Vec::new();
         for order in &expressions.order_by_exprs {
@@ -307,10 +326,12 @@ fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPla
             }
             new_order_by.push(wrapped);
         }
-        
+
         if args_changed {
             changed = true;
-            if let Some(new_expr) = window_expr.with_new_expressions(new_args, new_partition_by, new_order_by) {
+            if let Some(new_expr) =
+                window_expr.with_new_expressions(new_args, new_partition_by, new_order_by)
+            {
                 new_window_exprs.push(new_expr);
             } else {
                 new_window_exprs.push(Arc::clone(window_expr) as _);
@@ -319,7 +340,7 @@ fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPla
             new_window_exprs.push(Arc::clone(window_expr) as _);
         }
     }
-    
+
     if changed {
         let new_window = BoundedWindowAggExec::try_new(
             new_window_exprs,
@@ -334,7 +355,10 @@ fn wrap_bounded_window(window: &BoundedWindowAggExec, node: Arc<dyn ExecutionPla
 }
 
 /// Wraps higher-order functions in HashJoinExec filter
-fn wrap_hash_join(join: &HashJoinExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_hash_join(
+    join: &HashJoinExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(filter) = join.filter() {
         let left_schema = join.left().schema();
         let right_schema = join.right().schema();
@@ -344,19 +368,17 @@ fn wrap_hash_join(join: &HashJoinExec, node: Arc<dyn ExecutionPlan>) -> Result<T
             right_schema.as_ref().clone(),
         ])?;
         let combined_schema = Arc::new(combined_schema);
-        
-        let wrapped = wrap_distributed_higher_order(
-            Arc::clone(filter.expression()),
-            &combined_schema,
-        )?;
-        
+
+        let wrapped =
+            wrap_distributed_higher_order(Arc::clone(filter.expression()), &combined_schema)?;
+
         if !Arc::ptr_eq(&wrapped, filter.expression()) {
             let new_filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
                 wrapped,
                 filter.column_indices().to_vec(),
                 filter.schema().clone(),
             );
-            
+
             let new_join = HashJoinExec::try_new(
                 Arc::clone(join.left()),
                 Arc::clone(join.right()),
@@ -368,16 +390,19 @@ fn wrap_hash_join(join: &HashJoinExec, node: Arc<dyn ExecutionPlan>) -> Result<T
                 join.null_equality(),
                 false, // null_aware
             )?;
-            
+
             return Ok(Transformed::yes(Arc::new(new_join) as _));
         }
     }
-    
+
     Ok(Transformed::no(node))
 }
 
 /// Wraps higher-order functions in NestedLoopJoinExec filter
-fn wrap_nested_loop_join(join: &NestedLoopJoinExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_nested_loop_join(
+    join: &NestedLoopJoinExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(filter) = join.filter() {
         let left_schema = join.left().schema();
         let right_schema = join.right().schema();
@@ -386,19 +411,17 @@ fn wrap_nested_loop_join(join: &NestedLoopJoinExec, node: Arc<dyn ExecutionPlan>
             right_schema.as_ref().clone(),
         ])?;
         let combined_schema = Arc::new(combined_schema);
-        
-        let wrapped = wrap_distributed_higher_order(
-            Arc::clone(filter.expression()),
-            &combined_schema,
-        )?;
-        
+
+        let wrapped =
+            wrap_distributed_higher_order(Arc::clone(filter.expression()), &combined_schema)?;
+
         if !Arc::ptr_eq(&wrapped, filter.expression()) {
             let new_filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
                 wrapped,
                 filter.column_indices().to_vec(),
                 filter.schema().clone(),
             );
-            
+
             let new_join = NestedLoopJoinExec::try_new(
                 Arc::clone(join.left()),
                 Arc::clone(join.right()),
@@ -406,16 +429,19 @@ fn wrap_nested_loop_join(join: &NestedLoopJoinExec, node: Arc<dyn ExecutionPlan>
                 join.join_type(),
                 None, // projection
             )?;
-            
+
             return Ok(Transformed::yes(Arc::new(new_join) as _));
         }
     }
-    
+
     Ok(Transformed::no(node))
 }
 
 /// Wraps higher-order functions in SortMergeJoinExec filter
-fn wrap_sort_merge_join(join: &SortMergeJoinExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_sort_merge_join(
+    join: &SortMergeJoinExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(filter) = join.filter() {
         let left_schema = join.left().schema();
         let right_schema = join.right().schema();
@@ -424,19 +450,17 @@ fn wrap_sort_merge_join(join: &SortMergeJoinExec, node: Arc<dyn ExecutionPlan>) 
             right_schema.as_ref().clone(),
         ])?;
         let combined_schema = Arc::new(combined_schema);
-        
-        let wrapped = wrap_distributed_higher_order(
-            Arc::clone(filter.expression()),
-            &combined_schema,
-        )?;
-        
+
+        let wrapped =
+            wrap_distributed_higher_order(Arc::clone(filter.expression()), &combined_schema)?;
+
         if !Arc::ptr_eq(&wrapped, filter.expression()) {
             let new_filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
                 wrapped,
                 filter.column_indices().to_vec(),
                 filter.schema().clone(),
             );
-            
+
             let new_join = SortMergeJoinExec::try_new(
                 Arc::clone(join.left()),
                 Arc::clone(join.right()),
@@ -446,19 +470,22 @@ fn wrap_sort_merge_join(join: &SortMergeJoinExec, node: Arc<dyn ExecutionPlan>) 
                 join.sort_options().to_vec(),
                 join.null_equality(),
             )?;
-            
+
             return Ok(Transformed::yes(Arc::new(new_join) as _));
         }
     }
-    
+
     Ok(Transformed::no(node))
 }
 
 /// Wraps higher-order functions in StreamFilterExec
-fn wrap_stream_filter(filter: &StreamFilterExec, node: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+fn wrap_stream_filter(
+    filter: &StreamFilterExec,
+    node: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let input_schema = filter.input().schema();
     let wrapped = wrap_distributed_higher_order(Arc::clone(filter.predicate()), &input_schema)?;
-    
+
     if Arc::ptr_eq(&wrapped, filter.predicate()) {
         Ok(Transformed::no(node))
     } else {
@@ -478,52 +505,52 @@ impl PhysicalOptimizerRule for WrapHigherOrderFunctions {
             if let Some(projection) = node.downcast_ref::<ProjectionExec>() {
                 return wrap_projection(projection, Arc::clone(&node));
             }
-            
+
             // Handle FilterExec
             if let Some(filter) = node.downcast_ref::<FilterExec>() {
                 return wrap_filter(filter, Arc::clone(&node));
             }
-            
+
             // Handle SortExec
             if let Some(sort) = node.downcast_ref::<SortExec>() {
                 return wrap_sort(sort, Arc::clone(&node));
             }
-            
+
             // Handle AggregateExec
             if let Some(aggregate) = node.downcast_ref::<AggregateExec>() {
                 return wrap_aggregate(aggregate, Arc::clone(&node));
             }
-            
+
             // Handle WindowAggExec
             if let Some(window) = node.downcast_ref::<WindowAggExec>() {
                 return wrap_window(window, Arc::clone(&node));
             }
-            
+
             // Handle BoundedWindowAggExec
             if let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() {
                 return wrap_bounded_window(window, Arc::clone(&node));
             }
-            
+
             // Handle HashJoinExec
             if let Some(join) = node.downcast_ref::<HashJoinExec>() {
                 return wrap_hash_join(join, Arc::clone(&node));
             }
-            
+
             // Handle NestedLoopJoinExec
             if let Some(join) = node.downcast_ref::<NestedLoopJoinExec>() {
                 return wrap_nested_loop_join(join, Arc::clone(&node));
             }
-            
+
             // Handle SortMergeJoinExec
             if let Some(join) = node.downcast_ref::<SortMergeJoinExec>() {
                 return wrap_sort_merge_join(join, Arc::clone(&node));
             }
-            
+
             // Handle StreamFilterExec
             if let Some(filter) = node.downcast_ref::<StreamFilterExec>() {
                 return wrap_stream_filter(filter, Arc::clone(&node));
             }
-            
+
             Ok(Transformed::no(node))
         })
         .data()
