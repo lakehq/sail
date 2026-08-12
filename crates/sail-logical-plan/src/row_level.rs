@@ -497,7 +497,15 @@ pub fn expand_delete(
         condition,
         input_schema,
         resolved_target_field_names,
+        case_sensitive,
     } = info;
+    validate_row_level_internal_columns(
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+        case_sensitive,
+    )?;
     let normalized = normalize_row_level_target(
         target_plan.as_ref().clone(),
         &input_schema,
@@ -583,6 +591,13 @@ pub fn expand_update(
         generated_column_exprs,
         check_constraint_exprs,
     } = info;
+    validate_row_level_internal_columns(
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+        case_sensitive,
+    )?;
     let normalized = normalize_row_level_target(
         target_plan.as_ref().clone(),
         &input_schema,
@@ -609,6 +624,10 @@ pub fn expand_update(
         &normalized.field_names,
         case_sensitive,
     )?;
+    let assigned_columns = assignments
+        .iter()
+        .map(|assignment| row_level_name_key(&assignment.column, case_sensitive))
+        .collect::<std::collections::HashSet<_>>();
     let assignment_map = assignments
         .into_iter()
         .map(|assignment| {
@@ -664,7 +683,12 @@ pub fn expand_update(
             ))
         })
         .collect::<Result<Vec<_>>>()?;
-    let write_rows = apply_update_generation(write_rows, &generated_column_exprs, case_sensitive)?;
+    let write_rows = apply_update_generation(
+        write_rows,
+        &generated_column_exprs,
+        &assigned_columns,
+        case_sensitive,
+    )?;
     let constraints = check_constraint_exprs
         .into_iter()
         .map(|constraint| {
@@ -733,9 +757,42 @@ fn rewrite_assignments(
         .collect()
 }
 
+pub fn validate_row_level_internal_columns(
+    input_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+    path_column: &str,
+    row_index_column: Option<&str>,
+    case_sensitive: bool,
+) -> Result<()> {
+    let reserved = [OPERATION_COLUMN, path_column]
+        .into_iter()
+        .chain(row_index_column);
+    for reserved_name in reserved {
+        if resolved_field_names.iter().any(|name| {
+            if case_sensitive {
+                name == reserved_name
+            } else {
+                name.eq_ignore_ascii_case(reserved_name)
+            }
+        }) || input_schema.fields().iter().any(|field| {
+            if case_sensitive {
+                field.name() == reserved_name
+            } else {
+                field.name().eq_ignore_ascii_case(reserved_name)
+            }
+        }) {
+            return plan_err!(
+                "row-level target column '{reserved_name}' uses a reserved internal column name"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn apply_update_generation(
     plan: LogicalPlan,
     generated_column_exprs: &[(String, Expr)],
+    assigned_columns: &std::collections::HashSet<String>,
     case_sensitive: bool,
 ) -> Result<LogicalPlan> {
     if generated_column_exprs.is_empty() {
@@ -754,7 +811,29 @@ fn apply_update_generation(
             let name = field.name();
             if let Some(generation_expr) = generated.get(&row_level_name_key(name, case_sensitive))
             {
-                when(update_row.clone(), (*generation_expr).clone())
+                let generated_value = if assigned_columns
+                    .contains(&row_level_name_key(name, case_sensitive))
+                {
+                    let current_value = col(name);
+                    let matches_generation = Expr::BinaryExpr(
+                        datafusion_expr::expr::BinaryExpr::new(
+                            Box::new(current_value.clone()),
+                            datafusion_expr::Operator::IsNotDistinctFrom,
+                            Box::new((*generation_expr).clone()),
+                        ),
+                    );
+                    let message = format!(
+                        "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] CHECK constraint for generated column `{name}` violated: user-provided value does not match the generation expression."
+                    );
+                    let raise = datafusion_expr::ScalarUDF::from(
+                        sail_function::scalar::misc::raise_error::RaiseError::new(),
+                    )
+                    .call(vec![lit(message)]);
+                    when(matches_generation, current_value).otherwise(raise)?
+                } else {
+                    (*generation_expr).clone()
+                };
+                when(update_row.clone(), generated_value)
                     .otherwise(col(name))
                     .map(|expr| expr.alias(name))
             } else {

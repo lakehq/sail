@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::TableReference;
-use datafusion_expr::{LogicalPlan, SubqueryAlias};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
@@ -13,6 +13,19 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    pub(super) fn validate_row_level_condition(
+        &self,
+        command: &str,
+        condition: &Expr,
+    ) -> PlanResult<()> {
+        if condition.is_volatile() {
+            return Err(PlanError::AnalysisError(format!(
+                "Non-deterministic expressions are not allowed in {command} conditions"
+            )));
+        }
+        Ok(())
+    }
+
     pub(super) async fn resolve_row_level_table_plan(
         &self,
         name: spec::ObjectName,

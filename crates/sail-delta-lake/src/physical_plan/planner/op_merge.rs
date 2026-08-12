@@ -142,7 +142,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
     //
     // Untouched files remain as-is (not removed, not rewritten).
     let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
-        build_targeted_writer_input(&expanded, touched_plan)?
+        build_targeted_writer_input(row_level_info.command, &expanded, touched_plan)?
     } else {
         Arc::clone(&expanded)
     };
@@ -380,6 +380,7 @@ fn sort_by_column_preserving_partitioning(
 /// - Insert rows (path is NULL) — new rows not in any existing file
 /// - Touched rows (inner join with touched files) — rows from files being rewritten
 fn build_targeted_writer_input(
+    command: RowLevelCommand,
     expanded: &Arc<dyn ExecutionPlan>,
     touched_plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -401,15 +402,9 @@ fn build_targeted_writer_input(
         return internal_err!("MERGE touched file plan is missing required column '{PATH_COLUMN}'");
     }
 
-    // Insert rows: path is NULL.
     let path_idx = projected_schema
         .index_of(PATH_COLUMN)
         .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
-    let insert_pred: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(IsNullExpr::new(
-        Arc::new(Column::new(PATH_COLUMN, path_idx)),
-    ));
-    let insert_rows: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(insert_pred, Arc::clone(expanded))?);
 
     // Touched rows: inner join touched_paths (small, collected) with writer input (big).
     let touched_schema = touched_plan.schema();
@@ -448,7 +443,16 @@ fn build_targeted_writer_input(
         .collect::<Vec<_>>();
     let touched_rows: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
-    UnionExec::try_new(vec![insert_rows, touched_rows])
+    match command {
+        RowLevelCommand::Update => Ok(touched_rows),
+        RowLevelCommand::Merge => {
+            let insert_rows = build_insert_rows_input(expanded)?;
+            UnionExec::try_new(vec![insert_rows, touched_rows])
+        }
+        RowLevelCommand::Delete => {
+            internal_err!("DELETE does not use the targeted row-level writer input assembly path")
+        }
+    }
 }
 
 /// Build MERGE MoR writer input for source-only INSERT rows.
