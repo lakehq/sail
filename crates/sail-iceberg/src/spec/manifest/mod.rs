@@ -143,13 +143,27 @@ impl Manifest {
         let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
         for value in reader {
             let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-            let entry: _serde::ManifestEntryV2 =
-                avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
-            entries.push(entry.into_entry(
-                metadata.partition_spec.spec_id(),
-                &partition_type,
-                Some(&metadata.schema),
-            )?);
+            let entry = match metadata.format_version {
+                FormatVersion::V1 => {
+                    let entry: _serde::ManifestEntryV1 = avro_from_value(&value)
+                        .map_err(|e| format!("Avro decode v1 entry error: {e}"))?;
+                    entry.into_entry(
+                        metadata.partition_spec.spec_id(),
+                        &partition_type,
+                        Some(&metadata.schema),
+                    )?
+                }
+                FormatVersion::V2 | FormatVersion::V3 => {
+                    let entry: _serde::ManifestEntryV2 = avro_from_value(&value)
+                        .map_err(|e| format!("Avro decode entry error: {e}"))?;
+                    entry.into_entry(
+                        metadata.partition_spec.spec_id(),
+                        &partition_type,
+                        Some(&metadata.schema),
+                    )?
+                }
+            };
+            entries.push(entry);
         }
 
         Ok((metadata, entries))
