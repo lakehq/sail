@@ -129,8 +129,8 @@ message CastColumnExprNode {
 // needed to rebuild it. `udf` identifies the concrete higher-order function,
 // following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
 message HigherOrderUdfExprNode {
-  bytes input_schema = 1;
-  HigherOrderUdf udf = 2;
+  HigherOrderUdf udf = 1;
+  bytes input_schema = 2;
 }
 
 message HigherOrderUdf {
@@ -188,7 +188,11 @@ message SparkMapZipWithUdf {
   uint32 parameter_order = 1;
 }
 
-message SparkArrayZipWithUdf {}
+message SparkArrayZipWithUdf {
+  // Whether the lambda receives the right array element before the left one.
+  // False preserves the original `(left, right)` order.
+  bool right_first = 1;
+}
 
 message SparkArrayAggregateUdf {
   bool element_first = 1;

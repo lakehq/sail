@@ -80,6 +80,12 @@ static SPARK_MAP_ZIP_WITH_VALUE2_KEY_VALUE1_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
 
+static SPARK_ARRAY_ZIP_WITH_RIGHT_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
+    Arc::new(HigherOrderUDF::new_from_impl(
+        SparkArrayZipWith::new_with_right_first(true),
+    ))
+});
+
 static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new())));
 
@@ -378,9 +384,26 @@ fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             lambda.params.len()
         )));
     }
+    let (func, params) = if !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
+        && lambda_body_uses_param(&lambda.body, &lambda.params[1])?
+    {
+        (
+            Arc::clone(&SPARK_ARRAY_ZIP_WITH_RIGHT_FIRST_UDF),
+            vec![lambda.params[1].clone()],
+        )
+    } else {
+        (Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF), lambda.params.clone())
+    };
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF),
-        vec![left, right, expr::Expr::Lambda(lambda)],
+        func,
+        vec![
+            left,
+            right,
+            expr::Expr::Lambda(Lambda {
+                params,
+                body: lambda.body,
+            }),
+        ],
     )))
 }
 

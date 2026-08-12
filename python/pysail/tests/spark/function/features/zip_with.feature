@@ -67,3 +67,16 @@ Feature: zip_with higher-order function
       Then query result
         | result                         |
         | [{1, a}, {2, b}]               |
+
+    Scenario: Use only the right array element
+      When query
+        """
+        SELECT zip_with(
+          array(1, 2),
+          array(10, 20),
+          (x, y) -> y
+        ) AS result
+        """
+      Then query result
+        | result  |
+        | [10, 20] |

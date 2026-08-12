@@ -248,17 +248,6 @@ impl PlanResolver<'_> {
             func
         };
 
-        // DataFusion lambda variables carry no type until resolved against the schema.
-        // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
-        // only when not inside an enclosing lambda scope: a higher-order function
-        // nested in another lambda body has free variables that only the outermost
-        // resolution, which sees the whole expression tree, can bind.
-        let func = if has_lambda_argument && !state.in_lambda_scope() {
-            func.resolve_lambda_variables(schema)?.data
-        } else {
-            func
-        };
-
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
         // to individual column names so the output header matches Spark JVM behavior
         // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).

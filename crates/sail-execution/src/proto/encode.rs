@@ -125,8 +125,10 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
             parameter_order: encode_map_zip_with_parameter_order(map_zip_with.parameter_order()),
         })
-    } else if udf_inner.is::<SparkArrayZipWith>() {
-        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
+    } else if let Some(zip_with) = udf_inner.downcast_ref::<SparkArrayZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {
+            right_first: zip_with.right_first(),
+        })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };

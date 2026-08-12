@@ -106,7 +106,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (left, right, lambda) = map_zip_args(self.name(), args.arg_fields)?;
-        let (left_key, _left_value, ordered) = map_fields(self.name(), left)?;
+        let (left_key, _left_value, _) = map_fields(self.name(), left)?;
         let (right_key, _right_value, _) = map_fields(self.name(), right)?;
         if left_key.data_type() != right_key.data_type() {
             return plan_err!(
@@ -133,7 +133,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                     DataType::Struct(fields),
                     false,
                 )),
-                ordered,
+                false,
             ),
             left.is_nullable() || right.is_nullable(),
         )))

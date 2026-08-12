@@ -7,11 +7,13 @@
 /// maximum length of the two input arrays.
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, ListArray, new_null_array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, new_null_array,
+};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{concat, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::cast::as_list_array;
+use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -21,6 +23,7 @@ use datafusion_expr::{
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayZipWith {
     signature: HigherOrderSignature,
+    right_first: bool,
 }
 
 impl Default for SparkArrayZipWith {
@@ -40,7 +43,19 @@ impl SparkArrayZipWith {
                 ],
                 Volatility::Immutable,
             ),
+            right_first: false,
         }
+    }
+
+    pub fn new_with_right_first(right_first: bool) -> Self {
+        Self {
+            right_first,
+            ..Self::new()
+        }
+    }
+
+    pub fn right_first(&self) -> bool {
+        self.right_first
     }
 }
 
@@ -61,23 +76,39 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let (left, right, _lambda) = zip_args(self.name(), fields)?;
         let left_element = list_element(self.name(), left, "first")?;
         let right_element = list_element(self.name(), right, "second")?;
-        Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(left_element.as_ref().clone().with_nullable(true)),
-            Arc::new(right_element.as_ref().clone().with_nullable(true)),
-        ]]))
+        let left_element = Arc::new(left_element.as_ref().clone().with_nullable(true));
+        let right_element = Arc::new(right_element.as_ref().clone().with_nullable(true));
+        let parameters = if self.right_first {
+            vec![right_element, left_element]
+        } else {
+            vec![left_element, right_element]
+        };
+        Ok(LambdaParametersProgress::Complete(vec![parameters]))
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (left, right, lambda) = zip_args(self.name(), args.arg_fields)?;
-        list_element(self.name(), left, "first")?;
-        list_element(self.name(), right, "second")?;
-        Ok(Arc::new(Field::new(
-            "",
+        let left_type = coerced_list_type(self.name(), left, "first")?;
+        let right_type = coerced_list_type(self.name(), right, "second")?;
+        let element_type = lambda.data_type().clone();
+        let list_type = if matches!(left_type, DataType::LargeList(_))
+            || matches!(right_type, DataType::LargeList(_))
+        {
+            DataType::LargeList(Arc::new(Field::new(
+                Field::LIST_FIELD_DEFAULT_NAME,
+                element_type,
+                lambda.is_nullable(),
+            )))
+        } else {
             DataType::List(Arc::new(Field::new(
                 Field::LIST_FIELD_DEFAULT_NAME,
-                lambda.data_type().clone(),
+                element_type,
                 lambda.is_nullable(),
-            ))),
+            )))
+        };
+        Ok(Arc::new(Field::new(
+            "",
+            list_type,
             left.is_nullable() || right.is_nullable(),
         )))
     }
@@ -86,47 +117,35 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let (left, right, lambda) = zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
         let right_array = right.to_array(args.number_rows)?;
-        let left_list = as_list_array(&left_array)?;
-        let right_list = as_list_array(&right_array)?;
-        if left_list.len() != right_list.len() {
-            return exec_err!(
-                "{} expected arrays with the same row count, got {} and {}",
-                self.name(),
-                left_list.len(),
-                right_list.len()
-            );
-        }
-
-        let (left_values, right_values, offsets, nulls) =
-            build_zipped_values(left_list, right_list)?;
-        let row_numbers = zip_row_numbers(&offsets)?;
-        let left_param = || Ok(Arc::clone(&left_values));
-        let right_param = || Ok(Arc::clone(&right_values));
-        let params: [&dyn Fn() -> Result<ArrayRef>; 2] = [&left_param, &right_param];
-        let output = lambda
-            .evaluate(&params, |arrays| {
-                Ok(take_arrays(arrays, &row_numbers, None)?)
-            })?
-            .into_array(left_values.len())?;
-
-        let DataType::List(element_field) = args.return_field.data_type() else {
-            return exec_err!(
+        match args.return_field.data_type() {
+            DataType::List(element_field) => {
+                let left_list = as_list_array(&left_array)?;
+                let right_list = as_list_array(&right_array)?;
+                invoke_with_lists(
+                    self,
+                    lambda,
+                    left_list,
+                    right_list,
+                    Arc::clone(element_field),
+                )
+            }
+            DataType::LargeList(element_field) => {
+                let left_list = as_large_list_array(&left_array)?;
+                let right_list = as_large_list_array(&right_array)?;
+                invoke_with_lists(
+                    self,
+                    lambda,
+                    left_list,
+                    right_list,
+                    Arc::clone(element_field),
+                )
+            }
+            data_type => exec_err!(
                 "{} expected a list return type, got {}",
                 self.name(),
-                args.return_field
-            );
-        };
-        let output = if output.data_type() == element_field.data_type() {
-            output
-        } else {
-            datafusion::arrow::compute::cast(&output, element_field.data_type())?
-        };
-        Ok(ColumnarValue::Array(Arc::new(ListArray::new(
-            Arc::clone(element_field),
-            offsets,
-            output,
-            nulls,
-        ))))
+                data_type
+            ),
+        }
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -139,9 +158,20 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         }
         arg_types
             .iter()
-            .map(|data_type| match data_type {
-                DataType::List(_) => Ok(data_type.clone()),
-                other => plan_err!("{} expected a list, got {other}", self.name()),
+            .enumerate()
+            .map(|(index, data_type)| {
+                super::lambda_utils::coerce_single_list_arg(
+                    self.name(),
+                    std::slice::from_ref(data_type),
+                )?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(format!(
+                        "{} failed to coerce list argument {index}",
+                        self.name()
+                    ))
+                })
             })
             .collect()
     }
@@ -167,23 +197,79 @@ fn zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
 }
 
 fn list_element(name: &str, field: &FieldRef, position: &str) -> Result<FieldRef> {
-    let DataType::List(element) = field.data_type() else {
+    let (DataType::List(element) | DataType::LargeList(element)) =
+        coerced_list_type(name, field, position)?
+    else {
         return plan_err!("{name} expected a list as the {position} argument, got {field}");
     };
-    Ok(Arc::clone(element))
+    Ok(element)
 }
 
-fn build_zipped_values(
-    left_list: &ListArray,
-    right_list: &ListArray,
-) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>, Option<NullBuffer>)> {
+fn coerced_list_type(name: &str, field: &FieldRef, position: &str) -> Result<DataType> {
+    let coerced = super::lambda_utils::coerce_single_list_arg(
+        name,
+        std::slice::from_ref(&field.data_type().clone()),
+    )?;
+    let Some(coerced) = coerced.into_iter().next() else {
+        return plan_err!("{name} expected a list as the {position} argument, got {field}");
+    };
+    Ok(coerced)
+}
+
+fn invoke_with_lists<O: OffsetSizeTrait>(
+    function: &SparkArrayZipWith,
+    lambda: &datafusion_expr::LambdaArgument,
+    left_list: &GenericListArray<O>,
+    right_list: &GenericListArray<O>,
+    element_field: FieldRef,
+) -> Result<ColumnarValue> {
+    if left_list.len() != right_list.len() {
+        return exec_err!(
+            "{} expected arrays with the same row count, got {} and {}",
+            function.name(),
+            left_list.len(),
+            right_list.len()
+        );
+    }
+
+    let (left_values, right_values, offsets, nulls) = build_zipped_values(left_list, right_list)?;
+    let row_numbers = zip_row_numbers(&offsets)?;
+    let left_param = || Ok(Arc::clone(&left_values));
+    let right_param = || Ok(Arc::clone(&right_values));
+    let params: [&dyn Fn() -> Result<ArrayRef>; 2] = if function.right_first {
+        [&right_param, &left_param]
+    } else {
+        [&left_param, &right_param]
+    };
+    let output = lambda
+        .evaluate(&params, |arrays| {
+            Ok(take_arrays(arrays, &row_numbers, None)?)
+        })?
+        .into_array(left_values.len())?;
+    let output = if output.data_type() == element_field.data_type() {
+        output
+    } else {
+        datafusion::arrow::compute::cast(&output, element_field.data_type())?
+    };
+    Ok(ColumnarValue::Array(Arc::new(GenericListArray::<O>::new(
+        element_field,
+        offsets,
+        output,
+        nulls,
+    ))))
+}
+
+fn build_zipped_values<O: OffsetSizeTrait>(
+    left_list: &GenericListArray<O>,
+    right_list: &GenericListArray<O>,
+) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<O>, Option<NullBuffer>)> {
     let left_values = left_list.values();
     let right_values = right_list.values();
-    let mut offsets = vec![0i32];
+    let mut offsets = vec![O::usize_as(0)];
     let mut nulls = Vec::with_capacity(left_list.len());
     let mut left_parts = Vec::new();
     let mut right_parts = Vec::new();
-    let mut total = 0i32;
+    let mut total = O::usize_as(0);
 
     for row in 0..left_list.len() {
         if left_list.is_null(row) || right_list.is_null(row) {
@@ -192,18 +278,18 @@ fn build_zipped_values(
             continue;
         }
         nulls.push(true);
-        let left_start = left_list.offsets()[row] as usize;
-        let left_len = (left_list.offsets()[row + 1] - left_list.offsets()[row]) as usize;
-        let right_start = right_list.offsets()[row] as usize;
-        let right_len = (right_list.offsets()[row + 1] - right_list.offsets()[row]) as usize;
+        let left_start = left_list.offsets()[row].as_usize();
+        let left_len =
+            left_list.offsets()[row + 1].as_usize() - left_list.offsets()[row].as_usize();
+        let right_start = right_list.offsets()[row].as_usize();
+        let right_len =
+            right_list.offsets()[row + 1].as_usize() - right_list.offsets()[row].as_usize();
         let length = left_len.max(right_len);
         let left_part = left_values.slice(left_start, left_len);
         let right_part = right_values.slice(right_start, right_len);
         left_parts.push(pad_part(&left_part, length)?);
         right_parts.push(pad_part(&right_part, length)?);
-        let length = i32::try_from(length).map_err(|_| {
-            datafusion_common::DataFusionError::Execution("zip_with array is too large".to_string())
-        })?;
+        let length = O::usize_as(length);
         total += length;
         offsets.push(total);
     }
@@ -235,12 +321,14 @@ fn concat_or_empty(parts: &[ArrayRef], data_type: &DataType) -> Result<ArrayRef>
     )?)
 }
 
-fn zip_row_numbers(offsets: &OffsetBuffer<i32>) -> Result<datafusion::arrow::array::UInt32Array> {
-    let mut values = Vec::with_capacity(offsets.last().copied().unwrap_or_default() as usize);
+fn zip_row_numbers<O: OffsetSizeTrait>(
+    offsets: &OffsetBuffer<O>,
+) -> Result<datafusion::arrow::array::UInt32Array> {
+    let mut values = Vec::with_capacity(offsets.last().copied().unwrap_or_default().as_usize());
     for row in 0..offsets.len() - 1 {
         values.extend(std::iter::repeat_n(
             row as u32,
-            (offsets[row + 1] - offsets[row]) as usize,
+            (offsets[row + 1] - offsets[row]).as_usize(),
         ));
     }
     Ok(datafusion::arrow::array::UInt32Array::from(values))
@@ -248,7 +336,7 @@ fn zip_row_numbers(offsets: &OffsetBuffer<i32>) -> Result<datafusion::arrow::arr
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int32Array, UInt32Array};
+    use datafusion::arrow::array::{Int32Array, ListArray, UInt32Array};
     use datafusion_common::DataFusionError;
 
     use super::*;
@@ -295,6 +383,35 @@ mod tests {
             zip_row_numbers(&offsets)?,
             UInt32Array::from(vec![0, 0, 0, 1])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn right_first_reorders_lambda_parameters() -> Result<()> {
+        let function = SparkArrayZipWith::new_with_right_first(true);
+        let fields = vec![
+            ValueOrLambda::Value(Arc::new(Field::new(
+                "left",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ))),
+            ValueOrLambda::Value(Arc::new(Field::new(
+                "right",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                true,
+            ))),
+            ValueOrLambda::Lambda(None),
+        ];
+
+        let LambdaParametersProgress::Complete(parameters) =
+            function.lambda_parameters(0, &fields)?
+        else {
+            return Err(DataFusionError::Internal(
+                "expected complete lambda parameters".to_string(),
+            ));
+        };
+        assert_eq!(parameters[0][0].data_type(), &DataType::Int64);
+        assert_eq!(parameters[0][1].data_type(), &DataType::Int32);
         Ok(())
     }
 

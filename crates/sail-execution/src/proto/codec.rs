@@ -185,7 +185,9 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{
+    JsonAsText, JsonLength, JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson,
+};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::spark_map_zip_with::{MapZipWithParameterOrder, SparkMapZipWith};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -2480,6 +2482,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        // When the buffer is empty, return an error to trigger fallback to session registry.
+        // This allows DataFusion built-in functions (e.g., array_length, cardinality, greatest, least)
+        // to be resolved from the session registry during distributed execution.
+        if buf.is_empty() {
+            return plan_err!("empty buffer for scalar function: {name}");
+        }
+
         // TODO: Implement custom registry to avoid codec for built-in functions.
         // The `match name` below has no session-registry fallback, so every
         // scalar UDF needs an explicit arm or distributed decode fails with
@@ -2928,8 +2937,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
-            || node_inner.is::<GreatestFunc>()
-            || node_inner.is::<LeastFunc>()
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
@@ -2947,7 +2954,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
-            || node_inner.is::<OverlayFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
@@ -3032,14 +3038,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
+            || node_inner.is::<JsonAsText>()
+            || node_inner.is::<JsonLength>()
+            || node_inner.is::<JsonObjectKeys>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
             || matches!(node.name(), "date_part" | "datepart" | "extract")
-            || node.name() == "json_as_text"
-            || node.name() == "json_len"
-            || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
@@ -3736,8 +3742,10 @@ impl RemoteExecutionCodec {
                     map_zip_with.parameter_order(),
                 ),
             })
-        } else if udf_inner.downcast_ref::<SparkArrayZipWith>().is_some() {
-            HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
+        } else if let Some(zip_with) = udf_inner.downcast_ref::<SparkArrayZipWith>() {
+            HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {
+                right_first: zip_with.right_first(),
+            })
         } else {
             return plan_err!("unsupported higher-order function: {}", hof.name());
         };
@@ -3802,9 +3810,9 @@ impl RemoteExecutionCodec {
                     ),
                 ))
             }
-            HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
-            }
+            HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf { right_first }) => Arc::new(
+                HigherOrderUDF::new_from_impl(SparkArrayZipWith::new_with_right_first(right_first)),
+            ),
         })
     }
 

@@ -156,9 +156,9 @@ pub(super) fn try_decode_higher_order_udf(
                 decode_map_zip_with_parameter_order(parameter_order)?,
             )),
         ),
-        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
-        }
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf { right_first }) => Arc::new(
+            HigherOrderUDF::new_from_impl(SparkArrayZipWith::new_with_right_first(right_first)),
+        ),
     })
 }
 
