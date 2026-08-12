@@ -91,6 +91,8 @@ impl ScalarUDFImpl for RandPoisson {
             }
         };
 
+        // `Poisson::new` rejects zero, but Spark permits a zero sampling fraction and emits no
+        // copies of each input row, so return one zero count per row without a distribution.
         if lambda == 0.0 {
             let values = Int64Array::from_value(0, number_rows);
             return Ok(ColumnarValue::Array(Arc::new(values)));
