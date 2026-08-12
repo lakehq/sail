@@ -80,6 +80,10 @@ pub enum DeltaOperation {
         #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
     },
+    Update {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     Merge {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +130,7 @@ impl DeltaOperation {
             Self::Create { .. } => "CREATE TABLE",
             Self::Write { .. } => "WRITE",
             Self::Delete { .. } => "DELETE",
+            Self::Update { .. } => "UPDATE",
             Self::Merge { .. } => "MERGE",
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
@@ -180,6 +185,9 @@ impl DeltaOperation {
                 insert_opt(&mut parameters, "predicate", predicate.clone());
             }
             Self::Delete { predicate } => {
+                insert_opt(&mut parameters, "predicate", predicate.clone());
+            }
+            Self::Update { predicate } => {
                 insert_opt(&mut parameters, "predicate", predicate.clone());
             }
             Self::Merge {
@@ -262,6 +270,7 @@ impl DeltaOperation {
         match self {
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
+            Self::Update { predicate, .. } => predicate.clone(),
             Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }

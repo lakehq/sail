@@ -302,6 +302,33 @@ pub fn expand_merge(
         })
         .collect();
 
+    if options.with_schema_evolution && merge_has_star_action(&options) {
+        for (source_field, source_name) in options
+            .resolved_source_schema
+            .fields()
+            .iter()
+            .zip(&desired_source_names)
+        {
+            if desired_target_names.iter().any(|target_name| {
+                merge_names_equal(target_name, source_name, options.case_sensitive)
+            }) {
+                continue;
+            }
+            if is_reserved_merge_column(
+                source_name,
+                path_column,
+                row_index_column,
+                row_delete_metadata_columns,
+            ) {
+                return plan_err!(
+                    "MERGE schema evolution cannot add reserved internal column '{source_name}'"
+                );
+            }
+            let null_value = ScalarValue::try_new_null(source_field.data_type())?;
+            target_proj_exprs.push(lit(null_value).alias(source_name.clone()));
+        }
+    }
+
     // Ensure MERGE metadata columns are preserved even when desired_target_names was shorter.
     let path_already_present = target_proj_exprs
         .iter()
@@ -867,6 +894,17 @@ fn can_fast_append_insert_only(
     Ok(true)
 }
 
+fn merge_has_star_action(options: &MergeIntoOptions) -> bool {
+    options
+        .matched_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
+        || options
+            .not_matched_by_target_clauses
+            .iter()
+            .any(|clause| matches!(clause.action, MergeNotMatchedByTargetAction::InsertAll))
+}
+
 fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     let preds = options
         .not_matched_by_target_clauses
@@ -968,6 +1006,27 @@ fn is_merge_metadata_column(
         || row_index_column.is_some_and(|column| name == column)
         || row_delete_metadata_columns.contains(&name)
         || name == TARGET_ROW_ID_COLUMN
+}
+
+fn is_reserved_merge_column(
+    name: &str,
+    path_column: &str,
+    row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
+) -> bool {
+    is_merge_metadata_column(
+        name,
+        path_column,
+        row_index_column,
+        row_delete_metadata_columns,
+    ) || matches!(
+        name,
+        TARGET_PRESENT_COLUMN
+            | SOURCE_PRESENT_COLUMN
+            | TARGET_ROW_ID_COLUMN
+            | OPERATION_COLUMN
+            | MERGE_SOURCE_METRIC_COLUMN
+    )
 }
 
 fn merge_source_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {

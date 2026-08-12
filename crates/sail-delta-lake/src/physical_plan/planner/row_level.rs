@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
+use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
@@ -17,7 +17,7 @@ use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_pr
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo,
-    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor,
+    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update,
 };
 use crate::table::open_table_with_object_store;
 
@@ -96,7 +96,37 @@ pub async fn create_row_level_write_physical_plan(
             };
             create_delta_row_level_writer(ctx, info).await
         }
-        RowLevelCommand::Update => internal_err!("UPDATE is not yet implemented"),
+        RowLevelCommand::Update => {
+            let physical_write = planner
+                .create_physical_plan(
+                    node.write_plan().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "UPDATE RowLevelWriteNode must have a write plan".into(),
+                        )
+                    })?,
+                    ctx,
+                )
+                .await?;
+            let physical_touched = match node.touched_files_plan() {
+                Some(plan) => Some(planner.create_physical_plan(plan, ctx).await?),
+                None => None,
+            };
+            let info = RowLevelWriteInfo {
+                command: RowLevelCommand::Update,
+                target,
+                condition: node.condition().cloned(),
+                expanded_input: Some(physical_write),
+                touched_file_plan: physical_touched,
+                deletion_vector_plan: None,
+                with_schema_evolution: false,
+                operation_override: Some(OperationOverride::Update {
+                    predicate: node
+                        .condition()
+                        .and_then(|condition| condition.source.clone()),
+                }),
+            };
+            create_delta_row_level_writer(ctx, info).await
+        }
     }
 }
 
@@ -104,7 +134,9 @@ async fn create_delta_row_level_writer(
     ctx: &dyn Session,
     info: RowLevelWriteInfo,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let effective_strategy = if matches!(
+    let effective_strategy = if row_level_operation_requires_eager(&info) {
+        MergeStrategy::Eager
+    } else if matches!(
         info.command,
         RowLevelCommand::Delete | RowLevelCommand::Merge
     ) {
@@ -121,9 +153,12 @@ async fn create_delta_row_level_writer(
     match (effective_strategy, info.command) {
         (MergeStrategy::MergeOnRead, RowLevelCommand::Delete) => {
             let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
-            let condition = info.condition.ok_or_else(|| {
-                DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
-            })?;
+            let condition = info.condition.unwrap_or_else(|| {
+                sail_common_datafusion::logical_expr::ExprWithSource::new(
+                    datafusion_expr::lit(true),
+                    None,
+                )
+            });
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let delete_config = DeltaPlannerConfig::new(
                 table_url,
@@ -158,9 +193,12 @@ async fn create_delta_row_level_writer(
         }
         (MergeStrategy::Eager, RowLevelCommand::Delete) => {
             let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
-            let condition = info.condition.ok_or_else(|| {
-                DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
-            })?;
+            let condition = info.condition.unwrap_or_else(|| {
+                sail_common_datafusion::logical_expr::ExprWithSource::new(
+                    datafusion_expr::lit(true),
+                    None,
+                )
+            });
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let delete_config = DeltaPlannerConfig::new(
                 table_url,
@@ -190,10 +228,41 @@ async fn create_delta_row_level_writer(
             let merge_ctx = PlannerContext::new(ctx, merge_config);
             plan_merge(&merge_ctx, info).await
         }
-        (_, RowLevelCommand::Update) => {
-            not_impl_err!("UPDATE is not yet implemented for Delta Lake")
+        (MergeStrategy::Eager, RowLevelCommand::Update) => {
+            let table_url =
+                DeltaLakeSource::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+            let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
+            let update_config = DeltaPlannerConfig::new(
+                table_url,
+                delta_options,
+                HashMap::new(),
+                info.target.partition_by.clone(),
+                None,
+                true,
+            )
+            .with_lakehouse_table(lakehouse_table.clone());
+            let update_ctx = PlannerContext::new(ctx, update_config);
+            plan_update(&update_ctx, info).await
         }
     }
+}
+
+fn row_level_operation_requires_eager(info: &RowLevelWriteInfo) -> bool {
+    if info.command == RowLevelCommand::Update {
+        return true;
+    }
+    let Some(OperationOverride::Merge {
+        matched_predicates,
+        not_matched_by_source_predicates,
+        ..
+    }) = info.operation_override.as_ref()
+    else {
+        return false;
+    };
+    matched_predicates
+        .iter()
+        .chain(not_matched_by_source_predicates)
+        .any(|predicate| predicate.action_type.eq_ignore_ascii_case("update"))
 }
 
 /// Build `OperationOverride::Merge` from the logical MERGE options on the write node.
