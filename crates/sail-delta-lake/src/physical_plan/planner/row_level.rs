@@ -9,7 +9,7 @@ use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
-use sail_logical_plan::merge::RowLevelWriteNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 use url::Url;
 
 use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};

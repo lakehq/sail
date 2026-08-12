@@ -8,7 +8,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo};
+use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -55,6 +55,14 @@ impl LakeSourceCreateTableInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LakeSourceCreateTableResult {
     pub properties: Vec<(String, String)>,
+}
+
+/// A row-level operation that requires lake-source-specific planning.
+#[derive(Debug, Clone)]
+pub enum RowLevelOperation {
+    Delete(Box<DeleteInfo>),
+    Update(Box<UpdateInfo>),
+    Merge(Box<MergeInfo>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,22 +119,27 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceCreateTableResult::default())
     }
 
-    /// Creates a logical plan for DELETE.
-    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "DELETE is not yet implemented for lake source '{}'",
-            self.name()
-        )
-    }
-
-    /// Creates a logical plan for MERGE.
-    async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "MERGE is not yet implemented for lake source '{}'",
-            self.name()
-        )
+    /// Creates a logical plan for a row-level operation.
+    async fn plan_row_level_operation(
+        &self,
+        ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let _ = ctx;
+        match operation {
+            RowLevelOperation::Delete(_) => not_impl_err!(
+                "DELETE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+            RowLevelOperation::Update(_) => not_impl_err!(
+                "UPDATE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+            RowLevelOperation::Merge(_) => not_impl_err!(
+                "MERGE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
+        }
     }
 
     /// Alters storage metadata for an existing lake source.

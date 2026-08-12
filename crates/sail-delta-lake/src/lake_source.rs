@@ -24,19 +24,19 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeleteInfo, MergeInfo, OptionLayer,
-    PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode,
+    SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
-    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata,
+    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
-use sail_logical_plan::merge::RowLevelWriteNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -421,14 +421,20 @@ impl LakeSource for DeltaLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let DeleteInfo {
-            table_name,
-            path,
-            condition,
-            lakehouse_table,
-            options,
-        } = info;
+    async fn plan_row_level_operation(
+        &self,
+        _ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let DeleteInfo { target, condition } = match operation {
+            RowLevelOperation::Delete(info) => *info,
+            RowLevelOperation::Update(_) => {
+                return not_impl_err!("UPDATE is not yet implemented for Delta");
+            }
+            RowLevelOperation::Merge(info) => {
+                return crate::logical::merge::expand_merge_node(*info);
+            }
+        };
         let write_node = RowLevelWriteNode::new_delete(
             Arc::new(LogicalPlan::EmptyRelation(
                 datafusion_expr::logical_plan::EmptyRelation {
@@ -438,20 +444,12 @@ impl LakeSource for DeltaLakeSource {
             )),
             Arc::new(DFSchema::empty()),
             condition,
-            self.name().to_string(),
-            path,
-            table_name,
-            options,
-            lakehouse_table,
+            target,
         );
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
         }))
-    }
-
-    async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
-        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn alter_table(

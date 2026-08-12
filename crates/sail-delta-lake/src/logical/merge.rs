@@ -10,7 +10,8 @@ use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::merge::{expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::logical::table_source::DeltaTableSource;
 
