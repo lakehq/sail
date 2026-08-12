@@ -7,12 +7,12 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum LifecycleManagerMessage {
-    GetOrCreateShuffleId {
+    GetShuffleId {
         job_id: u64,
         stage: u64,
         result: oneshot::Sender<CelebornResult<i32>>,
     },
-    GetShuffleIds {
+    GetJobShuffleIds {
         job_id: u64,
         result: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
     },
@@ -59,8 +59,8 @@ pub enum LifecycleManagerMessage {
 impl SpanAssociation for LifecycleManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
-            Self::GetOrCreateShuffleId { .. } => "GetOrCreateShuffleId",
-            Self::GetShuffleIds { .. } => "GetShuffleIds",
+            Self::GetShuffleId { .. } => "GetShuffleId",
+            Self::GetJobShuffleIds { .. } => "GetJobShuffleIds",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleComplete { .. } => "RegisterShuffleComplete",
             Self::MapperEnd { .. } => "MapperEnd",

@@ -36,7 +36,7 @@ impl CelebornStreamManager {
     ) -> Result<()> {
         let shuffle_ids = self
             .client
-            .get_shuffle_ids(job_id.into())
+            .get_job_shuffle_ids(job_id.into())
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         for (stream_stage, shuffle_id) in shuffle_ids {
@@ -66,7 +66,7 @@ impl CelebornStreamManager {
         // A Celeborn shuffle spans every map task and reduce channel in one producer stage.
         let shuffle_id = self
             .client
-            .get_or_create_shuffle_id(key.job_id.into(), key.stage as u64)
+            .get_shuffle_id(key.job_id.into(), key.stage as u64)
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         self.client
@@ -120,7 +120,7 @@ impl CelebornStreamManager {
     ) -> Result<TaskStreamSource> {
         let shuffle_id = self
             .client
-            .get_or_create_shuffle_id(job_id.into(), stage as u64)
+            .get_shuffle_id(job_id.into(), stage as u64)
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let partition_ids = channels

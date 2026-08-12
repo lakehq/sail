@@ -10,11 +10,10 @@ use tonic::{Request, Response, Status};
 use crate::driver::DriverRegistryAccessor;
 use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLifecycleManagerService;
 use crate::driver::r#gen::{
-    CelebornGetOrCreateShuffleIdRequest, CelebornGetOrCreateShuffleIdResponse,
-    CelebornGetShuffleIdsRequest, CelebornGetShuffleIdsResponse, CelebornMapperEndRequest,
-    CelebornMapperEndResponse, CelebornPartitionLocation, CelebornRegisterShuffleRequest,
-    CelebornRegisterShuffleResponse, CelebornShuffleId, CelebornUnregisterShuffleRequest,
-    CelebornUnregisterShuffleResponse,
+    CelebornGetJobShuffleIdsRequest, CelebornGetJobShuffleIdsResponse, CelebornGetShuffleIdRequest,
+    CelebornGetShuffleIdResponse, CelebornMapperEndRequest, CelebornMapperEndResponse,
+    CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
+    CelebornShuffleId, CelebornUnregisterShuffleRequest, CelebornUnregisterShuffleResponse,
 };
 use crate::error::ExecutionError;
 use crate::id::DriverId;
@@ -64,17 +63,17 @@ fn location(partition: PartitionLocation) -> CelebornPartitionLocation {
 
 #[tonic::async_trait]
 impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
-    async fn get_or_create_shuffle_id(
+    async fn get_shuffle_id(
         &self,
-        request: Request<CelebornGetOrCreateShuffleIdRequest>,
-    ) -> Result<Response<CelebornGetOrCreateShuffleIdResponse>, Status> {
+        request: Request<CelebornGetShuffleIdRequest>,
+    ) -> Result<Response<CelebornGetShuffleIdResponse>, Status> {
         let request = request.into_inner();
         let manager = self
             .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
             .await?;
         let (result, receiver) = oneshot::channel();
         manager
-            .send(LifecycleManagerMessage::GetOrCreateShuffleId {
+            .send(LifecycleManagerMessage::GetShuffleId {
                 job_id: request.job_id,
                 stage: request.stage,
                 result,
@@ -82,9 +81,7 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
             .await
             .map_err(ExecutionError::from)?;
         let shuffle_id = receiver.await.map_err(status)?.map_err(status)?;
-        Ok(Response::new(CelebornGetOrCreateShuffleIdResponse {
-            shuffle_id,
-        }))
+        Ok(Response::new(CelebornGetShuffleIdResponse { shuffle_id }))
     }
 
     async fn register_shuffle(
@@ -116,24 +113,24 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
         }))
     }
 
-    async fn get_shuffle_ids(
+    async fn get_job_shuffle_ids(
         &self,
-        request: Request<CelebornGetShuffleIdsRequest>,
-    ) -> Result<Response<CelebornGetShuffleIdsResponse>, Status> {
+        request: Request<CelebornGetJobShuffleIdsRequest>,
+    ) -> Result<Response<CelebornGetJobShuffleIdsResponse>, Status> {
         let request = request.into_inner();
         let manager = self
             .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
             .await?;
         let (result, receiver) = oneshot::channel();
         manager
-            .send(LifecycleManagerMessage::GetShuffleIds {
+            .send(LifecycleManagerMessage::GetJobShuffleIds {
                 job_id: request.job_id,
                 result,
             })
             .await
             .map_err(ExecutionError::from)?;
         let shuffle_ids = receiver.await.map_err(status)?.map_err(status)?;
-        Ok(Response::new(CelebornGetShuffleIdsResponse {
+        Ok(Response::new(CelebornGetJobShuffleIdsResponse {
             shuffle_ids: shuffle_ids
                 .into_iter()
                 .map(|(stage, shuffle_id)| CelebornShuffleId { stage, shuffle_id })

@@ -8,22 +8,22 @@ use crate::error::CelebornResult;
 use crate::master::SlotReservation;
 
 pub enum ShuffleClientMessage {
-    GetOrCreateShuffleId {
+    GetShuffleId {
         job_id: u64,
         stage: u64,
         result: oneshot::Sender<CelebornResult<i32>>,
     },
-    GetOrCreateShuffleIdComplete {
+    GetShuffleIdComplete {
         job_id: u64,
         stage: u64,
         result: CelebornResult<i32>,
         reply: oneshot::Sender<CelebornResult<i32>>,
     },
-    GetShuffleIds {
+    GetJobShuffleIds {
         job_id: u64,
         result: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
     },
-    GetShuffleIdsComplete {
+    GetJobShuffleIdsComplete {
         job_id: u64,
         result: CelebornResult<Vec<(u64, i32)>>,
         reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
@@ -82,10 +82,10 @@ pub enum ShuffleClientMessage {
 impl SpanAssociation for ShuffleClientMessage {
     fn name(&self) -> Cow<'static, str> {
         match self {
-            Self::GetOrCreateShuffleId { .. } => "GetOrCreateShuffleId",
-            Self::GetOrCreateShuffleIdComplete { .. } => "GetOrCreateShuffleIdComplete",
-            Self::GetShuffleIds { .. } => "GetShuffleIds",
-            Self::GetShuffleIdsComplete { .. } => "GetShuffleIdsComplete",
+            Self::GetShuffleId { .. } => "GetShuffleId",
+            Self::GetShuffleIdComplete { .. } => "GetShuffleIdComplete",
+            Self::GetJobShuffleIds { .. } => "GetJobShuffleIds",
+            Self::GetJobShuffleIdsComplete { .. } => "GetJobShuffleIdsComplete",
             Self::RegisterShuffle { .. } => "RegisterShuffle",
             Self::RegisterShuffleComplete { .. } => "RegisterShuffleComplete",
             Self::PushData { .. } => "PushData",

@@ -19,16 +19,16 @@ impl RemoteLifecycleManager {
 
 #[tonic::async_trait]
 impl LifecycleManager for RemoteLifecycleManager {
-    async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+    async fn get_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         self.client
-            .get_or_create_shuffle_id(job_id, stage)
+            .get_shuffle_id(job_id, stage)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))
     }
 
-    async fn get_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+    async fn get_job_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
         self.client
-            .get_shuffle_ids(job_id)
+            .get_job_shuffle_ids(job_id)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))
     }

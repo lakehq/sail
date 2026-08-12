@@ -2,17 +2,17 @@ syntax = "proto3";
 
 package sail.driver;
 
-message CelebornGetOrCreateShuffleIdRequest {
+message CelebornGetShuffleIdRequest {
   uint64 driver_id = 1;
   uint64 job_id = 2;
   uint64 stage = 3;
 }
 
-message CelebornGetOrCreateShuffleIdResponse {
+message CelebornGetShuffleIdResponse {
   int32 shuffle_id = 1;
 }
 
-message CelebornGetShuffleIdsRequest {
+message CelebornGetJobShuffleIdsRequest {
   uint64 driver_id = 1;
   uint64 job_id = 2;
 }
@@ -22,7 +22,7 @@ message CelebornShuffleId {
   int32 shuffle_id = 2;
 }
 
-message CelebornGetShuffleIdsResponse {
+message CelebornGetJobShuffleIdsResponse {
   repeated CelebornShuffleId shuffle_ids = 1;
 }
 
@@ -68,8 +68,8 @@ message CelebornUnregisterShuffleRequest {
 message CelebornUnregisterShuffleResponse {}
 
 service CelebornLifecycleManagerService {
-  rpc GetOrCreateShuffleId(CelebornGetOrCreateShuffleIdRequest) returns (CelebornGetOrCreateShuffleIdResponse) {}
-  rpc GetShuffleIds(CelebornGetShuffleIdsRequest) returns (CelebornGetShuffleIdsResponse) {}
+  rpc GetShuffleId(CelebornGetShuffleIdRequest) returns (CelebornGetShuffleIdResponse) {}
+  rpc GetJobShuffleIds(CelebornGetJobShuffleIdsRequest) returns (CelebornGetJobShuffleIdsResponse) {}
   rpc RegisterShuffle(CelebornRegisterShuffleRequest) returns (CelebornRegisterShuffleResponse) {}
   rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
   rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}

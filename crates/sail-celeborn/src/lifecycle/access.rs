@@ -23,10 +23,10 @@ impl LocalLifecycleManager {
 
 #[tonic::async_trait]
 impl LifecycleManager for LocalLifecycleManager {
-    async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+    async fn get_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerMessage::GetOrCreateShuffleId {
+            .send(LifecycleManagerMessage::GetShuffleId {
                 job_id,
                 stage,
                 result,
@@ -36,10 +36,10 @@ impl LifecycleManager for LocalLifecycleManager {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    async fn get_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+    async fn get_job_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerMessage::GetShuffleIds { job_id, result })
+            .send(LifecycleManagerMessage::GetJobShuffleIds { job_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?

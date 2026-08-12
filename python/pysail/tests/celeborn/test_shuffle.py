@@ -18,6 +18,8 @@ ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 _DATA = b"hello Celeborn"
 _REPLICATION_WORKER_COUNT = 2
+
+
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,

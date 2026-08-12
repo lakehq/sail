@@ -23,25 +23,25 @@ impl Actor for ShuffleClientActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            ShuffleClientMessage::GetOrCreateShuffleId {
+            ShuffleClientMessage::GetShuffleId {
                 job_id,
                 stage,
                 result,
-            } => self.handle_get_or_create_shuffle_id(ctx, job_id, stage, result),
-            ShuffleClientMessage::GetOrCreateShuffleIdComplete {
+            } => self.handle_get_shuffle_id(ctx, job_id, stage, result),
+            ShuffleClientMessage::GetShuffleIdComplete {
                 job_id,
                 stage,
                 result,
                 reply,
-            } => self.handle_get_or_create_shuffle_id_complete(job_id, stage, result, reply),
-            ShuffleClientMessage::GetShuffleIds { job_id, result } => {
-                self.handle_get_shuffle_ids(ctx, job_id, result)
+            } => self.handle_get_shuffle_id_complete(job_id, stage, result, reply),
+            ShuffleClientMessage::GetJobShuffleIds { job_id, result } => {
+                self.handle_get_job_shuffle_ids(ctx, job_id, result)
             }
-            ShuffleClientMessage::GetShuffleIdsComplete {
+            ShuffleClientMessage::GetJobShuffleIdsComplete {
                 job_id,
                 result,
                 reply,
-            } => self.handle_get_shuffle_ids_complete(job_id, result, reply),
+            } => self.handle_get_job_shuffle_ids_complete(job_id, result, reply),
             ShuffleClientMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,

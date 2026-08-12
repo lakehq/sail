@@ -48,13 +48,13 @@ impl Actor for LifecycleManagerActor {
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            LifecycleManagerMessage::GetOrCreateShuffleId {
+            LifecycleManagerMessage::GetShuffleId {
                 job_id,
                 stage,
                 result,
-            } => self.handle_get_or_create_shuffle_id(job_id, stage, result),
-            LifecycleManagerMessage::GetShuffleIds { job_id, result } => {
-                self.handle_get_shuffle_ids(job_id, result)
+            } => self.handle_get_shuffle_id(job_id, stage, result),
+            LifecycleManagerMessage::GetJobShuffleIds { job_id, result } => {
+                self.handle_get_job_shuffle_ids(job_id, result)
             }
             LifecycleManagerMessage::RegisterShuffle {
                 shuffle_id,

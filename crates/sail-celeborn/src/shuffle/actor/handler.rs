@@ -11,7 +11,7 @@ use crate::shuffle::actor::ShuffleClientActor;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl ShuffleClientActor {
-    pub(super) fn handle_get_or_create_shuffle_id(
+    pub(super) fn handle_get_shuffle_id(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: u64,
@@ -25,11 +25,9 @@ impl ShuffleClientActor {
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let result = lifecycle_manager
-                .get_or_create_shuffle_id(job_id, stage)
-                .await;
+            let result = lifecycle_manager.get_shuffle_id(job_id, stage).await;
             let _ = handle
-                .send(ShuffleClientMessage::GetOrCreateShuffleIdComplete {
+                .send(ShuffleClientMessage::GetShuffleIdComplete {
                     job_id,
                     stage,
                     result,
@@ -40,7 +38,7 @@ impl ShuffleClientActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_get_or_create_shuffle_id_complete(
+    pub(super) fn handle_get_shuffle_id_complete(
         &mut self,
         job_id: u64,
         stage: u64,
@@ -56,7 +54,7 @@ impl ShuffleClientActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_get_shuffle_ids(
+    pub(super) fn handle_get_job_shuffle_ids(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: u64,
@@ -65,9 +63,9 @@ impl ShuffleClientActor {
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let result = lifecycle_manager.get_shuffle_ids(job_id).await;
+            let result = lifecycle_manager.get_job_shuffle_ids(job_id).await;
             let _ = handle
-                .send(ShuffleClientMessage::GetShuffleIdsComplete {
+                .send(ShuffleClientMessage::GetJobShuffleIdsComplete {
                     job_id,
                     result,
                     reply,
@@ -77,7 +75,7 @@ impl ShuffleClientActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_get_shuffle_ids_complete(
+    pub(super) fn handle_get_job_shuffle_ids_complete(
         &mut self,
         job_id: u64,
         result: CelebornResult<Vec<(u64, i32)>>,

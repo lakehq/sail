@@ -13,10 +13,10 @@ pub struct ShuffleClient {
 }
 
 impl ShuffleClient {
-    pub async fn get_or_create_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+    pub async fn get_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::GetOrCreateShuffleId {
+            .send(ShuffleClientMessage::GetShuffleId {
                 job_id,
                 stage,
                 result,
@@ -26,10 +26,10 @@ impl ShuffleClient {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
-    pub async fn get_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+    pub async fn get_job_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(ShuffleClientMessage::GetShuffleIds { job_id, result })
+            .send(ShuffleClientMessage::GetJobShuffleIds { job_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?

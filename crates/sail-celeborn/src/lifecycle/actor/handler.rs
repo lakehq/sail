@@ -9,7 +9,7 @@ use crate::master::{SlotReservation, UserIdentifier};
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
 impl LifecycleManagerActor {
-    pub(super) fn handle_get_or_create_shuffle_id(
+    pub(super) fn handle_get_shuffle_id(
         &mut self,
         job_id: u64,
         stage: u64,
@@ -33,7 +33,7 @@ impl LifecycleManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_get_shuffle_ids(
+    pub(super) fn handle_get_job_shuffle_ids(
         &mut self,
         job_id: u64,
         reply: oneshot::Sender<CelebornResult<Vec<(u64, i32)>>>,
