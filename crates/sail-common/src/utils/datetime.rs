@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::LazyLock;
+
 use arrow::datatypes::TimeUnit;
 use iana_time_zone::get_timezone;
 
@@ -15,4 +19,59 @@ pub const fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
         TimeUnit::Microsecond => 1_000_000i64,
         TimeUnit::Nanosecond => 1_000_000_000i64,
     }
+}
+
+// Mirrors `java.time.ZoneId#SHORT_IDS`, as used by Spark's `SparkDateTimeUtils#getZoneId`.
+// Resolve these aliases before ordinary parsing because some short IDs are also valid IANA names.
+static JAVA_SHORT_ZONE_IDS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+    HashMap::from([
+        ("ACT", "Australia/Darwin"),
+        ("AET", "Australia/Sydney"),
+        ("AGT", "America/Argentina/Buenos_Aires"),
+        ("ART", "Africa/Cairo"),
+        ("AST", "America/Anchorage"),
+        ("BET", "America/Sao_Paulo"),
+        ("BST", "Asia/Dhaka"),
+        ("CAT", "Africa/Harare"),
+        ("CNT", "America/St_Johns"),
+        ("CST", "America/Chicago"),
+        ("CTT", "Asia/Shanghai"),
+        ("EAT", "Africa/Addis_Ababa"),
+        ("ECT", "Europe/Paris"),
+        ("EST", "America/Panama"),
+        ("HST", "Pacific/Honolulu"),
+        ("IET", "America/Indiana/Indianapolis"),
+        ("IST", "Asia/Kolkata"),
+        ("JST", "Asia/Tokyo"),
+        ("MIT", "Pacific/Apia"),
+        ("MST", "America/Phoenix"),
+        ("NET", "Asia/Yerevan"),
+        ("NST", "Pacific/Auckland"),
+        ("PLT", "Asia/Karachi"),
+        ("PNT", "America/Phoenix"),
+        ("PRT", "America/Puerto_Rico"),
+        ("PST", "America/Los_Angeles"),
+        ("SST", "Pacific/Guadalcanal"),
+        ("VST", "Asia/Ho_Chi_Minh"),
+    ])
+});
+
+pub fn parse_spark_timezone_id<T>(value: &str) -> CommonResult<T>
+where
+    T: FromStr,
+{
+    JAVA_SHORT_ZONE_IDS
+        .get(value)
+        .and_then(|timezone| timezone.parse::<T>().ok())
+        .or_else(|| value.parse::<T>().ok())
+        .ok_or_else(|| {
+            CommonError::invalid(format!(
+                "[INVALID_TIMEZONE] The timezone: {value} is invalid. \
+        The timezone must be either a region-based zone ID or a zone offset. \
+        Region IDs must have the form 'area/city', such as 'America/Los_Angeles'. \
+        Zone offsets must be in the format '(+|-)HH', '(+|-)HH:mm’ or '(+|-)HH:mm:ss', \
+        e.g '-08' , '+01:00' or '-13:33:33', and must be in the range from -18:00 to +18:00. \
+        'Z' and 'UTC' are accepted as synonyms for '+00:00'."
+            ))
+        })
 }

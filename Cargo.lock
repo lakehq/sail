@@ -6800,16 +6800,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_chacha"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7624,6 +7614,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "chrono",
+ "chrono-tz",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -7836,7 +7827,6 @@ dependencies = [
  "base64",
  "cbc",
  "chrono",
- "chrono-tz",
  "chumsky 0.12.0",
  "datafusion",
  "datafusion-common",
@@ -7857,7 +7847,6 @@ dependencies = [
  "parquet-variant-json",
  "percent-encoding",
  "rand 0.10.2",
- "rand_chacha 0.10.0",
  "rand_distr",
  "regex",
  "sail-common",

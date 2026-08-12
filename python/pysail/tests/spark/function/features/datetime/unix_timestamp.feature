@@ -247,6 +247,22 @@ Feature: unix_timestamp with an argument coming from a column
          |-- timestamp_ntz_result: long (nullable = false)
         """
 
+    Scenario Outline: unix_timestamp accepts a second-precision session offset for <case>
+      Given config spark.sql.session.timeZone = +01:02:03
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT unix_timestamp(<arguments>) AS result
+        """
+      Then query result
+        | result |
+        | -3723  |
+
+      Examples:
+        | case             | arguments                                    |
+        | formatted string | '1970-01-01 00:00:00', 'yyyy-MM-dd HH:mm:ss' |
+        | typed DATE       | DATE '1970-01-01'                            |
+
   @function(nullability)
   Rule: Output schema
 

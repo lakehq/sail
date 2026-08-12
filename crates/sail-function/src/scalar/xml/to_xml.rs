@@ -2,13 +2,13 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 
 use crate::scalar::datetime::format::DateTimeFormat;
 
@@ -910,12 +910,7 @@ fn format_timestamp_field(
     let _is_default_format = options.timestamp_ltz_format.is_none();
 
     if tz_opt.is_some() {
-        let tz: Tz = options.session_timezone.parse().map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Invalid session timezone '{}': {e}",
-                options.session_timezone
-            ))
-        })?;
+        let tz = parse_spark_timezone(&options.session_timezone)?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;

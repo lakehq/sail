@@ -16,6 +16,7 @@ use datafusion_expr::{
     Volatility,
 };
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
@@ -493,7 +494,7 @@ fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> St
 
     if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
         let (datetime, timezone) = if let Some(tz_str) = tz {
-            if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
+            if let Ok(tz) = parse_spark_timezone(tz_str) {
                 let local_dt = dt_utc.with_timezone(&tz);
                 let offset = local_dt.offset().fix();
                 (

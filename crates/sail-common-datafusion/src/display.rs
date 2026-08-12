@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
 use chrono::{Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal32Type,
@@ -33,6 +32,7 @@ use crate::formatter::{
     Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
     TimestampNanosecondFormatter, TimestampSecondFormatter,
 };
+use crate::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 use crate::variant::is_marked_variant_storage_type;
 
 /// Format for displaying datetime values
@@ -556,13 +556,22 @@ macro_rules! try_convert {
 macro_rules! timestamp_display {
     ($t:ty, $formatter:expr_2021 $(,)?) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = (Option<Tz>, TimeFormat<'a>);
+            type State = (Option<SparkTimeZone>, TimeFormat<'a>);
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                // FIXME: ArrayFormatter accepts Spark-only zone IDs here, but Arrow temporal
+                // kernels still parse timestamp metadata with Arrow's `Tz`, which rejects
+                // second-precision offsets. Route all LTZ consumers through `SparkTimeZone`
+                // or adopt an internal timestamp representation that does not rely on Arrow's
+                // timezone parser.
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => {
-                        Ok((Some(tz.parse()?), options.timestamp_tz_format))
-                    }
+                    DataType::Timestamp(_, Some(timezone)) => Ok((
+                        Some(
+                            parse_spark_timezone(timezone)
+                                .map_err(|error| ArrowError::ParseError(error.to_string()))?,
+                        ),
+                        options.timestamp_tz_format,
+                    )),
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }

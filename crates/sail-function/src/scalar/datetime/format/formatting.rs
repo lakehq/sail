@@ -1,5 +1,6 @@
 use chrono::{Datelike, FixedOffset, NaiveDateTime, Timelike};
 use datafusion_common::Result;
+use sail_common_datafusion::utils::datetime::canonical_spark_timezone_id;
 
 use super::locale::LocaleData;
 use super::pattern::{
@@ -61,7 +62,7 @@ fn format_items(
                 format_fraction_spec(fraction_spec, input, output);
             }
             DateTimeItem::Zone(zone_spec) => {
-                format_zone_spec(zone_spec, input, output);
+                format_zone_spec(zone_spec, input, output)?;
             }
             DateTimeItem::Optional(items) => {
                 format_items(items, input, locale, output)?;
@@ -416,7 +417,11 @@ fn format_fraction_spec(spec: &FractionSpec, input: DateTimeFormatInput<'_>, out
     }
 }
 
-fn format_zone_spec(spec: &ZoneSpec, input: DateTimeFormatInput<'_>, output: &mut String) {
+fn format_zone_spec(
+    spec: &ZoneSpec,
+    input: DateTimeFormatInput<'_>,
+    output: &mut String,
+) -> Result<()> {
     match spec.kind {
         ZoneField::IsoOffset => {
             format_offset(input.timezone, spec.width, spec.zero_as_z, output);
@@ -432,15 +437,15 @@ fn format_zone_spec(spec: &ZoneSpec, input: DateTimeFormatInput<'_>, output: &mu
             format_localized_offset(input.timezone, spec.width, output);
         }
         ZoneField::ZoneId => {
-            output.push_str(
-                input
-                    .zone_id
-                    .or_else(|| input.timezone.and_then(|tz| tz.name))
-                    .unwrap_or("UTC"),
-            );
+            let zone_id = input
+                .zone_id
+                .or_else(|| input.timezone.and_then(|tz| tz.name))
+                .unwrap_or("UTC");
+            output.push_str(&canonical_spark_timezone_id(zone_id)?);
         }
         ZoneField::ZoneName => {
             output.push_str(input.timezone.and_then(|tz| tz.name).unwrap_or("UTC"));
         }
     }
+    Ok(())
 }

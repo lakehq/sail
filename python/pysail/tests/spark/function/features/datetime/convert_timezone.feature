@@ -65,10 +65,198 @@ Feature: convert_timezone
         | '2025-03-09 10:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 01:30:00 |
         | '2025-03-09 11:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 03:30:00 |
 
+  Rule: Zone ID parsing
+
+  Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario Outline: `convert_timezone` accepts every zone offset form Java accepts
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone      | result              |
+        | Z         | 2024-01-01 12:00:00 |
+        | +8        | 2024-01-01 04:00:00 |
+        | -9        | 2024-01-01 21:00:00 |
+        | +08       | 2024-01-01 04:00:00 |
+        | +0130     | 2024-01-01 10:30:00 |
+        | +01:30    | 2024-01-01 10:30:00 |
+        | +013045   | 2024-01-01 10:29:15 |
+        | +01:30:45 | 2024-01-01 10:29:15 |
+        | +18:00    | 2023-12-31 18:00:00 |
+        | -18:00    | 2024-01-02 06:00:00 |
+
+    Scenario Outline: `convert_timezone` pads the offset forms supported before Spark 3.0
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone     | result              |
+        | +8:30    | 2024-01-01 03:30:00 |
+        | +08:3    | 2024-01-01 03:57:00 |
+        | +8:3     | 2024-01-01 03:57:00 |
+        | GMT+8:30 | 2024-01-01 03:30:00 |
+        | UTC+1:09 | 2024-01-01 10:51:00 |
+
+    Scenario Outline: `convert_timezone` accepts bare and prefixed UTC zone IDs
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone     | result              |
+        | UT       | 2024-01-01 12:00:00 |
+        | UTC      | 2024-01-01 12:00:00 |
+        | GMT      | 2024-01-01 12:00:00 |
+        | UTC+8    | 2024-01-01 04:00:00 |
+        | GMT+0130 | 2024-01-01 10:30:00 |
+        | UT+01:00 | 2024-01-01 11:00:00 |
+
+    Scenario Outline: `convert_timezone` resolves the legacy short zone IDs
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone | result              |
+        | PST  | 2024-01-01 20:00:00 |
+        | EST  | 2024-01-01 17:00:00 |
+        | MST  | 2024-01-01 19:00:00 |
+        | HST  | 2024-01-01 22:00:00 |
+
+    Scenario Outline: legacy short zone IDs resolve through Java SHORT_IDS
+      When query
+        """
+        SELECT CAST(convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '<input>') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone | input               | result              |
+        | EST  | 1800-01-01 00:00:00 | 1800-01-01 05:18:08 |
+        | HST  | 1945-07-01 00:00:00 | 1945-07-01 09:30:00 |
+        | IET  | 2024-01-01 12:00:00 | 2024-01-01 17:00:00 |
+        | IST  | 2024-01-01 12:00:00 | 2024-01-01 06:30:00 |
+        | MST  | 1918-07-01 00:00:00 | 1918-07-01 06:00:00 |
+        | VST  | 2024-01-01 12:00:00 | 2024-01-01 05:00:00 |
+
+    Scenario Outline: `convert_timezone` parses the session time zone as the implicit source zone
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT CAST(convert_timezone('UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone      | result              |
+        | +8        | 2024-01-01 04:00:00 |
+        | +01:30:45 | 2024-01-01 10:29:15 |
+        | GMT+8:30  | 2024-01-01 03:30:00 |
+        | UT        | 2024-01-01 12:00:00 |
+        | UTC+8     | 2024-01-01 04:00:00 |
+        | EST       | 2024-01-01 17:00:00 |
+
+    Scenario: fixed-offset conversions preserve Spark's full microsecond domain
+      When query
+        """
+        SELECT
+          unix_micros(CAST(convert_timezone('UTC', 'UTC', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS convert_max,
+          unix_micros(CAST(convert_timezone('+01:00', 'UTC', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS shifted_max,
+          unix_micros(from_utc_timestamp(timestamp_micros(9223372036854775807), 'UTC')) AS from_utc_max,
+          unix_micros(to_utc_timestamp(timestamp_micros(-9223372036854775808), 'UTC')) AS to_utc_min
+        """
+      Then query result
+        | convert_max         | shifted_max         | from_utc_max        | to_utc_min           |
+        | 9223372036854775807 | 9223372033254775807 | 9223372036854775807 | -9223372036854775808 |
+
+    @sail-bug
+    Scenario: named-zone conversions preserve Spark's full microsecond domain
+      When query
+        """
+        SELECT
+          unix_micros(CAST(convert_timezone('UTC', 'America/Los_Angeles', CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ)) AS TIMESTAMP)) AS convert_max,
+          unix_micros(from_utc_timestamp(timestamp_micros(9223372036854775807), 'America/Los_Angeles')) AS from_utc_max,
+          unix_micros(to_utc_timestamp(timestamp_micros(-9223372036854775808), 'America/Los_Angeles')) AS to_utc_min
+        """
+      Then query result
+        | convert_max         | from_utc_max        | to_utc_min           |
+        | 9223372008054775807 | 9223372008054775807 | -9223372008476775808 |
+
+    Scenario Outline: `convert_timezone` rejects the zone IDs Java rejects
+      When query
+        """
+        SELECT convert_timezone('<zone>', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS result
+        """
+      Then query error \[INVALID_TIMEZONE\]
+
+      Examples:
+        | zone      |
+        | +         |
+        | A         |
+        | +8:       |
+        | +123      |
+        | +01:2:03  |
+        | +18:00:01 |
+        | +19:00    |
+        | Foo/Bar   |
+
+    Scenario: an invalid zone ID is reported without quoting
+      When query
+        """
+        SELECT convert_timezone('Foo/Bar', 'UTC', TIMESTAMP_NTZ '2024-01-01 12:00:00') AS result
+        """
+      Then query error \[INVALID_TIMEZONE\] The timezone: Foo/Bar is invalid\.
+
+  Rule: NULL short-circuiting
+
+    Background:
+      Given config spark.sql.session.timeZone = UTC
+
+    Scenario: invalid zones are not evaluated when another argument is NULL
+      When query
+        """
+        SELECT
+          convert_timezone('Bad/Zone', 'UTC', ts) AS scalar_bad_zone,
+          convert_timezone(bad_zone, 'UTC', ts) AS column_bad_zone,
+          convert_timezone(null_zone, bad_zone, TIMESTAMP_NTZ '2024-01-01 00:00:00') AS null_source_zone,
+          from_utc_timestamp(CAST(ts AS TIMESTAMP), 'Bad/Zone') AS scalar_from_utc,
+          from_utc_timestamp(CAST(ts AS TIMESTAMP), bad_zone) AS column_from_utc,
+          to_utc_timestamp(CAST(ts AS TIMESTAMP), bad_zone) AS column_to_utc
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRING), 'Bad/Zone')
+        AS t(ts, null_zone, bad_zone)
+        """
+      Then query result
+        | scalar_bad_zone | column_bad_zone | null_source_zone | scalar_from_utc | column_from_utc | column_to_utc |
+        | NULL            | NULL            | NULL             | NULL            | NULL            | NULL          |
+
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to convert_timezone yields the schema Spark declares
       When query
         """
@@ -80,7 +268,6 @@ Feature: convert_timezone
          |-- result: timestamp_ntz (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to convert_timezone yields the schema Spark declares
       When query
         """

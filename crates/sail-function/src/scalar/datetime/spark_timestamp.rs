@@ -5,13 +5,12 @@ use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 use datafusion::arrow::array::Array;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
@@ -53,17 +52,17 @@ impl TimestampParser {
     fn localize(&self, datetime: NaiveDateTime, timezone: &str, safe: bool) -> Result<Option<i64>> {
         match self {
             TimestampParser::Ltz { default_timezone } => {
-                let tz: Tz = if timezone.is_empty() {
-                    match default_timezone.parse() {
+                let tz = if timezone.is_empty() {
+                    match parse_spark_timezone(default_timezone) {
                         Ok(v) => v,
                         Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     }
                 } else {
-                    match timezone.parse() {
+                    match parse_spark_timezone(timezone) {
                         Ok(v) => v,
                         Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     }
                 };
                 match localize_with_fallback(&tz, &datetime) {
@@ -99,10 +98,10 @@ impl TimestampParser {
                         .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
                 } else {
                     let timezone_name = parsed.timezone.as_deref().unwrap_or(default_timezone);
-                    let timezone: Tz = match timezone_name.parse() {
+                    let timezone = match parse_spark_timezone(timezone_name) {
                         Ok(v) => v,
                         Err(_e) if is_try => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     };
                     match localize_with_fallback(&timezone, &parsed.datetime) {
                         Ok(v) => v,

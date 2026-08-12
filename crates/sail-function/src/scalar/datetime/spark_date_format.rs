@@ -3,7 +3,6 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeZone};
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
@@ -15,7 +14,7 @@ use datafusion::arrow::temporal_conversions::{
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
@@ -228,13 +227,13 @@ fn parse_timestamp_string(value: &str, timezone: &str) -> Result<Option<i64>> {
         Err(_e) => return Ok(None),
     };
     // Use the timezone from the parsed string if present, otherwise use the provided timezone
-    let timezone: Tz = if parsed_timezone.is_empty() {
-        match timezone.parse() {
+    let timezone = if parsed_timezone.is_empty() {
+        match parse_spark_timezone(timezone) {
             Ok(v) => v,
             Err(_e) => return Ok(None),
         }
     } else {
-        match parsed_timezone.parse() {
+        match parse_spark_timezone(parsed_timezone) {
             Ok(v) => v,
             Err(_e) => return Ok(None),
         }
@@ -553,9 +552,7 @@ fn format_timestamp_value(
 
     match tz {
         Some(tz_str) => {
-            let tz = tz_str
-                .parse::<chrono_tz::Tz>()
-                .map_err(|e| exec_datafusion_err!("Invalid timezone '{}': {}", tz_str, e))?;
+            let tz = parse_spark_timezone(tz_str.as_ref())?;
             let datetime = tz.from_utc_datetime(&naive_datetime);
             format.format(DateTimeFormatInput {
                 datetime: datetime.naive_local(),

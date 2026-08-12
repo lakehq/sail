@@ -3,7 +3,6 @@ use std::str::Chars;
 use std::sync::Arc;
 
 use chrono::{NaiveDate, NaiveTime};
-use chrono_tz::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
@@ -16,6 +15,7 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
+use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 
 use crate::schema_inference::{InferredType, TypeMerger};
 
@@ -739,37 +739,9 @@ fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
     })
 }
 
-/// Validates a timezone string the way Spark's `getZoneId` does for the cases
-/// that appear in JSON: `Z`, numeric offsets (`+02:00`, `-0800`), and IANA
-/// region IDs (`America/Los_Angeles`).
+/// Validates a timezone string the way Spark's `getZoneId` does.
 fn is_valid_timezone(tz: &str) -> bool {
-    let tz = tz.trim();
-    if tz.is_empty() {
-        return false;
-    }
-    if tz == "Z" || tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("GMT") {
-        return true;
-    }
-    if let Some(offset) = tz.strip_prefix(['+', '-']) {
-        let digits: String = offset.chars().filter(|c| *c != ':').collect();
-        if digits.len() != offset.len() - offset.matches(':').count()
-            || !digits.bytes().all(|b| b.is_ascii_digit())
-        {
-            return false;
-        }
-        let parse2 = |s: &str| s.parse::<u32>().ok();
-        let (hours, minutes) = match digits.len() {
-            2 => (parse2(&digits), Some(0)),
-            4 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
-            6 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
-            _ => (None, None),
-        };
-        return match (hours, minutes) {
-            (Some(h), Some(m)) => h <= 18 && m < 60,
-            _ => false,
-        };
-    }
-    tz.parse::<Tz>().is_ok()
+    parse_spark_timezone(tz.trim_matches(|character| character <= '\u{20}')).is_ok()
 }
 
 /// Returns true if the string matches a timestamp/date that Spark's
@@ -1085,6 +1057,8 @@ mod tests {
             ("2024-01-02 03:04:05+02:00", true),
             ("2024-01-02 03:04:05-0800", true),
             ("2024-01-02 03:04:05 America/Los_Angeles", true),
+            ("2024-01-02 03:04:05 UTC ", true),
+            ("2024-01-02 03:04:05 UTC\u{a0}", false),
             ("03:04:05", true),
             ("03:04", true),
             ("3:4:5", true),

@@ -15,6 +15,7 @@ pub(crate) mod common;
 mod generator;
 mod metadata;
 mod scalar;
+pub(crate) mod special_datetime;
 mod table;
 mod window;
 

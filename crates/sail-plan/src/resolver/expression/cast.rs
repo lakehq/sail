@@ -15,6 +15,7 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
@@ -22,6 +23,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::special_datetime::foldable_special_datetime_cast;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -101,6 +103,11 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
+        if let Some(expr) =
+            foldable_special_datetime_cast(&expr, &cast_to_type, &self.config.session_timezone)
+        {
+            return Ok(NamedExpr::new(name, expr));
+        }
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
@@ -121,6 +128,14 @@ impl PlanResolver<'_> {
                     lit("$"),
                     lit(data_type_string),
                 ])
+            }
+            (from, to, is_try) if needs_spark_timezone_cast(&from, &to) => {
+                ScalarUDF::new_from_impl(SparkTimezoneCast::new(
+                    to,
+                    self.config.session_timezone.clone(),
+                    is_try,
+                ))
+                .call(vec![expr])
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
@@ -208,6 +223,32 @@ impl PlanResolver<'_> {
             (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
+    }
+}
+
+fn needs_spark_timezone_cast(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_)))
+        | (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
+        | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
+        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64) => true,
+        (DataType::List(from), DataType::List(to))
+        | (DataType::LargeList(from), DataType::LargeList(to)) => {
+            needs_spark_timezone_cast(from.data_type(), to.data_type())
+        }
+        (DataType::FixedSizeList(from, from_size), DataType::FixedSizeList(to, to_size))
+            if from_size == to_size =>
+        {
+            needs_spark_timezone_cast(from.data_type(), to.data_type())
+        }
+        (DataType::Map(from, _), DataType::Map(to, _)) => {
+            needs_spark_timezone_cast(from.data_type(), to.data_type())
+        }
+        (DataType::Struct(from), DataType::Struct(to)) if from.len() == to.len() => from
+            .iter()
+            .zip(to.iter())
+            .any(|(from, to)| needs_spark_timezone_cast(from.data_type(), to.data_type())),
+        _ => false,
     }
 }
 

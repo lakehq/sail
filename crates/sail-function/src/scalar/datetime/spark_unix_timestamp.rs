@@ -3,7 +3,6 @@ use std::collections::hash_map::Entry;
 use std::fmt::Display;
 use std::sync::Arc;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, PrimitiveArray, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, Int64Type, TimeUnit};
 use datafusion_common::cast::{
@@ -13,7 +12,9 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_er
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
@@ -234,7 +235,7 @@ impl SparkUnixTimestamp {
     }
 
     fn invoke_with_date(&self, first: &ColumnarValue) -> Result<ColumnarValue> {
-        let timezone: Tz = self.session_timezone.parse()?;
+        let timezone = parse_spark_timezone(self.session_timezone.as_ref())?;
         match first.cast_to(&DataType::Date32, None)? {
             ColumnarValue::Array(array) => {
                 let dates = as_date32_array(&array)?;
@@ -358,11 +359,12 @@ impl SparkUnixTimestamp {
             };
             localized.to_utc().timestamp()
         } else {
-            let timezone = parsed
-                .timezone
-                .as_deref()
-                .unwrap_or(&self.session_timezone)
-                .parse::<Tz>();
+            let timezone = parse_spark_timezone(
+                parsed
+                    .timezone
+                    .as_deref()
+                    .unwrap_or(self.session_timezone.as_ref()),
+            );
             let Some(timezone) = timestamp_parse_result(timezone, safe)? else {
                 return Ok(None);
             };
@@ -397,7 +399,7 @@ fn null_int64(value: &ColumnarValue) -> Result<ColumnarValue> {
     }
 }
 
-fn date32_to_seconds(days: i32, timezone: &Tz) -> Result<i64> {
+fn date32_to_seconds(days: i32, timezone: &SparkTimeZone) -> Result<i64> {
     let date = Date32Type::to_naive_date_opt(days).ok_or_else(|| {
         exec_datafusion_err!("spark_unix_timestamp cannot convert date value {days}")
     })?;

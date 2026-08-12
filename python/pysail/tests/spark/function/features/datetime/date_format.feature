@@ -37,6 +37,21 @@ Feature: date_format with an argument coming from a column
         | 2026   |
         | 02     |
 
+  Rule: Spark timestamp zone IDs
+
+    Scenario: date_format accepts a second-precision offset in its timestamp string
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT date_format(
+          '1970-01-01 00:00:00+01:02:03',
+          'yyyy-MM-dd HH:mm:ss'
+        ) AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 22:57:57 |
+
   @function(nullability)
   Rule: Output schema
 

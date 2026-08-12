@@ -6,9 +6,24 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+pub(crate) fn timezone_cast(
+    expression: expr::Expr,
+    target_type: DataType,
+    session_timezone: &Arc<str>,
+    safe: bool,
+) -> expr::Expr {
+    ScalarUDF::from(SparkTimezoneCast::new(
+        target_type,
+        Arc::clone(session_timezone),
+        safe,
+    ))
+    .call(vec![expression])
+}
 
 pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
@@ -26,6 +41,12 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
             args: vec![arg],
         }))
     } else {
+        // Ok(timezone_cast(
+        //     arg,
+        //     DataType::Date32,
+        //     &input.function_context.plan_config.session_timezone,
+        //     false,
+        // ))
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
             DataType::Date32,

@@ -2,7 +2,6 @@ use std::fmt::{Display, Formatter, Write};
 
 use chrono::format::{Item, Numeric, Pad};
 use chrono::{DateTime, TimeZone, Timelike, Utc};
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::arrow::temporal_conversions::{
     time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
@@ -77,10 +76,10 @@ const TIME_FORMAT_ITEMS: &[Item<'static>] = &[
     Item::Numeric(Numeric::Second, Pad::Zero),
 ];
 
-fn write_timestamp(
+fn write_timestamp<T: TimeZone>(
     f: &mut Formatter<'_>,
     datetime: &DateTime<Utc>,
-    tz: Option<&Tz>,
+    tz: Option<&T>,
 ) -> std::fmt::Result {
     let datetime = if let Some(tz) = tz {
         datetime.with_timezone(tz).naive_local()
@@ -92,9 +91,9 @@ fn write_timestamp(
     write!(f, "{value}{fraction}")
 }
 
-pub struct TimestampSecondFormatter<'a>(pub i64, pub Option<&'a Tz>);
+pub struct TimestampSecondFormatter<'a, T: TimeZone>(pub i64, pub Option<&'a T>);
 
-impl Display for TimestampSecondFormatter<'_> {
+impl<T: TimeZone> Display for TimestampSecondFormatter<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(seconds, tz) = self;
         match Utc.timestamp_opt(*seconds, 0).earliest() {
@@ -104,9 +103,9 @@ impl Display for TimestampSecondFormatter<'_> {
     }
 }
 
-pub struct TimestampMillisecondFormatter<'a>(pub i64, pub Option<&'a Tz>);
+pub struct TimestampMillisecondFormatter<'a, T: TimeZone>(pub i64, pub Option<&'a T>);
 
-impl Display for TimestampMillisecondFormatter<'_> {
+impl<T: TimeZone> Display for TimestampMillisecondFormatter<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(milliseconds, tz) = self;
         match Utc.timestamp_millis_opt(*milliseconds).earliest() {
@@ -116,9 +115,9 @@ impl Display for TimestampMillisecondFormatter<'_> {
     }
 }
 
-pub struct TimestampMicrosecondFormatter<'a>(pub i64, pub Option<&'a Tz>);
+pub struct TimestampMicrosecondFormatter<'a, T: TimeZone>(pub i64, pub Option<&'a T>);
 
-impl Display for TimestampMicrosecondFormatter<'_> {
+impl<T: TimeZone> Display for TimestampMicrosecondFormatter<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(microseconds, tz) = self;
         // Convert microseconds to seconds and nanoseconds
@@ -133,9 +132,9 @@ impl Display for TimestampMicrosecondFormatter<'_> {
     }
 }
 
-pub struct TimestampNanosecondFormatter<'a>(pub i64, pub Option<&'a Tz>);
+pub struct TimestampNanosecondFormatter<'a, T: TimeZone>(pub i64, pub Option<&'a T>);
 
-impl Display for TimestampNanosecondFormatter<'_> {
+impl<T: TimeZone> Display for TimestampNanosecondFormatter<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(nanoseconds, tz) = self;
         let datetime = Utc.timestamp_nanos(*nanoseconds);
