@@ -7458,8 +7458,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-common-hms",
  "serde_json",
- "tempfile",
- "testcontainers",
  "tokio",
  "volo",
  "volo-thrift",
@@ -8078,13 +8076,17 @@ dependencies = [
 name = "sail-python"
 version = "0.7.0"
 dependencies = [
+ "arrow-schema",
  "fastrace",
  "futures",
  "log",
  "pyo3",
+ "sail-catalog",
+ "sail-catalog-hms",
  "sail-celeborn",
  "sail-cli",
  "sail-common",
+ "sail-common-datafusion",
  "sail-flight",
  "sail-spark-connect",
  "sail-telemetry",

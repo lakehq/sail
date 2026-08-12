@@ -1,0 +1,1 @@
+"""Hive Metastore integration tests."""
