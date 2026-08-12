@@ -329,9 +329,7 @@ def celeborn_push_fault_proxies(
 ) -> Generator[dict[str, FaultInjectingTcpProxy], None, None]:
     """Forward worker push traffic while allowing a test to drop one connection."""
     proxies = {
-        name: FaultInjectingTcpProxy(
-            name, worker.host, worker.push_port, celeborn_push_fault_controller
-        )
+        name: FaultInjectingTcpProxy(name, worker.host, worker.push_port, celeborn_push_fault_controller)
         for name, worker in celeborn_workers.items()
     }
     for proxy in proxies.values():
