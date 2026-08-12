@@ -110,6 +110,55 @@ Feature: Delta Lake Delete
         | 1  | NULL  |
         | 2  | 10    |
 
+    Scenario: DELETE rejects a non-deterministic predicate before writing
+      Given variable location for temporary directory delta_delete_nondeterministic
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_nondeterministic
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_nondeterministic (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_nondeterministic VALUES (1, 'one'), (2, 'two')
+        """
+      When query
+        """
+        DELETE FROM delta_delete_nondeterministic WHERE rand() > 0.5
+        """
+      Then query error Non-deterministic expressions are not allowed in DELETE conditions
+      When query
+        """
+        SELECT id, value FROM delta_delete_nondeterministic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | one   |
+        | 2  | two   |
+
+    Scenario: DELETE rejects target columns that collide with row-level metadata
+      Given variable location for temporary directory delta_delete_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_internal_column (
+          id INT,
+          `__sail_file_path` STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      When query
+        """
+        DELETE FROM delta_delete_internal_column WHERE id = 1
+        """
+      Then query error reserved internal column name
+
   Rule: Basic operations
     Background:
       Given variable location for temporary directory x

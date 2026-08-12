@@ -107,6 +107,34 @@ Feature: Delta Lake Update
         | 2  | updated |
         | 3  | updated |
 
+    Scenario: UPDATE rejects a non-deterministic predicate before writing
+      When query
+        """
+        UPDATE delta_update_basic
+        SET label = 'unstable'
+        WHERE id <= 2 AND rand() > 0.5
+        """
+      Then query error Non-deterministic expressions are not allowed in UPDATE conditions
+      When query
+        """
+        SELECT id, label FROM delta_update_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | label  |
+        | 1  | keep   |
+        | 2  | change |
+        | 3  | change |
+
+    Scenario: EXPLAIN CODEGEN shows one targeted UPDATE rewrite
+      When query
+        """
+        EXPLAIN CODEGEN
+        UPDATE delta_update_basic
+        SET value = value + 1
+        WHERE id = 2
+        """
+      Then query plan matches snapshot
+
   Rule: Path-based update targets
     Background:
       Given variable location for temporary directory delta_update_path
@@ -141,6 +169,39 @@ Feature: Delta Lake Update
         | 2  | keep        |
 
   Rule: Delta invariants are enforced by UPDATE
+
+    Scenario: UPDATE nested fields preserves sibling values
+      Given variable location for temporary directory delta_update_nested
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_nested
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_nested (
+          id INT,
+          payload STRUCT<a: INT, b: STRING>
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_nested
+        VALUES (1, named_struct('a', 10, 'b', 'keep'))
+        """
+      Given statement
+        """
+        UPDATE delta_update_nested AS target
+        SET target.payload.a = 11
+        WHERE target.id = 1
+        """
+      When query
+        """
+        SELECT id, payload.a, payload.b FROM delta_update_nested
+        """
+      Then query result
+        | id | a  | b    |
+        | 1  | 11 | keep |
 
     Scenario: UPDATE rejects incompatible assignment types before writing
       Given variable location for temporary directory delta_update_type_check
@@ -304,6 +365,72 @@ Feature: Delta Lake Update
         | id | event_time          | event_date |
         | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
 
+    Scenario: UPDATE validates explicitly assigned generated columns
+      Given variable location for temporary directory delta_update_explicit_generated
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_explicit_generated
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_explicit_generated (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_explicit_generated (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      Given statement
+        """
+        UPDATE delta_update_explicit_generated
+        SET event_time = TIMESTAMP '2024-02-01 00:00:00',
+            event_date = DATE '2024-02-01'
+        WHERE id = 1
+        """
+      When query
+        """
+        UPDATE delta_update_explicit_generated
+        SET event_time = TIMESTAMP '2024-03-01 00:00:00',
+            event_date = DATE '2024-03-02'
+        WHERE id = 1
+        """
+      Then query error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+      When query
+        """
+        SELECT id, event_time, event_date
+        FROM delta_update_explicit_generated
+        """
+      Then query result
+        | id | event_time          | event_date |
+        | 1  | 2024-02-01 00:00:00 | 2024-02-01 |
+
+    Scenario: UPDATE rejects target columns that collide with row-level metadata
+      Given variable location for temporary directory delta_update_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_internal_column (
+          id INT,
+          `__sail_operation_type` STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      When query
+        """
+        UPDATE delta_update_internal_column
+        SET `__sail_operation_type` = 'new'
+        WHERE id = 1
+        """
+      Then query error reserved internal column name
+
     Scenario: UPDATE rejects CHECK constraint violations without changing the table
       Given variable location for temporary directory delta_update_constraint
       Given final statement
@@ -360,6 +487,7 @@ Feature: Delta Lake Update
         | operation                       | "UPDATE" |
         | operationMetrics.numUpdatedRows | 1        |
         | operationMetrics.numCopiedRows  | 1        |
+        | operationMetrics.numTouchedRows | 2        |
       When query
         """
         SELECT id, value FROM delta_update_dv ORDER BY id
@@ -394,6 +522,12 @@ Feature: Delta Lake Update
         """
         UPDATE delta_update_existing_dv SET value = 'new' WHERE id = 1
         """
+      Then delta log latest commit info contains
+        | path                            | value    |
+        | operation                       | "UPDATE" |
+        | operationMetrics.numUpdatedRows | 1        |
+        | operationMetrics.numCopiedRows  | 1        |
+        | operationMetrics.numTouchedRows | 2        |
       When query
         """
         SELECT id, value FROM delta_update_existing_dv ORDER BY id
