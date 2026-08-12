@@ -5186,37 +5186,42 @@ mod tests {
                 DataType::Utf8,
                 false,
             )]))));
-        let remove_actions: Arc<dyn ExecutionPlan> = Arc::new(IcebergRemoveDataFilesExec::try_new(
-            input,
-            "__sail_file_path",
-        )?);
-        let plan = Arc::new(
-            IcebergCommitExec::new(
-                remove_actions,
-                Url::parse("file:///tmp/iceberg-codec/")
-                    .map_err(|error| plan_datafusion_err!("{error}"))?,
-                None,
-                SnapshotUpdateKind::CopyOnWriteDelete,
-            )
-            .with_expected_snapshot_id(Some(Some(41))),
-        );
-
         let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_plan(&codec, plan)?;
-        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-        let commit = decoded
-            .downcast_ref::<IcebergCommitExec>()
-            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an Iceberg commit"))?;
-        assert_eq!(
-            commit.snapshot_update_kind(),
-            SnapshotUpdateKind::CopyOnWriteDelete
-        );
-        assert_eq!(commit.expected_snapshot_id(), Some(Some(41)));
-        let remove_actions = commit
-            .input()
-            .downcast_ref::<IcebergRemoveDataFilesExec>()
-            .ok_or_else(|| plan_datafusion_err!("decoded child is not a remove-data-files exec"))?;
-        assert_eq!(remove_actions.file_path_column(), "__sail_file_path");
+        for kind in [
+            SnapshotUpdateKind::CopyOnWriteDelete,
+            SnapshotUpdateKind::CopyOnWrite,
+        ] {
+            for expected_snapshot_id in [None, Some(None), Some(Some(41))] {
+                let remove_actions: Arc<dyn ExecutionPlan> = Arc::new(
+                    IcebergRemoveDataFilesExec::try_new(Arc::clone(&input), "__sail_file_path")?,
+                );
+                let plan = Arc::new(
+                    IcebergCommitExec::new(
+                        remove_actions,
+                        Url::parse("file:///tmp/iceberg-codec/")
+                            .map_err(|error| plan_datafusion_err!("{error}"))?,
+                        None,
+                        kind,
+                    )
+                    .with_expected_snapshot_id(expected_snapshot_id),
+                );
+
+                let bytes = try_encode_physical_plan(&codec, plan)?;
+                let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+                let commit = decoded
+                    .downcast_ref::<IcebergCommitExec>()
+                    .ok_or_else(|| plan_datafusion_err!("decoded plan is not an Iceberg commit"))?;
+                assert_eq!(commit.snapshot_update_kind(), kind);
+                assert_eq!(commit.expected_snapshot_id(), expected_snapshot_id);
+                let remove_actions = commit
+                    .input()
+                    .downcast_ref::<IcebergRemoveDataFilesExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("decoded child is not a remove-data-files exec")
+                    })?;
+                assert_eq!(remove_actions.file_path_column(), "__sail_file_path");
+            }
+        }
         Ok(())
     }
 

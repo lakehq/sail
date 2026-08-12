@@ -62,6 +62,7 @@ use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
 
+#[cfg(test)]
 async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[String]) {
     let mut base_paths = Vec::new();
     let mut prefixed_paths = Vec::new();
@@ -86,6 +87,7 @@ async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[
     delete_task_files(&store_ctx.prefixed, prefixed_paths).await;
 }
 
+#[cfg(test)]
 async fn delete_task_files(
     store: &Arc<dyn object_store::ObjectStore>,
     paths: Vec<object_store::path::Path>,
@@ -100,14 +102,6 @@ async fn delete_task_files(
             }
         }
     }
-}
-
-fn task_file_paths(data_files: &[DataFile], delete_files: &[DataFile]) -> Vec<String> {
-    data_files
-        .iter()
-        .chain(delete_files.iter())
-        .map(|file| file.file_path.clone())
-        .collect()
 }
 
 fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
@@ -543,13 +537,11 @@ impl ExecutionPlan for IcebergCommitExec {
             }
             .await;
             if let Err(error) = input_result {
-                let paths = task_file_paths(&added_data_files, &added_delete_files);
-                cleanup_uncommitted_task_files(&store_ctx, &paths).await;
                 return Err(error);
             }
 
-            let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
-            let mut task_files_may_be_committed = false;
+            // Blocking-shuffle retries can replay these actions, so task files remain owned by
+            // the job until a commit succeeds or orphan-file maintenance removes them.
             let commit_result: Result<RecordBatch> = async {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
@@ -655,7 +647,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Uuid,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     let new_metadata_location =
                         Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
                     Self::update_catalog_metadata_location(
@@ -679,7 +670,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Hadoop,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     if let Some(catalog_table) = catalog_registered_metadata_table {
                         let new_metadata_location = Self::table_metadata_location(
                             &table_url,
@@ -723,15 +713,6 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
-                if matches!(
-                    commit_info.snapshot_update_kind,
-                    SnapshotUpdateKind::CopyOnWriteDelete | SnapshotUpdateKind::CopyOnWrite
-                ) && commit_info.data_files.is_empty()
-                    && commit_info.delete_files.is_empty()
-                    && commit_info.removed_data_file_paths.is_empty()
-                {
-                    return commit_count_batch(schema, commit_info.row_count);
-                }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
                 if let Some(new_schema) = commit_info.schema.clone() {
@@ -800,7 +781,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 if maybe_snapshot.is_none() {
                     let mut catalog_fallback_table = catalog_metadata_update_table;
                     if let Some(catalog_table) = catalog_commit_table {
-                        let prepared_snapshot = prepare_bootstrap_snapshot(
+                        let mut prepared_snapshot = prepare_bootstrap_snapshot(
                             &table_url,
                             &store_ctx,
                             &commit_info,
@@ -834,7 +815,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 ));
                             }
                         };
-                        task_files_may_be_committed = true;
+                        prepared_snapshot.publication_started();
                         let catalog_outcome = match Self::try_commit_to_catalog(
                             &context,
                             catalog_table,
@@ -857,10 +838,10 @@ impl ExecutionPlan for IcebergCommitExec {
                                 if committed.payload().is_some() {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
+                                prepared_snapshot.commit_succeeded();
                                 return commit_count_batch(schema, commit_info.row_count);
                             }
                             CatalogCommitOutcome::NotSupported => {
-                                task_files_may_be_committed = false;
                                 prepared_snapshot.cleanup().await;
                                 if matches!(
                                     catalog_commit_mode,
@@ -875,7 +856,6 @@ impl ExecutionPlan for IcebergCommitExec {
                                 }
                             }
                             CatalogCommitOutcome::Conflict => {
-                                task_files_may_be_committed = false;
                                 prepared_snapshot.cleanup().await;
                                 if attempt >= MAX_COMMIT_RETRIES {
                                     return Err(commit_conflict_error());
@@ -904,7 +884,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         persist_strategy,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     if let (Some(catalog_table), Some(previous_metadata_location)) =
                         (catalog_fallback_table, catalog_metadata_location.as_deref())
                     {
@@ -971,7 +950,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     &partition_spec_for_commit,
                     table_meta.format_version,
                 );
-                let prepared_snapshot = SnapshotProducer::new(
+                let mut prepared_snapshot = SnapshotProducer::new(
                     &tx,
                     commit_info.data_files.clone(),
                     Some(store_ctx.clone()),
@@ -1011,7 +990,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             ));
                         }
                     };
-                    task_files_may_be_committed = true;
+                    prepared_snapshot.publication_started();
                     let catalog_outcome = match Self::try_commit_to_catalog(
                         &context,
                         catalog_table,
@@ -1034,6 +1013,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             if committed.payload().is_some() {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
+                            prepared_snapshot.commit_succeeded();
                             return commit_count_batch(schema, commit_info.row_count);
                         }
                         CatalogCommitOutcome::NotSupported
@@ -1041,10 +1021,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                 catalog_commit_mode,
                                 IcebergCatalogCommitMode::CompatibilityCatalogCommit
                             ) => {
-                            task_files_may_be_committed = false;
+                            prepared_snapshot.publication_did_not_happen();
                         }
                         CatalogCommitOutcome::NotSupported => {
-                            task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                             return Err(DataFusionError::Plan(
                                 "Iceberg catalog commit is not supported by the resolved catalog authority"
@@ -1052,7 +1031,6 @@ impl ExecutionPlan for IcebergCommitExec {
                             ));
                         }
                         CatalogCommitOutcome::Conflict => {
-                            task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                             if attempt >= MAX_COMMIT_RETRIES {
                                 return Err(commit_conflict_error());
@@ -1150,14 +1128,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     ..Default::default()
                 };
                 let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes));
+                prepared_snapshot.publication_started();
                 match store_ctx
                     .prefixed
                     .put_opts(&metadata_path, payload, put_opts)
                     .await
                 {
-                    Ok(_) => {
-                        task_files_may_be_committed = true;
-                    }
+                    Ok(_) => {}
                     Err(object_store::Error::AlreadyExists { .. }) => {
                         log::warn!(
                             "Metadata file {} already exists for version {}. Retrying attempt {}",
@@ -1187,7 +1164,6 @@ impl ExecutionPlan for IcebergCommitExec {
                     );
                     match store_ctx.prefixed.delete(&metadata_path).await {
                         Ok(()) | Err(object_store::Error::NotFound { .. }) => {
-                            task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                         }
                         Err(error) => {
@@ -1202,7 +1178,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     continue;
                 }
                 log::trace!("Metadata written successfully");
-                drop(prepared_snapshot);
+                prepared_snapshot.commit_succeeded();
 
                 let version_hint = if use_uuid_metadata_file {
                     metadata_file
@@ -1240,9 +1216,6 @@ impl ExecutionPlan for IcebergCommitExec {
             }
             .await;
 
-            if commit_result.is_err() && !task_files_may_be_committed {
-                cleanup_uncommitted_task_files(&store_ctx, &task_file_paths).await;
-            }
             commit_result
         };
 
@@ -1507,7 +1480,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_conflict_cleans_attempt_artifacts_and_uncommitted_task_file() {
+    fn metadata_conflict_cleans_attempt_artifacts_and_preserves_retryable_task_file() {
         futures::executor::block_on(async {
             let table_url = Url::parse("file:///tmp/commit-conflict/").expect("table URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
@@ -1678,10 +1651,7 @@ mod tests {
                     .iter()
                     .all(|path| !path.contains("/manifest-") && !path.contains("/snap-"))
             );
-            assert!(matches!(
-                store_ctx.prefixed.head(&task_file_path).await,
-                Err(object_store::Error::NotFound { .. })
-            ));
+            assert!(store_ctx.prefixed.head(&task_file_path).await.is_ok());
         });
     }
 }

@@ -348,7 +348,9 @@ impl ManifestEntryV1 {
         entry: super::ManifestEntry,
         partition_type: &StructType,
     ) -> Result<Self, String> {
-        let snapshot_id = entry.snapshot_id.unwrap_or_default();
+        let snapshot_id = entry
+            .snapshot_id
+            .ok_or_else(|| "Iceberg v1 manifest entry requires snapshot_id".to_string())?;
         let mut data_file = DataFileSerde::from_data_file(entry.data_file, partition_type)?;
         data_file.block_size_in_bytes = Some(data_file.block_size_in_bytes.unwrap_or(67_108_864));
         Ok(Self {

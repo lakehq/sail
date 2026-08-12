@@ -79,6 +79,10 @@ impl ManifestWriter {
         self.entries.push(Arc::new(entry));
     }
 
+    pub fn add_entry(&mut self, entry: ManifestEntry) {
+        self.entries.push(Arc::new(entry));
+    }
+
     pub fn add_existing_entry(&mut self, mut entry: ManifestEntry) -> Result<(), String> {
         if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
             return Err(
@@ -148,13 +152,25 @@ impl ManifestWriter {
             .filter(|e| matches!(e.status, ManifestStatus::Deleted))
             .map(|e| e.data_file.record_count as i64)
             .sum();
+        let min_sequence_number = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                )
+            })
+            .map(|entry| entry.sequence_number.unwrap_or(sequence_number))
+            .min()
+            .unwrap_or(sequence_number);
         ManifestFile {
             manifest_path,
             manifest_length: 0,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
-            content: ManifestContentType::Data,
+            content: self.metadata.content,
             sequence_number,
-            min_sequence_number: sequence_number,
+            min_sequence_number,
             added_snapshot_id: snapshot_id,
             added_files_count: Some(added),
             existing_files_count: Some(existing),
