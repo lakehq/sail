@@ -168,10 +168,29 @@ def dataframe_for(case, spark):
         pytest.fail(f"Unknown DataFrame case: {case}")
 
 
+@when(
+    parsers.parse("dataframe sample without replacement with bounds {lower_bound} and {upper_bound}"),
+    target_fixture="dataframe",
+)
+def dataframe_sample_without_replacement_with_bounds(lower_bound, upper_bound, spark):
+    """Build a Spark Connect sample plan with independently controlled bounds."""
+    dataframe = spark.range(10, numPartitions=1).sample(False, 0.0, 1)
+    dataframe._plan.lower_bound = float(lower_bound)  # noqa: SLF001
+    dataframe._plan.upper_bound = float(upper_bound)  # noqa: SLF001
+    return dataframe
+
+
 @then("dataframe schema")
 def dataframe_schema(docstring, dataframe):
     """Compare a DataFrame schema with expected schema tree string."""
     assert_schema_tree(dataframe, docstring)
+
+
+@then(parsers.parse("dataframe error {error}"))
+def dataframe_error(error, dataframe):
+    """Collect the DataFrame and expect it to fail with an error."""
+    with pytest.raises(Exception, match=error):
+        _ = dataframe.collect()
 
 
 def assert_schema_tree(df, docstring):

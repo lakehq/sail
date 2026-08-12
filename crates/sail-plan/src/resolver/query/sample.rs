@@ -165,6 +165,11 @@ impl PlanResolver<'_> {
         }
 
         if !with_replacement {
+            if lower_bound > upper_bound + SAMPLE_ROUNDING_EPSILON {
+                return Err(PlanError::invalid(format!(
+                    "Lower bound ({lower_bound}) must be <= upper bound ({upper_bound})"
+                )));
+            }
             if lower_bound < -SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
                     "Lower bound ({lower_bound}) must be >= 0.0"

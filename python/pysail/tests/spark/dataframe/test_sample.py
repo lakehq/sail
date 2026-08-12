@@ -71,6 +71,18 @@ def test_dataframe_sample_rejects_fraction_beyond_spark_rounding_tolerance(spark
 def test_dataframe_sample_rejects_individual_bounds(spark):
     with pytest.raises(
         Exception,
+        match=r"Lower bound .* must be <= upper bound .*",
+    ):
+        # The fraction rounds to exactly -epsilon, but Spark still rejects the bounds.
+        _sample_with_bounds(
+            spark,
+            5e-324,
+            -0.000001,
+            with_replacement=False,
+        ).collect()
+
+    with pytest.raises(
+        Exception,
         match=r"Lower bound .* must be >= 0\.0",
     ):
         _sample_with_bounds(spark, -0.000002, -0.000002, with_replacement=False).collect()

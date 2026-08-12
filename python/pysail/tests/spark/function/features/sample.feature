@@ -30,6 +30,18 @@ Feature: DataFrame sample operations
         | 4  |
         | 5  |
 
+  Rule: Sample without replacement bound validation
+
+    Scenario Outline: sample without replacement rejects invalid individual bounds
+      When dataframe sample without replacement with bounds <lower_bound> and <upper_bound>
+      Then dataframe error <error>
+
+      Examples:
+        | lower_bound | upper_bound | error                                    |
+        | 5e-324      | -0.000001   | Lower bound .* must be <= upper bound .* |
+        | -0.000002   | -0.000002   | Lower bound .* must be >= 0\.0           |
+        | 1.000002    | 1.000002    | Upper bound .* must be <= 1\.0           |
+
   Rule: Random function with seed
 
     Scenario: rand with same seed returns same value
