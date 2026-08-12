@@ -230,7 +230,6 @@ Feature: sequence() over DATE returns expected arrays
         | dates                                | timestamps                                                        |
         | [2024-01-01, 2024-01-02, 2024-01-03] | [2024-01-01 00:00:00, 2024-01-01 00:00:01, 2024-01-01 00:00:02] |
 
-    @sail-bug
     Scenario: ANSI temporal sequence coercion accepts a leading positive year sign
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
