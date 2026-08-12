@@ -163,7 +163,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             .evaluate(&params, |arrays| repeat_captures(arrays, &offsets))?
             .into_array(num_entries)?;
 
-        let DataType::Map(entries_field, ordered) = args.return_field.data_type() else {
+        let DataType::Map(entries_field, _ordered) = args.return_field.data_type() else {
             return exec_err!(
                 "{} expected return_field to be a map, got {}",
                 self.name(),
@@ -188,7 +188,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             offsets,
             entries,
             nulls,
-            *ordered,
+            false, // The result concatenates left keys followed by right-only keys, so it's not sorted
         )?)))
     }
 

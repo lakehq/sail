@@ -15,7 +15,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::{
     adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
 };
@@ -63,6 +63,72 @@ pub(crate) fn coerce_single_list_arg(name: &str, arg_types: &[DataType]) -> Resu
     };
 
     Ok(vec![coerced])
+}
+
+/// Normalizes a list array at runtime to `ListArray` or `LargeListArray`.
+///
+/// This mirrors the type coercion logic in `coerce_single_list_arg` but operates on
+/// runtime arrays rather than types. It converts:
+/// - `ListView`/`FixedSizeList` → `ListArray`
+/// - `LargeListView` → `LargeListArray`
+/// - `List`/`LargeList` → pass through unchanged
+///
+/// This ensures that higher-order functions can accept all Arrow list variants
+/// at runtime, matching what the type coercion already allows at planning time.
+pub(crate) fn normalize_list_array(array: ArrayRef) -> Result<ArrayRef> {
+    use datafusion::arrow::array::{FixedSizeListArray, ListArray};
+    use datafusion::arrow::compute::cast;
+
+    match array.data_type() {
+        DataType::List(_) | DataType::LargeList(_) => Ok(array),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            // Cast ListView/LargeListView to List/LargeList
+            let target_type = match array.data_type() {
+                DataType::ListView(field) => DataType::List(Arc::clone(field)),
+                DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
+                _ => unreachable!(),
+            };
+            cast(&array, &target_type).map_err(|e| e.into())
+        }
+        DataType::FixedSizeList(field, _) => {
+            // Convert FixedSizeList to List by constructing a new ListArray
+            let fixed_list = array
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Failed to downcast FixedSizeListArray".to_string(),
+                    )
+                })?;
+
+            let list_field = Arc::new(Field::new(
+                Field::LIST_FIELD_DEFAULT_NAME,
+                DataType::List(Arc::clone(field)),
+                fixed_list.nulls().is_some(),
+            ));
+
+            // Build offsets for each sublist
+            let size = fixed_list.value_length() as usize;
+            let num_rows = fixed_list.len();
+            let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
+            offsets.push(0);
+            for _ in 0..num_rows {
+                let next = offsets.last().unwrap() + size as i32;
+                offsets.push(next);
+            }
+
+            let offsets = OffsetBuffer::new(offsets.into());
+            let list_array = ListArray::new(
+                list_field,
+                offsets,
+                fixed_list.values().clone(),
+                fixed_list.nulls().cloned(),
+            );
+
+            Ok(Arc::new(list_array) as ArrayRef)
+        }
+        other => plan_err!("expected a list array, got {other}"),
+    }
 }
 
 /// Result of extracting flat list values, with fast-path short-circuits handled.

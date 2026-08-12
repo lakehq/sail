@@ -117,6 +117,11 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let (left, right, lambda) = zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
         let right_array = right.to_array(args.number_rows)?;
+        
+        // Normalize list arrays to handle ListView, LargeListView, and FixedSizeList variants
+        let left_array = super::lambda_utils::normalize_list_array(left_array)?;
+        let right_array = super::lambda_utils::normalize_list_array(right_array)?;
+        
         match args.return_field.data_type() {
             DataType::List(element_field) => {
                 let left_list = as_list_array(&left_array)?;
