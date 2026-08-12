@@ -32,11 +32,13 @@ impl PlanResolver<'_> {
         let input_schema = target_plan.schema().clone();
         let resolved_target_field_names = Self::get_field_names(&input_schema, state)?;
         let condition = match condition {
-            Some(condition) => Some(ExprWithSource::new(
-                self.resolve_expression(condition.expr, &input_schema, state)
-                    .await?,
-                condition.source,
-            )),
+            Some(condition) => {
+                let expression = self
+                    .resolve_expression(condition.expr, &input_schema, state)
+                    .await?;
+                self.validate_row_level_condition("DELETE", &expression)?;
+                Some(ExprWithSource::new(expression, condition.source))
+            }
             None => None,
         };
 
@@ -46,6 +48,7 @@ impl PlanResolver<'_> {
             condition,
             input_schema,
             resolved_target_field_names,
+            case_sensitive: self.config.case_sensitive,
         };
 
         let registry = self.ctx.extension::<DataSourceRegistry>()?;

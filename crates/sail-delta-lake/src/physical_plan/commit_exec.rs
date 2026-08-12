@@ -936,15 +936,22 @@ impl ExecutionPlan for DeltaCommitExec {
                         table,
                     )
                     .await?;
-                    let reference = Self::refresh_catalog_managed_reference(
-                        &context,
-                        lakehouse_context,
-                        &table_url,
-                        &log_store,
-                        reference,
-                        latest_catalog_version,
-                    )
-                    .await?;
+                    let reference = if crate::transaction::CommitData::is_blind_append(
+                        &final_actions,
+                        &operation,
+                    ) {
+                        Self::refresh_catalog_managed_reference(
+                            &context,
+                            lakehouse_context,
+                            &table_url,
+                            &log_store,
+                            reference,
+                            latest_catalog_version,
+                        )
+                        .await?
+                    } else {
+                        reference
+                    };
                     let pre_commit = CommitBuilder::from(
                         CommitProperties::default()
                             .with_operation_metrics(operation_metrics)

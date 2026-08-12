@@ -249,6 +249,7 @@ pub struct DeleteInfo {
     pub condition: Option<ExprWithSource>,
     pub input_schema: DFSchemaRef,
     pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
 }
 
 /// Information required to create a logical UPDATE plan for a lake source.
