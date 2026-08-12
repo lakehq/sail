@@ -1,9 +1,9 @@
+use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MergeIntoOptions, OptionLayer, RowLevelCommand, RowLevelTarget,
@@ -68,22 +68,42 @@ impl RowLevelCommitInfo {
 }
 
 /// Unified post-expansion node for DELETE, UPDATE, and MERGE.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
-#[educe(PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RowLevelWriteNode {
     target: RowLevelTarget,
     raw_target: Arc<LogicalPlan>,
     raw_source: Option<Arc<LogicalPlan>>,
-    #[educe(PartialOrd(ignore))]
     raw_input_schema: DFSchemaRef,
     effects: Vec<RowLevelEffect>,
-    #[educe(PartialOrd(ignore))]
     commit: RowLevelCommitInfo,
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
-    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
+}
+
+impl PartialOrd for RowLevelWriteNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self == other {
+            return Some(Ordering::Equal);
+        }
+
+        (
+            &self.target,
+            &self.raw_target,
+            &self.raw_source,
+            &self.effects,
+            &self.expected_snapshot_id,
+        )
+            .partial_cmp(&(
+                &other.target,
+                &other.raw_target,
+                &other.raw_source,
+                &other.effects,
+                &other.expected_snapshot_id,
+            ))
+            .filter(|ordering| *ordering != Ordering::Equal)
+    }
 }
 
 impl RowLevelWriteNode {
@@ -352,7 +372,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::{LogicalPlanBuilder, UserDefinedLogicalNode, lit};
 
     use super::*;
 
@@ -374,9 +394,41 @@ mod tests {
         assert!(node.effects().is_empty());
         assert_eq!(node.expected_snapshot_id(), Some(None));
 
-        let rebuilt = node.with_exprs_and_inputs(vec![], vec![])?;
+        let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
         assert_eq!(rebuilt.expected_snapshot_id(), Some(None));
         assert_eq!(rebuilt.target_format(), "iceberg");
+        Ok(())
+    }
+
+    #[test]
+    fn row_level_write_partial_order_matches_equality() -> Result<()> {
+        let plan = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        let target = RowLevelTarget {
+            table_name: vec!["catalog".into(), "schema".into(), "table".into()],
+            format: "iceberg".into(),
+            location: "file:///tmp/table".into(),
+            partition_by: vec![],
+            options: vec![],
+            lakehouse_table: None,
+        };
+        let node = RowLevelWriteNode::new_delete(plan, Arc::new(DFSchema::empty()), None, target);
+        let mut distinct_commit = node.clone();
+        distinct_commit.commit = RowLevelCommitInfo::Delete {
+            predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),
+        };
+
+        assert_ne!(node, distinct_commit);
+        assert_eq!(node.partial_cmp(&node), Some(Ordering::Equal));
+        assert_ne!(node.partial_cmp(&distinct_commit), Some(Ordering::Equal));
+        assert_ne!(distinct_commit.partial_cmp(&node), Some(Ordering::Equal));
+
+        let node_trait: &dyn UserDefinedLogicalNode = &node;
+        let distinct_trait: &dyn UserDefinedLogicalNode = &distinct_commit;
+        assert!(node_trait.dyn_eq(node_trait));
+        assert_eq!(node_trait.dyn_ord(node_trait), Some(Ordering::Equal));
+        assert!(!node_trait.dyn_eq(distinct_trait));
+        assert_ne!(node_trait.dyn_ord(distinct_trait), Some(Ordering::Equal));
+        assert_ne!(distinct_trait.dyn_ord(node_trait), Some(Ordering::Equal));
         Ok(())
     }
 }
