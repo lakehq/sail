@@ -164,6 +164,19 @@ impl PlanResolver<'_> {
             )));
         }
 
+        if !with_replacement {
+            if lower_bound < -SAMPLE_ROUNDING_EPSILON {
+                return Err(PlanError::invalid(format!(
+                    "Lower bound ({lower_bound}) must be >= 0.0"
+                )));
+            }
+            if upper_bound > 1.0 + SAMPLE_ROUNDING_EPSILON {
+                return Err(PlanError::invalid(format!(
+                    "Upper bound ({upper_bound}) must be <= 1.0"
+                )));
+            }
+        }
+
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {

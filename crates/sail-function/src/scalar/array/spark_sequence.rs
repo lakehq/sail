@@ -5,6 +5,7 @@ use chrono::{
     DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta,
     TimeZone, Utc,
 };
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
     ListArray, NullArray, NullBufferBuilder, TimestampMicrosecondArray, UInt64Array,
@@ -25,9 +26,7 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
-use sail_common_datafusion::utils::datetime::{
-    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
-};
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -59,8 +58,8 @@ impl SparkSequence {
         self.ansi_mode
     }
 
-    fn parse_session_timezone(&self) -> Result<SparkTimeZone> {
-        parse_spark_timezone(&self.session_timezone).map_err(|error| {
+    fn parse_session_timezone(&self) -> Result<Tz> {
+        self.session_timezone.parse().map_err(|error| {
             exec_datafusion_err!(
                 "Spark `sequence` function: failed to parse timezone {}: {error}",
                 self.session_timezone
@@ -273,7 +272,7 @@ impl ScalarUDFImpl for SparkSequence {
             Some(DataType::Timestamp(TimeUnit::Microsecond, output_timezone)) => {
                 let arithmetic_timezone = match output_timezone {
                     Some(_) => self.parse_session_timezone()?,
-                    None => parse_spark_timezone("UTC")?,
+                    None => "UTC".parse()?,
                 };
                 let output_timezone = output_timezone.clone();
                 make_scalar_function(move |arrays| {
@@ -938,10 +937,10 @@ fn add_calendar_interval_wide(
 }
 
 fn localize_with_preferred_offset(
-    timezone: SparkTimeZone,
+    timezone: Tz,
     datetime: NaiveDateTime,
     preferred_offset: i32,
-) -> Result<DateTime<SparkTimeZone>> {
+) -> Result<DateTime<Tz>> {
     match timezone.from_local_datetime(&datetime) {
         LocalResult::Single(value) => Ok(value),
         LocalResult::Ambiguous(first, second) => {
@@ -959,22 +958,7 @@ fn localize_with_preferred_offset(
     }
 }
 
-fn add_ltz_interval(
-    start: i64,
-    months: i32,
-    days: i32,
-    micros: i64,
-    timezone: SparkTimeZone,
-) -> Result<i64> {
-    if let SparkTimeZone::Fixed(offset) = timezone {
-        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
-        let local_start = i128::from(start) + offset_micros;
-        let local_result =
-            add_wide_calendar_interval(local_start, months, days, micros)? - offset_micros;
-        return i64::try_from(local_result)
-            .map_err(|_| exec_datafusion_err!("cannot add interval to {start}"));
-    }
-
+fn add_ltz_interval(start: i64, months: i32, days: i32, micros: i64, timezone: Tz) -> Result<i64> {
     let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
         .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
@@ -1023,7 +1007,7 @@ fn add_temporal_interval(
     months: i32,
     days: i32,
     micros: i64,
-    timezone: SparkTimeZone,
+    timezone: Tz,
     timestamp_ntz: bool,
 ) -> Result<i64> {
     let months = scaled_i32(months, index, "month")?;
@@ -1040,7 +1024,7 @@ fn temporal_timestamp_row(
     start: i64,
     stop: i64,
     step: TemporalStep,
-    timezone: SparkTimeZone,
+    timezone: Tz,
     timestamp_ntz: bool,
     max_values: usize,
 ) -> Result<Vec<i64>> {
@@ -1079,28 +1063,14 @@ fn temporal_timestamp_row(
     Ok(values)
 }
 
-fn date_to_micros(date: i32, timezone: SparkTimeZone) -> Result<i64> {
-    if let SparkTimeZone::Fixed(offset) = timezone {
-        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
-        let result = i128::from(date) * i128::from(MICROS_PER_DAY) - offset_micros;
-        return i64::try_from(result)
-            .map_err(|_| exec_datafusion_err!("cannot convert sequence date {date}"));
-    }
-
+fn date_to_micros(date: i32, timezone: Tz) -> Result<i64> {
     let datetime = Date32Type::to_naive_date_opt(date)
         .and_then(|date| date.and_hms_opt(0, 0, 0))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence date {date}"))?;
     Ok(localize_with_fallback(&timezone, &datetime)?.timestamp_micros())
 }
 
-fn micros_to_date(micros: i64, timezone: SparkTimeZone) -> Result<i32> {
-    if let SparkTimeZone::Fixed(offset) = timezone {
-        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
-        let local_micros = i128::from(micros) + offset_micros;
-        return i32::try_from(local_micros.div_euclid(i128::from(MICROS_PER_DAY)))
-            .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
-    }
-
+fn micros_to_date(micros: i64, timezone: Tz) -> Result<i32> {
     let date = as_datetime::<TimestampMicrosecondType>(micros)
         .map(|value| {
             Utc.from_utc_datetime(&value)
@@ -1115,7 +1085,7 @@ fn temporal_date_row(
     start: i32,
     stop: i32,
     step: TemporalStep,
-    timezone: SparkTimeZone,
+    timezone: Tz,
     max_values: usize,
 ) -> Result<Vec<i32>> {
     let (months, days, micros) = step.parts()?;
@@ -1162,7 +1132,7 @@ fn temporal_date_row(
     Ok(values)
 }
 
-fn gen_sequence_date(args: &[ArrayRef], timezone: SparkTimeZone) -> Result<ArrayRef> {
+fn gen_sequence_date(args: &[ArrayRef], timezone: Tz) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {
         [start, stop] => (
             start.as_primitive::<Date32Type>(),
@@ -1214,7 +1184,7 @@ fn gen_sequence_date(args: &[ArrayRef], timezone: SparkTimeZone) -> Result<Array
 
 fn gen_sequence_timestamp(
     args: &[ArrayRef],
-    timezone: SparkTimeZone,
+    timezone: Tz,
     output_timezone: Option<Arc<str>>,
 ) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {

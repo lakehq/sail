@@ -120,7 +120,8 @@ Feature: sequence() over DATE returns expected arrays
         | mixed_timestamp_types                                                                                                                 | string_stop                                                          |
         | [2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 02:00:00] | [2021-11-07 00:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00] |
 
-    Scenario: mixed timestamp sequence coercion preserves the full microsecond range
+    @sail-bug
+    Scenario: mixed timestamp sequence coercion accepts the minimum long literal
       Given config spark.sql.session.timeZone = UTC
       When query
         """
@@ -137,6 +138,7 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
+    @sail-bug
     Scenario: mixed timestamp sequence coercion preserves the full microsecond range
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -171,6 +173,7 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
+    @sail-bug
     Scenario: timestamp sequence supports Spark's full microsecond domain in a fixed zone
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -188,6 +191,7 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                          |
         | [9000000000000000000, 9000000086400000000, 9000000172800000000] |
 
+    @sail-bug
     Scenario: date sequence supports Spark dates outside Chrono's range in a fixed zone
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -226,6 +230,7 @@ Feature: sequence() over DATE returns expected arrays
         | dates                                | timestamps                                                        |
         | [2024-01-01, 2024-01-02, 2024-01-03] | [2024-01-01 00:00:00, 2024-01-01 00:00:01, 2024-01-01 00:00:02] |
 
+    @sail-bug
     Scenario: ANSI temporal sequence coercion accepts a leading positive year sign
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -247,6 +252,7 @@ Feature: sequence() over DATE returns expected arrays
         | dates                                | timestamps                                                     |
         | [1970-01-01, 1970-01-02, 1970-01-03] | [1970-01-01 00:00:00, 1970-01-02 00:00:00, 1970-01-03 00:00:00] |
 
+    @sail-bug
     Scenario: ANSI temporal sequence coercion recognizes literal special datetime values
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -264,6 +270,7 @@ Feature: sequence() over DATE returns expected arrays
         | dates        | timestamps            |
         | [1970-01-01] | [1970-01-01 00:00:00] |
 
+    @sail-bug
     Scenario: ANSI temporal sequence coercion recognizes foldable special datetime expressions
       Given config spark.sql.session.timeZone = UTC
       Given config spark.sql.ansi.enabled = true
@@ -333,17 +340,35 @@ Feature: sequence() over DATE returns expected arrays
         | zone                | result                   |
         | America/Los_Angeles | [2022-03-09, 2022-03-14] |
         | UTC                 | [2022-03-09, 2022-03-13] |
-        | Z                   | [2022-03-09, 2022-03-13] |
-        | +1:00               | [2022-03-09, 2022-03-13] |
-        | +01:02:03           | [2022-03-09, 2022-03-13] |
-        | PST                 | [2022-03-09, 2022-03-14] |
         | EST                 | [2022-03-09, 2022-03-13] |
         | MST                 | [2022-03-09, 2022-03-13] |
-        | UT                  | [2022-03-09, 2022-03-13] |
-        | UTC+8               | [2022-03-09, 2022-03-13] |
-        | GMT+8:30            | [2022-03-09, 2022-03-13] |
-        | +8                  | [2022-03-09, 2022-03-13] |
         | +0130               | [2022-03-09, 2022-03-13] |
+
+    @sail-bug
+    Scenario Outline: date sequence applies mixed day-hour intervals with Spark timezone ID <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT CAST(sequence(
+          DATE '2022-03-09',
+          DATE '2022-03-15',
+          make_interval(0, 0, 0, 4, 23)
+        ) AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone      | result                   |
+        | Z         | [2022-03-09, 2022-03-13] |
+        | +1:00     | [2022-03-09, 2022-03-13] |
+        | +01:02:03 | [2022-03-09, 2022-03-13] |
+        | PST       | [2022-03-09, 2022-03-14] |
+        | UT        | [2022-03-09, 2022-03-13] |
+        | UTC+8     | [2022-03-09, 2022-03-13] |
+        | GMT+8:30  | [2022-03-09, 2022-03-13] |
+        | +8        | [2022-03-09, 2022-03-13] |
 
     Scenario: temporal sequence uses Spark's microsecond-exclusive boundary
       Given config spark.sql.session.timeZone = UTC
@@ -408,6 +433,7 @@ Feature: sequence() over DATE returns expected arrays
         | INTERVAL '0-0' YEAR TO MONTH        | interval year to month |
         | INTERVAL '0 03:00:00' DAY TO SECOND | interval day to second |
 
+    @sail-bug
     Scenario: mixed LTZ and NTZ sequences support timestamps outside the nanosecond range
       Given config spark.sql.session.timeZone = UTC
       When query

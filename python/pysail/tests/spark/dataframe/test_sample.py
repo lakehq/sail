@@ -29,12 +29,15 @@ def test_dataframe_sample_with_replacement_zero_fraction(spark):
 
 
 def test_dataframe_sample_with_replacement_uses_bound_difference(spark):
-    sampled = _sample_with_bounds(spark, 0.5, 0.5)
+    sampled = _sample_with_bounds(spark, 2.0, 2.0)
     assert sampled.collect() == []
 
 
 def test_dataframe_sample_accepts_spark_rounding_tolerance(spark):
     sampled = _sample_with_bounds(spark, 0.5000005, 0.5)
+    assert sampled.collect() == []
+
+    sampled = _sample_with_bounds(spark, -0.0000005, 0.0, with_replacement=False)
     assert sampled.collect() == []
 
     sampled = _sample_with_bounds(
@@ -63,3 +66,17 @@ def test_dataframe_sample_rejects_fraction_beyond_spark_rounding_tolerance(spark
             1.000002,
             with_replacement=False,
         ).collect()
+
+
+def test_dataframe_sample_rejects_individual_bounds(spark):
+    with pytest.raises(
+        Exception,
+        match=r"Lower bound .* must be >= 0\.0",
+    ):
+        _sample_with_bounds(spark, -0.000002, -0.000002, with_replacement=False).collect()
+
+    with pytest.raises(
+        Exception,
+        match=r"Upper bound .* must be <= 1\.0",
+    ):
+        _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
