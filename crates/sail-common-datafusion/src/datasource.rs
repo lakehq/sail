@@ -10,7 +10,9 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, plan_err};
+use datafusion_common::{
+    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
+};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
 
@@ -450,8 +452,18 @@ impl SourceRegistry {
             .sources
             .write()
             .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
+        let name = source.name().to_lowercase();
+        if sources
+            .get(&name)
+            .is_some_and(|entry| entry.lake_source.is_some())
+        {
+            return plan_err!(
+                "Data source '{}' is already registered as a lake source",
+                source.name()
+            );
+        }
         sources.insert(
-            source.name().to_lowercase(),
+            name,
             SourceEntry {
                 data_source: source,
                 lake_source: None,
@@ -488,8 +500,20 @@ impl SourceRegistry {
     }
 
     pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
-        self.get_lake_source_if_supported(name)?
-            .ok_or_else(|| plan_datafusion_err!("No lake source found for: {name}"))
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
+        match sources.get(&name.to_lowercase()) {
+            Some(SourceEntry {
+                lake_source: Some(source),
+                ..
+            }) => Ok(source.clone()),
+            Some(_) => Err(not_impl_datafusion_err!(
+                "Data source '{name}' does not support lake operations"
+            )),
+            None => Err(missing_lake_source_error(name)),
+        }
     }
 
     /// Returns the optional lakehouse capability for a registered data source.
@@ -515,6 +539,10 @@ fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError 
     } else {
         plan_datafusion_err!("No data source found for: {name}")
     }
+}
+
+fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError {
+    plan_datafusion_err!("No lake source found for: {name}")
 }
 
 impl SessionExtension for SourceRegistry {
@@ -607,12 +635,8 @@ mod tests {
     impl LakeSource for TestLakeSource {}
 
     #[test]
-    fn registration_replaces_the_complete_source_entry() -> Result<()> {
+    fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
         let registry = SourceRegistry::new();
-
-        registry.register_lake_source(Arc::new(TestLakeSource))?;
-        assert!(registry.get_data_source("test").is_ok());
-        assert!(registry.get_lake_source("test").is_ok());
 
         registry.register_data_source(Arc::new(TestLakeSource))?;
         assert!(registry.get_data_source("test").is_ok());
@@ -625,13 +649,31 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_registration_cannot_replace_a_lake_source() -> Result<()> {
+        let registry = SourceRegistry::new();
+        registry.register_lake_source(Arc::new(TestLakeSource))?;
+
+        let error = registry
+            .register_data_source(Arc::new(TestLakeSource))
+            .expect_err("a generic source must not replace a lake source");
+
+        assert!(matches!(error, datafusion_common::DataFusionError::Plan(_)));
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_ok());
+        Ok(())
+    }
+
+    #[test]
     fn ordinary_data_source_has_no_lake_capability() -> Result<()> {
         let registry = SourceRegistry::new();
         registry.register_data_source(Arc::new(TestLakeSource))?;
 
         assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source_if_supported("test")?.is_none());
-        assert!(registry.get_lake_source("test").is_err());
+        assert!(matches!(
+            registry.get_lake_source("test"),
+            Err(datafusion_common::DataFusionError::NotImplemented(_))
+        ));
         Ok(())
     }
 
