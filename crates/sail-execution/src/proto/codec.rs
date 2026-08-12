@@ -16,8 +16,8 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
-    FileSinkConfig, FileSource, JsonSource, ParquetSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
+    FileSource, JsonSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -95,6 +95,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::csv::CsvSource;
 use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
@@ -1836,18 +1837,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self,
                         &RemotePhysicalProtoConverter {},
                     )?)?;
-                    let csv_options = CsvOptions {
-                        has_header: Some(csv_source.has_header()),
-                        delimiter: csv_source.delimiter(),
-                        quote: csv_source.quote(),
-                        terminator: csv_source.terminator(),
-                        escape: csv_source.escape(),
-                        comment: csv_source.comment(),
-                        newlines_in_values: Some(csv_source.newlines_in_values()),
-                        truncated_rows: Some(csv_source.truncate_rows()),
-                        compression: file_scan.file_compression_type.into(),
-                        ..Default::default()
-                    };
+                    let mut csv_options = csv_source.options().clone();
+                    csv_options.compression = file_scan.file_compression_type.into();
                     let options = try_encode_message(gen_datafusion_common::CsvOptions::try_from(
                         &csv_options,
                     )?)?;
@@ -4978,6 +4969,54 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_csv_source_preserves_sail_source_and_options() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let csv_options = CsvOptions {
+            has_header: Some(false),
+            delimiter: b'|',
+            quote: b'\'',
+            terminator: Some(b';'),
+            escape: Some(b'\\'),
+            double_quote: Some(false),
+            newlines_in_values: Some(true),
+            compression_level: Some(7),
+            schema_infer_max_rec: Some(123),
+            date_format: Some("yyyy-MM-dd".to_string()),
+            null_regex: Some("^(NULL|-)$".to_string()),
+            comment: Some(b'#'),
+            truncated_rows: Some(true),
+            ignore_leading_whitespace: Some(true),
+            ignore_trailing_whitespace: Some(true),
+            ..Default::default()
+        };
+        let mut expected_options = csv_options.clone();
+        expected_options.compression = CompressionTypeVariant::GZIP;
+        let source = Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            source,
+        )
+        .with_file_compression_type(FileCompressionType::GZIP)
+        .build();
+        let plan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+        let (file_scan, csv_source) = decoded
+            .downcast_to_file_source::<CsvSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source is not Sail CSV"))?;
+
+        assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+        assert_eq!(csv_source.options(), &expected_options);
         Ok(())
     }
 

@@ -18,6 +18,7 @@ mod source;
 mod write;
 
 pub use read::CsvReadFormat;
+pub use source::CsvSource;
 pub use write::CsvWriteFormat;
 
 pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;

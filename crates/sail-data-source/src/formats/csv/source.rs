@@ -25,7 +25,7 @@ use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use super::decoder::{LossyUtf8Reader, decode_utf8_lossy_stream};
 
 #[derive(Debug, Clone)]
-pub(super) struct CsvSource {
+pub struct CsvSource {
     options: CsvOptions,
     batch_size: Option<usize>,
     table_schema: TableSchema,
@@ -34,7 +34,7 @@ pub(super) struct CsvSource {
 }
 
 impl CsvSource {
-    pub(super) fn new(table_schema: impl Into<TableSchema>) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
         Self {
             options: CsvOptions::default(),
@@ -45,9 +45,13 @@ impl CsvSource {
         }
     }
 
-    pub(super) fn with_csv_options(mut self, options: CsvOptions) -> Self {
+    pub fn with_csv_options(mut self, options: CsvOptions) -> Self {
         self.options = options;
         self
+    }
+
+    pub fn options(&self) -> &CsvOptions {
+        &self.options
     }
 
     fn has_header(&self) -> bool {
