@@ -156,7 +156,7 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
     })
 }
 
-fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
+fn timestampadd_interval(function_name: &str, unit: &str, quantity: Expr) -> PlanResult<Expr> {
     let zero_i32 = || lit(0_i32);
     let zero_f64 = || lit(0_f64);
     let quantity_i32 = || cast(quantity.clone(), DataType::Int32);
@@ -215,24 +215,24 @@ fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
             quantity_f64() / lit(1_000_000_f64),
         ])),
         _ => Err(PlanError::invalid(format!(
-            "timestampadd does not support interval unit type '{unit}'"
+            "{function_name} does not support interval unit type '{unit}'"
         ))),
     }
 }
 
-fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn timestampadd_with_name(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> {
     let (unit, quantity, timestamp) = input.arguments.three()?;
     let unit = match &unit {
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.clone(),
         Expr::Column(col) => col.name().to_string(),
         _ => {
-            return Err(PlanError::invalid(
-                "timestampadd unit must be a string literal or keyword",
-            ));
+            return Err(PlanError::invalid(format!(
+                "{function_name} unit must be a string literal or keyword"
+            )));
         }
     };
-    let interval = timestampadd_interval(&unit, quantity)?;
+    let interval = timestampadd_interval(function_name, &unit, quantity)?;
     Ok(cast(
         timestamp,
         DataType::Timestamp(
@@ -240,6 +240,20 @@ fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Some(input.function_context.plan_config.session_timezone.clone()),
         ),
     ) + interval)
+}
+
+fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    timestampadd_with_name(input, "timestampadd")
+}
+
+fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> {
+    match input.arguments.len() {
+        2 => interval_arithmetic(input, "days", Operator::Plus),
+        3 => timestampadd_with_name(input, function_name),
+        _ => Err(PlanError::invalid(format!(
+            "{function_name} requires 2 or 3 arguments"
+        ))),
+    }
 }
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
@@ -1160,10 +1174,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(current_timestamp_microseconds),
         ),
         ("current_timezone", F::custom(current_timezone)),
-        (
-            "date_add",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("date_add", F::custom(|input| dateadd(input, "date_add"))),
         ("date_diff", F::custom(datediff)),
         (
             "date_format",
@@ -1182,10 +1193,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
         ("date_trunc", F::custom(date_trunc)),
-        (
-            "dateadd",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
