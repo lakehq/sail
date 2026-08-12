@@ -49,3 +49,13 @@ Feature: DataFrame sample operations
       Then query result
         | r      |
         | 394325 |
+
+  Rule: Internal Poisson sampler argument validation
+
+    @sail-only
+    Scenario: zero lambda still validates a non-scalar seed
+      When query
+        """
+        SELECT random_poisson(CAST(0 AS DOUBLE), id) AS result FROM range(3)
+        """
+      Then query error (?i)random_poisson.*scalar seed
