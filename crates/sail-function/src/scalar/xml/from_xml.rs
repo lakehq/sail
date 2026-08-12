@@ -182,9 +182,8 @@ impl ScalarUDFImpl for SparkFromXml {
         )
     }
 
-    /// Spark: `XmlToStructs` declares `override def nullable: Boolean = true`
-    /// (`xmlExpressions.scala:70`) — unconditionally, so it wins over the `UnaryExpression`
-    /// arity default (`child.nullable`).
+    /// Spark: `XmlToStructs.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L70>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let schema_str = match args.scalar_arguments.get(1) {
             Some(Some(

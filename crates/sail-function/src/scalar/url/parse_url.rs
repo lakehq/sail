@@ -148,13 +148,8 @@ impl ScalarUDFImpl for ParseUrl {
         )
     }
 
-    /// Spark: `ParseUrl` declares `override def nullable: Boolean = true`
-    /// (`urlExpressions.scala:221`) — in the class body, so it wins over the
-    /// `RuntimeReplaceable` rule (`replacement.nullable`, `Expression.scala:446`) it would
-    /// otherwise inherit from the `with` chain.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `ParseUrl.nullable = true`, unconditional (class body, beats `RuntimeReplaceable`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L221>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields

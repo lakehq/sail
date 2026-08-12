@@ -98,15 +98,9 @@ impl ScalarUDFImpl for XpathTyped {
         )
     }
 
-    /// Spark: every typed variant (`XPathBoolean`, `XPathShort`, `XPathInt`, `XPathLong`,
-    /// `XPathFloat`, `XPathDouble`, `XPathString`) inherits `override def nullable: Boolean =
-    /// true` from its base `XPathExtract` (`xml/xpath.scala:40`); none of them overrides it,
-    /// and the `Predicate` trait mixed into `XPathBoolean` does not declare `nullable`
-    /// (`predicates.scala:68-72`). The rule is unconditional, so it wins over the
-    /// `BinaryExpression` arity default (`left || right`).
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `XPathExtract.nullable = true`, unconditional; every typed variant inherits it
+    /// and declares no `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xml/xpath.scala#L40>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),

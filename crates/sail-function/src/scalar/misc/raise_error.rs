@@ -57,12 +57,8 @@ impl ScalarUDFImpl for RaiseError {
         )
     }
 
-    /// Spark: `RaiseError` declares `override def nullable: Boolean = true`
-    /// (`misc.scala:86`) — unconditionally, not derived from its children. The expression never
-    /// returns at all, but its declared type is `NullType` and its declared flag is `true`.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `RaiseError.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L86>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Null, true)))
     }

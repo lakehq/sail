@@ -60,13 +60,8 @@ impl ScalarUDFImpl for ArrayMin {
         )
     }
 
-    /// Spark: `ArrayMin` declares `override def nullable: Boolean = true`
-    /// (`collectionOperations.scala:2315`) — unconditionally, so it wins over the
-    /// `UnaryExpression` arity default (`child.nullable`). An empty array yields NULL whatever
-    /// the child's flag says.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `ArrayMin.nullable = true`, unconditional (an empty array yields NULL).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2349>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_type =
             element_return_type("ArrayMin", args.arg_fields.first().map(|f| f.data_type()))?;
@@ -116,13 +111,8 @@ impl ScalarUDFImpl for ArrayMax {
         )
     }
 
-    /// Spark: `ArrayMax` declares `override def nullable: Boolean = true`
-    /// (`collectionOperations.scala:2388`) — unconditionally, so it wins over the
-    /// `UnaryExpression` arity default (`child.nullable`). An empty array yields NULL whatever
-    /// the child's flag says.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `ArrayMax.nullable = true`, unconditional (an empty array yields NULL).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2422>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_type =
             element_return_type("ArrayMax", args.arg_fields.first().map(|f| f.data_type()))?;

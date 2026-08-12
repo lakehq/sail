@@ -46,12 +46,8 @@ impl ScalarUDFImpl for FormatNumber {
         )
     }
 
-    /// Spark: `FormatNumber` declares `override def nullable: Boolean = true`
-    /// (`stringExpressions.scala:3366`) — unconditionally, not derived from its children, even
-    /// though it is a `BinaryExpression` whose arity default would be `left || right`.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `FormatNumber.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L3367>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }

@@ -196,13 +196,8 @@ impl ScalarUDFImpl for SparkToXml {
         )
     }
 
-    /// Spark: `StructsToXml` declares `override def nullable: Boolean = true`
-    /// (`xmlExpressions.scala:236`) — unconditionally, so it wins over the `UnaryExpression`
-    /// arity default (`child.nullable`). Its `nullIntolerant = true` (`:237`) is a different
-    /// mechanism (constraint inference) and does not feed the declared flag.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `StructsToXml.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L236>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }

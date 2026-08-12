@@ -52,36 +52,36 @@ impl ScalarUDFImpl for SparkMask {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() || arg_types.len() > 5 {
-            return exec_err!(
-                "Spark `mask` function requires 1 to 5 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            _ => exec_err!(
-                "Spark `mask` function: first arg must be string, got {}",
-                arg_types[0]
-            ),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
-    /// Spark: `Mask` declares `override def nullable: Boolean = true`
-    /// (`maskExpressions.scala:201`) — unconditionally, so it wins over the `QuinaryExpression`
-    /// arity default (`children.exists(_.nullable)`, `Expression.scala:1069`).
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `Mask.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/maskExpressions.scala#L201>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
+        if arg_types.is_empty() || arg_types.len() > 5 {
+            return exec_err!(
+                "Spark `mask` function requires 1 to 5 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        let data_type = match arg_types[0] {
+            DataType::Utf8 | DataType::Utf8View | DataType::Null => DataType::Utf8,
+            DataType::LargeUtf8 => DataType::LargeUtf8,
+            _ => {
+                return exec_err!(
+                    "Spark `mask` function: first arg must be string, got {}",
+                    arg_types[0]
+                );
+            }
+        };
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 

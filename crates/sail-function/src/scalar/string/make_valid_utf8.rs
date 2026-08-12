@@ -46,16 +46,20 @@ impl ScalarUDFImpl for MakeValidUtf8 {
         )
     }
 
-    /// Spark: `MakeValidUTF8` declares `override def nullable: Boolean = true`
-    /// (`stringExpressions.scala:812`) — in the class body, so it wins over the
-    /// `RuntimeReplaceable` rule (`replacement.nullable`, `Expression.scala:446`) it would
-    /// otherwise inherit from the `with` chain.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `MakeValidUTF8.nullable = true`, unconditional (class body, beats `RuntimeReplaceable`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L813>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_type =
-            make_valid_utf8_return_type(args.arg_fields.first().map(|f| f.data_type()))?;
+        let data_type = match args.arg_fields.first().map(|f| f.data_type()) {
+            Some(data_type) => match data_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => data_type.clone(),
+                DataType::Binary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
+                    DataType::Utf8
+                }
+                DataType::LargeBinary => DataType::LargeUtf8,
+                _ => return exec_err!("expected string array for `make_valid_utf8`"),
+            },
+            None => return exec_err!("expected single argument for `make_valid_utf8`"),
+        };
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -63,20 +67,6 @@ impl ScalarUDFImpl for MakeValidUtf8 {
         make_scalar_function(make_valid_utf8_inner, vec![Hint::AcceptsSingular])(
             args.args.as_slice(),
         )
-    }
-}
-
-fn make_valid_utf8_return_type(data_type: Option<&DataType>) -> Result<DataType> {
-    match data_type {
-        Some(data_type) => match data_type {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(data_type.clone()),
-            DataType::Binary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
-                Ok(DataType::Utf8)
-            }
-            DataType::LargeBinary => Ok(DataType::LargeUtf8),
-            _ => exec_err!("expected string array for `make_valid_utf8`"),
-        },
-        None => exec_err!("expected single argument for `make_valid_utf8`"),
     }
 }
 

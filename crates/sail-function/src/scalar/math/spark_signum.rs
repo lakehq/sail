@@ -61,13 +61,9 @@ impl ScalarUDFImpl for SparkSignum {
         )
     }
 
-    /// Spark: `Signum` declares `override def nullable: Boolean = true`
-    /// (`mathExpressions.scala:773`) — unconditionally, in the class body, so it wins over the
-    /// `UnaryExpression` arity default (`child.nullable`) it would otherwise inherit through
-    /// `UnaryMathExpression`.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `UnaryMathExpression.nullable = true`, unconditional; `Signum` inherits it and
+    /// declares no `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L73>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Float64, true)))
     }

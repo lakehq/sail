@@ -44,13 +44,8 @@ impl ScalarUDFImpl for SparkQuote {
         )
     }
 
-    /// Spark: `Quote` declares `override def nullable: Boolean = true`
-    /// (`stringExpressions.scala:3786`) — in the class body, so it wins over the
-    /// `RuntimeReplaceable` rule (`replacement.nullable`, `Expression.scala:446`) it would
-    /// otherwise inherit from the `with` chain.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `Quote.nullable = true`, unconditional (class body, beats `RuntimeReplaceable`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L3787>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_type = match args.arg_fields.first().map(|f| f.data_type()) {
             Some(DataType::LargeUtf8) => DataType::LargeUtf8,

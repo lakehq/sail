@@ -45,12 +45,9 @@ impl ScalarUDFImpl for Xpath {
         )
     }
 
-    /// Spark: `XPathList` inherits `override def nullable: Boolean = true` from its base
-    /// `XPathExtract` (`xml/xpath.scala:40`); no subclass overrides it. The rule is
-    /// unconditional, so it wins over the `BinaryExpression` arity default (`left || right`).
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `XPathExtract.nullable = true`, unconditional; `XPathList` inherits it and
+    /// declares no `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xml/xpath.scala#L40>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(
             self.name(),

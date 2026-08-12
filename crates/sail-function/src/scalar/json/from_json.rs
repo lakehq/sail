@@ -128,9 +128,8 @@ impl ScalarUDFImpl for SparkFromJson {
         )
     }
 
-    /// Spark: `JsonToStructs` declares `override def nullable: Boolean = true`
-    /// (`jsonExpressions.scala:273`) — unconditionally, so it wins over the `UnaryExpression`
-    /// arity default (`child.nullable`).
+    /// Spark: `JsonToStructs.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/jsonExpressions.scala#L273>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..

@@ -69,30 +69,13 @@ impl ScalarUDFImpl for SparkToNumber {
         &self.signature
     }
 
-    /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // We cannot know the final DataType result without knowing the format input args
         internal_err!(
             "`return_type` should not be called; `return_field_from_args` is used instead"
         )
     }
 
-    /// Spark splits the rule between the two expressions this type serves, and `self.safe` is
-    /// the same flag `name()` uses to tell them apart:
-    ///
-    /// - `try_to_number` is `TryToNumber`, which declares
-    ///   `override def nullable: Boolean = true` (`numberFormatExpressions.scala:183`),
-    ///   unconditionally — bad input becomes NULL.
-    /// - `to_number` is `ToNumber` (`:145`), which has NO override, so it falls through to the
-    ///   `BinaryExpression` arity default `left.nullable || right.nullable`
-    ///   (`Expression.scala:711`) — bad input raises instead of returning NULL.
-    ///
-    /// The narrow `false` is sound here: with `safe = false` and both arguments non-nullable,
-    /// no path in `spark_to_number_impl` can produce NULL. The null-value branch needs a NULL
-    /// input, the null-format branch needs a NULL format (both nullable by then), and a parse
-    /// failure returns `Err`, not NULL.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = self.safe || args.arg_fields.iter().any(|f| f.is_nullable());
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
@@ -128,7 +111,7 @@ impl ScalarUDFImpl for SparkToNumber {
             precision, scale, ..
         } = NumberComponents::try_from(&format_spec)?;
         let return_type = DataType::Decimal256(precision, scale);
-        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

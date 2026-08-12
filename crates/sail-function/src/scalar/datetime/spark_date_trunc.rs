@@ -42,9 +42,8 @@ impl ScalarUDFImpl for SparkDateTrunc {
         )
     }
 
-    /// Spark: `TruncInstant` declares `override def nullable: Boolean = true`
-    /// (`datetimeExpressions.scala:2285`) — unconditionally, so it wins over the
-    /// `BinaryExpression` arity default (`left || right`).
+    /// Spark: `TruncInstant.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/datetimeExpressions.scala#L2287>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let field = self.inner.return_field_from_args(args)?;
         Ok(Arc::new(field.as_ref().clone().with_nullable(true)))

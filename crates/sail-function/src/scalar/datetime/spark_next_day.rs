@@ -53,13 +53,8 @@ impl ScalarUDFImpl for SparkNextDay {
         )
     }
 
-    /// Spark: `NextDay` declares `override def nullable: Boolean = true`
-    /// (`datetimeExpressions.scala:1586`) — unconditionally, so it wins over the
-    /// `BinaryExpression` arity default (`left || right`), and it is NOT narrowed by the
-    /// `failOnError` parameter the expression carries.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `NextDay.nullable = true`, unconditional (not narrowed by `failOnError`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/datetimeExpressions.scala#L1588>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
     }

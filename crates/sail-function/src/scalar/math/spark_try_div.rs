@@ -46,41 +46,39 @@ impl ScalarUDFImpl for SparkTryDiv {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types {
-            [DataType::Int32, DataType::Int32]
-            | [DataType::Int64, DataType::Int64]
-            | [DataType::Int32, DataType::Int64]
-            | [DataType::Int64, DataType::Int32] => Ok(DataType::Float64),
-            [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
-            [DataType::Interval(MonthDayNano), DataType::Int32] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
-            [DataType::Interval(MonthDayNano), DataType::Int64] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
-            _ => Err(unsupported_data_types_exec_err(
-                "try_divide",
-                "Int32, Int64 o Interval(YearMonth|MonthDayNano)",
-                arg_types,
-            )),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
-    /// Spark: `TryDivide` (`TryEval.scala:117-126`) is `RuntimeReplaceable` and declares no
-    /// `nullable` of its own, and neither does `InheritAnalysisRules`
-    /// (`Expression.scala:470`), so the rule is `replacement.nullable`
-    /// (`Expression.scala:446`). Both replacement branches land on `true`: the numeric branch
-    /// is `Divide(left, right, EvalMode.TRY)`, whose `nullable` short-circuits on
-    /// `evalMode == EvalMode.TRY` (`arithmetic.scala:236`), and the fallback wraps the ANSI
-    /// expression in `TryEval`, which declares `true` (`TryEval.scala:50`).
+    /// Spark: `TryDivide` is `RuntimeReplaceable`; both replacement branches declare `true`.
+    /// numeric  <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L236>
+    /// fallback <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
+        let data_type = match arg_types.as_slice() {
+            [DataType::Int32, DataType::Int32]
+            | [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => DataType::Float64,
+            [DataType::Interval(YearMonth), DataType::Int32] => DataType::Interval(YearMonth),
+            [DataType::Interval(MonthDayNano), DataType::Int32]
+            | [DataType::Interval(MonthDayNano), DataType::Int64] => {
+                DataType::Interval(MonthDayNano)
+            }
+            _ => {
+                return Err(unsupported_data_types_exec_err(
+                    "try_divide",
+                    "Int32, Int64 or Interval(YearMonth|MonthDayNano)",
+                    &arg_types,
+                ));
+            }
+        };
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -159,7 +157,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth) / Int32",
+                "Int32, Int64 or Interval(YearMonth) / Int32",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -221,7 +219,7 @@ impl ScalarUDFImpl for SparkTryDiv {
 
         Err(unsupported_data_types_exec_err(
             "try_divide",
-            "Int32, Int64 o Interval(YearMonth) / Int32",
+            "Int32, Int64 or Interval(YearMonth) / Int32",
             types,
         ))
     }

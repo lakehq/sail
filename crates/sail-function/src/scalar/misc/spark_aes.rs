@@ -1076,11 +1076,9 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
         )
     }
 
-    /// Spark 4.1.1 has no `TryAesEncrypt` expression — `try_aes_encrypt` is a Sail-only
-    /// spelling. Its sibling `TryAesDecrypt` (`misc.scala:537-550`) wraps the strict expression
-    /// in `TryEval`, which declares `nullable = true` (`TryEval.scala:50`), and `AesEncrypt`
-    /// itself is already `true` (`misc.scala:414` via `objects/objects.scala:334`), so `true`
-    /// is the value under either reading.
+    /// Spark: `TryEval.nullable = true`, unconditional; `try_aes_encrypt` has no expression of
+    /// its own and follows its `TryAesDecrypt` sibling, which wraps the strict call in `TryEval`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L54>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }

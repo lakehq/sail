@@ -56,13 +56,8 @@ impl ScalarUDFImpl for SparkUnHex {
         )
     }
 
-    /// Spark: `Unhex` declares `override def nullable: Boolean = true`
-    /// (`mathExpressions.scala:1183`) — unconditionally, not derived from its child and not
-    /// narrowed by its `failOnError` parameter. Its `nullIntolerant = true` (`:1175`) is a
-    /// different mechanism (constraint inference) and does not feed the declared flag.
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
+    /// Spark: `Unhex.nullable = true`, unconditional (not narrowed by `failOnError`).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1247>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }

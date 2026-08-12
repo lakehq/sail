@@ -55,13 +55,8 @@ impl ScalarUDFImpl for SparkPmod {
         )
     }
 
-    /// Spark: `Pmod` declares `override def nullable: Boolean = true`
-    /// (`arithmetic.scala:1061`) — unconditionally, so it wins over the `BinaryExpression`
-    /// arity default (`left || right`), and it is NOT narrowed by ANSI mode: under ANSI a zero
-    /// divisor raises instead of returning NULL, but the declared flag stays `true`.
-    ///
-    /// The output type keeps coming from the wrapped `datafusion-spark` implementation, so the
-    /// coercion rules stay in one place.
+    /// Spark: `Pmod.nullable = true`, unconditional (not narrowed by ANSI mode).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L1061>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let field = self.inner.return_field_from_args(args)?;
         Ok(Arc::new(field.as_ref().clone().with_nullable(true)))
