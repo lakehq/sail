@@ -44,3 +44,25 @@ def test_higher_order_lambda_survives_self_join(spark, higher_order_expression, 
 
     actual = [(row["entity_id"], row["arr"], row["t"]) for row in result.orderBy("entity_id").collect()]
     assert actual == expected
+
+
+def test_higher_order_lambda_survives_nested_loop_join_filter(spark):
+    left = spark.createDataFrame(
+        [
+            (1, [1], 10, 20),
+            (2, [None], 30, 40),
+        ],
+        ["id", "arr", "padding_1", "padding_2"],
+    ).alias("l")
+    right = spark.createDataFrame([(0,), (1,), (2,)], ["k"]).alias("r")
+
+    result = left.join(
+        right,
+        F.expr("exists(l.arr, x -> x IS NOT NULL) = (l.id > r.k)"),
+        "inner",
+    ).select("l.id", "r.k")
+
+    plan = result._explain_string()  # noqa: SLF001
+    assert "NestedLoopJoinExec" in plan
+    assert "join_proj_push_down" not in plan
+    assert [tuple(row) for row in result.orderBy("id", "k").collect()] == [(1, 0), (2, 2)]
