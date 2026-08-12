@@ -12,6 +12,7 @@ use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -51,7 +52,9 @@ fn add_day_time_interval_to_string(
         false,
     )?)
     .call(vec![string]);
-    let shifted = timestamp + interval;
+    let calendar_interval =
+        ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
+    let shifted = timestamp + calendar_interval;
     match string_type {
         DataType::Utf8 => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![shifted])),
         DataType::LargeUtf8 => Ok(ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![shifted])),
