@@ -703,7 +703,7 @@ pub struct RecordBatchIterator {
     /// Wrapped in Mutex so the struct is Sync (required by PyO3 for pyclass).
     receiver: std::sync::Arc<std::sync::Mutex<tokio::sync::mpsc::Receiver<Result<RecordBatch>>>>,
     is_arrow: bool,
-    row_factory: Option<Py<PyAny>>,
+    row_converter: Option<super::arrow_utils::RowWriterConverter>,
     current_batch: Option<RecordBatch>,
     current_row: usize,
 }
@@ -716,16 +716,18 @@ impl RecordBatchIterator {
         schema: SchemaRef,
         py: Python<'_>,
     ) -> Result<Self> {
-        let row_factory = if is_arrow {
+        let row_converter = if is_arrow {
             None
         } else {
-            Some(super::arrow_utils::get_row_factory(py, &schema)?)
+            Some(super::arrow_utils::RowWriterConverter::try_new(
+                py, &schema,
+            )?)
         };
 
         Ok(Self {
             receiver: std::sync::Arc::new(std::sync::Mutex::new(receiver)),
             is_arrow,
-            row_factory,
+            row_converter,
             current_batch: None,
             current_row: 0,
         })
@@ -755,30 +757,14 @@ impl RecordBatchIterator {
                 } else {
                     // For row, return one row at a time
                     let row_idx = slf.current_row;
-                    let factory = slf
-                        .row_factory
-                        .as_ref()
-                        .ok_or_else(|| {
-                            pyo3::exceptions::PyRuntimeError::new_err(
-                                "row_factory is None for row-based writer",
-                            )
-                        })?
-                        .bind(py);
-                    let mut row_values = Vec::with_capacity(batch.num_columns());
-                    for col_idx in 0..batch.num_columns() {
-                        let column = batch.column(col_idx);
-                        let value = super::arrow_utils::extract_python_value(py, column, row_idx)
-                            .map_err(|e| {
-                            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                        })?;
-                        row_values.push(value);
-                    }
-                    let args = pyo3::types::PyTuple::new(py, row_values)
+                    let converter = slf.row_converter.as_ref().ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "row converter is None for row-based writer",
+                        )
+                    })?;
+                    let r = converter
+                        .convert_row(py, batch, row_idx)
                         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-                    let r = factory
-                        .call1(args)
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-                        .unbind();
                     (r, row_idx + 1)
                 };
                 slf.current_row = next_row;

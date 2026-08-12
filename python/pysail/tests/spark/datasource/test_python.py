@@ -7,6 +7,7 @@ including both Arrow RecordBatch and tuple-based paths.
 
 import json
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -273,6 +274,48 @@ def test_python_arrow_datasource(spark):
     assert len(filtered) == 66  # noqa: PLR2004 - ids 34-99 have value > 50
 
 
+def test_python_arrow_datasource_with_nested_schema(spark):
+    """Arrow readers do not initialize the primitive-only row fallback."""
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("nested", pa.struct([("value", pa.int32())])),
+            ("items", pa.list_(pa.int32())),
+        ]
+    )
+
+    class NestedArrowDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "nested_arrow_test"
+
+        def schema(self):
+            return schema
+
+        def reader(self, schema):  # noqa: ARG002
+            return NestedArrowReader()
+
+    class NestedArrowReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_arrays(
+                [
+                    pa.array([1], type=pa.int64()),
+                    pa.array([{"value": 7}], type=schema.field("nested").type),
+                    pa.array([[2, 3]], type=schema.field("items").type),
+                ],
+                schema=schema,
+            )
+
+    spark.dataSource.register(NestedArrowDataSource)
+    [row] = spark.read.format("nested_arrow_test").load().collect()
+    assert row.id == 1
+    assert row.nested.value == 7  # noqa: PLR2004
+    assert row.items == [2, 3]
+
+
 def test_python_tuple_datasource(spark):
     """Test row-based tuple fallback path with data integrity verification."""
     import pyarrow as pa
@@ -318,6 +361,73 @@ def test_python_tuple_datasource(spark):
     sample = df.filter("id = 100").collect()
     assert len(sample) == 1
     assert sample[0].square == 10000  # noqa: PLR2004 - 100² = 10000
+
+
+def test_python_tuple_timestamp_read_write(spark, tmp_path):
+    """Tuple readers and row writers follow Spark LTZ/NTZ datetime semantics."""
+    datasource_name = f"tuple_timestamp_test_{uuid4().hex}"
+    state_path = tmp_path / "tuple_timestamp_state.json"
+
+    class TimestampReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            fixed_offset = timezone(timedelta(hours=1, minutes=2, seconds=3))
+            ntz = datetime(1970, 1, 1)  # noqa: DTZ001 - TIMESTAMP_NTZ is intentionally naive
+            yield (datetime(1970, 1, 1, tzinfo=fixed_offset), ntz)
+
+    class TimestampWriter(DataSourceWriter):
+        def __init__(self, path):
+            self.path = path
+
+        def write(self, iterator):
+            return {
+                "values": [(row.ltz.isoformat(), row.ntz.isoformat()) for row in iterator],
+            }
+
+        def commit(self, messages):
+            _update_test_state(self.path, timestamp_commit_messages=messages)
+
+    class TimestampDataSource(DataSource):
+        def __init__(self, options):
+            self.options = options
+
+        @classmethod
+        def name(cls):
+            return datasource_name
+
+        def schema(self):
+            return "ltz TIMESTAMP, ntz TIMESTAMP_NTZ"
+
+        def reader(self, schema):  # noqa: ARG002
+            return TimestampReader()
+
+        def writer(self, schema, overwrite):  # noqa: ARG002
+            return TimestampWriter(self.options["state_path"])
+
+    original_timezone = spark.conf.get("spark.sql.session.timeZone")
+    try:
+        spark.conf.set("spark.sql.session.timeZone", "+01:02:03")
+        spark.dataSource.register(TimestampDataSource)
+
+        row = (
+            spark.read.format(datasource_name)
+            .load()
+            .selectExpr("cast(ltz as long) AS ltz", "cast(ntz as string) AS ntz")
+            .first()
+        )
+        assert row == (-3_723, "1970-01-01 00:00:00")
+
+        spark.sql(
+            "SELECT TIMESTAMP '1970-01-01 00:00:00' AS ltz, TIMESTAMP_NTZ '1970-01-01 00:00:00' AS ntz"
+        ).write.format(datasource_name).option("state_path", str(state_path)).save()
+
+        messages = _read_test_state(state_path)["timestamp_commit_messages"]
+        values = [tuple(value) for message in messages for value in message["values"]]
+        assert values == [("1970-01-01T00:00:00", "1970-01-01T00:00:00")]
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", original_timezone)
 
 
 def test_python_multi_partition(spark):

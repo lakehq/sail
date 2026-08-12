@@ -10,19 +10,19 @@ use datafusion::arrow::array::{
     StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
-use sail_common_datafusion::utils::datetime::parse_spark_timezone;
+use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
 use crate::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
+use crate::scalar::options::{find_option, reject_null_options};
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -46,6 +46,7 @@ struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
     session_timezone: Arc<str>,
+    timezone: SparkTimeZone,
 }
 
 impl ToJsonOptions {
@@ -58,8 +59,8 @@ impl ToJsonOptions {
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
     fn from_map(map: &MapArray, session_timezone: Arc<str>) -> Result<Self> {
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
+        reject_null_options(map, "to_json")?;
+        let timestamp_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
             .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
@@ -68,8 +69,7 @@ impl ToJsonOptions {
                     .expect("default timestamp format should be valid")
             });
 
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
+        let date_format = find_option(map, Self::DATE_FORMAT_OPTION)
             .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
@@ -78,10 +78,12 @@ impl ToJsonOptions {
                     .expect("default date format should be valid")
             });
 
+        let timezone = parse_spark_timezone(&session_timezone)?;
         Ok(Self {
             timestamp_format,
             date_format,
             session_timezone,
+            timezone,
         })
     }
 }
@@ -95,6 +97,7 @@ impl Default for ToJsonOptions {
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             session_timezone: Arc::from("UTC"),
+            timezone: parse_spark_timezone("UTC").expect("UTC should be a valid timezone"),
         }
     }
 }
@@ -148,11 +151,14 @@ impl ScalarUDFImpl for SparkToJson {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // If input is a Variant struct, use the shared variant-to-JSON conversion
-        // (Spark's to_json supports Variant input and ignores options for it)
+        // (Spark's to_json supports Variant input, but still converts the entire options map)
         if let Some(field) = args.arg_fields.first()
             && matches!(field.data_type(), DataType::Struct(_))
             && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
         {
+            if let Some(options) = args.args.get(1) {
+                validate_to_json_options(options, Arc::clone(&self.session_timezone))?;
+            }
             let result = crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
                 &args.args[0],
             )?;
@@ -174,6 +180,20 @@ impl ScalarUDFImpl for SparkToJson {
             vec![],
         )(&args.args)
     }
+}
+
+fn validate_to_json_options(options: &ColumnarValue, session_timezone: Arc<str>) -> Result<()> {
+    let array = match options {
+        ColumnarValue::Array(array) => Arc::clone(array),
+        ColumnarValue::Scalar(value) => value.to_array()?,
+    };
+    let map = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+        DataFusionError::Plan(
+            "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options."
+                .to_string(),
+        )
+    })?;
+    ToJsonOptions::from_map(map, session_timezone).map(drop)
 }
 
 pub fn to_json_udf(session_timezone: Arc<str>) -> Arc<ScalarUDF> {
@@ -201,8 +221,10 @@ fn to_json_inner(args: &[ArrayRef], session_timezone: Arc<str>) -> Result<ArrayR
         })?;
         ToJsonOptions::from_map(map_array, session_timezone)?
     } else {
+        let timezone = parse_spark_timezone(&session_timezone)?;
         ToJsonOptions {
             session_timezone,
+            timezone,
             ..ToJsonOptions::default()
         }
     };
@@ -303,11 +325,10 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let arr =
                 array.as_primitive::<datafusion::arrow::datatypes::TimestampMicrosecondType>();
             let value = arr.value(index);
-            let formatted = format_timestamp(
-                value,
-                tz.as_ref().map(|_| options.session_timezone.as_ref()),
-                &options.timestamp_format,
-            );
+            let timezone = tz
+                .as_ref()
+                .map(|_| (&options.timezone, options.session_timezone.as_ref()));
+            let formatted = format_timestamp(value, timezone, &options.timestamp_format);
             Ok(Value::String(formatted))
         }
         DataType::Struct(_) => {
@@ -499,7 +520,11 @@ fn struct_to_values_array(
     Ok(Value::Array(json_values))
 }
 
-fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> String {
+fn format_timestamp(
+    value: i64,
+    timezone: Option<(&SparkTimeZone, &str)>,
+    format: &DateTimeFormat,
+) -> String {
     use chrono::Offset;
 
     use crate::scalar::datetime::format::{
@@ -507,28 +532,25 @@ fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> St
     };
 
     if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
-        let (datetime, timezone) = if let Some(tz_str) = tz {
-            if let Ok(tz) = parse_spark_timezone(tz_str) {
-                let local_dt = dt_utc.with_timezone(&tz);
-                let offset = local_dt.offset().fix();
-                (
-                    local_dt.naive_local(),
-                    Some(TimeZoneDisplay {
-                        offset,
-                        name: Some(tz_str),
-                    }),
-                )
-            } else {
-                (dt_utc.naive_utc(), None)
-            }
+        let (datetime, timezone, zone_id) = if let Some((tz, tz_str)) = timezone {
+            let local_dt = dt_utc.with_timezone(tz);
+            let offset = local_dt.offset().fix();
+            (
+                local_dt.naive_local(),
+                Some(TimeZoneDisplay {
+                    offset,
+                    name: Some(tz_str),
+                }),
+                Some(tz_str),
+            )
         } else {
-            (dt_utc.naive_utc(), None)
+            (dt_utc.naive_utc(), None, None)
         };
 
         let input = DateTimeFormatInput {
             datetime,
             timezone,
-            zone_id: tz,
+            zone_id,
             timestamp_kind: TimestampKind::Normal,
             precision: TimePrecision::Microsecond,
         };
@@ -598,33 +620,6 @@ fn number_from_f64(value: f64) -> Value {
         .unwrap_or_else(|| Value::String(value.to_string()))
 }
 
-/// Finds the index of a specified key in a MapArray.
-fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
-    options
-        .entries()
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-        .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-        .and_then(|x| {
-            x.iter()
-                .enumerate()
-                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
-        })
-        .map(|(i, _)| i)
-}
-
-/// Retrieves the value associated with a specified key from a MapArray.
-fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
-    if let Some(index) = find_key_index(options, search_key) {
-        options
-            .entries()
-            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .map(|values| values.value(index).to_string())
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,13 +627,14 @@ mod tests {
     #[test]
     fn formats_second_precision_offset_default_and_custom() -> Result<()> {
         let default = DateTimeFormat::for_formatting(ToJsonOptions::TIMESTAMP_FORMAT_DEFAULT)?;
+        let timezone = parse_spark_timezone("+01:02:03")?;
         assert_eq!(
-            format_timestamp(-3_723_000_000, Some("+01:02:03"), &default),
+            format_timestamp(-3_723_000_000, Some((&timezone, "+01:02:03")), &default),
             "1970-01-01T00:00:00.000+01:02:03"
         );
         let custom = DateTimeFormat::for_formatting("yyyy/MM/dd HH:mm:ss XXXXX")?;
         assert_eq!(
-            format_timestamp(-3_723_000_000, Some("+01:02:03"), &custom),
+            format_timestamp(-3_723_000_000, Some((&timezone, "+01:02:03")), &custom),
             "1970/01/01 00:00:00 +01:02:03"
         );
         Ok(())

@@ -629,32 +629,51 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType, *, assign_columns_
         return pa.array([], type=data_type)
 
     struct_arrays = []
+    target_fields = list(data_type.fields)
 
     for batch in data:
-        if len(data_type.fields) != batch.num_columns:
-            error = f"column number doesn't match: expected {len(data_type.fields)}, got {batch.num_columns}"
+        # Spark permits an entirely empty result without requiring it to carry
+        # the declared schema.
+        if batch.num_columns == 0 and batch.num_rows == 0:
+            continue
+
+        if assign_columns_by_name:
+            target_types = {field.name: field.type for field in target_fields}
+            source_types = dict(zip(batch.schema.names, batch.schema.types, strict=True))
+            missing = sorted(target_types.keys() - source_types.keys())
+            extra = sorted(source_types.keys() - target_types.keys())
+            if missing or extra:
+                details = f" Missing: {', '.join(missing)}." if missing else ""
+                details += f" Unexpected: {', '.join(extra)}." if extra else ""
+                error = f"Column names of the returned pyarrow.Table do not match specified schema.{details}"
+                raise ValueError(error)
+            type_mismatch = [
+                (name, target_types[name], source_types[name])
+                for name in sorted(target_types)
+                if target_types[name] != source_types[name]
+            ]
+            arrays = [batch[field.name] for field in target_fields]
+        else:
+            if len(target_fields) != batch.num_columns:
+                error = f"column number doesn't match: expected {len(target_fields)}, got {batch.num_columns}"
+                raise ValueError(error)
+            type_mismatch = [
+                (field.name, field.type, source_type)
+                for field, source_type in zip(target_fields, batch.schema.types, strict=True)
+                if field.type != source_type
+            ]
+            arrays = list(batch.columns)
+
+        if type_mismatch:
+            mismatch = ", ".join(
+                f"column '{name}' (expected {expected}, actual {actual})" for name, expected, actual in type_mismatch
+            )
+            error = f"Columns do not match in their data type: {mismatch}"
             raise ValueError(error)
 
-        arrays = []
-        names = []
+        struct_arrays.append(pa.StructArray.from_arrays(arrays, fields=target_fields))
 
-        for i, target_field in enumerate(data_type.fields):
-            target_name = target_field.name
-            target_type = target_field.type
-
-            source_array = (
-                batch[target_name] if assign_columns_by_name and target_name in batch.schema.names else batch.column(i)
-            )
-
-            if source_array.type != target_type:
-                source_array = source_array.cast(target_type)
-
-            arrays.append(source_array)
-            names.append(target_name)
-
-        struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
-
-    return pa.concat_arrays(struct_arrays)
+    return pa.array([], type=data_type) if not struct_arrays else pa.concat_arrays(struct_arrays)
 
 
 def _named_arrays_to_pandas(

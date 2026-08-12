@@ -9,7 +9,7 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::functions_nested::string::array_to_string;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when,
@@ -563,13 +563,15 @@ fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Ex
     coalesce(vec![agg, lit(empty)])
 }
 
-fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
-    let session_timezone = &input.function_context.plan_config.session_timezone;
-    let (agg_col, other_args) = input.arguments.at_least_one()?;
+pub(super) fn prepare_listagg(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+    session_timezone: &Arc<str>,
+) -> PlanResult<Option<(expr::Expr, expr::Expr, DataType)>> {
+    let (agg_col, other_args) = arguments.at_least_one()?;
     let agg_col_type = agg_col.get_type(schema)?;
     if agg_col_type == DataType::Null {
-        return Ok(lit(ScalarValue::Null));
+        return Ok(None);
     }
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
     let agg_col = if matches!(&agg_col_type, DataType::Timestamp(_, Some(_))) {
@@ -582,22 +584,15 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         delim.cast_to(&DataType::Utf8, schema)?
     };
+    Ok(Some((agg_col, delim, agg_col_type)))
+}
 
-    let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
-        params: AggregateFunctionParams {
-            args: vec![agg_col.clone()],
-            distinct: input.distinct,
-            order_by: if input.distinct {
-                vec![agg_col.clone().sort(true, true)]
-            } else {
-                input.order_by
-            },
-            filter: input.filter,
-            null_treatment: get_null_treatment(Some(true)),
-        },
-    });
-
+pub(super) fn finish_listagg(
+    agg: expr::Expr,
+    delim: expr::Expr,
+    agg_col_type: DataType,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
     let string_agg = array_to_string(
         agg.cast_to(
             &DataType::List(Arc::new(Field::new(
@@ -619,6 +614,33 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(when(casted_agg.clone().is_not_null(), casted_agg)
         .when(lit(true), lit(ScalarValue::Null))
         .end()?)
+}
+
+fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let Some((agg_col, delim, agg_col_type)) = prepare_listagg(
+        input.arguments,
+        schema,
+        &input.function_context.plan_config.session_timezone,
+    )?
+    else {
+        return Ok(lit(ScalarValue::Null));
+    };
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: vec![agg_col.clone()],
+            distinct: input.distinct,
+            order_by: if input.distinct {
+                vec![agg_col.sort(true, true)]
+            } else {
+                input.order_by
+            },
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    });
+    finish_listagg(agg, delim, agg_col_type, schema)
 }
 
 fn histogram_numeric(input: AggFunctionInput) -> PlanResult<expr::Expr> {

@@ -176,6 +176,13 @@ fn resolve_row_level_writer_options(
         IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
     let iceberg_options = IcebergWriteOptions::resolve(session_state, clean_options)?;
     let mut writer_options = IcebergWriterExecOptions::from(iceberg_options);
+    writer_options.session_timezone = session_state
+        .config()
+        .options()
+        .execution
+        .time_zone
+        .clone()
+        .unwrap_or_else(|| "UTC".to_string());
     writer_options.apply_variant_shredding_option_presence(variant_presence);
     writer_options.table_properties = table_properties;
     writer_options.lakehouse_table = node.target_lakehouse_table().cloned();

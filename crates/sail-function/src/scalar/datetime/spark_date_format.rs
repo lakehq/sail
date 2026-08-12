@@ -1,25 +1,30 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeZone};
 use datafusion::arrow::array::{
-    Array, ArrayRef, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    Array, ArrayRef, Date32Array, Date64Array, PrimitiveArray, StringArray,
+    TimestampMicrosecondArray,
 };
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::datatypes::{
+    ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion::arrow::temporal_conversions::{
     as_datetime, date32_to_datetime, date64_to_datetime,
 };
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::scalar::datetime::format::{
     DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+    cached_format,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -76,32 +81,12 @@ impl ScalarUDFImpl for SparkDateFormat {
                     }
                     DataType::Date32 => format_date32_array(&array, &format)?,
                     DataType::Date64 => format_date64_array(&array, &format)?,
-                    DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                        format_timestamp_array_microsecond(
-                            &array,
-                            tz.as_ref().map(|_| &self.session_timezone),
-                            &format,
-                        )?
-                    }
-                    DataType::Timestamp(TimeUnit::Millisecond, tz) => {
-                        format_timestamp_array_millisecond(
-                            &array,
-                            tz.as_ref().map(|_| &self.session_timezone),
-                            &format,
-                        )?
-                    }
-                    DataType::Timestamp(TimeUnit::Second, tz) => format_timestamp_array_second(
+                    DataType::Timestamp(unit, tz) => format_timestamp_array_by_unit(
                         &array,
+                        *unit,
                         tz.as_ref().map(|_| &self.session_timezone),
                         &format,
                     )?,
-                    DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                        format_timestamp_array_nanosecond(
-                            &array,
-                            tz.as_ref().map(|_| &self.session_timezone),
-                            &format,
-                        )?
-                    }
                     _ => {
                         return exec_err!(
                             "spark_date_format: expected date or timestamp array, got {:?}",
@@ -257,6 +242,16 @@ fn null_string_array(len: usize) -> ColumnarValue {
 
 /// Parse a timestamp string to microseconds since epoch.
 fn parse_timestamp_string(value: &str, timezone: &str) -> Result<Option<i64>> {
+    let Ok(timezone) = parse_spark_timezone(timezone) else {
+        return Ok(None);
+    };
+    parse_timestamp_string_in_zone(value, &timezone)
+}
+
+fn parse_timestamp_string_in_zone(
+    value: &str,
+    default_timezone: &SparkTimeZone,
+) -> Result<Option<i64>> {
     let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
     let (datetime, parsed_timezone) = match parsed {
         Ok(v) => v,
@@ -264,10 +259,7 @@ fn parse_timestamp_string(value: &str, timezone: &str) -> Result<Option<i64>> {
     };
     // Use the timezone from the parsed string if present, otherwise use the provided timezone
     let timezone = if parsed_timezone.is_empty() {
-        match parse_spark_timezone(timezone) {
-            Ok(v) => v,
-            Err(_e) => return Ok(None),
-        }
+        *default_timezone
     } else {
         match parse_spark_timezone(parsed_timezone) {
             Ok(v) => v,
@@ -287,13 +279,17 @@ fn parse_string_array_to_timestamp(
     timezone: &str,
 ) -> Result<TimestampMicrosecondArray> {
     let mut builder = TimestampMicrosecondArray::builder(array.len());
+    let Ok(timezone) = parse_spark_timezone(timezone) else {
+        builder.append_nulls(array.len());
+        return Ok(builder.finish());
+    };
 
     match array.data_type() {
         DataType::Utf8 => {
             let string_array = as_string_array(array)?;
             for value in string_array.iter() {
                 match value {
-                    Some(v) => match parse_timestamp_string(v, timezone)? {
+                    Some(v) => match parse_timestamp_string_in_zone(v, &timezone)? {
                         Some(micros) => builder.append_value(micros),
                         None => builder.append_null(),
                     },
@@ -305,7 +301,7 @@ fn parse_string_array_to_timestamp(
             let string_array = as_large_string_array(array)?;
             for value in string_array.iter() {
                 match value {
-                    Some(v) => match parse_timestamp_string(v, timezone)? {
+                    Some(v) => match parse_timestamp_string_in_zone(v, &timezone)? {
                         Some(micros) => builder.append_value(micros),
                         None => builder.append_null(),
                     },
@@ -317,7 +313,7 @@ fn parse_string_array_to_timestamp(
             let string_array = as_string_view_array(array)?;
             for value in string_array.iter() {
                 match value {
-                    Some(v) => match parse_timestamp_string(v, timezone)? {
+                    Some(v) => match parse_timestamp_string_in_zone(v, &timezone)? {
                         Some(micros) => builder.append_value(micros),
                         None => builder.append_null(),
                     },
@@ -345,7 +341,7 @@ fn format_string_array_as_timestamp(
     let timestamp_array = parse_string_array_to_timestamp(array, timezone)?;
     let tz: Arc<str> = Arc::from(timezone);
     let timestamp_array: Arc<dyn datafusion::arrow::array::Array> = Arc::new(timestamp_array);
-    format_timestamp_array_microsecond(&timestamp_array, Some(&tz), format)
+    format_timestamp_array_by_unit(&timestamp_array, TimeUnit::Microsecond, Some(&tz), format)
 }
 
 fn format_timestamp_array_dynamic(
@@ -403,74 +399,38 @@ fn format_timestamp_array_with_formats<'f>(
             format_date64_values(values.iter(), formats, cache)
         }
         DataType::Timestamp(TimeUnit::Microsecond, array_tz) => {
-            let values = timestamp_array
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "spark_date_format: failed to downcast to TimestampMicrosecondArray"
-                    )
-                })?;
-            let effective_tz = tz.or(array_tz.as_ref());
-            format_timestamp_values(
-                values.iter(),
+            format_timestamp_values_for_type::<TimestampMicrosecondType>(
+                timestamp_array,
                 formats,
-                &TimeUnit::Microsecond,
-                effective_tz,
+                TimeUnit::Microsecond,
+                tz.or(array_tz.as_ref()),
                 cache,
             )
         }
         DataType::Timestamp(TimeUnit::Millisecond, array_tz) => {
-            let values = timestamp_array
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "spark_date_format: failed to downcast to TimestampMillisecondArray"
-                    )
-                })?;
-            let effective_tz = tz.or(array_tz.as_ref());
-            format_timestamp_values(
-                values.iter(),
+            format_timestamp_values_for_type::<TimestampMillisecondType>(
+                timestamp_array,
                 formats,
-                &TimeUnit::Millisecond,
-                effective_tz,
+                TimeUnit::Millisecond,
+                tz.or(array_tz.as_ref()),
                 cache,
             )
         }
         DataType::Timestamp(TimeUnit::Second, array_tz) => {
-            let values = timestamp_array
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "spark_date_format: failed to downcast to TimestampSecondArray"
-                    )
-                })?;
-            let effective_tz = tz.or(array_tz.as_ref());
-            format_timestamp_values(
-                values.iter(),
+            format_timestamp_values_for_type::<TimestampSecondType>(
+                timestamp_array,
                 formats,
-                &TimeUnit::Second,
-                effective_tz,
+                TimeUnit::Second,
+                tz.or(array_tz.as_ref()),
                 cache,
             )
         }
         DataType::Timestamp(TimeUnit::Nanosecond, array_tz) => {
-            let values = timestamp_array
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "spark_date_format: failed to downcast to TimestampNanosecondArray"
-                    )
-                })?;
-            let effective_tz = tz.or(array_tz.as_ref());
-            format_timestamp_values(
-                values.iter(),
+            format_timestamp_values_for_type::<TimestampNanosecondType>(
+                timestamp_array,
                 formats,
-                &TimeUnit::Nanosecond,
-                effective_tz,
+                TimeUnit::Nanosecond,
+                tz.or(array_tz.as_ref()),
                 cache,
             )
         }
@@ -503,7 +463,7 @@ fn format_date32_values<'v, 'f>(
         .zip(formats)
         .map(|(value, format)| match (value, format) {
             (Some(value), Some(format)) => {
-                let format = get_or_parse_format(cache, format)?;
+                let format = cached_format(cache, format, DateTimeFormat::for_formatting)?;
                 format_date32_value(value, format).map(Some)
             }
             _ => Ok(None),
@@ -520,7 +480,7 @@ fn format_date64_values<'v, 'f>(
         .zip(formats)
         .map(|(value, format)| match (value, format) {
             (Some(value), Some(format)) => {
-                let format = get_or_parse_format(cache, format)?;
+                let format = cached_format(cache, format, DateTimeFormat::for_formatting)?;
                 format_date64_value(value, format).map(Some)
             }
             _ => Ok(None),
@@ -535,32 +495,62 @@ fn format_timestamp_values<'v, 'f>(
     tz: Option<&Arc<str>>,
     cache: &mut HashMap<String, DateTimeFormat>,
 ) -> Result<StringArray> {
+    let timezone = parse_format_timezone(tz)?;
     values
         .zip(formats)
         .map(|(value, format)| match (value, format) {
             (Some(value), Some(format)) => {
-                let format = get_or_parse_format(cache, format)?;
-                format_timestamp_value(value, time_unit, tz, format).map(Some)
+                let format = cached_format(cache, format, DateTimeFormat::for_formatting)?;
+                format_timestamp_value_in_zone(value, time_unit, timezone, format).map(Some)
             }
             _ => Ok(None),
         })
         .collect::<Result<StringArray>>()
 }
 
-fn get_or_parse_format<'a>(
-    cache: &'a mut HashMap<String, DateTimeFormat>,
-    pattern: &str,
-) -> Result<&'a DateTimeFormat> {
-    match cache.entry(pattern.to_string()) {
-        Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_formatting(pattern)?)),
-    }
+fn format_timestamp_values_for_type<'f, T: ArrowTimestampType>(
+    array: &ArrayRef,
+    formats: impl Iterator<Item = Option<&'f str>>,
+    time_unit: TimeUnit,
+    tz: Option<&Arc<str>>,
+    cache: &mut HashMap<String, DateTimeFormat>,
+) -> Result<StringArray> {
+    let values = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| exec_datafusion_err!("spark_date_format: invalid timestamp array"))?;
+    format_timestamp_values(values.iter(), formats, &time_unit, tz, cache)
+}
+
+#[derive(Clone, Copy)]
+struct FormatTimeZone<'a> {
+    id: &'a str,
+    timezone: SparkTimeZone,
+}
+
+fn parse_format_timezone(tz: Option<&Arc<str>>) -> Result<Option<FormatTimeZone<'_>>> {
+    tz.map(|id| {
+        Ok(FormatTimeZone {
+            id,
+            timezone: parse_spark_timezone(id)?,
+        })
+    })
+    .transpose()
 }
 
 fn format_timestamp_value(
     value: i64,
     time_unit: &TimeUnit,
     tz: Option<&Arc<str>>,
+    format: &DateTimeFormat,
+) -> Result<String> {
+    format_timestamp_value_in_zone(value, time_unit, parse_format_timezone(tz)?, format)
+}
+
+fn format_timestamp_value_in_zone(
+    value: i64,
+    time_unit: &TimeUnit,
+    timezone: Option<FormatTimeZone<'_>>,
     format: &DateTimeFormat,
 ) -> Result<String> {
     let naive_datetime = match time_unit {
@@ -582,17 +572,16 @@ fn format_timestamp_value(
         )
     })?;
 
-    match tz {
-        Some(tz_str) => {
-            let tz = parse_spark_timezone(tz_str.as_ref())?;
-            let datetime = tz.from_utc_datetime(&naive_datetime);
+    match timezone {
+        Some(timezone) => {
+            let datetime = timezone.timezone.from_utc_datetime(&naive_datetime);
             format.format(DateTimeFormatInput {
                 datetime: datetime.naive_local(),
                 timezone: Some(TimeZoneDisplay {
                     offset: datetime.offset().fix(),
-                    name: Some(tz_str),
+                    name: Some(timezone.id),
                 }),
-                zone_id: Some(tz_str),
+                zone_id: Some(timezone.id),
                 timestamp_kind: TimestampKind::Normal,
                 precision: TimePrecision::Microsecond,
             })
@@ -615,17 +604,8 @@ pub(crate) fn format_file_timestamp_array(
     let format = DateTimeFormat::for_formatting(pattern)?;
     let timezone = Arc::<str>::from(session_timezone);
     let output = match array.data_type() {
-        DataType::Timestamp(TimeUnit::Second, Some(_)) => {
-            format_timestamp_array_second(array, Some(&timezone), &format)?
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, Some(_)) => {
-            format_timestamp_array_millisecond(array, Some(&timezone), &format)?
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
-            format_timestamp_array_microsecond(array, Some(&timezone), &format)?
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
-            format_timestamp_array_nanosecond(array, Some(&timezone), &format)?
+        DataType::Timestamp(unit, Some(_)) => {
+            format_timestamp_array_by_unit(array, *unit, Some(&timezone), &format)?
         }
         data_type => {
             return exec_err!(
@@ -706,102 +686,46 @@ fn format_date64_array(
     Ok(StringArray::from(result))
 }
 
-fn format_timestamp_array_microsecond(
+fn format_timestamp_array<T: ArrowTimestampType>(
     array: &Arc<dyn datafusion::arrow::array::Array>,
+    time_unit: TimeUnit,
     tz: Option<&Arc<str>>,
     format: &DateTimeFormat,
 ) -> Result<StringArray> {
     let ts_array = array
         .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .ok_or_else(|| {
-            exec_datafusion_err!(
-                "spark_date_format: failed to downcast to TimestampMicrosecondArray"
-            )
-        })?;
-
-    let result: Vec<Option<String>> = ts_array
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| exec_datafusion_err!("spark_date_format: invalid timestamp array"))?;
+    let timezone = parse_format_timezone(tz)?;
+    ts_array
         .iter()
         .map(|opt| {
-            opt.map(|value| format_timestamp_value(value, &TimeUnit::Microsecond, tz, format))
+            opt.map(|value| format_timestamp_value_in_zone(value, &time_unit, timezone, format))
                 .transpose()
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(StringArray::from(result))
+        .collect()
 }
 
-fn format_timestamp_array_millisecond(
-    array: &Arc<dyn datafusion::arrow::array::Array>,
+fn format_timestamp_array_by_unit(
+    array: &ArrayRef,
+    time_unit: TimeUnit,
     tz: Option<&Arc<str>>,
     format: &DateTimeFormat,
 ) -> Result<StringArray> {
-    let ts_array = array
-        .as_any()
-        .downcast_ref::<TimestampMillisecondArray>()
-        .ok_or_else(|| {
-            exec_datafusion_err!(
-                "spark_date_format: failed to downcast to TimestampMillisecondArray"
-            )
-        })?;
-
-    let result: Vec<Option<String>> = ts_array
-        .iter()
-        .map(|opt| {
-            opt.map(|value| format_timestamp_value(value, &TimeUnit::Millisecond, tz, format))
-                .transpose()
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(StringArray::from(result))
-}
-
-fn format_timestamp_array_second(
-    array: &Arc<dyn datafusion::arrow::array::Array>,
-    tz: Option<&Arc<str>>,
-    format: &DateTimeFormat,
-) -> Result<StringArray> {
-    let ts_array = array
-        .as_any()
-        .downcast_ref::<TimestampSecondArray>()
-        .ok_or_else(|| {
-            exec_datafusion_err!("spark_date_format: failed to downcast to TimestampSecondArray")
-        })?;
-
-    let result: Vec<Option<String>> = ts_array
-        .iter()
-        .map(|opt| {
-            opt.map(|value| format_timestamp_value(value, &TimeUnit::Second, tz, format))
-                .transpose()
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(StringArray::from(result))
-}
-
-fn format_timestamp_array_nanosecond(
-    array: &Arc<dyn datafusion::arrow::array::Array>,
-    tz: Option<&Arc<str>>,
-    format: &DateTimeFormat,
-) -> Result<StringArray> {
-    let ts_array = array
-        .as_any()
-        .downcast_ref::<TimestampNanosecondArray>()
-        .ok_or_else(|| {
-            exec_datafusion_err!(
-                "spark_date_format: failed to downcast to TimestampNanosecondArray"
-            )
-        })?;
-
-    let result: Vec<Option<String>> = ts_array
-        .iter()
-        .map(|opt| {
-            opt.map(|value| format_timestamp_value(value, &TimeUnit::Nanosecond, tz, format))
-                .transpose()
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(StringArray::from(result))
+    match time_unit {
+        TimeUnit::Second => {
+            format_timestamp_array::<TimestampSecondType>(array, time_unit, tz, format)
+        }
+        TimeUnit::Millisecond => {
+            format_timestamp_array::<TimestampMillisecondType>(array, time_unit, tz, format)
+        }
+        TimeUnit::Microsecond => {
+            format_timestamp_array::<TimestampMicrosecondType>(array, time_unit, tz, format)
+        }
+        TimeUnit::Nanosecond => {
+            format_timestamp_array::<TimestampNanosecondType>(array, time_unit, tz, format)
+        }
+    }
 }
 
 #[cfg(test)]

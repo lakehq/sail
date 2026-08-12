@@ -14,7 +14,7 @@ use datafusion_expr::{
 use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::spark_sequence::add_timestamp_interval;
+use crate::scalar::datetime::utils::add_timestamp_interval;
 
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 

@@ -7,7 +7,7 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::physical_plan::RecordBatchStream;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use futures::Stream;
 use tokio::sync::mpsc;
 
@@ -166,6 +166,11 @@ impl PythonDataSourceStream {
         let gil_wait_start = Instant::now();
 
         let result = Python::attach(|py| -> Result<()> {
+            enum OutputMode {
+                Arrow,
+                Rows(RowBatchCollector),
+            }
+
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(
@@ -198,8 +203,9 @@ impl PythonDataSourceStream {
             let pyarrow = py.import("pyarrow").map_err(py_err)?;
             let record_batch_type = pyarrow.getattr("RecordBatch").map_err(py_err)?;
 
-            // Create row batcher for tuple fallback path
-            let mut row_batcher = RowBatchCollector::new(schema.clone(), batch_size);
+            // The first value fixes the output mode, matching Spark. Build the row
+            // converter lazily so Arrow-only readers retain full nested-type support.
+            let mut output_mode = None;
 
             // Iterate over results
             loop {
@@ -222,7 +228,20 @@ impl PythonDataSourceStream {
                     Ok(item) => {
                         // Check if item is a RecordBatch (Arrow zero-copy path)
                         // or a tuple (row-based fallback path)
-                        if item.is_instance(&record_batch_type).unwrap_or(false) {
+                        let is_record_batch = item.is_instance(&record_batch_type).unwrap_or(false);
+                        if output_mode.is_none() {
+                            output_mode = Some(if is_record_batch {
+                                OutputMode::Arrow
+                            } else {
+                                OutputMode::Rows(RowBatchCollector::new(
+                                    py,
+                                    schema.clone(),
+                                    batch_size,
+                                )?)
+                            });
+                        }
+
+                        if matches!(&output_mode, Some(OutputMode::Arrow)) && is_record_batch {
                             // Arrow path - zero copy transfer
                             let batch = super::arrow_utils::py_record_batch_to_rust(py, &item)?;
 
@@ -244,19 +263,15 @@ impl PythonDataSourceStream {
                             if tx.blocking_send(Ok(batch)).is_err() {
                                 break;
                             }
-                        } else {
-                            // Tuple fallback path - pickle and batch
-                            let row_bytes = cloudpickle
-                                .call_method1("dumps", (&item,))
-                                .map_err(py_err)?
-                                .extract::<Vec<u8>>()
-                                .map_err(|e| ctx.wrap_py_error(e))?;
-
-                            row_batcher.add_row(row_bytes);
+                        } else if let Some(OutputMode::Rows(row_batcher)) = output_mode.as_mut()
+                            && !is_record_batch
+                        {
+                            // Tuple fallback path - retain the row until this batch is converted.
+                            row_batcher.add_row(item.unbind());
 
                             // Flush if batch is ready
                             if row_batcher.is_ready()
-                                && let Some(batch) = row_batcher.flush()?
+                                && let Some(batch) = row_batcher.flush(py)?
                             {
                                 metrics
                                     .rows_processed
@@ -267,13 +282,20 @@ impl PythonDataSourceStream {
                                     break;
                                 }
                             }
+                        } else {
+                            return Err(DataFusionError::Execution(
+                                "Python data source reader cannot mix PyArrow RecordBatch and row outputs"
+                                    .to_string(),
+                            ));
                         }
                     }
                     Err(e) => {
                         // Check if StopIteration (normal end)
                         if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
                             // Flush any remaining rows in the batcher
-                            if let Some(batch) = row_batcher.flush()? {
+                            if let Some(OutputMode::Rows(row_batcher)) = output_mode.as_mut()
+                                && let Some(batch) = row_batcher.flush(py)?
+                            {
                                 metrics
                                     .rows_processed
                                     .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
@@ -341,26 +363,25 @@ fn with_partition_context(
 
 /// Helper for collecting rows into batches.
 pub struct RowBatchCollector {
-    /// Schema for the batch
-    schema: SchemaRef,
-    /// Collected rows (as Python tuples, pickled)
-    rows: Vec<Vec<u8>>,
+    converter: super::arrow_utils::RowReaderConverter,
+    /// Collected Python tuples.
+    rows: Vec<pyo3::Py<pyo3::PyAny>>,
     /// Batch size threshold
     batch_size: usize,
 }
 
 impl RowBatchCollector {
     /// Create a new collector.
-    pub fn new(schema: SchemaRef, batch_size: usize) -> Self {
-        Self {
-            schema,
+    pub fn new(py: pyo3::Python<'_>, schema: SchemaRef, batch_size: usize) -> Result<Self> {
+        Ok(Self {
+            converter: super::arrow_utils::RowReaderConverter::try_new(py, schema)?,
             rows: Vec::with_capacity(batch_size),
             batch_size,
-        }
+        })
     }
 
-    /// Add a row (pickled tuple).
-    pub fn add_row(&mut self, row: Vec<u8>) {
+    /// Add a Python row tuple.
+    pub fn add_row(&mut self, row: pyo3::Py<pyo3::PyAny>) {
         self.rows.push(row);
     }
 
@@ -370,13 +391,13 @@ impl RowBatchCollector {
     }
 
     /// Flush collected rows to a batch.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>> {
+    pub fn flush(&mut self, py: pyo3::Python<'_>) -> Result<Option<RecordBatch>> {
         if self.rows.is_empty() {
             return Ok(None);
         }
 
         let rows = std::mem::take(&mut self.rows);
-        let batch = super::arrow_utils::convert_rows_to_batch(&self.schema, &rows)?;
+        let batch = self.converter.convert_rows(py, &rows)?;
         Ok(Some(batch))
     }
 }
@@ -390,25 +411,24 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn test_row_batch_collector() {
+        pyo3::Python::initialize();
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        pyo3::Python::attach(|py| {
+            let mut collector = RowBatchCollector::new(py, schema, 100).unwrap();
 
-        let mut collector = RowBatchCollector::new(schema, 100);
+            assert!(!collector.is_ready());
 
-        assert!(!collector.is_ready());
+            for _ in 0..50 {
+                collector.add_row(py.None());
+            }
+            assert!(!collector.is_ready());
 
-        // Add rows
-        for _ in 0..50 {
-            collector.add_row(vec![1, 2, 3]);
-        }
-
-        assert!(!collector.is_ready());
-
-        // Add more to reach threshold
-        for _ in 0..60 {
-            collector.add_row(vec![1, 2, 3]);
-        }
-
-        assert!(collector.is_ready());
+            for _ in 0..60 {
+                collector.add_row(py.None());
+            }
+            assert!(collector.is_ready());
+        });
     }
 }

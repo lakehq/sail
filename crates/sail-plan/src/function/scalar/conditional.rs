@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use super::datetime::timezone_cast;
+use super::predicate::{coerce_temporal_expr, common_temporal_type, is_temporal_type};
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
@@ -29,13 +28,13 @@ pub(super) fn coerce_temporal_values(
     }
     if !data_types.iter().any(is_temporal_type)
         || !data_types.iter().all(|data_type| {
-            is_temporal_type(data_type) || is_string_type(data_type) || data_type.is_null()
+            is_temporal_type(data_type) || data_type.is_string() || data_type.is_null()
         })
     {
         return Ok(arguments);
     }
 
-    let has_string = data_types.iter().any(is_string_type);
+    let has_string = data_types.iter().any(DataType::is_string);
     if has_string && !function_context.plan_config.ansi_mode {
         for (&index, data_type) in value_indices.iter().zip(data_types) {
             if is_temporal_type(&data_type) {
@@ -52,11 +51,11 @@ pub(super) fn coerce_temporal_values(
         return Ok(arguments);
     };
     for (&index, data_type) in value_indices.iter().zip(data_types) {
-        arguments[index] = coerce_to_temporal(
+        arguments[index] = coerce_temporal_expr(
             arguments[index].clone(),
             &data_type,
             &target_type,
-            &function_context.plan_config.session_timezone,
+            function_context.plan_config,
         )?;
     }
     Ok(arguments)
@@ -147,80 +146,6 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::nullif(left, right))
 }
 
-fn coerce_to_temporal(
-    arg: expr::Expr,
-    data_type: &DataType,
-    target_type: &DataType,
-    session_timezone: &Arc<str>,
-) -> PlanResult<expr::Expr> {
-    if data_type == target_type {
-        return Ok(arg);
-    }
-    if data_type.is_null() {
-        return Ok(cast(arg, target_type.clone()));
-    }
-    if is_string_type(data_type) {
-        match target_type {
-            DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
-            // Only reached on the ANSI-enabled coalesce path, so strict parsing.
-            DataType::Timestamp(_, timezone) => Ok(ScalarUDF::from(SparkTimestamp::try_new(
-                timezone.as_ref().map(|_| Arc::clone(session_timezone)),
-                true,
-                false,
-            )?)
-            .call(vec![arg])),
-            _ => Ok(cast(arg, target_type.clone())),
-        }
-    } else if is_temporal_type(data_type) {
-        if matches!(
-            (data_type, target_type),
-            (
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
-                DataType::Timestamp(_, Some(_)),
-            ) | (
-                DataType::Timestamp(_, Some(_)),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
-            ) | (
-                DataType::Timestamp(_, Some(_)),
-                DataType::Timestamp(_, Some(_)),
-            )
-        ) {
-            Ok(ScalarUDF::from(SparkTimezoneCast::new(
-                target_type.clone(),
-                Arc::clone(session_timezone),
-                false,
-            ))
-            .call(vec![arg]))
-        } else {
-            Ok(cast(arg, target_type.clone()))
-        }
-    } else {
-        Ok(arg)
-    }
-}
-
-pub(super) fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
-    if data_types
-        .iter()
-        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
-    {
-        Some(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(Arc::from("UTC")),
-        ))
-    } else if data_types
-        .iter()
-        .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
-    {
-        Some(DataType::Timestamp(TimeUnit::Microsecond, None))
-    } else {
-        data_types
-            .iter()
-            .any(is_date_type)
-            .then_some(DataType::Date32)
-    }
-}
-
 fn collection_value_type(data_type: &DataType) -> Option<&DataType> {
     match data_type {
         DataType::List(field)
@@ -308,12 +233,12 @@ pub(crate) fn coerce_temporal_collection_comparison(
             with_collection_value_type(&collection_type, target_type.clone()).ok_or_else(|| {
                 crate::error::PlanError::invalid("unsupported temporal collection type")
             })?;
-        ScalarUDF::from(SparkTimezoneCast::new(
+        timezone_cast(
+            collection,
             target_collection_type,
-            config.session_timezone.clone(),
+            &config.session_timezone,
             false,
-        ))
-        .call(vec![collection])
+        )
     };
     let value = super::predicate::coerce_temporal_expr(value, &value_type, &target_type, config)?;
     Ok((collection, value))
@@ -361,30 +286,15 @@ pub(super) fn coerce_temporal_collection_values(
                     with_collection_value_type(&collection_type, target_type.clone()).ok_or_else(
                         || crate::error::PlanError::invalid("unsupported temporal collection type"),
                     )?;
-                Ok(ScalarUDF::from(SparkTimezoneCast::new(
+                Ok(timezone_cast(
+                    argument,
                     target_collection_type,
-                    function_context.plan_config.session_timezone.clone(),
+                    &function_context.plan_config.session_timezone,
                     false,
                 ))
-                .call(vec![argument]))
             }
         })
         .collect()
-}
-
-fn is_string_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
-fn is_temporal_type(data_type: &DataType) -> bool {
-    is_date_type(data_type) || matches!(data_type, DataType::Timestamp(_, _))
-}
-
-fn is_date_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Date32 | DataType::Date64)
 }
 
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -467,6 +377,8 @@ fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::TimeUnit;
+
     use super::*;
 
     #[test]

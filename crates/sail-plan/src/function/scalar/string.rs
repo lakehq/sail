@@ -14,8 +14,8 @@ use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
+use sail_common_datafusion::utils::data_type::contains_timestamp_with_timezone as contains_ltz;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -39,7 +39,7 @@ use sail_function::scalar::string::spark_to_number::SparkToNumber;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::function::scalar::datetime::date_format;
+use crate::function::scalar::datetime::{date_format, timezone_cast};
 
 fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
     let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
@@ -68,7 +68,7 @@ fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> 
     })
 }
 
-fn stringify_ltz(
+pub(super) fn stringify_ltz(
     expression: expr::Expr,
     schema: &DFSchema,
     session_timezone: &Arc<str>,
@@ -153,17 +153,23 @@ fn list_with_string_items(data_type: &DataType) -> Option<DataType> {
     }
 }
 
-fn contains_ltz(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Timestamp(_, Some(_)) => true,
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _) => contains_ltz(field.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|field| contains_ltz(field.data_type())),
-        DataType::Map(field, _) => contains_ltz(field.data_type()),
-        _ => false,
+pub(super) fn stringify_ltz_list(
+    expression: expr::Expr,
+    schema: &DFSchema,
+    session_timezone: &Arc<str>,
+) -> PlanResult<expr::Expr> {
+    let data_type = expression.get_type(schema)?;
+    if !contains_ltz(&data_type) {
+        return Ok(expression);
+    }
+    match list_with_string_items(&data_type) {
+        Some(target_type) => Ok(timezone_cast(
+            expression,
+            target_type,
+            session_timezone,
+            false,
+        )),
+        None => Ok(expression),
     }
 }
 
@@ -182,17 +188,12 @@ fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                     function_context.schema,
                     &function_context.plan_config.session_timezone,
                 )
-            } else if contains_ltz(&data_type)
-                && let Some(target_type) = list_with_string_items(&data_type)
-            {
-                Ok(ScalarUDF::from(SparkTimezoneCast::new(
-                    target_type,
-                    function_context.plan_config.session_timezone.clone(),
-                    false,
-                ))
-                .call(vec![argument]))
             } else {
-                Ok(argument)
+                stringify_ltz_list(
+                    argument,
+                    function_context.schema,
+                    &function_context.plan_config.session_timezone,
+                )
             }
         })
         .collect::<PlanResult<Vec<_>>>()?;

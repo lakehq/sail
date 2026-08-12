@@ -22,6 +22,7 @@ use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceL
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
+use crate::proto::codec::decode_session_timezone;
 use crate::proto::converter::RemotePhysicalProtoConverter;
 
 pub fn decode_remote_physical_plan(
@@ -154,7 +155,7 @@ pub(super) fn try_decode_higher_order_udf(
             session_timezone,
             ansi_mode,
         }) => Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(
-            SparkSequence::new(Arc::from(session_timezone), ansi_mode),
+            SparkSequence::new(decode_session_timezone(session_timezone), ansi_mode),
         ))),
     })
 }

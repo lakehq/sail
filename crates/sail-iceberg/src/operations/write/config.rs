@@ -23,6 +23,7 @@ use crate::spec::partition::UnboundPartitionSpec;
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
     pub table_schema: ArrowSchemaRef,
+    pub session_timezone: Arc<str>,
     pub partition_columns: Vec<CatalogPartitionField>,
     pub writer_properties: WriterProperties,
     pub target_file_size: u64,

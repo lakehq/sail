@@ -6,9 +6,14 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{
     Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, cast,
 };
+use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common::spec;
+use sail_common_datafusion::array::record_batch::retag_timestamp_data_type;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::utils::data_type::{
+    contains_timestamp_with_timezone as contains_ltz, requires_spark_timezone_cast,
+};
 use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode;
 
@@ -46,51 +51,8 @@ mod values;
 mod window;
 mod with_relations;
 
-fn contains_ltz(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Timestamp(_, Some(_)) => true,
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::Map(field, _) => contains_ltz(field.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|field| contains_ltz(field.data_type())),
-        _ => false,
-    }
-}
-
 fn canonicalize_ltz_type(data_type: &DataType) -> DataType {
-    let field = |field: &Arc<datafusion::arrow::datatypes::Field>| {
-        Arc::new(
-            field
-                .as_ref()
-                .clone()
-                .with_data_type(canonicalize_ltz_type(field.data_type())),
-        )
-    };
-    match data_type {
-        DataType::Timestamp(_, Some(_)) => {
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
-        }
-        DataType::List(value) => DataType::List(field(value)),
-        DataType::LargeList(value) => DataType::LargeList(field(value)),
-        DataType::ListView(value) => DataType::ListView(field(value)),
-        DataType::LargeListView(value) => DataType::LargeListView(field(value)),
-        DataType::FixedSizeList(value, size) => DataType::FixedSizeList(field(value), *size),
-        DataType::Struct(fields) => {
-            DataType::Struct(fields.iter().map(field).collect::<Vec<_>>().into())
-        }
-        DataType::Map(entries, sorted) => DataType::Map(field(entries), *sorted),
-        _ => data_type.clone(),
-    }
-}
-
-fn is_string(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
+    retag_timestamp_data_type(data_type, &Arc::from("UTC")).unwrap_or_else(|_| data_type.clone())
 }
 
 fn is_temporal(data_type: &DataType) -> bool {
@@ -98,6 +60,146 @@ fn is_temporal(data_type: &DataType) -> bool {
         data_type,
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
     )
+}
+
+fn is_spark_atomic(data_type: &DataType) -> bool {
+    data_type.is_primitive()
+        || matches!(data_type, DataType::Boolean)
+        || data_type.is_string()
+        || data_type.is_binary()
+}
+
+fn wider_decimal128(
+    left_precision: u8,
+    left_scale: i8,
+    right_precision: u8,
+    right_scale: i8,
+    retain_fraction_digits_on_truncate: bool,
+) -> DataType {
+    let scale = i16::from(left_scale.max(right_scale));
+    let integer_digits = (i16::from(left_precision) - i16::from(left_scale))
+        .max(i16::from(right_precision) - i16::from(right_scale));
+    let precision = scale + integer_digits;
+    if precision <= 38 {
+        DataType::Decimal128(precision as u8, scale as i8)
+    } else if retain_fraction_digits_on_truncate {
+        DataType::Decimal128(38, scale.min(38) as i8)
+    } else {
+        DataType::Decimal128(38, (scale - (precision - 38)).max(0) as i8)
+    }
+}
+
+fn decimal128_precision_for_integer(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Int8 | DataType::UInt8 => Some(3),
+        DataType::Int16 | DataType::UInt16 => Some(5),
+        DataType::Int32 | DataType::UInt32 => Some(10),
+        DataType::Int64 | DataType::UInt64 => Some(20),
+        _ => None,
+    }
+}
+
+fn decimal128_cast_force_nullable(
+    source_type: &DataType,
+    target_precision: u8,
+    target_scale: i8,
+) -> bool {
+    let target_integer_digits = i16::from(target_precision) - i16::from(target_scale);
+    match source_type {
+        DataType::Boolean => target_integer_digits < 1 || target_scale < 0,
+        DataType::Decimal128(source_precision, source_scale) => {
+            target_integer_digits < i16::from(*source_precision) - i16::from(*source_scale)
+        }
+        source if source.is_integer() => {
+            decimal128_precision_for_integer(source).is_none_or(|source_precision| {
+                target_integer_digits < i16::from(source_precision) || target_scale < 0
+            })
+        }
+        _ => true,
+    }
+}
+
+fn spark_wider_numeric_type(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+    retain_fraction_digits_on_truncate: bool,
+) -> Option<DataType> {
+    if !left.is_numeric() || !right.is_numeric() {
+        return None;
+    }
+
+    match (left, right) {
+        (
+            DataType::Decimal128(left_precision, left_scale),
+            DataType::Decimal128(right_precision, right_scale),
+        ) => {
+            return Some(wider_decimal128(
+                *left_precision,
+                *left_scale,
+                *right_precision,
+                *right_scale,
+                retain_fraction_digits_on_truncate,
+            ));
+        }
+        (DataType::Decimal128(precision, scale), integer)
+        | (integer, DataType::Decimal128(precision, scale))
+            if integer.is_integer() =>
+        {
+            return Some(wider_decimal128(
+                *precision,
+                *scale,
+                decimal128_precision_for_integer(integer)?,
+                0,
+                retain_fraction_digits_on_truncate,
+            ));
+        }
+        (decimal, floating) | (floating, decimal)
+            if decimal.is_decimal() && floating.is_floating() =>
+        {
+            return Some(DataType::Float64);
+        }
+        _ => {}
+    }
+
+    let data_type = binary_numeric_coercion(left, right)?;
+    if ansi_mode
+        && matches!(data_type, DataType::Float32)
+        && ((matches!(left, DataType::Float32) && right.is_integer())
+            || (matches!(right, DataType::Float32) && left.is_integer()))
+    {
+        Some(DataType::Float64)
+    } else {
+        Some(data_type)
+    }
+}
+
+fn spark_wider_string_type(left: &DataType, right: &DataType, ansi_mode: bool) -> Option<DataType> {
+    let (string, other) = if left.is_string() {
+        (left, right)
+    } else if right.is_string() {
+        (right, left)
+    } else {
+        return None;
+    };
+
+    if ansi_mode {
+        if other.is_integer() {
+            Some(DataType::Int64)
+        } else if other.is_floating() || other.is_decimal() {
+            Some(DataType::Float64)
+        } else if matches!(other, DataType::Interval(_) | DataType::Duration(_)) {
+            None
+        } else if is_spark_atomic(other) {
+            Some(canonicalize_ltz_type(other))
+        } else {
+            None
+        }
+    } else if is_spark_atomic(other) && !matches!(other, DataType::Boolean) && !other.is_binary() {
+        Some(string.clone())
+    } else {
+        None
+    }
 }
 
 fn spark_force_nullable(source_type: &DataType, target_type: &DataType) -> bool {
@@ -120,22 +222,34 @@ fn spark_force_nullable(source_type: &DataType, target_type: &DataType) -> bool 
         ) => false,
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, _) => true,
         (_, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => false,
+        (DataType::Timestamp(_, _), DataType::Int8 | DataType::Int16 | DataType::Int32) => true,
+        (DataType::Time32(_) | DataType::Time64(_), DataType::Int8 | DataType::Int16) => true,
         (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64) => false,
         (_, DataType::Date32 | DataType::Date64) => true,
         (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_))) => false,
         (DataType::Date32 | DataType::Date64, _) => true,
+        (_, DataType::Interval(_) | DataType::Duration(_)) => true,
+        (_, DataType::Decimal128(precision, scale)) => {
+            decimal128_cast_force_nullable(source_type, *precision, *scale)
+        }
+        (source, target)
+            if (source.is_floating() || source.is_decimal()) && target.is_integer() =>
+        {
+            true
+        }
         _ => false,
     }
 }
 
-/// Finds the Spark common type for the subset of coercions involving LTZ.
+/// Finds Spark's wider type recursively for set operations and inline values.
 /// The boolean records LTZ involvement even when legacy coercion widens it to string.
-fn widen_ltz_types(
+pub(crate) fn spark_wider_type(
     left: &DataType,
     right: &DataType,
     ansi_mode: bool,
     promote_strings: bool,
     case_sensitive: bool,
+    retain_fraction_digits_on_truncate: bool,
 ) -> Option<(DataType, bool)> {
     if left == right {
         return Some((canonicalize_ltz_type(left), contains_ltz(left)));
@@ -147,22 +261,11 @@ fn widen_ltz_types(
         return Some((canonicalize_ltz_type(left), contains_ltz(left)));
     }
 
-    if is_string(left) && is_string(right) {
+    if left.is_string() && right.is_string() {
         return Some((DataType::Utf8, false));
     }
-    if promote_strings
-        && ((is_string(left) && is_temporal(right)) || (is_temporal(left) && is_string(right)))
-    {
-        let (string, temporal) = if is_string(left) {
-            (left, right)
-        } else {
-            (right, left)
-        };
-        return if ansi_mode {
-            Some((canonicalize_ltz_type(temporal), contains_ltz(temporal)))
-        } else {
-            Some((string.clone(), contains_ltz(temporal)))
-        };
+    if promote_strings && let Some(data_type) = spark_wider_string_type(left, right, ansi_mode) {
+        return Some((data_type, contains_ltz(left) || contains_ltz(right)));
     }
     if is_temporal(left) && is_temporal(right) {
         let has_ltz = contains_ltz(left) || contains_ltz(right);
@@ -177,15 +280,21 @@ fn widen_ltz_types(
         };
         return Some((data_type, has_ltz));
     }
+    if let Some(data_type) =
+        spark_wider_numeric_type(left, right, ansi_mode, retain_fraction_digits_on_truncate)
+    {
+        return Some((data_type, false));
+    }
 
     let merge_field = |left: &Arc<datafusion::arrow::datatypes::Field>,
                        right: &Arc<datafusion::arrow::datatypes::Field>| {
-        let (data_type, has_ltz) = widen_ltz_types(
+        let (data_type, has_ltz) = spark_wider_type(
             left.data_type(),
             right.data_type(),
             ansi_mode,
             promote_strings,
             case_sensitive,
+            retain_fraction_digits_on_truncate,
         )?;
         let nullable = left.is_nullable()
             || right.is_nullable()
@@ -259,24 +368,26 @@ fn widen_ltz_types(
             else {
                 return None;
             };
-            let (key_type, key_has_ltz) = widen_ltz_types(
+            let (key_type, key_has_ltz) = spark_wider_type(
                 left_key.data_type(),
                 right_key.data_type(),
                 ansi_mode,
                 promote_strings,
                 case_sensitive,
+                retain_fraction_digits_on_truncate,
             )?;
             if spark_force_nullable(left_key.data_type(), &key_type)
                 || spark_force_nullable(right_key.data_type(), &key_type)
             {
                 return None;
             }
-            let (value_type, value_has_ltz) = widen_ltz_types(
+            let (value_type, value_has_ltz) = spark_wider_type(
                 left_value.data_type(),
                 right_value.data_type(),
                 ansi_mode,
                 promote_strings,
                 case_sensitive,
+                retain_fraction_digits_on_truncate,
             )?;
             let value_nullable = left_value.is_nullable()
                 || right_value.is_nullable()
@@ -313,9 +424,16 @@ fn common_ltz_type(
     ansi_mode: bool,
     promote_strings: bool,
     case_sensitive: bool,
+    retain_fraction_digits_on_truncate: bool,
 ) -> Option<DataType> {
-    let (data_type, has_ltz) =
-        widen_ltz_types(left, right, ansi_mode, promote_strings, case_sensitive)?;
+    let (data_type, has_ltz) = spark_wider_type(
+        left,
+        right,
+        ansi_mode,
+        promote_strings,
+        case_sensitive,
+        retain_fraction_digits_on_truncate,
+    )?;
     has_ltz.then_some(data_type)
 }
 
@@ -437,10 +555,7 @@ fn assignment_needs_timezone_cast(
             }
             Some(needs_timezone_cast)
         }
-        _ => Some(crate::resolver::expression::needs_spark_timezone_cast(
-            source_type,
-            target_type,
-        )),
+        _ => Some(requires_spark_timezone_cast(source_type, target_type)),
     }
 }
 
@@ -1059,19 +1174,182 @@ mod tests {
 
     use super::*;
 
+    fn ltz() -> DataType {
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+    }
+
+    fn struct_type(fields: impl IntoIterator<Item = (&'static str, DataType)>) -> DataType {
+        DataType::Struct(
+            fields
+                .into_iter()
+                .map(|(name, data_type)| Arc::new(Field::new(name, data_type, false)))
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    }
+
+    fn map_type(key_type: DataType, value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Arc::new(Field::new("key", key_type, false)),
+                        Arc::new(Field::new("value", value_type, false)),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        )
+    }
+
+    #[test]
+    fn widens_mixed_union_struct_siblings() {
+        let left = struct_type([("a", ltz()), ("b", DataType::Int32)]);
+        let right = struct_type([("a", DataType::Date32), ("b", DataType::Int64)]);
+        let expected = struct_type([("a", ltz()), ("b", DataType::Int64)]);
+
+        assert_eq!(
+            common_ltz_type(&left, &right, true, true, false, false),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn widens_mixed_values_struct_and_map_siblings() {
+        let left_value = struct_type([("a", ltz()), ("b", DataType::Int32)]);
+        let right_value = struct_type([("a", DataType::Date32), ("b", DataType::Int64)]);
+        let expected_value = struct_type([("a", ltz()), ("b", DataType::Int64)]);
+
+        assert_eq!(
+            spark_wider_type(&left_value, &right_value, true, false, false, false),
+            Some((expected_value.clone(), true))
+        );
+        assert_eq!(
+            spark_wider_type(
+                &map_type(DataType::Int32, left_value),
+                &map_type(DataType::Int64, right_value),
+                true,
+                false,
+                false,
+                false,
+            ),
+            Some((map_type(DataType::Int64, expected_value), true))
+        );
+    }
+
+    #[test]
+    fn uses_spark_string_promotion_inside_union_structs() {
+        let left = struct_type([("a", ltz()), ("b", DataType::Utf8)]);
+        let right = struct_type([("a", DataType::Date32), ("b", DataType::Int32)]);
+
+        assert_eq!(
+            common_ltz_type(&left, &right, true, true, false, false),
+            Some(DataType::Struct(
+                vec![
+                    Arc::new(Field::new("a", ltz(), false)),
+                    Arc::new(Field::new("b", DataType::Int64, true)),
+                ]
+                .into()
+            ))
+        );
+        assert_eq!(
+            common_ltz_type(&left, &right, false, true, false, false),
+            Some(struct_type([("a", ltz()), ("b", DataType::Utf8)]))
+        );
+        assert_eq!(
+            spark_wider_type(&left, &right, true, false, false, false),
+            None
+        );
+        assert_eq!(
+            spark_wider_type(&left, &right, false, false, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn widens_numeric_and_decimal_siblings_like_spark() {
+        assert_eq!(
+            spark_wider_numeric_type(&DataType::Int32, &DataType::Float32, true, false),
+            Some(DataType::Float64)
+        );
+        assert_eq!(
+            spark_wider_numeric_type(&DataType::Int32, &DataType::Float32, false, false),
+            Some(DataType::Float32)
+        );
+        assert_eq!(
+            spark_wider_numeric_type(
+                &DataType::Decimal128(38, 20),
+                &DataType::Decimal128(38, 10),
+                true,
+                false,
+            ),
+            Some(DataType::Decimal128(38, 10))
+        );
+        assert_eq!(
+            spark_wider_numeric_type(
+                &DataType::Decimal128(38, 20),
+                &DataType::Decimal128(38, 10),
+                true,
+                true,
+            ),
+            Some(DataType::Decimal128(38, 20))
+        );
+        assert_eq!(
+            spark_wider_numeric_type(&DataType::Decimal128(8, 2), &DataType::Int32, true, false,),
+            Some(DataType::Decimal128(12, 2))
+        );
+
+        let left = struct_type([("a", ltz()), ("b", DataType::Decimal128(38, 20))]);
+        let right = struct_type([("a", DataType::Date32), ("b", DataType::Decimal128(38, 10))]);
+        assert_eq!(
+            common_ltz_type(&left, &right, true, true, false, false),
+            Some(struct_type([
+                ("a", ltz()),
+                ("b", DataType::Decimal128(38, 10)),
+            ]))
+        );
+        assert_eq!(
+            common_ltz_type(&left, &right, true, true, false, true),
+            Some(DataType::Struct(
+                vec![
+                    Arc::new(Field::new("a", ltz(), false)),
+                    Arc::new(Field::new("b", DataType::Decimal128(38, 20), true)),
+                ]
+                .into(),
+            ))
+        );
+    }
+
+    #[test]
+    fn keeps_safe_decimal_widening_non_nullable() {
+        let left = struct_type([("d", DataType::Decimal128(5, 2))]);
+        let right = struct_type([("d", DataType::Decimal128(6, 3))]);
+
+        assert_eq!(
+            spark_wider_type(&left, &right, true, false, false, false),
+            Some((right, false))
+        );
+    }
+
     #[test]
     fn widens_nested_ltz_types_using_spark_ansi_rules() {
         let string = DataType::Utf8;
         let ltz = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
         assert_eq!(
-            common_ltz_type(&string, &ltz, false, true, false),
+            common_ltz_type(&string, &ltz, false, true, false, false),
             Some(string.clone())
         );
         assert_eq!(
-            common_ltz_type(&string, &ltz, true, true, false),
+            common_ltz_type(&string, &ltz, true, true, false, false),
             Some(ltz.clone())
         );
-        assert_eq!(common_ltz_type(&string, &ltz, true, false, false), None);
+        assert_eq!(
+            common_ltz_type(&string, &ltz, true, false, false, false),
+            None
+        );
 
         let list = |data_type| DataType::List(Arc::new(Field::new("element", data_type, true)));
         assert_eq!(
@@ -1081,11 +1359,19 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
             ),
             Some(list(string))
         );
         assert_eq!(
-            common_ltz_type(&list(DataType::Utf8), &list(ltz.clone()), true, true, false,),
+            common_ltz_type(
+                &list(DataType::Utf8),
+                &list(ltz.clone()),
+                true,
+                true,
+                false,
+                false,
+            ),
             Some(list(ltz))
         );
 
@@ -1098,13 +1384,16 @@ mod tests {
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
         );
         assert_eq!(
-            common_ltz_type(&upper, &lower, true, true, false),
+            common_ltz_type(&upper, &lower, true, true, false, false),
             Some(struct_type(
                 "A",
                 DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             ))
         );
-        assert_eq!(common_ltz_type(&upper, &lower, true, true, true), None);
+        assert_eq!(
+            common_ltz_type(&upper, &lower, true, true, true, false),
+            None
+        );
 
         let map = |entries: &str, key: &str, value: &str, key_type, value_type| {
             DataType::Map(
@@ -1137,7 +1426,7 @@ mod tests {
             DataType::Int32,
         );
         assert_eq!(
-            common_ltz_type(&string_key, &timestamp_key, true, true, false),
+            common_ltz_type(&string_key, &timestamp_key, true, true, false, false),
             None
         );
 
@@ -1156,7 +1445,7 @@ mod tests {
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
         );
         assert_eq!(
-            common_ltz_type(&ntz_value, &ltz_value, true, true, false),
+            common_ltz_type(&ntz_value, &ltz_value, true, true, false, false),
             Some(map(
                 "entries_left",
                 "keys",

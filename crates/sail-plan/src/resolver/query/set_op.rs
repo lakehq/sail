@@ -39,6 +39,8 @@ impl PlanResolver<'_> {
                     self.config.ansi_mode,
                     true,
                     self.config.case_sensitive,
+                    self.config
+                        .legacy_decimal_retain_fraction_digits_on_truncate,
                 );
                 changed |= target_type
                     .as_ref()

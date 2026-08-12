@@ -158,6 +158,17 @@ impl<'a> PlannerContext<'a> {
         self.session
     }
 
+    pub fn session_timezone(&self) -> Arc<str> {
+        self.session
+            .config()
+            .options()
+            .execution
+            .time_zone
+            .as_deref()
+            .map(Arc::from)
+            .unwrap_or_else(|| Arc::from("UTC"))
+    }
+
     pub fn config(&self) -> &DeltaPlannerConfig {
         &self.config
     }

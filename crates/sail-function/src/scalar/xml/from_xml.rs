@@ -8,17 +8,15 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{
-    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
-    SAIL_MAP_VALUE_FIELD_NAME,
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
 };
-use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::options::{find_option, reject_null_options};
+use crate::scalar::schema::{SchemaFormat, parse_schema_data_type};
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -79,19 +77,21 @@ impl SparkFromXmlOptions {
     const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
-        let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
-        let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
-            .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
-        let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
-            .unwrap_or_else(|| Self::VALUE_TAG_DEFAULT.to_string());
+        reject_null_options(map, SparkFromXml::FROM_XML_NAME)?;
+        let null_value = find_option(map, Self::NULL_VALUE_OPTION).map(str::to_owned);
+        let attribute_prefix = find_option(map, Self::ATTRIBUTE_PREFIX_OPTION)
+            .unwrap_or(Self::ATTRIBUTE_PREFIX_DEFAULT)
+            .to_owned();
+        let value_tag = find_option(map, Self::VALUE_TAG_OPTION)
+            .unwrap_or(Self::VALUE_TAG_DEFAULT)
+            .to_owned();
         if value_tag.is_empty() {
             return plan_err!("`valueTag` must not be empty");
         }
         if value_tag == attribute_prefix {
             return plan_err!("`valueTag` and `attributePrefix` must not be equal");
         }
-        let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
+        let timestamp_ltz_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
             .map(DateTimeFormat::for_parsing)
             .transpose()?
             .unwrap_or_else(|| {
@@ -99,8 +99,7 @@ impl SparkFromXmlOptions {
                 DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
                     .expect("default timestamp LTZ format should be valid")
             });
-        let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
-            .as_deref()
+        let timestamp_ntz_format = find_option(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .map(DateTimeFormat::for_parsing)
             .transpose()?
             .unwrap_or_else(|| {
@@ -108,8 +107,7 @@ impl SparkFromXmlOptions {
                 DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
                     .expect("default timestamp NTZ format should be valid")
             });
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
+        let date_format = find_option(map, Self::DATE_FORMAT_OPTION)
             .map(DateTimeFormat::for_parsing)
             .transpose()?
             .unwrap_or_else(|| {
@@ -117,13 +115,10 @@ impl SparkFromXmlOptions {
                 DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
-        let mode = match find_key_value(map, Self::MODE_OPTION)
-            .as_deref()
-            .map(|s| s.to_ascii_uppercase())
-            .as_deref()
-        {
-            None | Some("PERMISSIVE") => ParseMode::Permissive,
-            Some("FAILFAST") => ParseMode::FailFast,
+        let mode = match find_option(map, Self::MODE_OPTION) {
+            None => ParseMode::Permissive,
+            Some(mode) if mode.eq_ignore_ascii_case("PERMISSIVE") => ParseMode::Permissive,
+            Some(mode) if mode.eq_ignore_ascii_case("FAILFAST") => ParseMode::FailFast,
             Some(other) => {
                 return plan_err!("`mode` must be PERMISSIVE or FAILFAST, got '{other}'");
             }
@@ -193,7 +188,7 @@ impl ScalarUDFImpl for SparkFromXml {
                 );
             }
         };
-        let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
+        let dt = parse_xml_schema(schema_str)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -266,7 +261,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         SparkFromXmlOptions::default()
     };
 
-    let schema_dt = parse_xml_schema(schema_str, session_timezone)?;
+    let schema_dt = parse_xml_schema(schema_str)?;
     let DataType::Struct(fields) = &schema_dt else {
         return exec_err!(
             "`{}` schema must resolve to a STRUCT type, got {:?}",
@@ -275,7 +270,8 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         );
     };
 
-    let mut builder = create_struct_builder(fields, xml_array.len(), session_timezone)?;
+    let mut builder = create_struct_builder(fields, xml_array.len())?;
+    let session_timezone = parse_spark_timezone(session_timezone)?;
 
     for i in 0..xml_array.len() {
         if xml_array.is_null(i) {
@@ -284,7 +280,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         }
 
         let xml_str = xml_array.value(i);
-        match parse_xml_into_builder(xml_str, &mut builder, &options, session_timezone) {
+        match parse_xml_into_builder(xml_str, &mut builder, &options, &session_timezone) {
             Ok(()) => {}
             Err(e) => {
                 if options.mode == ParseMode::FailFast {
@@ -298,153 +294,8 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     finish_struct_builder(builder)
 }
 
-fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
-    let schema = schema.trim();
-    let ast_result = sail_parser::parse_data_type(schema)
-        .or_else(|_| sail_parser::parse_data_type(&format!("STRUCT<{schema}>")));
-    let ast = ast_result
-        .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
-}
-
-#[expect(clippy::only_used_in_recursion)]
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    use spec::DataType as SDT;
-
-    fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
-        match unit {
-            spec::TimeUnit::Second => TimeUnit::Second,
-            spec::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            spec::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            spec::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
-    }
-
-    match dt {
-        SDT::Null => Ok(DataType::Null),
-        SDT::Boolean => Ok(DataType::Boolean),
-        SDT::Int8 => Ok(DataType::Int8),
-        SDT::Int16 => Ok(DataType::Int16),
-        SDT::Int32 => Ok(DataType::Int32),
-        SDT::Int64 => Ok(DataType::Int64),
-        SDT::UInt8 => Ok(DataType::UInt8),
-        SDT::UInt16 => Ok(DataType::UInt16),
-        SDT::UInt32 => Ok(DataType::UInt32),
-        SDT::UInt64 => Ok(DataType::UInt64),
-        SDT::Float16 => Ok(DataType::Float16),
-        SDT::Float32 => Ok(DataType::Float32),
-        SDT::Float64 => Ok(DataType::Float64),
-        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
-        SDT::FixedSizeBinary { size } => Ok(DataType::FixedSizeBinary(*size)),
-        SDT::LargeBinary => Ok(DataType::LargeBinary),
-        SDT::BinaryView => Ok(DataType::BinaryView),
-        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        SDT::LargeUtf8 => Ok(DataType::LargeUtf8),
-        SDT::Utf8View => Ok(DataType::Utf8View),
-        SDT::Date32 => Ok(DataType::Date32),
-        SDT::Date64 => Ok(DataType::Date64),
-        SDT::Timestamp {
-            time_unit,
-            timestamp_type,
-        } => Ok(DataType::Timestamp(
-            to_time_unit(time_unit),
-            match timestamp_type {
-                spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from("UTC"))
-                }
-                spec::TimestampType::WithoutTimeZone => None,
-            },
-        )),
-        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
-        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
-        SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
-        SDT::Interval { interval_unit, .. } => match interval_unit {
-            spec::IntervalUnit::YearMonth => Ok(DataType::Interval(IntervalUnit::YearMonth)),
-            spec::IntervalUnit::DayTime => Ok(DataType::Duration(TimeUnit::Microsecond)),
-            spec::IntervalUnit::MonthDayNano => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
-        },
-        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
-        SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
-        SDT::List {
-            data_type,
-            nullable,
-        } => Ok(DataType::List(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::FixedSizeList {
-            data_type,
-            nullable,
-            length,
-        } => Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-                *nullable,
-            )),
-            *length,
-        )),
-        SDT::LargeList {
-            data_type,
-            nullable,
-        } => Ok(DataType::LargeList(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::Struct { fields } => {
-            let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
-            for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
-            }
-            Ok(DataType::Struct(Fields::from(out)))
-        }
-        SDT::Map {
-            key_type,
-            value_type,
-            value_type_nullable,
-            keys_sorted,
-        } => {
-            let fields = Fields::from(vec![
-                Arc::new(Field::new(
-                    SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
-                    *value_type_nullable,
-                )),
-            ]);
-            Ok(DataType::Map(
-                Arc::new(Field::new(
-                    SAIL_MAP_FIELD_NAME,
-                    DataType::Struct(fields),
-                    false,
-                )),
-                *keys_sorted,
-            ))
-        }
-        SDT::Geometry { .. } | SDT::Geography { .. } => Ok(DataType::Binary),
-        SDT::Variant => Ok(DataType::Struct(Fields::from(vec![
-            Arc::new(Field::new("metadata", DataType::Binary, false)),
-            Arc::new(Field::new("value", DataType::Binary, false)),
-        ]))),
-        SDT::UserDefined { sql_type, .. } => {
-            spec_to_arrow_data_type(sql_type.as_ref(), session_timezone)
-        }
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported data type in from_xml schema: {other:?}"
-        ))),
-    }
+fn parse_xml_schema(schema: &str) -> Result<DataType> {
+    parse_schema_data_type(schema, SchemaFormat::Xml)
 }
 
 enum XmlFieldBuilder {
@@ -493,12 +344,7 @@ struct TopLevelStructBuilder {
     nulls: Vec<bool>,
 }
 
-#[expect(clippy::only_used_in_recursion)]
-fn create_field_builder(
-    data_type: &DataType,
-    capacity: usize,
-    session_timezone: &str,
-) -> Result<XmlFieldBuilder> {
+fn create_field_builder(data_type: &DataType, capacity: usize) -> Result<XmlFieldBuilder> {
     match data_type {
         DataType::Boolean => Ok(XmlFieldBuilder::Boolean(BooleanBuilder::with_capacity(
             capacity,
@@ -549,7 +395,7 @@ fn create_field_builder(
             }),
         },
         DataType::List(item_field) => {
-            let values = create_field_builder(item_field.data_type(), capacity, session_timezone)?;
+            let values = create_field_builder(item_field.data_type(), capacity)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0_i32);
             Ok(XmlFieldBuilder::List {
@@ -562,7 +408,7 @@ fn create_field_builder(
         DataType::Struct(fields) => {
             let children = fields
                 .iter()
-                .map(|f| create_field_builder(f.data_type(), capacity, session_timezone))
+                .map(|f| create_field_builder(f.data_type(), capacity))
                 .collect::<Result<Vec<_>>>()?;
             Ok(XmlFieldBuilder::Struct {
                 fields: fields.clone(),
@@ -577,14 +423,10 @@ fn create_field_builder(
     }
 }
 
-fn create_struct_builder(
-    fields: &Fields,
-    capacity: usize,
-    session_timezone: &str,
-) -> Result<TopLevelStructBuilder> {
+fn create_struct_builder(fields: &Fields, capacity: usize) -> Result<TopLevelStructBuilder> {
     let children = fields
         .iter()
-        .map(|f| create_field_builder(f.data_type(), capacity, session_timezone))
+        .map(|f| create_field_builder(f.data_type(), capacity))
         .collect::<Result<Vec<_>>>()?;
     Ok(TopLevelStructBuilder {
         fields: fields.clone(),
@@ -645,7 +487,7 @@ fn parse_xml_into_builder(
     xml: &str,
     builder: &mut TopLevelStructBuilder,
     options: &SparkFromXmlOptions,
-    session_timezone: &str,
+    session_timezone: &SparkTimeZone,
 ) -> Result<()> {
     let mut documents = Documents::new();
     let handle = documents
@@ -683,7 +525,7 @@ fn append_xml_field(
     field_name: &str,
     builder: &mut XmlFieldBuilder,
     options: &SparkFromXmlOptions,
-    session_timezone: &str,
+    session_timezone: &SparkTimeZone,
 ) -> Result<()> {
     if field_name == options.value_tag {
         let text = element_text_content(xot, parent);
@@ -758,7 +600,7 @@ fn append_element_to_field(
     node: xot::Node,
     builder: &mut XmlFieldBuilder,
     options: &SparkFromXmlOptions,
-    session_timezone: &str,
+    session_timezone: &SparkTimeZone,
 ) -> Result<()> {
     match builder {
         XmlFieldBuilder::Struct {
@@ -783,7 +625,7 @@ fn append_text(
     text: Option<&str>,
     builder: &mut XmlFieldBuilder,
     options: &SparkFromXmlOptions,
-    session_timezone: &str,
+    session_timezone: &SparkTimeZone,
 ) -> Result<()> {
     let raw = match text {
         None => return append_null_to_field(builder),
@@ -879,7 +721,7 @@ fn append_text(
 fn parsed_timestamp_to_micros(
     parsed: ParsedDateTime,
     has_timezone: bool,
-    session_timezone: &str,
+    session_timezone: &SparkTimeZone,
 ) -> Result<i64> {
     if !has_timezone {
         return Ok(parsed.datetime.and_utc().timestamp_micros());
@@ -894,8 +736,12 @@ fn parsed_timestamp_to_micros(
             .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()));
     }
 
-    let timezone_name = parsed.timezone.as_deref().unwrap_or(session_timezone);
-    let timezone = parse_spark_timezone(timezone_name)?;
+    let timezone = parsed
+        .timezone
+        .as_deref()
+        .map(parse_spark_timezone)
+        .transpose()?
+        .unwrap_or(*session_timezone);
     Ok(localize_with_fallback(&timezone, &parsed.datetime)?.timestamp_micros())
 }
 
@@ -964,31 +810,6 @@ fn find_attribute(xot: &xot::Xot, node: xot::Node, attr_name: &str) -> Option<St
     for (name_id, value) in xot.attributes(node).iter() {
         if xot.local_name_str(name_id) == attr_name {
             return Some(value.clone());
-        }
-    }
-    None
-}
-
-fn find_key_value(map: &MapArray, key: &str) -> Option<String> {
-    if map.is_empty() {
-        return None;
-    }
-    let entries = map.value(0);
-    let keys = entries
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    let values = entries
-        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    for i in 0..keys.len() {
-        if !keys.is_null(i) && keys.value(i).eq_ignore_ascii_case(key) {
-            return if values.is_null(i) {
-                None
-            } else {
-                Some(values.value(i).to_string())
-            };
         }
     }
     None

@@ -2,8 +2,9 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, LargeListArray, ListArray, MapArray, PrimitiveArray, RecordBatch,
-    RecordBatchOptions, StructArray, make_array, new_null_array,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray, MapArray,
+    OffsetSizeTrait, PrimitiveArray, RecordBatch, RecordBatchOptions, StructArray, make_array,
+    new_null_array,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
@@ -88,6 +89,45 @@ pub fn retag_timestamp_array(array: &ArrayRef, timezone: &Arc<str>) -> Result<Ar
     // offset, buffers, nulls, and container layout; it changes only timestamp
     // timezone metadata and recursively retags children to match their parent fields.
     Ok(make_array(unsafe { data.build_unchecked() }))
+}
+
+fn first_timestamp_timezone(data_type: &DataType) -> Option<&Arc<str>> {
+    match data_type {
+        DataType::Timestamp(_, Some(timezone)) => Some(timezone),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => first_timestamp_timezone(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .find_map(|field| first_timestamp_timezone(field.data_type())),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .find_map(|(_, field)| first_timestamp_timezone(field.data_type())),
+        DataType::Dictionary(key, value) => {
+            first_timestamp_timezone(key).or_else(|| first_timestamp_timezone(value))
+        }
+        DataType::RunEndEncoded(run_ends, values) => first_timestamp_timezone(run_ends.data_type())
+            .or_else(|| first_timestamp_timezone(values.data_type())),
+        _ => None,
+    }
+}
+
+/// Retags an array without copying buffers when `target_type` differs only by one timestamp
+/// timezone. Returns `None` when an actual value or structural conversion is required.
+pub fn retag_timestamp_array_to_type(
+    array: &ArrayRef,
+    target_type: &DataType,
+) -> Result<Option<ArrayRef>> {
+    let Some(timezone) = first_timestamp_timezone(target_type) else {
+        return Ok(None);
+    };
+    if retag_timestamp_data_type(array.data_type(), timezone)? != *target_type {
+        return Ok(None);
+    }
+    Ok(Some(retag_timestamp_array(array, timezone)?))
 }
 
 pub fn retag_schema_timestamp_timezone(schema: &Schema, timezone: &str) -> Result<Schema> {
@@ -224,61 +264,37 @@ where
     ))
 }
 
+#[derive(Clone, Copy)]
+enum StructFieldMatching {
+    ByName,
+    ByPosition,
+}
+
 pub fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
-    let src_type = src.data_type();
-    if src_type == target_type {
-        return Ok(src.clone());
-    }
-
-    // Handle timestamp timezone metadata adjustments before diving into nested logic.
-    if let (DataType::Timestamp(src_unit, _), DataType::Timestamp(target_unit, target_tz)) =
-        (src_type, target_type)
-        && src_unit == target_unit
-    {
-        let adjusted = match src_unit {
-            TimeUnit::Second => {
-                adjust_timestamp_timezone::<TimestampSecondType>(src, target_tz.clone())?
-            }
-            TimeUnit::Millisecond => {
-                adjust_timestamp_timezone::<TimestampMillisecondType>(src, target_tz.clone())?
-            }
-            TimeUnit::Microsecond => {
-                adjust_timestamp_timezone::<TimestampMicrosecondType>(src, target_tz.clone())?
-            }
-            TimeUnit::Nanosecond => {
-                adjust_timestamp_timezone::<TimestampNanosecondType>(src, target_tz.clone())?
-            }
-        };
-        return Ok(adjusted);
-    }
-
-    match (src_type, target_type) {
-        (DataType::Struct(_), DataType::Struct(target_fields)) => {
-            cast_struct_array(src, target_fields)
-        }
-        (DataType::List(_), DataType::List(target_field)) => cast_list_array(src, target_field),
-        (DataType::LargeList(_), DataType::LargeList(target_field)) => {
-            cast_large_list_array(src, target_field)
-        }
-        (DataType::Map(_, _), DataType::Map(target_field, sorted)) => {
-            cast_map_array(src, target_field, *sorted)
-        }
-        _ => {
-            let casted = cast(src, target_type)?;
-            Ok(casted)
-        }
-    }
+    cast_array_with_field_matching(src, target_type, StructFieldMatching::ByName)
 }
 
 pub fn cast_array_positionally_recursively(
     src: &ArrayRef,
     target_type: &DataType,
 ) -> Result<ArrayRef> {
+    cast_array_with_field_matching(src, target_type, StructFieldMatching::ByPosition)
+}
+
+fn cast_array_with_field_matching(
+    src: &ArrayRef,
+    target_type: &DataType,
+    field_matching: StructFieldMatching,
+) -> Result<ArrayRef> {
     let src_type = src.data_type();
     if src_type == target_type {
         return Ok(src.clone());
     }
+    if let Some(retagged) = retag_timestamp_array_to_type(src, target_type)? {
+        return Ok(retagged);
+    }
 
+    // Handle timestamp timezone metadata adjustments before diving into nested logic.
     if let (DataType::Timestamp(src_unit, _), DataType::Timestamp(target_unit, target_tz)) =
         (src_type, target_type)
         && src_unit == target_unit
@@ -301,43 +317,98 @@ pub fn cast_array_positionally_recursively(
 
     match (src_type, target_type) {
         (DataType::Struct(_), DataType::Struct(target_fields)) => {
-            cast_struct_array_positionally(src, target_fields)
+            cast_struct_array(src, target_fields, field_matching)
         }
         (DataType::List(_), DataType::List(target_field)) => {
-            cast_list_array_positionally(src, target_field)
+            cast_list_array::<i32>(src, target_field, field_matching)
         }
         (DataType::LargeList(_), DataType::LargeList(target_field)) => {
-            cast_large_list_array_positionally(src, target_field)
+            cast_list_array::<i64>(src, target_field, field_matching)
+        }
+        (DataType::ListView(_), DataType::ListView(target_field)) => {
+            cast_list_view_array::<i32>(src, target_field, field_matching)
+        }
+        (DataType::LargeListView(_), DataType::LargeListView(target_field)) => {
+            cast_list_view_array::<i64>(src, target_field, field_matching)
+        }
+        (
+            DataType::FixedSizeList(_, source_size),
+            DataType::FixedSizeList(target_field, target_size),
+        ) if source_size == target_size => {
+            let source = src
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Failed to downcast array to FixedSizeListArray".to_string(),
+                    )
+                })?;
+            let values = cast_array_with_field_matching(
+                source.values(),
+                target_field.data_type(),
+                field_matching,
+            )?;
+            Ok(Arc::new(FixedSizeListArray::try_new(
+                Arc::clone(target_field),
+                *target_size,
+                values,
+                source.nulls().cloned(),
+            )?))
         }
         (DataType::Map(_, _), DataType::Map(target_field, sorted)) => {
-            cast_map_array_positionally(src, target_field, *sorted)
+            cast_map_array(src, target_field, *sorted, field_matching)
         }
-        _ => {
-            let casted = cast(src, target_type)?;
-            Ok(casted)
-        }
+        _ => Ok(cast(src, target_type)?),
     }
 }
 
-fn cast_struct_array(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef> {
+fn cast_struct_array(
+    src: &ArrayRef,
+    target_fields: &Fields,
+    field_matching: StructFieldMatching,
+) -> Result<ArrayRef> {
     let struct_array = src.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to StructArray".to_string())
     })?;
 
-    let mut new_children: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
-    for target_field in target_fields.iter() {
-        if let Some(child) = struct_array.column_by_name(target_field.name()) {
-            new_children.push(cast_array_recursively(child, target_field.data_type())?);
-        } else if target_field.is_nullable() {
-            new_children.push(new_null_array(target_field.data_type(), struct_array.len()));
-        } else {
-            return Err(DataFusionError::Plan(format!(
-                "Missing required field '{}' in nested struct",
-                target_field.name()
-            )));
+    let new_children = match field_matching {
+        StructFieldMatching::ByName => {
+            let mut children = Vec::with_capacity(target_fields.len());
+            for target_field in target_fields {
+                if let Some(child) = struct_array.column_by_name(target_field.name()) {
+                    children.push(cast_array_with_field_matching(
+                        child,
+                        target_field.data_type(),
+                        field_matching,
+                    )?);
+                } else if target_field.is_nullable() {
+                    children.push(new_null_array(target_field.data_type(), struct_array.len()));
+                } else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Missing required field '{}' in nested struct",
+                        target_field.name()
+                    )));
+                }
+            }
+            children
         }
-    }
-
+        StructFieldMatching::ByPosition => {
+            if struct_array.num_columns() != target_fields.len() {
+                return Err(DataFusionError::Plan(format!(
+                    "Struct field count mismatch: expected {} fields but found {} fields",
+                    target_fields.len(),
+                    struct_array.num_columns()
+                )));
+            }
+            target_fields
+                .iter()
+                .zip(struct_array.columns())
+                .map(|(target_field, child)| {
+                    cast_array_with_field_matching(child, target_field.data_type(), field_matching)
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
     let new_struct = StructArray::try_new(
         target_fields.clone(),
         new_children,
@@ -346,40 +417,19 @@ fn cast_struct_array(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef>
     Ok(Arc::new(new_struct))
 }
 
-fn cast_struct_array_positionally(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef> {
-    let struct_array = src.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-        DataFusionError::Internal("Failed to downcast array to StructArray".to_string())
-    })?;
-    if struct_array.num_columns() != target_fields.len() {
-        return Err(DataFusionError::Plan(format!(
-            "Struct field count mismatch: expected {} fields but found {} fields",
-            target_fields.len(),
-            struct_array.num_columns()
-        )));
-    }
+fn cast_list_array<O: OffsetSizeTrait>(
+    src: &ArrayRef,
+    target_field: &FieldRef,
+    field_matching: StructFieldMatching,
+) -> Result<ArrayRef> {
+    let list_array = src.as_list::<O>();
 
-    let new_children = target_fields
-        .iter()
-        .zip(struct_array.columns())
-        .map(|(target_field, child)| {
-            cast_array_positionally_recursively(child, target_field.data_type())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let new_struct = StructArray::try_new(
-        target_fields.clone(),
-        new_children,
-        struct_array.nulls().cloned(),
+    let values = cast_array_with_field_matching(
+        list_array.values(),
+        target_field.data_type(),
+        field_matching,
     )?;
-    Ok(Arc::new(new_struct))
-}
-
-fn cast_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
-    let list_array = src.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-        DataFusionError::Internal("Failed to downcast array to ListArray".to_string())
-    })?;
-
-    let values = cast_array_recursively(list_array.values(), target_field.data_type())?;
-    let new_list = ListArray::try_new(
+    let new_list = GenericListArray::<O>::try_new(
         target_field.clone(),
         list_array.offsets().clone(),
         values,
@@ -388,99 +438,57 @@ fn cast_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> 
     Ok(Arc::new(new_list))
 }
 
-fn cast_list_array_positionally(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
-    let list_array = src.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-        DataFusionError::Internal("Failed to downcast array to ListArray".to_string())
-    })?;
-
-    let values =
-        cast_array_positionally_recursively(list_array.values(), target_field.data_type())?;
-    let new_list = ListArray::try_new(
-        target_field.clone(),
+fn cast_list_view_array<O: OffsetSizeTrait>(
+    src: &ArrayRef,
+    target_field: &FieldRef,
+    field_matching: StructFieldMatching,
+) -> Result<ArrayRef> {
+    let list_array = src.as_list_view::<O>();
+    let values = cast_array_with_field_matching(
+        list_array.values(),
+        target_field.data_type(),
+        field_matching,
+    )?;
+    Ok(Arc::new(GenericListViewArray::<O>::try_new(
+        Arc::clone(target_field),
         list_array.offsets().clone(),
+        list_array.sizes().clone(),
         values,
         list_array.nulls().cloned(),
-    )?;
-    Ok(Arc::new(new_list))
+    )?))
 }
 
-fn cast_large_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
-    let list_array = src
-        .as_any()
-        .downcast_ref::<LargeListArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Failed to downcast array to LargeListArray".to_string())
-        })?;
-
-    let values = cast_array_recursively(list_array.values(), target_field.data_type())?;
-    let new_list = LargeListArray::try_new(
-        target_field.clone(),
-        list_array.offsets().clone(),
-        values,
-        list_array.nulls().cloned(),
-    )?;
-    Ok(Arc::new(new_list))
-}
-
-fn cast_large_list_array_positionally(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
-    let list_array = src
-        .as_any()
-        .downcast_ref::<LargeListArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Failed to downcast array to LargeListArray".to_string())
-        })?;
-
-    let values =
-        cast_array_positionally_recursively(list_array.values(), target_field.data_type())?;
-    let new_list = LargeListArray::try_new(
-        target_field.clone(),
-        list_array.offsets().clone(),
-        values,
-        list_array.nulls().cloned(),
-    )?;
-    Ok(Arc::new(new_list))
-}
-
-fn cast_map_array(src: &ArrayRef, target_field: &FieldRef, sorted: bool) -> Result<ArrayRef> {
-    let map_array = src.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
-        DataFusionError::Internal("Failed to downcast array to MapArray".to_string())
-    })?;
-    let entries: ArrayRef = Arc::new(map_array.entries().clone());
-    let cast_entries = cast_array_recursively(&entries, target_field.data_type())?;
-    let struct_entries = cast_entries
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Map entries must be struct arrays after casting".to_string())
-        })?
-        .clone();
-    let new_map = MapArray::try_new(
-        target_field.clone(),
-        map_array.offsets().clone(),
-        struct_entries,
-        map_array.nulls().cloned(),
-        sorted,
-    )?;
-    Ok(Arc::new(new_map))
-}
-
-fn cast_map_array_positionally(
+fn cast_map_array(
     src: &ArrayRef,
     target_field: &FieldRef,
     sorted: bool,
+    field_matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
     let map_array = src.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to MapArray".to_string())
     })?;
-    let entries: ArrayRef = Arc::new(map_array.entries().clone());
-    let cast_entries = cast_array_positionally_recursively(&entries, target_field.data_type())?;
-    let struct_entries = cast_entries
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Map entries must be struct arrays after casting".to_string())
-        })?
-        .clone();
+    let DataType::Struct(target_fields) = target_field.data_type() else {
+        return Err(DataFusionError::Plan(
+            "Map target entries must be a struct".to_string(),
+        ));
+    };
+    let [target_key, target_value] = target_fields.as_ref() else {
+        return Err(DataFusionError::Plan(
+            "Map target entries must contain key and value".to_string(),
+        ));
+    };
+    let keys =
+        cast_array_with_field_matching(map_array.keys(), target_key.data_type(), field_matching)?;
+    let values = cast_array_with_field_matching(
+        map_array.values(),
+        target_value.data_type(),
+        field_matching,
+    )?;
+    let struct_entries = StructArray::try_new(
+        target_fields.clone(),
+        vec![keys, values],
+        map_array.entries().nulls().cloned(),
+    )?;
     let new_map = MapArray::try_new(
         target_field.clone(),
         map_array.offsets().clone(),
@@ -575,6 +583,10 @@ mod tests {
             vec![timestamp],
             None,
         ));
+        let target_type =
+            retag_timestamp_data_type(payload.data_type(), &Arc::from("UTC")).unwrap();
+        let casted = cast_array_positionally_recursively(&payload, &target_type).unwrap();
+        assert_physical_buffers_shared(&payload.to_data(), &casted.to_data());
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new(
                 "payload",

@@ -9,9 +9,9 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::timezone_cast;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -115,22 +115,12 @@ impl PlanResolver<'_> {
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
                 if matches!(target_type, DataType::Timestamp(_, Some(_))) =>
             {
-                ScalarUDF::from(SparkTimezoneCast::new(
-                    target_type,
-                    Arc::clone(&self.config.session_timezone),
-                    false,
-                ))
-                .call(vec![resolved])
+                timezone_cast(resolved, target_type, &self.config.session_timezone, false)
             }
             DataType::Timestamp(_, Some(_))
                 if matches!(target_type, DataType::Timestamp(_, None)) =>
             {
-                ScalarUDF::from(SparkTimezoneCast::new(
-                    target_type,
-                    Arc::clone(&self.config.session_timezone),
-                    false,
-                ))
-                .call(vec![resolved])
+                timezone_cast(resolved, target_type, &self.config.session_timezone, false)
             }
             _ => cast(resolved, target_type),
         };

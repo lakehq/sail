@@ -24,14 +24,10 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int64Array, PrimitiveArray,
-    UInt64Array,
+    Array, BooleanArray, BooleanBuilder, Int32Array, Int64Array, UInt64Array,
 };
 use datafusion::arrow::compute::{SortOptions, filter_record_batch};
-use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::expressions::Column;
@@ -51,7 +47,8 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
 };
-use sail_function::scalar::datetime::spark_timezone_cast::spark_timezone_cast_array;
+use sail_common_datafusion::utils::data_type::requires_spark_timezone_cast_by_name;
+use sail_function::scalar::datetime::spark_timezone_cast::spark_timezone_cast_array_by_name;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
@@ -290,58 +287,10 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     write_context: DeltaWriteContext,
+    session_timezone: Arc<str>,
     lakehouse_table: Option<LakehouseExecutionContext>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
-}
-
-fn matching_nested_types(source: &DataType, target: &DataType) -> bool {
-    matches!(
-        (source, target),
-        (DataType::Struct(_), DataType::Struct(_))
-            | (DataType::List(_), DataType::List(_))
-            | (DataType::LargeList(_), DataType::LargeList(_))
-            | (DataType::FixedSizeList(_, _), DataType::FixedSizeList(_, _))
-            | (DataType::Map(_, _), DataType::Map(_, _))
-    )
-}
-
-fn needs_spark_timezone_cast(source: &DataType, target: &DataType) -> bool {
-    match (source, target) {
-        (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_)))
-        | (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
-        | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
-        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64)
-        | (
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            DataType::Timestamp(_, Some(_)),
-        )
-        | (
-            DataType::Timestamp(_, Some(_)),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-        ) => true,
-        (DataType::List(source), DataType::List(target))
-        | (DataType::LargeList(source), DataType::LargeList(target))
-        | (DataType::ListView(source), DataType::ListView(target))
-        | (DataType::LargeListView(source), DataType::LargeListView(target)) => {
-            needs_spark_timezone_cast(source.data_type(), target.data_type())
-        }
-        (
-            DataType::FixedSizeList(source, source_size),
-            DataType::FixedSizeList(target, target_size),
-        ) if source_size == target_size => {
-            needs_spark_timezone_cast(source.data_type(), target.data_type())
-        }
-        (DataType::Struct(source), DataType::Struct(target)) if source.len() == target.len() => {
-            source.iter().zip(target).any(|(source, target)| {
-                needs_spark_timezone_cast(source.data_type(), target.data_type())
-            })
-        }
-        (DataType::Map(source, _), DataType::Map(target, _)) => {
-            needs_spark_timezone_cast(source.data_type(), target.data_type())
-        }
-        _ => false,
-    }
 }
 
 fn validate_cast_safety_recursively(
@@ -406,6 +355,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         write_context: DeltaWriteContext,
+        session_timezone: Arc<str>,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
@@ -421,6 +371,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             write_context,
+            session_timezone,
             lakehouse_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -470,6 +421,10 @@ impl DeltaWriterExec {
 
     pub fn write_context(&self) -> &DeltaWriteContext {
         &self.write_context
+    }
+
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 
     pub fn catalog_table(&self) -> Option<&[String]> {
@@ -663,6 +618,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.write_context.clone(),
+            Arc::clone(&self.session_timezone),
             self.lakehouse_table.clone(),
         )?))
     }
@@ -704,12 +660,7 @@ impl DeltaWriterExec {
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let write_context = self.write_context.clone();
-        let session_timezone = context
-            .session_config()
-            .options()
-            .execution
-            .time_zone
-            .clone();
+        let session_timezone = Arc::clone(&self.session_timezone);
 
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -719,8 +670,6 @@ impl DeltaWriterExec {
                 write_batch_size,
                 ..
             } = &options;
-            let timezone = session_timezone;
-
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             match &sink_mode {
@@ -824,7 +773,7 @@ impl DeltaWriterExec {
                     &writer_schema,
                     logical_schema_for_mapping.as_ref(),
                     kernel_mode,
-                    timezone.as_deref(),
+                    &session_timezone,
                 )?;
 
                 writer
@@ -1053,7 +1002,7 @@ impl DeltaWriterExec {
         final_schema: &SchemaRef,
         logical_schema: Option<&SchemaRef>,
         column_mapping_mode: ColumnMappingMode,
-        timezone: Option<&str>,
+        session_timezone: &str,
     ) -> Result<RecordBatch> {
         let batch_schema = batch.schema();
         if column_mapping_mode != ColumnMappingMode::None {
@@ -1101,43 +1050,34 @@ impl DeltaWriterExec {
                         validation_field.name(),
                     )?;
 
-                    if column_mapping_mode != ColumnMappingMode::None
-                        && let Some(logical_field) = logical_field
-                        && matching_nested_types(logical_field.data_type(), final_field.data_type())
+                    let logical_column = if batch_column.data_type() == validation_field.data_type()
                     {
-                        adapted_columns.push(adapt_array_to_physical_field(
+                        Arc::clone(batch_column)
+                    } else if requires_spark_timezone_cast_by_name(
+                        batch_column.data_type(),
+                        validation_field.data_type(),
+                        true,
+                    ) {
+                        spark_timezone_cast_array_by_name(
                             batch_column,
-                            logical_field,
-                            final_field,
-                        )?);
-                    } else if batch_column.data_type() == final_field.data_type() {
-                        adapted_columns.push(batch_column.clone());
+                            validation_field.data_type(),
+                            session_timezone,
+                            false,
+                            true,
+                        )?
                     } else {
-                        let casted_column =
-                            match (batch_column.data_type(), final_field.data_type(), timezone) {
-                                (
-                                    DataType::Timestamp(unit_from, Some(_)),
-                                    DataType::Timestamp(unit_to, Some(target_tz)),
-                                    _,
-                                ) if unit_from == unit_to => reinterpret_timestamp_timezone(
-                                    batch_column,
-                                    *unit_to,
-                                    Some(target_tz.clone()),
-                                )?,
-                                (source, target, Some(session_tz))
-                                    if needs_spark_timezone_cast(source, target) =>
-                                {
-                                    spark_timezone_cast_array(
-                                        batch_column,
-                                        final_field.data_type(),
-                                        session_tz,
-                                        false,
-                                    )?
-                                }
-                                _ => cast_array_recursively(batch_column, final_field.data_type())?,
-                            };
-                        adapted_columns.push(casted_column);
-                    }
+                        cast_array_recursively(batch_column, validation_field.data_type())?
+                    };
+
+                    adapted_columns.push(if column_mapping_mode != ColumnMappingMode::None {
+                        adapt_array_to_physical_field(
+                            &logical_column,
+                            validation_field,
+                            final_field,
+                        )?
+                    } else {
+                        logical_column
+                    });
                 }
                 None => {
                     // Column missing from batch
@@ -1163,36 +1103,6 @@ impl DeltaWriterExec {
     }
 }
 
-fn reinterpret_timestamp_timezone(
-    array: &ArrayRef,
-    unit: TimeUnit,
-    target_tz: Option<Arc<str>>,
-) -> Result<ArrayRef> {
-    fn adjust<T: ArrowTimestampType>(
-        array: &ArrayRef,
-        target_tz: Option<Arc<str>>,
-    ) -> Result<ArrayRef> {
-        let ts_array = array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Failed to downcast timestamp array for timezone rewrite: {:?}",
-                    array.data_type()
-                ))
-            })?;
-
-        Ok(Arc::new(ts_array.clone().with_timezone_opt(target_tz)))
-    }
-
-    match unit {
-        TimeUnit::Second => adjust::<TimestampSecondType>(array, target_tz),
-        TimeUnit::Millisecond => adjust::<TimestampMillisecondType>(array, target_tz),
-        TimeUnit::Microsecond => adjust::<TimestampMicrosecondType>(array, target_tz),
-        TimeUnit::Nanosecond => adjust::<TimestampNanosecondType>(array, target_tz),
-    }
-}
-
 impl DisplayAs for DeltaWriterExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
@@ -1213,20 +1123,127 @@ mod tests {
     use std::collections::HashMap;
 
     use datafusion::arrow::array::{
-        Array, ArrayRef, Int32Array, ListArray, StructArray, TimestampMicrosecondArray,
+        Array, ArrayRef, Int32Array, ListArray, MapArray, StringArray, StructArray,
+        TimestampMicrosecondArray,
     };
     use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
-    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatchOptions;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
+    use crate::schema::make_physical_arrow_schema;
+    use crate::spec::ColumnMetadataKey;
 
     fn field_with_id(name: &str, metadata_key: &str, id: i64) -> Arc<Field> {
         Arc::new(
             Field::new(name, DataType::Int32, true)
                 .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
         )
+    }
+
+    fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> Arc<Field> {
+        Arc::new(
+            Field::new(name, data_type, true).with_metadata(HashMap::from([
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName
+                        .as_ref()
+                        .to_string(),
+                    physical_name.to_string(),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+                    id.to_string(),
+                ),
+            ])),
+        )
+    }
+
+    fn timestamp_array(data_type: &DataType) -> Result<ArrayRef> {
+        let DataType::Timestamp(TimeUnit::Microsecond, timezone) = data_type else {
+            return Err(DataFusionError::Internal(
+                "test timestamp must use microseconds".to_string(),
+            ));
+        };
+        Ok(Arc::new(
+            TimestampMicrosecondArray::from(vec![0]).with_timezone_opt(timezone.clone()),
+        ))
+    }
+
+    fn nested_timestamp_batch(timestamp_type: &DataType) -> Result<RecordBatch> {
+        let timestamp = timestamp_array(timestamp_type)?;
+        let struct_fields = Fields::from(vec![Arc::new(Field::new(
+            "at",
+            timestamp_type.clone(),
+            true,
+        ))]);
+        let struct_column = Arc::new(StructArray::try_new(
+            struct_fields.clone(),
+            vec![Arc::clone(&timestamp)],
+            None,
+        )?) as ArrayRef;
+
+        let list_column = Arc::new(ListArray::try_new(
+            Arc::new(Field::new("element", timestamp_type.clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            Arc::clone(&timestamp),
+            None,
+        )?) as ArrayRef;
+
+        let map_fields = Fields::from(vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", timestamp_type.clone(), true)),
+        ]);
+        let map_entries = StructArray::try_new(
+            map_fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["k"])) as ArrayRef,
+                timestamp,
+            ],
+            None,
+        )?;
+        let map_column = Arc::new(MapArray::try_new(
+            Arc::new(Field::new("entries", DataType::Struct(map_fields), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            map_entries,
+            None,
+            false,
+        )?) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("struct_col", DataType::Struct(struct_fields), true),
+            Field::new("list_col", list_column.data_type().clone(), true),
+            Field::new("map_col", map_column.data_type().clone(), true),
+        ]));
+        RecordBatch::try_new(schema, vec![struct_column, list_column, map_column])
+            .map_err(Into::into)
+    }
+
+    fn mapped_timestamp_schema(timestamp_type: &DataType) -> SchemaRef {
+        let struct_type = DataType::Struct(Fields::from(vec![mapped_field(
+            "at",
+            "col-at",
+            2,
+            timestamp_type.clone(),
+        )]));
+        let list_type = DataType::List(Arc::new(Field::new(
+            "element",
+            timestamp_type.clone(),
+            true,
+        )));
+        let map_fields = Fields::from(vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", timestamp_type.clone(), true)),
+        ]);
+        let map_type = DataType::Map(
+            Arc::new(Field::new("entries", DataType::Struct(map_fields), false)),
+            false,
+        );
+        Arc::new(Schema::new(vec![
+            mapped_field("struct_col", "col-struct", 1, struct_type),
+            mapped_field("list_col", "col-list", 3, list_type),
+            mapped_field("map_col", "col-map", 4, map_type),
+        ]))
     }
 
     #[test]
@@ -1272,7 +1289,7 @@ mod tests {
             &final_schema,
             Some(&logical_schema),
             ColumnMappingMode::Name,
-            None,
+            "UTC",
         )?;
         let details = adapted
             .column(0)
@@ -1368,7 +1385,7 @@ mod tests {
             &final_schema,
             None,
             ColumnMappingMode::None,
-            Some("+01:02:03"),
+            "+01:02:03",
         )?;
         let events = adapted
             .column(0)
@@ -1388,6 +1405,137 @@ mod tests {
 
         assert_eq!(timestamp.data_type(), &target_timestamp);
         assert_eq!(timestamp.value(0), -3_723_000_000);
+        Ok(())
+    }
+
+    #[test]
+    fn assignment_reorders_nested_struct_and_fills_nullable_field() -> Result<()> {
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("tag", DataType::Int32, false)),
+            Arc::new(Field::new(
+                "at",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )),
+        ]);
+        let source = Arc::new(StructArray::try_new(
+            source_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+                Arc::new(TimestampMicrosecondArray::from(vec![0])) as ArrayRef,
+            ],
+            None,
+        )?) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "payload",
+                DataType::Struct(source_fields),
+                false,
+            )])),
+            vec![source],
+        )?;
+        let target_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("at", target_timestamp.clone(), false)),
+            Arc::new(Field::new("tag", DataType::Int32, false)),
+            Arc::new(Field::new("extra", DataType::Utf8, true)),
+        ]);
+        let target_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(target_fields),
+            false,
+        )]));
+
+        let adapted = DeltaWriterExec::validate_and_adapt_batch(
+            batch,
+            &target_schema,
+            None,
+            ColumnMappingMode::None,
+            "+01:02:03",
+        )?;
+        let payload = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let timestamp = payload
+            .column_by_name("at")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        let tag = payload
+            .column_by_name("tag")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(timestamp.data_type(), &target_timestamp);
+        assert_eq!(timestamp.value(0), -3_723_000_000);
+        assert_eq!(tag.value(0), 7);
+        assert!(payload.column_by_name("extra").unwrap().is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn column_mapping_casts_nested_struct_list_and_map_timestamps_in_session_zone() -> Result<()> {
+        let ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let ltz = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+
+        for mode in [ColumnMappingMode::Name, ColumnMappingMode::Id] {
+            for (source_type, target_type, expected) in
+                [(&ntz, &ltz, -3_723_000_000), (&ltz, &ntz, 3_723_000_000)]
+            {
+                let batch = nested_timestamp_batch(source_type)?;
+                let logical_schema = mapped_timestamp_schema(target_type);
+                let physical_schema = Arc::new(make_physical_arrow_schema(&logical_schema, mode));
+                let adapted = DeltaWriterExec::validate_and_adapt_batch(
+                    batch,
+                    &physical_schema,
+                    Some(&logical_schema),
+                    mode,
+                    "+01:02:03",
+                )?;
+
+                assert_eq!(adapted.schema(), physical_schema);
+                let struct_column = adapted
+                    .column(physical_schema.index_of("col-struct")?)
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap();
+                let direct = struct_column
+                    .column_by_name("col-at")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
+                let list = adapted
+                    .column(physical_schema.index_of("col-list")?)
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .unwrap();
+                let listed = list
+                    .values()
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
+                let map = adapted
+                    .column(physical_schema.index_of("col-map")?)
+                    .as_any()
+                    .downcast_ref::<MapArray>()
+                    .unwrap();
+                let mapped = map
+                    .values()
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
+
+                for timestamp in [direct, listed, mapped] {
+                    assert_eq!(timestamp.data_type(), target_type);
+                    assert_eq!(timestamp.value(0), expected);
+                }
+            }
+        }
         Ok(())
     }
 }

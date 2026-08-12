@@ -18,7 +18,7 @@ use futures::Stream;
 use futures::stream::StreamExt;
 use sail_common::spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, retag_record_batch_timestamp_timezone,
+    cast_record_batch_positionally, retag_schema_timestamp_timezone,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -141,6 +141,7 @@ struct ExecutorTaskContext {
     stream: SendableRecordBatchStream,
     heartbeat_interval: Duration,
     session_timezone: Arc<str>,
+    external_schema: Option<SchemaRef>,
     state: ExecutorTaskState,
     buffer: Arc<Mutex<ExecutorBuffer>>,
 }
@@ -246,6 +247,7 @@ impl Executor {
                     stream,
                     heartbeat_interval,
                     session_timezone,
+                    external_schema: None,
                     state,
                     buffer: Arc::new(Mutex::new(buffer)),
                 },
@@ -276,13 +278,25 @@ impl Executor {
                 )
                 .await?;
 
+                let external_schema = match &context.external_schema {
+                    Some(schema) => Arc::clone(schema),
+                    None => {
+                        let schema = spark_connect_arrow_schema(
+                            context.stream.schema().as_ref(),
+                            &context.session_timezone,
+                        )?;
+                        context.external_schema = Some(Arc::clone(&schema));
+                        schema
+                    }
+                };
+
                 let mut empty = true;
                 loop {
                     match ExecutorTaskContext::next(&mut context.stream, context.heartbeat_interval)
                         .await?
                     {
                         ExecutorTaskItem::Batch(Some(batch)) => {
-                            let batch = to_arrow_batch(&batch, &context.session_timezone)?;
+                            let batch = to_arrow_batch_with_schema(&batch, &external_schema)?;
                             ExecutorTaskContext::send_output(
                                 &context.buffer,
                                 tx,
@@ -304,7 +318,7 @@ impl Executor {
                 }
                 if empty {
                     let batch = RecordBatch::new_empty(context.stream.schema());
-                    let batch = to_arrow_batch(&batch, &context.session_timezone)?;
+                    let batch = to_arrow_batch_with_schema(&batch, &external_schema)?;
                     ExecutorTaskContext::send_output(
                         &context.buffer,
                         tx,
@@ -476,8 +490,19 @@ pub(crate) fn to_arrow_batch(
     batch: &RecordBatch,
     session_timezone: &str,
 ) -> SparkResult<ArrowBatch> {
-    let batch = retag_record_batch_timestamp_timezone(batch, session_timezone)?;
-    let batch = normalize_time_for_spark_connect(&batch)?;
+    let schema = spark_connect_arrow_schema(batch.schema().as_ref(), session_timezone)?;
+    to_arrow_batch_with_schema(batch, &schema)
+}
+
+fn to_arrow_batch_with_schema(
+    batch: &RecordBatch,
+    external_schema: &SchemaRef,
+) -> SparkResult<ArrowBatch> {
+    let batch = if batch.schema_ref().as_ref() == external_schema.as_ref() {
+        batch.clone()
+    } else {
+        cast_record_batch_positionally(batch.clone(), Arc::clone(external_schema))?
+    };
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
@@ -489,21 +514,20 @@ pub(crate) fn to_arrow_batch(
     Ok(output)
 }
 
-fn normalize_time_for_spark_connect(batch: &RecordBatch) -> SparkResult<RecordBatch> {
-    let input_schema = batch.schema();
+fn spark_connect_arrow_schema(
+    input_schema: &Schema,
+    session_timezone: &str,
+) -> SparkResult<SchemaRef> {
+    let input_schema = retag_schema_timestamp_timezone(input_schema, session_timezone)?;
     let fields = input_schema
         .fields()
         .iter()
         .map(spark_connect_arrow_field)
         .collect::<Vec<_>>();
-    let schema = Arc::new(Schema::new_with_metadata(
+    Ok(Arc::new(Schema::new_with_metadata(
         fields,
         input_schema.metadata().clone(),
-    ));
-    if schema == input_schema {
-        return Ok(batch.clone());
-    }
-    Ok(cast_record_batch_positionally(batch.clone(), schema)?)
+    )))
 }
 
 fn spark_connect_arrow_field(field: &FieldRef) -> FieldRef {
@@ -545,5 +569,120 @@ fn spark_connect_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
             ArrowDataType::Map(spark_connect_arrow_field(field), *sorted)
         }
         _ => data_type.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{
+        ArrayRef, AsArray, StructArray, Time32SecondArray, TimestampMicrosecondArray,
+    };
+    use datafusion::arrow::datatypes::{
+        DataType, Field, Fields, Time64NanosecondType, TimestampMicrosecondType,
+    };
+    use datafusion::arrow::ipc::reader::StreamReader;
+
+    use super::*;
+
+    fn nested_batch(
+        schema: SchemaRef,
+        time_seconds: i32,
+        timestamp_micros: i64,
+    ) -> SparkResult<RecordBatch> {
+        let DataType::Struct(fields) = schema.field(0).data_type() else {
+            return Err(SparkError::internal("expected nested struct schema"));
+        };
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Time32SecondArray::from(vec![time_seconds])),
+            Arc::new(TimestampMicrosecondArray::from(vec![timestamp_micros]).with_timezone("UTC")),
+        ];
+        let nested = StructArray::try_new(fields.clone(), columns, None)?;
+        Ok(RecordBatch::try_new(schema, vec![Arc::new(nested)])?)
+    }
+
+    fn decode_arrow_batch(batch: ArrowBatch) -> SparkResult<RecordBatch> {
+        let mut reader = StreamReader::try_new(Cursor::new(batch.data), None)?;
+        reader
+            .next()
+            .transpose()?
+            .ok_or_else(|| SparkError::internal("Arrow batch did not contain a record batch"))
+    }
+
+    #[test]
+    fn serializes_multiple_batches_with_one_nested_external_schema() -> SparkResult<()> {
+        let time_field = Arc::new(
+            Field::new("time", DataType::Time32(TimeUnit::Second), false).with_metadata(
+                HashMap::from([(
+                    SAIL_SPARK_TIME_PRECISION_METADATA_KEY.to_string(),
+                    "0".to_string(),
+                )]),
+            ),
+        );
+        let timestamp_field = Arc::new(Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            false,
+        ));
+        let nested_fields: Fields = vec![time_field, timestamp_field].into();
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "nested",
+            DataType::Struct(nested_fields),
+            false,
+        )]));
+        let external_schema =
+            spark_connect_arrow_schema(input_schema.as_ref(), "America/Los_Angeles")?;
+
+        let DataType::Struct(external_fields) = external_schema.field(0).data_type() else {
+            return Err(SparkError::internal("expected nested external schema"));
+        };
+        assert_eq!(
+            external_fields[0].data_type(),
+            &DataType::Time64(TimeUnit::Nanosecond)
+        );
+        assert!(
+            !external_fields[0]
+                .metadata()
+                .contains_key(SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+        );
+        assert_eq!(
+            external_fields[1].data_type(),
+            &DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles"))
+            )
+        );
+
+        for (time_seconds, timestamp_micros) in [(1, 11), (2, 22)] {
+            let input = nested_batch(Arc::clone(&input_schema), time_seconds, timestamp_micros)?;
+            let output = to_arrow_batch_with_schema(&input, &external_schema)?;
+            assert_eq!(output.row_count, 1);
+            let output = decode_arrow_batch(output)?;
+            assert_eq!(output.schema_ref().as_ref(), external_schema.as_ref());
+            let nested = output.column(0).as_struct();
+            assert_eq!(
+                nested
+                    .column(0)
+                    .as_primitive::<Time64NanosecondType>()
+                    .value(0),
+                i64::from(time_seconds) * 1_000_000_000
+            );
+            assert_eq!(
+                nested
+                    .column(1)
+                    .as_primitive::<TimestampMicrosecondType>()
+                    .value(0),
+                timestamp_micros
+            );
+        }
+
+        let empty = RecordBatch::new_empty(input_schema);
+        let output = to_arrow_batch_with_schema(&empty, &external_schema)?;
+        assert_eq!(output.row_count, 0);
+        let output = decode_arrow_batch(output)?;
+        assert_eq!(output.num_rows(), 0);
+        assert_eq!(output.schema_ref().as_ref(), external_schema.as_ref());
+        Ok(())
     }
 }

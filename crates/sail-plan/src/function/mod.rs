@@ -22,7 +22,7 @@ mod window;
 pub(crate) use aggregate::get_built_in_aggregate_function;
 pub(crate) use scalar::{
     coerce_temporal_collection_comparison, coerce_temporal_comparison, coerce_temporal_expr,
-    coerce_temporal_in_list, get_lambda_parameters, is_higher_order_function,
+    coerce_temporal_in_list, get_lambda_parameters, is_higher_order_function, timezone_cast,
 };
 pub(crate) use window::get_built_in_window_function;
 

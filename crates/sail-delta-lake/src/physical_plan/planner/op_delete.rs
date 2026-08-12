@@ -167,6 +167,7 @@ pub async fn build_delete_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
+        ctx.session_timezone(),
         ctx.lakehouse_table().cloned(),
     )
 }

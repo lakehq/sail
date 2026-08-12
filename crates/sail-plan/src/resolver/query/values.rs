@@ -6,7 +6,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
 
-use super::{align_expr_to_ltz_type, contains_ltz, widen_ltz_types};
+use super::{align_expr_to_ltz_type, contains_ltz, spark_wider_type};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -70,12 +70,14 @@ impl PlanResolver<'_> {
             let Some((target_type, has_ltz)) = types.iter().skip(1).try_fold(
                 (first_type.clone(), contains_ltz(first_type)),
                 |(target_type, has_ltz), source_type| {
-                    let (target_type, pair_has_ltz) = widen_ltz_types(
+                    let (target_type, pair_has_ltz) = spark_wider_type(
                         &target_type,
                         source_type,
                         self.config.ansi_mode,
                         false,
                         self.config.case_sensitive,
+                        self.config
+                            .legacy_decimal_retain_fraction_digits_on_truncate,
                     )?;
                     Some((target_type, has_ltz || pair_has_ltz))
                 },
@@ -181,12 +183,14 @@ impl PlanResolver<'_> {
                 override_types
                     .into_iter()
                     .try_fold(DataType::Null, |target_type, source_type| {
-                        widen_ltz_types(
+                        spark_wider_type(
                             &target_type,
                             &source_type,
                             self.config.ansi_mode,
                             false,
                             self.config.case_sensitive,
+                            self.config
+                                .legacy_decimal_retain_fraction_digits_on_truncate,
                         )
                         .map(|(data_type, _)| data_type)
                     });

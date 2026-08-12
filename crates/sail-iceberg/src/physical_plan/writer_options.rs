@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use crate::operations::write::config::VariantShreddingConfig;
 use crate::options::r#gen::IcebergWriteOptions;
 
+fn default_session_timezone() -> String {
+    "UTC".to_string()
+}
+
 const PARQUET_SHRED_VARIANTS: &str = "write.parquet.shred-variants";
 const PARQUET_VARIANT_INFERENCE_BUFFER_SIZE: &str = "write.parquet.variant-inference-buffer-size";
 const SHRED_VARIANTS_OPTION_KEYS: &[&str] = &["shred-variants", "shred_variants", "shredVariants"];
@@ -41,6 +45,8 @@ pub struct VariantShreddingOptionPresence {
 /// during physical writing. It derives serde for use in the physical plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IcebergWriterExecOptions {
+    #[serde(default = "default_session_timezone")]
+    pub session_timezone: String,
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub write_data_path: Option<String>,
@@ -56,6 +62,7 @@ pub struct IcebergWriterExecOptions {
 impl Default for IcebergWriterExecOptions {
     fn default() -> Self {
         Self {
+            session_timezone: default_session_timezone(),
             merge_schema: false,
             overwrite_schema: false,
             write_data_path: None,
@@ -73,6 +80,7 @@ impl Default for IcebergWriterExecOptions {
 impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
     fn from(options: IcebergWriteOptions) -> Self {
         Self {
+            session_timezone: default_session_timezone(),
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             write_data_path: options.write_data_path,
@@ -185,4 +193,31 @@ fn parse_usize_property(key: &str, value: &str) -> Result<usize> {
             "invalid Iceberg table property {key} value: {value}"
         ))
     })
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_timezone_survives_serialization_and_defaults_for_legacy_plans() {
+        let options = IcebergWriterExecOptions {
+            session_timezone: "America/Los_Angeles".to_string(),
+            ..Default::default()
+        };
+        let encoded = serde_json::to_string(&options).expect("encode writer options");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_str(&encoded).expect("decode writer options");
+        assert_eq!(decoded.session_timezone, "America/Los_Angeles");
+
+        let mut legacy = serde_json::to_value(options).expect("encode legacy writer options");
+        legacy
+            .as_object_mut()
+            .expect("writer options object")
+            .remove("session_timezone");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_value(legacy).expect("decode legacy writer options");
+        assert_eq!(decoded.session_timezone, "UTC");
+    }
 }

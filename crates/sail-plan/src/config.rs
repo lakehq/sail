@@ -37,6 +37,8 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether decimal widening retains fractional digits when precision exceeds 38.
+    pub legacy_decimal_retain_fraction_digits_on_truncate: bool,
     /// Type coercion policy for values written into table columns.
     pub store_assignment_policy: StoreAssignmentPolicy,
     /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
@@ -74,6 +76,7 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: true,
+            legacy_decimal_retain_fraction_digits_on_truncate: false,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             cross_join_enabled: true,
             case_sensitive: false,

@@ -7,53 +7,56 @@ use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use super::datetime::timezone_cast;
+use super::string::stringify_ltz;
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn is_string_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
-fn is_temporal_type(data_type: &DataType) -> bool {
+pub(super) fn is_temporal_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
     )
 }
 
-fn comparison_temporal_type(left: &DataType, right: &DataType) -> Option<DataType> {
-    if !(is_temporal_type(left) || is_temporal_type(right)) {
-        return None;
-    }
-    if !matches!(left, DataType::Null) && !is_temporal_type(left) && !is_string_type(left) {
-        return None;
-    }
-    if !matches!(right, DataType::Null) && !is_temporal_type(right) && !is_string_type(right) {
-        return None;
-    }
-
-    if matches!(left, DataType::Timestamp(_, Some(_)))
-        || matches!(right, DataType::Timestamp(_, Some(_)))
+pub(super) fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
+    if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
     {
         Some(DataType::Timestamp(
             TimeUnit::Microsecond,
             Some(Arc::from("UTC")),
         ))
-    } else if matches!(left, DataType::Timestamp(_, None))
-        || matches!(right, DataType::Timestamp(_, None))
+    } else if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
     {
         Some(DataType::Timestamp(TimeUnit::Microsecond, None))
     } else {
-        Some(DataType::Date32)
+        data_types
+            .iter()
+            .any(|data_type| matches!(data_type, DataType::Date32 | DataType::Date64))
+            .then_some(DataType::Date32)
     }
+}
+
+fn comparison_temporal_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if !(is_temporal_type(left) || is_temporal_type(right)) {
+        return None;
+    }
+    if !matches!(left, DataType::Null) && !is_temporal_type(left) && !left.is_string() {
+        return None;
+    }
+    if !matches!(right, DataType::Null) && !is_temporal_type(right) && !right.is_string() {
+        return None;
+    }
+
+    common_temporal_type(&[left.clone(), right.clone()])
 }
 
 pub(crate) fn coerce_temporal_expr(
@@ -65,7 +68,7 @@ pub(crate) fn coerce_temporal_expr(
     if source_type == target_type {
         return Ok(expression);
     }
-    if is_string_type(source_type) {
+    if source_type.is_string() {
         return match target_type {
             DataType::Date32 => {
                 Ok(ScalarUDF::from(SparkDate::new(!config.ansi_mode)).call(vec![expression]))
@@ -91,32 +94,14 @@ pub(crate) fn coerce_temporal_expr(
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
         )
     ) {
-        return Ok(ScalarUDF::from(SparkTimezoneCast::new(
+        return Ok(timezone_cast(
+            expression,
             target_type.clone(),
-            Arc::clone(&config.session_timezone),
+            &config.session_timezone,
             false,
-        ))
-        .call(vec![expression]));
+        ));
     }
     Ok(cast(expression, target_type.clone()))
-}
-
-fn stringify_ltz(
-    expression: expr::Expr,
-    schema: &DFSchemaRef,
-    config: &PlanConfig,
-) -> PlanResult<expr::Expr> {
-    if matches!(
-        expression.get_type(schema)?,
-        DataType::Timestamp(_, Some(_))
-    ) {
-        Ok(
-            ScalarUDF::from(SparkToUtf8::new(Arc::clone(&config.session_timezone)))
-                .call(vec![expression]),
-        )
-    } else {
-        Ok(expression)
-    }
 }
 
 pub(crate) fn coerce_temporal_comparison(
@@ -155,7 +140,7 @@ pub(crate) fn coerce_temporal_in_list(
         return Ok((value, expressions));
     }
 
-    if data_types.iter().any(is_string_type)
+    if data_types.iter().any(DataType::is_string)
         && !config.ansi_mode
         && data_types.iter().all(|data_type| !data_type.is_nested())
     {
@@ -163,7 +148,7 @@ pub(crate) fn coerce_temporal_in_list(
             .into_iter()
             .zip(data_types)
             .map(|(expression, data_type)| {
-                if is_string_type(&data_type) {
+                if data_type.is_string() {
                     expression
                 } else {
                     ScalarUDF::from(SparkToUtf8::new(Arc::clone(&config.session_timezone)))
@@ -180,7 +165,7 @@ pub(crate) fn coerce_temporal_in_list(
 
     if data_types.iter().all(|data_type| {
         is_temporal_type(data_type)
-            || (config.ansi_mode && is_string_type(data_type))
+            || (config.ansi_mode && data_type.is_string())
             || matches!(data_type, DataType::Null)
     }) {
         let target_type = if data_types
@@ -257,12 +242,15 @@ fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanRe
     match n {
         2 => {
             let (value, pattern) = arguments.two()?;
-            let value =
-                stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+            let value = stringify_ltz(
+                value,
+                function_context.schema,
+                &function_context.plan_config.session_timezone,
+            )?;
             let pattern = stringify_ltz(
                 pattern,
                 function_context.schema,
-                function_context.plan_config,
+                &function_context.plan_config.session_timezone,
             )?;
             Ok(expr::Expr::Like(expr::Like {
                 negated: false,
@@ -274,12 +262,15 @@ fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanRe
         }
         3 => {
             let (value, pattern, escape) = arguments.three()?;
-            let value =
-                stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+            let value = stringify_ltz(
+                value,
+                function_context.schema,
+                &function_context.plan_config.session_timezone,
+            )?;
             let pattern = stringify_ltz(
                 pattern,
                 function_context.schema,
-                function_context.plan_config,
+                &function_context.plan_config.session_timezone,
             )?;
             let escape_char = extract_escape_char(escape)?;
             // Arrow's LIKE kernel only supports `\` as the escape character.
@@ -327,11 +318,15 @@ fn build_rlike(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (value, pattern) = arguments.two()?;
-    let value = stringify_ltz(value, function_context.schema, function_context.plan_config)?;
+    let value = stringify_ltz(
+        value,
+        function_context.schema,
+        &function_context.plan_config.session_timezone,
+    )?;
     let pattern = stringify_ltz(
         pattern,
         function_context.schema,
-        function_context.plan_config,
+        &function_context.plan_config.session_timezone,
     )?;
     Ok(rlike(value, pattern))
 }

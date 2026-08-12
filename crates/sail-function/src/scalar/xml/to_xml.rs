@@ -8,10 +8,11 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
-use sail_common_datafusion::utils::datetime::parse_spark_timezone;
+use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 
 use crate::scalar::datetime::format::DateTimeFormat;
 use crate::scalar::datetime::spark_file_timestamp::SPARK_FILE_TIMESTAMP_FORMAT;
+use crate::scalar::options::{find_option, reject_null_options};
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -32,6 +33,7 @@ struct SparkToXmlOptions {
     timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,
     session_timezone: String,
+    timezone: SparkTimeZone,
 }
 
 impl SparkToXmlOptions {
@@ -54,8 +56,10 @@ impl SparkToXmlOptions {
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray, session_timezone: &str) -> Result<Self> {
-        let row_tag = find_key_value(map, Self::ROW_TAG_OPTION)
-            .unwrap_or_else(|| Self::ROW_TAG_DEFAULT.to_string());
+        reject_null_options(map, SparkToXml::TO_XML_NAME)?;
+        let row_tag = find_option(map, Self::ROW_TAG_OPTION)
+            .unwrap_or(Self::ROW_TAG_DEFAULT)
+            .to_owned();
         if row_tag.is_empty() {
             return plan_err!("`rowTag` option must not be empty");
         }
@@ -63,14 +67,16 @@ impl SparkToXmlOptions {
             return plan_err!("`rowTag` must not include angle brackets");
         }
 
-        let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
-            .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
+        let attribute_prefix = find_option(map, Self::ATTRIBUTE_PREFIX_OPTION)
+            .unwrap_or(Self::ATTRIBUTE_PREFIX_DEFAULT)
+            .to_owned();
         if attribute_prefix.is_empty() {
             return plan_err!("`attributePrefix` must not be empty when writing XML");
         }
 
-        let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
-            .unwrap_or_else(|| Self::VALUE_TAG_DEFAULT.to_string());
+        let value_tag = find_option(map, Self::VALUE_TAG_OPTION)
+            .unwrap_or(Self::VALUE_TAG_DEFAULT)
+            .to_owned();
         if value_tag.is_empty() {
             return plan_err!("`valueTag` must not be empty");
         }
@@ -78,15 +84,13 @@ impl SparkToXmlOptions {
             return plan_err!("`valueTag` and `attributePrefix` must not be equal");
         }
 
-        let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let null_value = find_option(map, Self::NULL_VALUE_OPTION).map(str::to_owned);
 
-        let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
+        let timestamp_ltz_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
             .map(DateTimeFormat::for_formatting)
             .transpose()?;
 
-        let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
-            .as_deref()
+        let timestamp_ntz_format = find_option(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
@@ -95,8 +99,7 @@ impl SparkToXmlOptions {
                     .expect("default timestamp NTZ format should be valid")
             });
 
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
+        let date_format = find_option(map, Self::DATE_FORMAT_OPTION)
             .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
@@ -107,8 +110,9 @@ impl SparkToXmlOptions {
 
         Ok(Self {
             row_tag,
-            array_element_name: find_key_value(map, Self::ARRAY_ELEMENT_NAME_OPTION)
-                .unwrap_or_else(|| Self::ARRAY_ELEMENT_NAME_DEFAULT.to_string()),
+            array_element_name: find_option(map, Self::ARRAY_ELEMENT_NAME_OPTION)
+                .unwrap_or(Self::ARRAY_ELEMENT_NAME_DEFAULT)
+                .to_owned(),
             attribute_prefix,
             value_tag,
             null_value,
@@ -116,7 +120,14 @@ impl SparkToXmlOptions {
             timestamp_ntz_format,
             date_format,
             session_timezone: session_timezone.to_string(),
+            timezone: parse_spark_timezone(session_timezone)?,
         })
+    }
+
+    fn with_session_timezone(mut self, session_timezone: &str) -> Result<Self> {
+        self.timezone = parse_spark_timezone(session_timezone)?;
+        self.session_timezone = session_timezone.to_string();
+        Ok(self)
     }
 
     #[inline]
@@ -148,6 +159,7 @@ impl Default for SparkToXmlOptions {
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             session_timezone: "UTC".to_string(),
+            timezone: SparkTimeZone::Fixed(Utc.fix()),
         }
     }
 }
@@ -230,15 +242,11 @@ impl ScalarUDFImpl for SparkToXml {
 
         let options = if args.len() == 2 {
             match &args[1] {
-                ColumnarValue::Scalar(s) if s.is_null() => SparkToXmlOptions {
-                    session_timezone: session_timezone.to_string(),
-                    ..SparkToXmlOptions::default()
-                },
+                ColumnarValue::Scalar(s) if s.is_null() => {
+                    SparkToXmlOptions::default().with_session_timezone(session_timezone)?
+                }
                 ColumnarValue::Array(arr) if matches!(arr.data_type(), DataType::Null) => {
-                    SparkToXmlOptions {
-                        session_timezone: session_timezone.to_string(),
-                        ..SparkToXmlOptions::default()
-                    }
+                    SparkToXmlOptions::default().with_session_timezone(session_timezone)?
                 }
                 _ => {
                     let map_array = to_map_array(&args[1])?;
@@ -246,10 +254,7 @@ impl ScalarUDFImpl for SparkToXml {
                 }
             }
         } else {
-            SparkToXmlOptions {
-                session_timezone: session_timezone.to_string(),
-                ..SparkToXmlOptions::default()
-            }
+            SparkToXmlOptions::default().with_session_timezone(session_timezone)?
         };
 
         let struct_array = to_struct_array(&args[0])?;
@@ -908,14 +913,11 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let _is_default_format = options.timestamp_ltz_format.is_none();
-
     if tz_opt.is_some() {
-        let tz = parse_spark_timezone(&options.session_timezone)?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
-        let local_dt = utc_dt.with_timezone(&tz);
+        let local_dt = utc_dt.with_timezone(&options.timezone);
 
         use chrono::Offset;
 
@@ -1040,32 +1042,6 @@ fn to_map_array(col: &ColumnarValue) -> Result<MapArray> {
         })
 }
 
-fn find_key_value(map: &MapArray, key: &str) -> Option<String> {
-    if map.is_empty() {
-        return None;
-    }
-    let entries = map.value(0);
-    let keys = entries
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    let values = entries
-        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-
-    for i in 0..keys.len() {
-        if !keys.is_null(i) && keys.value(i).eq_ignore_ascii_case(key) {
-            return if values.is_null(i) {
-                None
-            } else {
-                Some(values.value(i).to_string())
-            };
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,6 +1123,7 @@ mod tests {
         let timezone = Some(Arc::<str>::from("UTC"));
         let default = SparkToXmlOptions {
             session_timezone: "+01:02:03".to_string(),
+            timezone: parse_spark_timezone("+01:02:03")?,
             ..SparkToXmlOptions::default()
         };
         assert_eq!(

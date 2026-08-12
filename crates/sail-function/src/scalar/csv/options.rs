@@ -1,9 +1,9 @@
-use std::ops::Range;
-
-use datafusion::arrow::array::{Array, MapArray, StringArray};
+use datafusion::arrow::array::MapArray;
 use datafusion::error::Result;
 use datafusion_common::exec_err;
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+
+pub(super) use crate::scalar::options::find_option;
+use crate::scalar::options::reject_null_options;
 
 /// Which CSV expression function is reading the options.
 ///
@@ -98,51 +98,6 @@ const VALID_CODECS: [&str; 7] = [
     "gzip",
 ];
 
-/// The key and value columns of the options map, together with the entry range of its first row.
-///
-/// The options argument is one map for the whole batch, but `make_scalar_function` pads a scalar
-/// argument to one value per row, so the flattened entries repeat that map once per row. Only the
-/// first row is read: the rest are copies, and walking them would validate the same option once
-/// per row of the batch.
-fn first_row_entries(map: &MapArray) -> Option<(&StringArray, &StringArray, Range<usize>)> {
-    if map.is_empty() || map.is_null(0) {
-        return None;
-    }
-    let keys = map
-        .entries()
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    let values = map
-        .entries()
-        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)?
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    let offsets = map.value_offsets();
-    let start = *offsets.first()? as usize;
-    let end = *offsets.get(1)? as usize;
-    Some((keys, values, start..end))
-}
-
-/// Returns the effective value of the `key` option, or `None` when the map does not carry it.
-///
-/// Spark reads CSV options through a `CaseInsensitiveMap`, so `SEP` selects the same option as
-/// `sep` and a later case-variant of a key SHADOWS an earlier one — the LAST match wins. A null
-/// value yields `None` rather than an empty string.
-pub(super) fn find_option<'a>(map: &'a MapArray, key: &str) -> Option<&'a str> {
-    let (keys, values, entries) = first_row_entries(map)?;
-    keys.iter()
-        .zip(values.iter())
-        .take(entries.end)
-        .skip(entries.start)
-        .filter_map(|(entry_key, entry_value)| match entry_key {
-            Some(entry_key) if entry_key.eq_ignore_ascii_case(key) => Some(entry_value),
-            _ => None,
-        })
-        .next_back()
-        .flatten()
-}
-
 /// Returns the effective value of an option that has a fallback alias.
 ///
 /// Spark reads the `primary` key, falling back to `alias` (`parameters.get(primary).orElse(alias)`),
@@ -165,23 +120,7 @@ pub(super) fn find_option_with_alias<'a>(
 /// while building the options, not while parsing a row. Value validation, by contrast, is lazy
 /// (see [`validate_options`]).
 pub(super) fn reject_null_entries(map: &MapArray, function: CsvFunction) -> Result<()> {
-    let Some((keys, values, entries)) = first_row_entries(map) else {
-        return Ok(());
-    };
-    for (key, value) in keys
-        .iter()
-        .zip(values.iter())
-        .take(entries.end)
-        .skip(entries.start)
-    {
-        if key.is_none() || value.is_none() {
-            return exec_err!(
-                "Failed preparing of the function `{}` for call. Please, double check function's arguments.",
-                function.name()
-            );
-        }
-    }
-    Ok(())
+    reject_null_options(map, function.name())
 }
 
 /// Rejects an invalid VALUE for any CSV option present in `map`.

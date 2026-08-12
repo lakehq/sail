@@ -99,6 +99,7 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
+        ctx.session_timezone(),
         ctx.lakehouse_table().cloned(),
     )?);
 
@@ -236,6 +237,7 @@ async fn build_overwrite_if_plan(
         ctx.table_exists(),
         union_plan.schema(),
         write_context.clone(),
+        ctx.session_timezone(),
         ctx.lakehouse_table().cloned(),
     )?);
 

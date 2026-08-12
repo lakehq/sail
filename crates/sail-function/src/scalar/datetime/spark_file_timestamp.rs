@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, MapArray, StructArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray, MapArray,
+    OffsetSizeTrait, StructArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, exec_err, plan_err};
@@ -46,6 +47,8 @@ impl SparkFileTimestamp {
             DataType::Timestamp(_, Some(_)) => DataType::Utf8,
             DataType::List(field) => DataType::List(output_field(field)?),
             DataType::LargeList(field) => DataType::LargeList(output_field(field)?),
+            DataType::ListView(field) => DataType::ListView(output_field(field)?),
+            DataType::LargeListView(field) => DataType::LargeListView(output_field(field)?),
             DataType::FixedSizeList(field, size) => {
                 DataType::FixedSizeList(output_field(field)?, *size)
             }
@@ -118,26 +121,16 @@ fn format_array(
             format_file_timestamp_array(array, session_timezone, timestamp_format)
         }
         DataType::List(field) => {
-            let source = array.as_list::<i32>();
-            let target_field = output_field(field)?;
-            let values = format_array(source.values(), session_timezone, timestamp_format)?;
-            Ok(Arc::new(GenericListArray::<i32>::try_new(
-                target_field,
-                source.offsets().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
+            format_list_array::<i32>(array, field, session_timezone, timestamp_format)
         }
         DataType::LargeList(field) => {
-            let source = array.as_list::<i64>();
-            let target_field = output_field(field)?;
-            let values = format_array(source.values(), session_timezone, timestamp_format)?;
-            Ok(Arc::new(GenericListArray::<i64>::try_new(
-                target_field,
-                source.offsets().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
+            format_list_array::<i64>(array, field, session_timezone, timestamp_format)
+        }
+        DataType::ListView(field) => {
+            format_list_view_array::<i32>(array, field, session_timezone, timestamp_format)
+        }
+        DataType::LargeListView(field) => {
+            format_list_view_array::<i64>(array, field, session_timezone, timestamp_format)
         }
         DataType::FixedSizeList(field, size) => {
             let source = array
@@ -197,6 +190,39 @@ fn format_array(
         }
         _ => Ok(Arc::clone(array)),
     }
+}
+
+fn format_list_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    field: &FieldRef,
+    session_timezone: &str,
+    timestamp_format: &str,
+) -> Result<ArrayRef> {
+    let source = array.as_list::<O>();
+    let values = format_array(source.values(), session_timezone, timestamp_format)?;
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        output_field(field)?,
+        source.offsets().clone(),
+        values,
+        source.nulls().cloned(),
+    )?))
+}
+
+fn format_list_view_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    field: &FieldRef,
+    session_timezone: &str,
+    timestamp_format: &str,
+) -> Result<ArrayRef> {
+    let source = array.as_list_view::<O>();
+    let values = format_array(source.values(), session_timezone, timestamp_format)?;
+    Ok(Arc::new(GenericListViewArray::<O>::try_new(
+        output_field(field)?,
+        source.offsets().clone(),
+        source.sizes().clone(),
+        values,
+        source.nulls().cloned(),
+    )?))
 }
 
 #[cfg(test)]

@@ -25,7 +25,6 @@ use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
@@ -170,10 +169,10 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )))));
         };
 
-        let config = source
+        let plan = source
             .config()
             .read_format
-            .scan(
+            .scan_plan(
                 session_state,
                 ListingScanInput {
                     object_store_url,
@@ -190,9 +189,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                 },
             )
             .await?;
-
-        let plan = DataSourceExec::from_data_source(config);
-        Ok(Some(source.config().read_format.adapt_scan_plan(plan)?))
+        Ok(Some(plan))
     }
 }
 
@@ -234,17 +231,14 @@ async fn plan_file_write(
         file_output_mode: FileOutputMode::Automatic,
     };
     let sort_order = create_sort_order(session_state, sort_by.clone(), logical_input.schema())?;
-    let plan = format
-        .sink(
-            session_state,
-            ListingSinkInput {
-                input: physical_input,
-                sink: conf,
-                sort_order,
-                session_timezone: Arc::clone(session_timezone),
-            },
-        )
-        .await?;
+    let input = ListingSinkInput {
+        input: physical_input,
+        sink: conf,
+        sort_order,
+        session_timezone: Arc::clone(session_timezone),
+    }
+    .prepare_partition_timestamps(session_state)?;
+    let plan = format.sink(session_state, input).await?;
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,

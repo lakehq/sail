@@ -13,7 +13,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_timestamp_interval::SparkTimestampInterval;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -35,6 +34,7 @@ use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
+use super::datetime::timezone_cast;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -93,21 +93,21 @@ fn timestamp_interval(
 }
 
 fn local_timestamp(timestamp: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {
-    ScalarUDF::from(SparkTimezoneCast::new(
+    timezone_cast(
+        timestamp,
         DataType::Timestamp(TimeUnit::Microsecond, None),
-        session_timezone,
+        &session_timezone,
         safe,
-    ))
-    .call(vec![timestamp])
+    )
 }
 
 fn date_timestamp(date: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {
-    ScalarUDF::from(SparkTimezoneCast::new(
+    timezone_cast(
+        date,
         DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
-        session_timezone,
+        &session_timezone,
         safe,
-    ))
-    .call(vec![date])
+    )
 }
 
 fn timestamp_difference(left: Expr, right: Expr, session_timezone: Arc<str>, safe: bool) -> Expr {

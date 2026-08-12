@@ -12,7 +12,7 @@ mod function;
 mod lakehouse;
 mod literal;
 pub mod plan;
-mod query;
+pub(crate) mod query;
 mod schema;
 mod state;
 mod tree;

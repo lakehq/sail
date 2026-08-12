@@ -65,6 +65,7 @@ pub fn assemble_commit_plan(
     table_schema: SchemaRef,
     user_metadata: Option<String>,
     write_context: DeltaWriteContext,
+    session_timezone: Arc<str>,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
@@ -77,6 +78,7 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema.clone(),
         write_context.clone(),
+        session_timezone,
         lakehouse_table.clone(),
     )?);
 

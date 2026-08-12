@@ -299,6 +299,32 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | NULL   |
         | 3      |
 
+    Scenario: variant_get casts mixed integers and booleans row by row
+      When query
+        """
+        SELECT variant_get(parse_json(v), '$', 'int') AS result
+        FROM VALUES ('1'), ('true'), ('false'), ('3') AS t(v)
+        """
+      Then query result
+        | result |
+        | 1      |
+        | 1      |
+        | 0      |
+        | 3      |
+
+    Scenario: variant_get preserves Decimal16 precision
+      When query
+        """
+        SELECT variant_get(
+          parse_json('{"x":9999999999999999999.9999999999999999999}'),
+          '$.x',
+          'decimal(38,19)'
+        ) AS result
+        """
+      Then query result
+        | result                                      |
+        | 9999999999999999999.9999999999999999999 |
+
   Rule: Error cases
 
     Scenario: Invalid JSON raises error

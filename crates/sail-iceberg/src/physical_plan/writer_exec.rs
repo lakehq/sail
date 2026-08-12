@@ -641,6 +641,7 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let writer_config = WriterConfig {
                 table_schema: table_schema.clone(),
+                session_timezone: Arc::from(options.session_timezone.as_str()),
                 partition_columns: partition_columns.clone(),
                 writer_properties: WriterProperties::default(),
                 target_file_size: 134_217_728,

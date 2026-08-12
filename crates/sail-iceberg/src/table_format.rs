@@ -119,7 +119,7 @@ impl TableFormat for IcebergTableFormat {
         };
         let SinkInfo {
             input,
-            session_timezone: _,
+            session_timezone,
             mode,
             partition_by,
             bucket_by,
@@ -136,6 +136,7 @@ impl TableFormat for IcebergTableFormat {
                 Arc::new(input),
                 IcebergWriteNodeOptions {
                     path,
+                    session_timezone,
                     mode,
                     partition_by,
                     bucket_by,
@@ -366,6 +367,7 @@ fn reject_catalog_managed_iceberg_alter(
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct IcebergWriteNodeOptions {
     pub path: String,
+    pub session_timezone: Arc<str>,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -438,6 +440,7 @@ pub(crate) async fn plan_iceberg_write(
 
     let IcebergWriteNodeOptions {
         path,
+        session_timezone,
         mode,
         partition_by,
         bucket_by: _,
@@ -543,6 +546,7 @@ pub(crate) async fn plan_iceberg_write(
     };
 
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
+    options.session_timezone = session_timezone.to_string();
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
     options.lakehouse_table = lakehouse_table;

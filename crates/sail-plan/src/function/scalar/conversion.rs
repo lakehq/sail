@@ -7,9 +7,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use super::datetime::timezone_cast;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -29,12 +29,12 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
             args: vec![arg],
         }))
     } else if matches!(data_type, DataType::Timestamp(_, Some(_))) {
-        Ok(ScalarUDF::from(SparkTimezoneCast::new(
+        Ok(timezone_cast(
+            arg,
             DataType::Date32,
-            Arc::clone(&input.function_context.plan_config.session_timezone),
+            &input.function_context.plan_config.session_timezone,
             false,
         ))
-        .call(vec![arg]))
     } else {
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
@@ -99,12 +99,12 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         } else {
             arg
         };
-        Ok(ScalarUDF::from(SparkTimezoneCast::new(
+        Ok(timezone_cast(
+            arg,
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
-            Arc::clone(&input.function_context.plan_config.session_timezone),
+            &input.function_context.plan_config.session_timezone,
             false,
         ))
-        .call(vec![arg]))
     }
 }
 

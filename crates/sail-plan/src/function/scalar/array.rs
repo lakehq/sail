@@ -23,13 +23,14 @@ use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceL
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_timezone_cast::SparkTimezoneCast;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use super::string::stringify_ltz_list;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::special_datetime::foldable_special_datetime_cast;
+use crate::resolver::query::spark_wider_type;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
@@ -49,7 +50,92 @@ fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let indices = (0..arguments.len()).collect::<Vec<_>>();
     let arguments =
         super::conditional::coerce_temporal_values(arguments, &indices, &function_context)?;
+    make_spark_array(arguments, &function_context)
+}
+
+pub(super) fn make_spark_array(
+    arguments: Vec<expr::Expr>,
+    function_context: &crate::function::common::FunctionContextInput<'_>,
+) -> PlanResult<expr::Expr> {
+    let data_types = arguments
+        .iter()
+        .map(|argument| argument.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let target_type = spark_array_common_type(
+        &data_types,
+        function_context.plan_config.ansi_mode,
+        function_context.plan_config.case_sensitive,
+        function_context
+            .plan_config
+            .legacy_decimal_retain_fraction_digits_on_truncate,
+    )
+    .ok_or_else(|| {
+        PlanError::invalid(
+            "array elements must have the same type and Spark TIME precisions must match",
+        )
+    })?;
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| {
+            if argument.get_type(function_context.schema)? == target_type {
+                Ok(argument)
+            } else {
+                Ok(super::datetime::timezone_cast(
+                    argument,
+                    target_type.clone(),
+                    &function_context.plan_config.session_timezone,
+                    false,
+                ))
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
     Ok(ScalarUDF::from(SparkArray::new()).call(arguments))
+}
+
+fn spark_array_common_type(
+    data_types: &[DataType],
+    ansi_mode: bool,
+    case_sensitive: bool,
+    retain_fraction_digits_on_truncate: bool,
+) -> Option<DataType> {
+    let widen = |target: DataType, data_type: &DataType| {
+        spark_wider_type(
+            &target,
+            data_type,
+            ansi_mode,
+            true,
+            case_sensitive,
+            retain_fraction_digits_on_truncate,
+        )
+        .map(|(data_type, _)| data_type)
+    };
+    if ansi_mode {
+        data_types.iter().try_fold(DataType::Null, widen)
+    } else {
+        // Spark's legacy common-type fold puts string-containing arrays first because
+        // string promotion is not associative (for example timestamp, int, string).
+        data_types
+            .iter()
+            .filter(|data_type| spark_has_string_type(data_type))
+            .chain(
+                data_types
+                    .iter()
+                    .filter(|data_type| !spark_has_string_type(data_type)),
+            )
+            .try_fold(DataType::Null, widen)
+    }
+}
+
+fn spark_has_string_type(data_type: &DataType) -> bool {
+    match data_type {
+        data_type if data_type.is_string() => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => spark_has_string_type(field.data_type()),
+        _ => false,
+    }
 }
 
 fn array_repeat_with_nullable_element(
@@ -77,26 +163,11 @@ fn array_join(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     if let Some(array) = arguments.first_mut() {
-        let data_type = array.get_type(function_context.schema)?;
-        let target_type = match &data_type {
-            DataType::List(field) if contains_ltz(field.data_type()) => Some(DataType::List(
-                Arc::new(field.as_ref().clone().with_data_type(DataType::Utf8)),
-            )),
-            DataType::LargeList(field) if contains_ltz(field.data_type()) => {
-                Some(DataType::LargeList(Arc::new(
-                    field.as_ref().clone().with_data_type(DataType::Utf8),
-                )))
-            }
-            _ => None,
-        };
-        if let Some(target_type) = target_type {
-            *array = ScalarUDF::from(SparkTimezoneCast::new(
-                target_type,
-                function_context.plan_config.session_timezone.clone(),
-                false,
-            ))
-            .call(vec![array.clone()]);
-        }
+        *array = stringify_ltz_list(
+            array.clone(),
+            function_context.schema,
+            &function_context.plan_config.session_timezone,
+        )?;
     }
     for argument in arguments.iter_mut().skip(1) {
         if matches!(
@@ -110,20 +181,6 @@ fn array_join(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     Ok(ScalarUDF::from(ArrayToString::new()).call(arguments))
-}
-
-fn contains_ltz(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Timestamp(_, Some(_)) => true,
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _) => contains_ltz(field.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|field| contains_ltz(field.data_type())),
-        DataType::Map(field, _) => contains_ltz(field.data_type()),
-        _ => false,
-    }
 }
 
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -581,7 +638,7 @@ fn array_update_output_type(
     ))
 }
 
-fn cast_list_value_nullability(
+pub(super) fn cast_list_value_nullability(
     expr: expr::Expr,
     schema: &datafusion_common::DFSchemaRef,
     nullable: bool,
@@ -682,12 +739,30 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{ListArray, RecordBatch};
-    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::arrow::datatypes::{Field, Int32Type};
     use datafusion::prelude::SessionContext;
     use datafusion_common::DFSchema;
     use datafusion_expr::{ColumnarValue, col};
 
     use super::*;
+
+    #[test]
+    fn legacy_array_common_type_puts_strings_first() {
+        let timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
+        let types = [timestamp.clone(), DataType::Int32, DataType::Utf8];
+        assert_eq!(
+            spark_array_common_type(&types, false, false, false),
+            Some(DataType::Utf8)
+        );
+        assert_eq!(spark_array_common_type(&types, true, false, false), None);
+
+        let list = |data_type| DataType::List(Arc::new(Field::new_list_field(data_type, false)));
+        let types = [list(timestamp), list(DataType::Int32), list(DataType::Utf8)];
+        assert_eq!(
+            spark_array_common_type(&types, false, false, false),
+            Some(list(DataType::Utf8))
+        );
+    }
 
     #[expect(clippy::unwrap_used, clippy::panic)]
     #[test]

@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray, MapArray,
-    PrimitiveArray, StringArray, StructArray,
+    OffsetSizeTrait, PrimitiveArray, StringArray, StructArray, new_null_array,
 };
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UnionFields,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
@@ -15,6 +15,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
+use sail_common_datafusion::array::record_batch::retag_timestamp_data_type;
 
 use super::convert_tz::convert_tz_inner;
 use super::spark_timestamp::SparkTimestamp;
@@ -32,9 +33,10 @@ pub struct SparkTimezoneCast {
 
 impl SparkTimezoneCast {
     pub fn new(target_type: DataType, session_timezone: Arc<str>, safe: bool) -> Self {
+        let target_type = canonicalize_ltz_type(target_type);
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            target_type: canonicalize_ltz_type(&target_type),
+            target_type,
             session_timezone,
             safe,
             struct_by_name: false,
@@ -48,9 +50,10 @@ impl SparkTimezoneCast {
         safe: bool,
         case_sensitive: bool,
     ) -> Self {
+        let target_type = canonicalize_ltz_type(target_type);
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            target_type: canonicalize_ltz_type(&target_type),
+            target_type,
             session_timezone,
             safe,
             struct_by_name: true,
@@ -79,53 +82,8 @@ impl SparkTimezoneCast {
     }
 }
 
-fn canonicalize_ltz_field(field: &FieldRef) -> FieldRef {
-    Arc::new(
-        field
-            .as_ref()
-            .clone()
-            .with_data_type(canonicalize_ltz_type(field.data_type())),
-    )
-}
-
-fn canonicalize_ltz_type(data_type: &DataType) -> DataType {
-    match data_type {
-        DataType::Timestamp(unit, Some(_)) => DataType::Timestamp(*unit, Some(Arc::from("UTC"))),
-        DataType::List(field) => DataType::List(canonicalize_ltz_field(field)),
-        DataType::ListView(field) => DataType::ListView(canonicalize_ltz_field(field)),
-        DataType::FixedSizeList(field, size) => {
-            DataType::FixedSizeList(canonicalize_ltz_field(field), *size)
-        }
-        DataType::LargeList(field) => DataType::LargeList(canonicalize_ltz_field(field)),
-        DataType::LargeListView(field) => DataType::LargeListView(canonicalize_ltz_field(field)),
-        DataType::Struct(fields) => DataType::Struct(
-            fields
-                .iter()
-                .map(canonicalize_ltz_field)
-                .collect::<Vec<_>>()
-                .into(),
-        ),
-        DataType::Map(field, sorted) => DataType::Map(canonicalize_ltz_field(field), *sorted),
-        DataType::Union(fields, mode) => {
-            let type_ids = fields.iter().map(|(type_id, _)| type_id);
-            let output_fields = fields
-                .iter()
-                .map(|(_, field)| canonicalize_ltz_field(field));
-            match UnionFields::try_new(type_ids, output_fields) {
-                Ok(fields) => DataType::Union(fields, *mode),
-                Err(_) => data_type.clone(),
-            }
-        }
-        DataType::Dictionary(key, value) => DataType::Dictionary(
-            Box::new(canonicalize_ltz_type(key)),
-            Box::new(canonicalize_ltz_type(value)),
-        ),
-        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
-            canonicalize_ltz_field(run_ends),
-            canonicalize_ltz_field(values),
-        ),
-        _ => data_type.clone(),
-    }
+fn canonicalize_ltz_type(data_type: DataType) -> DataType {
+    retag_timestamp_data_type(&data_type, &Arc::from("UTC")).unwrap_or(data_type)
 }
 
 impl ScalarUDFImpl for SparkTimezoneCast {
@@ -310,75 +268,39 @@ fn cast_array(
             let timestamp = cast_ltz_to_ntz(array, *source_unit, session_timezone, safe)?;
             arrow_cast(&timestamp, target_type, safe)
         }
-        (DataType::List(_), DataType::List(target_field)) => {
-            let source = array.as_list::<i32>();
-            let values = cast_array(
-                source.values(),
-                target_field.data_type(),
-                session_timezone,
-                safe,
-                struct_by_name,
-                case_sensitive,
-            )?;
-            Ok(Arc::new(GenericListArray::<i32>::try_new(
-                Arc::clone(target_field),
-                source.offsets().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
-        }
-        (DataType::LargeList(_), DataType::LargeList(target_field)) => {
-            let source = array.as_list::<i64>();
-            let values = cast_array(
-                source.values(),
-                target_field.data_type(),
-                session_timezone,
-                safe,
-                struct_by_name,
-                case_sensitive,
-            )?;
-            Ok(Arc::new(GenericListArray::<i64>::try_new(
-                Arc::clone(target_field),
-                source.offsets().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
-        }
-        (DataType::ListView(_), DataType::ListView(target_field)) => {
-            let source = array.as_list_view::<i32>();
-            let values = cast_array(
-                source.values(),
-                target_field.data_type(),
-                session_timezone,
-                safe,
-                struct_by_name,
-                case_sensitive,
-            )?;
-            Ok(Arc::new(GenericListViewArray::<i32>::try_new(
-                Arc::clone(target_field),
-                source.offsets().clone(),
-                source.sizes().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
-        }
+        (DataType::List(_), DataType::List(target_field)) => cast_list_array::<i32>(
+            array,
+            target_field,
+            session_timezone,
+            safe,
+            struct_by_name,
+            case_sensitive,
+        ),
+        (DataType::LargeList(_), DataType::LargeList(target_field)) => cast_list_array::<i64>(
+            array,
+            target_field,
+            session_timezone,
+            safe,
+            struct_by_name,
+            case_sensitive,
+        ),
+        (DataType::ListView(_), DataType::ListView(target_field)) => cast_list_view_array::<i32>(
+            array,
+            target_field,
+            session_timezone,
+            safe,
+            struct_by_name,
+            case_sensitive,
+        ),
         (DataType::LargeListView(_), DataType::LargeListView(target_field)) => {
-            let source = array.as_list_view::<i64>();
-            let values = cast_array(
-                source.values(),
-                target_field.data_type(),
+            cast_list_view_array::<i64>(
+                array,
+                target_field,
                 session_timezone,
                 safe,
                 struct_by_name,
                 case_sensitive,
-            )?;
-            Ok(Arc::new(GenericListViewArray::<i64>::try_new(
-                Arc::clone(target_field),
-                source.offsets().clone(),
-                source.sizes().clone(),
-                values,
-                source.nulls().cloned(),
-            )?))
+            )
         }
         (
             DataType::FixedSizeList(_, source_size),
@@ -455,13 +377,6 @@ fn cast_array(
             )?))
         }
         (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-            if source_fields.len() != target_fields.len() {
-                return exec_err!(
-                    "spark_timezone_cast struct field count mismatch: {} vs {}",
-                    source_fields.len(),
-                    target_fields.len()
-                );
-            }
             let source = array.as_struct();
             let columns = if struct_by_name {
                 let mut matched = vec![false; source_fields.len()];
@@ -482,10 +397,14 @@ fn cast_array(
                                     }
                                 });
                         let Some((source_index, _)) = matches.next() else {
-                            return exec_err!(
-                                "spark_timezone_cast missing struct field {}",
-                                target_field.name()
-                            );
+                            return if target_field.is_nullable() {
+                                Ok(new_null_array(target_field.data_type(), source.len()))
+                            } else {
+                                exec_err!(
+                                    "spark_timezone_cast missing required struct field {}",
+                                    target_field.name()
+                                )
+                            };
                         };
                         if matches.next().is_some() || matched[source_index] {
                             return exec_err!(
@@ -505,6 +424,13 @@ fn cast_array(
                     })
                     .collect::<Result<Vec<_>>>()?
             } else {
+                if source_fields.len() != target_fields.len() {
+                    return exec_err!(
+                        "spark_timezone_cast struct field count mismatch: {} vs {}",
+                        source_fields.len(),
+                        target_fields.len()
+                    );
+                }
                 source
                     .columns()
                     .iter()
@@ -531,6 +457,57 @@ fn cast_array(
     }
 }
 
+fn cast_list_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    target_field: &FieldRef,
+    session_timezone: &str,
+    safe: bool,
+    struct_by_name: bool,
+    case_sensitive: bool,
+) -> Result<ArrayRef> {
+    let source = array.as_list::<O>();
+    let values = cast_array(
+        source.values(),
+        target_field.data_type(),
+        session_timezone,
+        safe,
+        struct_by_name,
+        case_sensitive,
+    )?;
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::clone(target_field),
+        source.offsets().clone(),
+        values,
+        source.nulls().cloned(),
+    )?))
+}
+
+fn cast_list_view_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    target_field: &FieldRef,
+    session_timezone: &str,
+    safe: bool,
+    struct_by_name: bool,
+    case_sensitive: bool,
+) -> Result<ArrayRef> {
+    let source = array.as_list_view::<O>();
+    let values = cast_array(
+        source.values(),
+        target_field.data_type(),
+        session_timezone,
+        safe,
+        struct_by_name,
+        case_sensitive,
+    )?;
+    Ok(Arc::new(GenericListViewArray::<O>::try_new(
+        Arc::clone(target_field),
+        source.offsets().clone(),
+        source.sizes().clone(),
+        values,
+        source.nulls().cloned(),
+    )?))
+}
+
 /// Cast an Arrow array using Spark's session-zone semantics.
 ///
 /// This is shared by physical writer boundaries that must adapt LTZ and NTZ
@@ -542,6 +519,24 @@ pub fn spark_timezone_cast_array(
     safe: bool,
 ) -> Result<ArrayRef> {
     cast_array(array, target_type, session_timezone, safe, false, false)
+}
+
+/// Applies Spark assignment semantics, recursively matching struct fields by name.
+pub fn spark_timezone_cast_array_by_name(
+    array: &ArrayRef,
+    target_type: &DataType,
+    session_timezone: &str,
+    safe: bool,
+    case_sensitive: bool,
+) -> Result<ArrayRef> {
+    cast_array(
+        array,
+        target_type,
+        session_timezone,
+        safe,
+        true,
+        case_sensitive,
+    )
 }
 
 #[cfg(test)]
@@ -743,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn casts_reordered_struct_fields_by_name_for_assignments() -> Result<()> {
+    fn casts_reordered_struct_fields_and_fills_nullable_fields_by_name() -> Result<()> {
         let source_fields: Fields = vec![
             Arc::new(Field::new("b", DataType::Int32, false)),
             Arc::new(Field::new(
@@ -751,6 +746,7 @@ mod tests {
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 false,
             )),
+            Arc::new(Field::new("dropped", DataType::Int32, false)),
         ]
         .into();
         let source: ArrayRef = Arc::new(StructArray::try_new(
@@ -758,6 +754,7 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![7])),
                 Arc::new(TimestampMicrosecondArray::from(vec![0])),
+                Arc::new(Int32Array::from(vec![9])),
             ],
             None,
         )?);
@@ -768,6 +765,8 @@ mod tests {
                 false,
             )),
             Arc::new(Field::new("b", DataType::Int32, false)),
+            Arc::new(Field::new("missing", DataType::Int32, true)),
+            Arc::new(Field::new("also_missing", DataType::Utf8, true)),
         ]
         .into();
         let target_type = DataType::Struct(target_fields.clone());
@@ -789,6 +788,47 @@ mod tests {
                 .value(0),
             7
         );
+        assert!(output.column(2).is_null(0));
+        assert!(output.column(3).is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_required_and_ambiguous_struct_fields_by_name() -> Result<()> {
+        let source: ArrayRef = Arc::new(StructArray::try_new(
+            vec![Arc::new(Field::new("other", DataType::Int32, false))].into(),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+            None,
+        )?);
+        let required =
+            DataType::Struct(vec![Arc::new(Field::new("required", DataType::Int32, false))].into());
+        let Some(error) = cast_array(&source, &required, "UTC", false, true, false).err() else {
+            return exec_err!("missing required field must fail");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("missing required struct field required")
+        );
+
+        let source: ArrayRef = Arc::new(StructArray::try_new(
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("A", DataType::Int32, false)),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![2])),
+            ],
+            None,
+        )?);
+        let target =
+            DataType::Struct(vec![Arc::new(Field::new("a", DataType::Int32, false))].into());
+        let Some(error) = cast_array(&source, &target, "UTC", false, true, false).err() else {
+            return exec_err!("ambiguous field must fail");
+        };
+        assert!(error.to_string().contains("ambiguous struct field a"));
         Ok(())
     }
 

@@ -1,14 +1,14 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
     ListArray, NullArray, NullBufferBuilder, TimestampMicrosecondArray, UInt64Array,
     new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::{concat, take_arrays};
+use datafusion::arrow::compute::{concat, take, take_arrays};
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type,
     Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
@@ -23,10 +23,11 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::{
-    SparkTimeZone, localize_with_fallback, localize_with_preferred_offset, parse_spark_timezone,
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::datetime::utils::add_timestamp_interval;
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
@@ -153,53 +154,119 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let row_count = u64::try_from(args.number_rows)
-            .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
-        let mut output = Vec::with_capacity(args.number_rows);
-
-        for row in 0..row_count {
-            let row = [row];
-            let mut values = Vec::with_capacity(lambdas.len());
-            let mut is_null = false;
-
-            for lambda in &lambdas {
-                let value = evaluate_sequence_lambda(lambda, &row)?;
-                if value.is_null(0) {
-                    is_null = true;
-                    break;
-                }
-                values.push(ColumnarValue::Array(value));
-            }
-
-            let value = if is_null {
-                new_null_array(args.return_type(), 1)
-            } else {
-                ScalarUDFImpl::invoke_with_args(
-                    &self.sequence,
-                    ScalarFunctionArgs {
-                        args: values,
-                        arg_fields: arg_fields.clone(),
-                        number_rows: 1,
-                        return_field: Arc::clone(&args.return_field),
-                        config_options: Arc::clone(&args.config_options),
-                    },
-                )?
-                .into_array(1)?
-            };
-            output.push(value);
+        if args.number_rows == 0 {
+            return Ok(ColumnarValue::Array(new_empty_array(args.return_type())));
         }
 
-        let output = if output.is_empty() {
-            new_empty_array(args.return_type())
-        } else {
-            let arrays = output
-                .iter()
-                .map(|array| array.as_ref())
-                .collect::<Vec<_>>();
-            concat(&arrays)?
-        };
-        Ok(ColumnarValue::Array(output))
+        let mut rows = (0..args.number_rows).collect::<Vec<_>>();
+        let mut values = Vec::with_capacity(lambdas.len());
+
+        for lambda in &lambdas {
+            let value = match evaluate_sequence_lambda(lambda, &rows) {
+                Ok(value) => value,
+                Err(_) => {
+                    // Spark evaluates sequence row-by-row and each row's start, stop, and step in
+                    // order. If bulk lambda evaluation fails, retry only this exceptional path in
+                    // that order so an earlier boundary error still wins over a later-row child
+                    // error. The normal path below remains one bulk sequence invocation.
+                    return invoke_sequence_ordered(&self.sequence, &lambdas, &arg_fields, &args)
+                        .map(ColumnarValue::Array);
+                }
+            };
+
+            if value.null_count() > 0 {
+                let kept = (0..value.len())
+                    .filter(|&index| !value.is_null(index))
+                    .collect::<Vec<_>>();
+                if kept.is_empty() {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        args.return_type(),
+                        args.number_rows,
+                    )));
+                }
+
+                values.push(value);
+                let indices = UInt64Array::from_iter_values(kept.iter().map(|&index| index as u64));
+                values = take_arrays(&values, &indices, None)?;
+                rows = kept.into_iter().map(|index| rows[index]).collect();
+                continue;
+            }
+            values.push(value);
+        }
+
+        let output = invoke_sequence_batch(&self.sequence, values, &arg_fields, &args, rows.len())?;
+        if rows.len() == args.number_rows {
+            return Ok(ColumnarValue::Array(output));
+        }
+
+        let mut scatter_indices = vec![None; args.number_rows];
+        for (output_index, row) in rows.into_iter().enumerate() {
+            scatter_indices[row] = Some(output_index as u64);
+        }
+
+        Ok(ColumnarValue::Array(take(
+            output.as_ref(),
+            &UInt64Array::from(scatter_indices),
+            None,
+        )?))
     }
+}
+
+fn invoke_sequence_ordered(
+    sequence: &SparkSequence,
+    lambdas: &[&LambdaArgument],
+    arg_fields: &[FieldRef],
+    args: &HigherOrderFunctionArgs,
+) -> Result<ArrayRef> {
+    let mut output = Vec::with_capacity(args.number_rows);
+
+    for row in 0..args.number_rows {
+        let row = [row];
+        let mut values = Vec::with_capacity(lambdas.len());
+        let mut is_null = false;
+
+        for lambda in lambdas {
+            let value = evaluate_sequence_lambda(lambda, &row)?;
+            if value.is_null(0) {
+                is_null = true;
+                break;
+            }
+            values.push(value);
+        }
+
+        let value = if is_null {
+            new_null_array(args.return_type(), 1)
+        } else {
+            invoke_sequence_batch(sequence, values, arg_fields, args, 1)?
+        };
+        output.push(value);
+    }
+
+    let arrays = output
+        .iter()
+        .map(|array| array.as_ref())
+        .collect::<Vec<_>>();
+    Ok(concat(&arrays)?)
+}
+
+fn invoke_sequence_batch(
+    sequence: &SparkSequence,
+    values: Vec<ArrayRef>,
+    arg_fields: &[FieldRef],
+    args: &HigherOrderFunctionArgs,
+    number_rows: usize,
+) -> Result<ArrayRef> {
+    ScalarUDFImpl::invoke_with_args(
+        sequence,
+        ScalarFunctionArgs {
+            args: values.into_iter().map(ColumnarValue::Array).collect(),
+            arg_fields: arg_fields.to_vec(),
+            number_rows,
+            return_field: Arc::clone(&args.return_field),
+            config_options: Arc::clone(&args.config_options),
+        },
+    )?
+    .into_array(number_rows)
 }
 
 fn check_lazy_sequence_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
@@ -215,8 +282,8 @@ fn check_lazy_sequence_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
     Ok(())
 }
 
-fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[u64]) -> Result<ArrayRef> {
-    let indices = UInt64Array::from(rows.to_vec());
+fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[usize]) -> Result<ArrayRef> {
+    let indices = UInt64Array::from_iter_values(rows.iter().map(|&row| row as u64));
     let dummy = || Ok(Arc::new(NullArray::new(rows.len())) as ArrayRef);
 
     lambda
@@ -827,184 +894,12 @@ fn estimated_temporal_step(months: i32, days: i32, micros: i64) -> i64 {
         .wrapping_add(i64::from(days).wrapping_mul(MICROS_PER_DAY))
 }
 
-fn scaled_i32(value: i32, index: usize, component: &str) -> Result<i32> {
-    i32::try_from(i128::from(value) * index as i128)
-        .map_err(|_| exec_datafusion_err!("sequence {component} interval component overflow"))
+fn scaled_i32(value: i32, index: usize) -> i32 {
+    value.wrapping_mul(index as i32)
 }
 
-fn scaled_i64(value: i64, index: usize, component: &str) -> Result<i64> {
-    i64::try_from(i128::from(value) * index as i128)
-        .map_err(|_| exec_datafusion_err!("sequence {component} interval component overflow"))
-}
-
-fn checked_add_months(datetime: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
-    if months >= 0 {
-        datetime.checked_add_months(Months::new(months as u32))
-    } else {
-        datetime.checked_sub_months(Months::new(months.unsigned_abs()))
-    }
-}
-
-fn checked_add_days(datetime: NaiveDateTime, days: i32) -> Option<NaiveDateTime> {
-    if days >= 0 {
-        datetime.checked_add_days(Days::new(days as u64))
-    } else {
-        datetime.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
-    }
-}
-
-fn days_in_month(year: i64, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if year.rem_euclid(4) == 0
-            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
-        {
-            29
-        }
-        2 => 28,
-        _ => unreachable!("month is normalized to 1..=12"),
-    }
-}
-
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = year - if month <= 2 { 1 } else { 0 };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = shifted_month + if shifted_month < 10 { 3 } else { -9 };
-    year += if month <= 2 { 1 } else { 0 };
-    (year, month as u32, day as u32)
-}
-
-fn add_wide_calendar_interval(start: i128, months: i32, days: i32, micros: i64) -> Result<i128> {
-    let epoch_day = i64::try_from(start.div_euclid(i128::from(MICROS_PER_DAY)))
-        .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-    let micros_of_day = start.rem_euclid(i128::from(MICROS_PER_DAY));
-    let (year, month, day) = civil_from_days(epoch_day);
-
-    let month_index = year
-        .checked_mul(12)
-        .and_then(|value| value.checked_add(i64::from(month - 1)))
-        .and_then(|value| value.checked_add(i64::from(months)))
-        .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-    let year = month_index.div_euclid(12);
-    let month = u32::try_from(month_index.rem_euclid(12) + 1)
-        .map_err(|_| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-    let day = day.min(days_in_month(year, month));
-    let epoch_day = days_from_civil(year, month, day)
-        .checked_add(i64::from(days))
-        .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
-
-    Ok(i128::from(epoch_day) * i128::from(MICROS_PER_DAY) + micros_of_day + i128::from(micros))
-}
-
-fn add_calendar_interval_wide(
-    datetime: NaiveDateTime,
-    months: i32,
-    days: i32,
-) -> Option<NaiveDateTime> {
-    let date = datetime.date();
-    let month_index = i64::from(date.year())
-        .checked_mul(12)?
-        .checked_add(i64::from(date.month0()))?
-        .checked_add(i64::from(months))?;
-    let year = month_index.div_euclid(12);
-    let month = u32::try_from(month_index.rem_euclid(12) + 1).ok()?;
-    let day = date.day().min(days_in_month(year, month));
-    let epoch_day = days_from_civil(year, month, day).checked_add(i64::from(days))?;
-    let (year, month, day) = civil_from_days(epoch_day);
-    let year = i32::try_from(year).ok()?;
-
-    NaiveDate::from_ymd_opt(year, month, day).map(|date| date.and_time(datetime.time()))
-}
-
-fn add_ltz_interval(
-    start: i64,
-    months: i32,
-    days: i32,
-    micros: i64,
-    timezone: SparkTimeZone,
-) -> Result<i64> {
-    if let SparkTimeZone::Fixed(offset) = timezone {
-        let offset_micros = i128::from(offset.local_minus_utc()) * 1_000_000;
-        let local_start = i128::from(start) + offset_micros;
-        let local_result =
-            add_wide_calendar_interval(local_start, months, days, micros)? - offset_micros;
-        return i64::try_from(local_result)
-            .map_err(|_| exec_datafusion_err!("cannot add interval to {start}"));
-    }
-
-    let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
-        .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
-        .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-
-    let calendar_fits = checked_add_months(datetime.naive_local(), months)
-        .and_then(|value| checked_add_days(value, days))
-        .is_some();
-
-    if calendar_fits {
-        if months != 0 {
-            let preferred_offset = datetime.offset().fix().local_minus_utc();
-            let local = checked_add_months(datetime.naive_local(), months)
-                .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-            datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
-        }
-        if days != 0 {
-            let preferred_offset = datetime.offset().fix().local_minus_utc();
-            let local = checked_add_days(datetime.naive_local(), days)
-                .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
-            datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
-        }
-    } else {
-        let preferred_offset = datetime.offset().fix().local_minus_utc();
-        let local =
-            add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
-                exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
-            })?;
-        datetime = localize_with_preferred_offset(&timezone, &local, preferred_offset)?;
-    }
-
-    datetime
-        .with_timezone(&Utc)
-        .checked_add_signed(TimeDelta::microseconds(micros))
-        .map(|value| value.timestamp_micros())
-        .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))
-}
-
-fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
-    let result = add_wide_calendar_interval(i128::from(start), months, days, micros)?;
-    i64::try_from(result).map_err(|_| exec_datafusion_err!("cannot add interval to {start}"))
-}
-
-pub(crate) fn add_timestamp_interval(
-    start: i64,
-    months: i32,
-    days: i32,
-    micros: i64,
-    timezone: SparkTimeZone,
-    timestamp_ntz: bool,
-) -> Result<i64> {
-    if timestamp_ntz {
-        add_ntz_interval(start, months, days, micros)
-    } else {
-        add_ltz_interval(start, months, days, micros, timezone)
-    }
+fn scaled_i64(value: i64, index: usize) -> i64 {
+    value.wrapping_mul(index as i64)
 }
 
 fn add_temporal_interval(
@@ -1016,9 +911,11 @@ fn add_temporal_interval(
     timezone: SparkTimeZone,
     timestamp_ntz: bool,
 ) -> Result<i64> {
-    let months = scaled_i32(months, index, "month")?;
-    let days = scaled_i32(days, index, "day")?;
-    let micros = scaled_i64(micros, index, "microsecond")?;
+    // Spark evaluates these as JVM `Int`/`Long` multiplications in both interpreted and
+    // generated execution, so interval-component overflow wraps before the timestamp add.
+    let months = scaled_i32(months, index);
+    let days = scaled_i32(days, index);
+    let micros = scaled_i64(micros, index);
     add_timestamp_interval(start, months, days, micros, timezone, timestamp_ntz)
 }
 
@@ -1256,7 +1153,133 @@ fn gen_sequence_timestamp(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
+    use std::hash::{Hash, Hasher};
+    use std::sync::Mutex;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_physical_expr::PhysicalExpr;
+
     use super::*;
+
+    #[derive(Debug)]
+    struct RecordingColumn {
+        id: u8,
+        calls: Arc<Mutex<Vec<(u8, usize)>>>,
+        error_on: Option<i64>,
+    }
+
+    impl PartialEq for RecordingColumn {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+
+    impl Eq for RecordingColumn {}
+
+    impl Hash for RecordingColumn {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+        }
+    }
+
+    impl Display for RecordingColumn {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "recording_column_{}", self.id)
+        }
+    }
+
+    impl PhysicalExpr for RecordingColumn {
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.calls
+                .lock()
+                .map_err(|_| exec_datafusion_err!("recording column lock poisoned"))?
+                .push((self.id, batch.num_rows()));
+            let values = batch.column(0).as_primitive::<Int64Type>();
+            if self
+                .error_on
+                .is_some_and(|error| values.iter().flatten().any(|value| value == error))
+            {
+                return exec_err!("later-row");
+            }
+            Ok(ColumnarValue::Array(Arc::clone(batch.column(0))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            if !children.is_empty() {
+                return exec_err!("recording column has no children");
+            }
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            Display::fmt(self, formatter)
+        }
+    }
+
+    fn recording_lambda(
+        id: u8,
+        values: Int64Array,
+        calls: Arc<Mutex<Vec<(u8, usize)>>>,
+        error_on: Option<i64>,
+    ) -> Result<LambdaArgument> {
+        let field = Arc::new(Field::new(format!("capture_{id}"), DataType::Int64, true));
+        let captures =
+            RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![Arc::new(values)])?;
+        Ok(LambdaArgument::new(
+            vec![Arc::new(Field::new("", DataType::Null, true))],
+            Arc::new(RecordingColumn {
+                id,
+                calls,
+                error_on,
+            }),
+            Some(captures),
+        ))
+    }
+
+    fn lazy_sequence_args(
+        lambdas: Vec<LambdaArgument>,
+        number_rows: usize,
+    ) -> HigherOrderFunctionArgs {
+        let arg_fields = (0..lambdas.len())
+            .map(|_| ValueOrLambda::Lambda(Arc::new(Field::new("", DataType::Int64, true))))
+            .collect();
+        HigherOrderFunctionArgs {
+            args: lambdas.into_iter().map(ValueOrLambda::Lambda).collect(),
+            arg_fields,
+            number_rows,
+            return_field: Arc::new(Field::new(
+                "spark_sequence",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+                true,
+            )),
+            config_options: Arc::new(ConfigOptions::new()),
+        }
+    }
+
+    fn recorded_calls(calls: &Mutex<Vec<(u8, usize)>>) -> Result<Vec<(u8, usize)>> {
+        Ok(calls
+            .lock()
+            .map_err(|_| exec_datafusion_err!("recording column lock poisoned"))?
+            .clone())
+    }
 
     #[test]
     fn sequence_length_matches_spark_overflow_and_checked_limits() -> Result<()> {
@@ -1268,6 +1291,85 @@ mod tests {
         );
         assert!(sequence_length(0, MAX_ROUNDED_ARRAY_LENGTH, 1).is_err());
         assert!(checked_batch_length(i32::MAX as usize, 1).is_err());
+        assert_eq!(scaled_i32(i32::MAX, 2), -2);
+        assert_eq!(scaled_i64(i64::MAX, 2), -2);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_sequence_compacts_nulls_and_evaluates_each_argument_once() -> Result<()> {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let args = lazy_sequence_args(
+            vec![
+                recording_lambda(
+                    0,
+                    Int64Array::from(vec![Some(1), None, Some(3), Some(5)]),
+                    Arc::clone(&calls),
+                    None,
+                )?,
+                recording_lambda(
+                    1,
+                    Int64Array::from(vec![Some(3), Some(4), None, Some(1)]),
+                    Arc::clone(&calls),
+                    None,
+                )?,
+                recording_lambda(
+                    2,
+                    Int64Array::from(vec![Some(1), Some(1), Some(1), Some(-2)]),
+                    Arc::clone(&calls),
+                    None,
+                )?,
+            ],
+            4,
+        );
+
+        let function = SparkSequenceLazy::new(SparkSequence::new(Arc::from("UTC"), false));
+        let output = HigherOrderUDFImpl::invoke_with_args(&function, args)?.into_array(4)?;
+        let output = output.as_list::<i32>();
+        assert_eq!(
+            output.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2, 3]
+        );
+        assert!(output.is_null(1));
+        assert!(output.is_null(2));
+        assert_eq!(
+            output.value(3).as_primitive::<Int64Type>().values(),
+            &[5, 3, 1]
+        );
+        assert_eq!(recorded_calls(&calls)?, vec![(0, 4), (1, 3), (2, 2)]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_sequence_bulk_error_falls_back_to_spark_row_order() -> Result<()> {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let args = lazy_sequence_args(
+            vec![
+                recording_lambda(0, Int64Array::from(vec![1, 1]), Arc::clone(&calls), None)?,
+                recording_lambda(1, Int64Array::from(vec![2, 2]), Arc::clone(&calls), None)?,
+                recording_lambda(
+                    2,
+                    Int64Array::from(vec![0, 99]),
+                    Arc::clone(&calls),
+                    Some(99),
+                )?,
+            ],
+            2,
+        );
+
+        let function = SparkSequenceLazy::new(SparkSequence::new(Arc::from("UTC"), false));
+        let Err(error) = HigherOrderUDFImpl::invoke_with_args(&function, args) else {
+            return exec_err!("the first row should have illegal boundaries");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Illegal sequence boundaries: 1 to 2 by 0")
+        );
+        assert_eq!(
+            recorded_calls(&calls)?,
+            vec![(0, 2), (1, 2), (2, 2), (0, 1), (1, 1), (2, 1)]
+        );
         Ok(())
     }
 }

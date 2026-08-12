@@ -7,7 +7,6 @@ use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when}
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common::spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -112,19 +111,11 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let expr = arguments.one()?;
-    let data_type = expr.get_type(function_context.schema)?;
-    if matches!(data_type, DataType::Time32(_) | DataType::Time64(_)) {
-        let field = expr.to_field(function_context.schema.as_ref())?.1;
-        if let Some(precision) = field.metadata().get(SAIL_SPARK_TIME_PRECISION_METADATA_KEY) {
-            return Ok(lit(format!("time({precision})")));
-        }
-    }
+    let field = expr.to_field(function_context.schema.as_ref())?.1;
     let service = function_context
         .session_context
         .extension::<PlanService>()?;
-    let type_of = service
-        .plan_formatter()
-        .data_type_to_simple_string(&data_type)?;
+    let type_of = service.plan_formatter().field_to_simple_string(&field)?;
     Ok(lit(type_of))
 }
 

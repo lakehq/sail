@@ -25,12 +25,14 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow_schema::SchemaRef;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use datafusion_common::{DataFusionError, Result};
 use pyo3::prelude::*;
-use pyo3::types::PyAnyMethods;
+use pyo3::types::{PyAnyMethods, PyDate, PyDateTime, PyTzInfoAccess};
 use sail_common_datafusion::array::record_batch::{
     retag_record_batch_timestamp_timezone, retag_schema_timestamp_timezone,
 };
+use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 
 /// Convert a Python PyArrow RecordBatch to a Rust Arrow RecordBatch.
 ///
@@ -96,13 +98,124 @@ pub fn rust_record_batch_to_py(py: Python<'_>, batch: &RecordBatch) -> Result<Py
         })
 }
 
-/// Convert a Rust Arrow RecordBatch to Python Row objects.
+/// Converts rows for a `DataSourceWriter` using converters built once from its schema.
 ///
-/// This is used for the Row-based write path (DataSourceWriter).
-/// Each row is converted to a `pyspark.sql.Row` object so that user code
-/// can call methods like `.asDict()` on the received rows.
-/// Get a PySpark Row factory for the given schema.
-pub fn get_row_factory(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> {
+/// LTZ timestamps are exposed as session-local naive `datetime` values, matching
+/// `ArrowTableToRowsConversion`. Arrow writers bypass this converter entirely.
+pub(crate) struct RowWriterConverter {
+    row_factory: Py<PyAny>,
+    fields: Vec<RowWriterField>,
+    decimal_class: Option<Py<PyAny>>,
+}
+
+enum RowWriterField {
+    Direct,
+    Decimal { scale: i8 },
+    Date,
+    TimestampNtz,
+    TimestampLtz(SparkTimeZone),
+}
+
+impl RowWriterConverter {
+    pub(crate) fn try_new(py: Python<'_>, schema: &SchemaRef) -> Result<Self> {
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| match field.data_type() {
+                DataType::Decimal128(_, scale) => Ok(RowWriterField::Decimal { scale: *scale }),
+                DataType::Date32 => Ok(RowWriterField::Date),
+                DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                    Ok(RowWriterField::TimestampNtz)
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)) => {
+                    Ok(RowWriterField::TimestampLtz(parse_spark_timezone(
+                        timezone,
+                    )?))
+                }
+                data_type if is_supported_row_type(data_type) => Ok(RowWriterField::Direct),
+                data_type => Err(DataFusionError::NotImplemented(format!(
+                    "Data type {data_type:?} not supported in row-based write path. Use DataSourceArrowWriter for full type support."
+                ))),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let decimal_class = fields
+            .iter()
+            .any(|field| matches!(field, RowWriterField::Decimal { .. }))
+            .then(|| {
+                py.import("decimal")
+                    .and_then(|module| module.getattr("Decimal"))
+                    .map(Bound::unbind)
+                    .map_err(py_err)
+            })
+            .transpose()?;
+
+        Ok(Self {
+            row_factory: get_row_factory(py, schema)?,
+            fields,
+            decimal_class,
+        })
+    }
+
+    pub(crate) fn convert_row(
+        &self,
+        py: Python<'_>,
+        batch: &RecordBatch,
+        row: usize,
+    ) -> Result<Py<PyAny>> {
+        if batch.num_columns() != self.fields.len() {
+            return Err(DataFusionError::Execution(format!(
+                "Row converter expected {} columns, got {}",
+                self.fields.len(),
+                batch.num_columns()
+            )));
+        }
+        let values = batch
+            .columns()
+            .iter()
+            .zip(&self.fields)
+            .map(|(array, field)| field.convert(py, array, row, self.decimal_class.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let args = pyo3::types::PyTuple::new(py, values).map_err(py_err)?;
+        self.row_factory
+            .bind(py)
+            .call1(args)
+            .map(Bound::unbind)
+            .map_err(py_err)
+    }
+}
+
+impl RowWriterField {
+    fn convert(
+        &self,
+        py: Python<'_>,
+        array: &ArrayRef,
+        row: usize,
+        decimal_class: Option<&Py<PyAny>>,
+    ) -> Result<Py<PyAny>> {
+        use arrow::array::Array;
+
+        if array.is_null(row) {
+            return Ok(py.None());
+        }
+        match self {
+            Self::Direct => extract_direct_python_value(py, array, row),
+            Self::Decimal { scale } => extract_decimal128_value(
+                py,
+                array,
+                row,
+                *scale,
+                decimal_class.ok_or_else(|| {
+                    DataFusionError::Internal("decimal converter was not initialized".to_string())
+                })?,
+            ),
+            Self::Date => extract_date32_value(py, array, row),
+            Self::TimestampNtz => extract_timestamp_value(py, array, row, None),
+            Self::TimestampLtz(timezone) => extract_timestamp_value(py, array, row, Some(timezone)),
+        }
+    }
+}
+
+fn get_row_factory(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> {
     let row_module = py.import("pyspark.sql").map_err(py_err)?;
     let row_class = row_module.getattr("Row").map_err(py_err)?;
 
@@ -117,40 +230,12 @@ pub fn get_row_factory(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> 
     Ok(row_factory.unbind())
 }
 
-// Test-only helpers: these convenience wrappers over get_row_factory + extract_python_value
-// are not used in production (executor.rs calls get_row_factory directly in its
-// RecordBatchIterator). Kept for unit testing row conversion logic.
 #[cfg(test)]
-pub fn record_batch_to_py_rows_with_factory(
-    py: Python<'_>,
-    batch: &RecordBatch,
-    row_factory: &Bound<'_, PyAny>,
-) -> Result<Vec<Py<PyAny>>> {
-    let num_rows = batch.num_rows();
-    let num_cols = batch.num_columns();
-    let mut rows = Vec::with_capacity(num_rows);
-
-    for row_idx in 0..num_rows {
-        let mut row_values = Vec::with_capacity(num_cols);
-
-        for col_idx in 0..num_cols {
-            let column = batch.column(col_idx);
-            let value = extract_python_value(py, column, row_idx)?;
-            row_values.push(value);
-        }
-
-        let args = pyo3::types::PyTuple::new(py, row_values).map_err(py_err)?;
-        let row = row_factory.call1(args).map_err(py_err)?;
-        rows.push(row.unbind());
-    }
-
-    Ok(rows)
-}
-
-#[cfg(test)]
-pub fn record_batch_to_py_rows(py: Python<'_>, batch: &RecordBatch) -> Result<Vec<Py<PyAny>>> {
-    let row_factory = get_row_factory(py, batch.schema_ref())?;
-    record_batch_to_py_rows_with_factory(py, batch, row_factory.bind(py))
+fn record_batch_to_py_rows(py: Python<'_>, batch: &RecordBatch) -> Result<Vec<Py<PyAny>>> {
+    let converter = RowWriterConverter::try_new(py, batch.schema_ref())?;
+    (0..batch.num_rows())
+        .map(|row| converter.convert_row(py, batch, row))
+        .collect()
 }
 
 /// Convert an Arrow value to a Python object, returning a proper error instead of panicking.
@@ -169,19 +254,11 @@ macro_rules! to_py_value {
     }};
 }
 
-/// Extract a Python value from an Arrow array at a given index.
-/// Public for use by RecordBatchIterator in executor (row-based write path).
-pub(crate) fn extract_python_value(
+fn extract_direct_python_value(
     py: Python<'_>,
     array: &ArrayRef,
     row_idx: usize,
 ) -> Result<Py<PyAny>> {
-    use arrow::array::Array;
-
-    if array.is_null(row_idx) {
-        return Ok(py.None());
-    }
-
     /// Helper macro: downcast to `$array_ty` and call `to_py_value!`.
     macro_rules! simple_extract {
         ($array_ty:ty, $label:literal) => {{
@@ -205,18 +282,8 @@ pub(crate) fn extract_python_value(
         DataType::UInt64 => simple_extract!(UInt64Array, "UInt64Array"),
         DataType::Float32 => simple_extract!(Float32Array, "Float32Array"),
         DataType::Float64 => simple_extract!(Float64Array, "Float64Array"),
-        DataType::Decimal128(precision, scale) => {
-            extract_decimal128_value(py, array, row_idx, *precision, *scale)
-        }
         DataType::Utf8 => simple_extract!(StringArray, "StringArray"),
         DataType::LargeUtf8 => simple_extract!(LargeStringArray, "LargeStringArray"),
-        DataType::Date32 => extract_date32_value(py, array, row_idx),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            extract_timestamp_us_value(py, array, row_idx)
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
-            extract_timestamp_us_tz_value(py, array, row_idx, tz)
-        }
         DataType::Binary => {
             use arrow::array::BinaryArray;
             simple_extract!(BinaryArray, "BinaryArray")
@@ -238,110 +305,54 @@ fn extract_date32_value(py: Python<'_>, array: &ArrayRef, row_idx: usize) -> Res
         .ok_or_else(|| {
             DataFusionError::Execution("Failed to downcast to Date32Array".to_string())
         })?;
-    let days_since_epoch = arr.value(row_idx);
-    let datetime = py.import("datetime").map_err(py_err)?;
-    let date_cls = datetime.getattr("date").map_err(py_err)?;
-    let epoch = date_cls.call1((1970, 1, 1)).map_err(py_err)?;
-    let epoch_ord: i32 = epoch
-        .call_method0("toordinal")
-        .map_err(py_err)?
-        .extract()
-        .map_err(py_err)?;
-    let target_ord = epoch_ord.checked_add(days_since_epoch).ok_or_else(|| {
-        DataFusionError::Execution(
-            "Date32 value overflowed when converting to datetime.date".to_string(),
-        )
+    let date = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(arr.value(row_idx)))))
+        .ok_or_else(|| DataFusionError::Execution("Date32 value is out of range".to_string()))?;
+    PyDate::new(py, date.year(), date.month() as u8, date.day() as u8)
+        .map(|value| value.into_any().unbind())
+        .map_err(py_err)
+}
+
+/// Converts physical timestamp micros to a naive Python datetime. LTZ values are
+/// first rendered in the Spark session zone; NTZ values retain their wall clock.
+fn extract_timestamp_value(
+    py: Python<'_>,
+    array: &ArrayRef,
+    row_idx: usize,
+    timezone: Option<&SparkTimeZone>,
+) -> Result<Py<PyAny>> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Failed to downcast to TimestampMicrosecondArray".to_string(),
+            )
+        })?;
+    let instant = DateTime::<Utc>::from_timestamp_micros(arr.value(row_idx)).ok_or_else(|| {
+        DataFusionError::Execution("Timestamp value is out of Python datetime range".to_string())
     })?;
-    let py_date = date_cls
-        .call_method1("fromordinal", (target_ord,))
-        .map_err(py_err)?;
-    Ok(py_date.unbind())
+    let datetime = match timezone {
+        Some(timezone) => instant.with_timezone(timezone).naive_local(),
+        None => instant.naive_utc(),
+    };
+    naive_datetime_to_py(py, &datetime)
 }
 
-/// Convert an Arrow Timestamp (microseconds, no tz) to a Python naive `datetime.datetime`.
-///
-/// Uses `fromtimestamp` with UTC timezone, then strips `tzinfo` for a naive datetime.
-/// (utcfromtimestamp is deprecated in Python 3.12, removed in 3.14)
-/// Uses `datetime.timezone.utc` (Python 3.2+) instead of `datetime.UTC` (Python 3.11+).
-fn extract_timestamp_us_value(
-    py: Python<'_>,
-    array: &ArrayRef,
-    row_idx: usize,
-) -> Result<Py<PyAny>> {
-    let arr = array
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Failed to downcast to TimestampMicrosecondArray".to_string(),
-            )
-        })?;
-    let ts = arr.value(row_idx);
-    let datetime = py.import("datetime").map_err(py_err)?;
-    let datetime_cls = datetime.getattr("datetime").map_err(py_err)?;
-    let utc = datetime
-        .getattr("timezone")
-        .map_err(py_err)?
-        .getattr("utc")
-        .map_err(py_err)?;
-    let seconds = (ts as f64) / 1_000_000f64;
-    let py_dt_aware = datetime_cls
-        .call_method1("fromtimestamp", (seconds, utc))
-        .map_err(py_err)?;
-    // Convert to naive datetime by removing tzinfo (PySpark uses naive datetimes)
-    let kwargs = pyo3::types::PyDict::new(py);
-    kwargs.set_item("tzinfo", py.None()).map_err(py_err)?;
-    let py_dt = py_dt_aware
-        .call_method("replace", (), Some(&kwargs))
-        .map_err(py_err)?;
-    Ok(py_dt.unbind())
-}
-
-/// Convert an Arrow Timestamp (microseconds, with timezone) to a Python aware `datetime.datetime`.
-fn extract_timestamp_us_tz_value(
-    py: Python<'_>,
-    array: &ArrayRef,
-    row_idx: usize,
-    tz: &Arc<str>,
-) -> Result<Py<PyAny>> {
-    let arr = array
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Failed to downcast to TimestampMicrosecondArray".to_string(),
-            )
-        })?;
-    let ts = arr.value(row_idx);
-    let datetime = py.import("datetime").map_err(py_err)?;
-    let datetime_cls = datetime.getattr("datetime").map_err(py_err)?;
-
-    // Use UTC for conversion, then localize to target timezone
-    let utc = datetime
-        .getattr("timezone")
-        .map_err(py_err)?
-        .getattr("utc")
-        .map_err(py_err)?;
-    let seconds = (ts as f64) / 1_000_000f64;
-    let py_dt_utc = datetime_cls
-        .call_method1("fromtimestamp", (seconds, utc))
-        .map_err(py_err)?;
-
-    // Convert to target timezone using zoneinfo (Python 3.9+)
-    let tz_str = tz.as_ref();
-    if tz_str == "UTC" || tz_str == "+00:00" {
-        return Ok(py_dt_utc.unbind());
-    }
-    let zoneinfo = py.import("zoneinfo").map_err(py_err)?;
-    let tz_info = zoneinfo
-        .getattr("ZoneInfo")
-        .map_err(py_err)?
-        .call1((tz_str,))
-        .map_err(py_err)?;
-    let py_dt = py_dt_utc
-        .call_method1("astimezone", (tz_info,))
-        .map_err(py_err)?;
-    Ok(py_dt.unbind())
+fn naive_datetime_to_py(py: Python<'_>, value: &NaiveDateTime) -> Result<Py<PyAny>> {
+    PyDateTime::new(
+        py,
+        value.year(),
+        value.month() as u8,
+        value.day() as u8,
+        value.hour() as u8,
+        value.minute() as u8,
+        value.second() as u8,
+        value.and_utc().timestamp_subsec_micros(),
+        None,
+    )
+    .map(|value| value.into_any().unbind())
+    .map_err(py_err)
 }
 
 /// Convert an Arrow Decimal128 value to a Python `decimal.Decimal`.
@@ -351,8 +362,8 @@ fn extract_decimal128_value(
     py: Python<'_>,
     array: &ArrayRef,
     row_idx: usize,
-    _precision: u8,
     scale: i8,
+    decimal_class: &Py<PyAny>,
 ) -> Result<Py<PyAny>> {
     let arr = array
         .as_any()
@@ -390,9 +401,10 @@ fn extract_decimal128_value(
         )
     };
 
-    let decimal_mod = py.import("decimal").map_err(py_err)?;
-    let decimal_cls = decimal_mod.getattr("Decimal").map_err(py_err)?;
-    let py_decimal = decimal_cls.call1((decimal_str,)).map_err(py_err)?;
+    let py_decimal = decimal_class
+        .bind(py)
+        .call1((decimal_str,))
+        .map_err(py_err)?;
     Ok(py_decimal.unbind())
 }
 
@@ -471,53 +483,62 @@ pub fn is_supported_row_type(data_type: &DataType) -> bool {
     )
 }
 
-/// Convert pickled Python rows to a RecordBatch.
-///
-/// This is used for efficient multi-row batching when Python yields tuples.
-pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Result<RecordBatch> {
-    use pyo3::types::PyBytes;
+/// Converts Python rows to Arrow using converters built once from the reader schema.
+pub(crate) struct RowReaderConverter {
+    schema: SchemaRef,
+    utc: Py<PyAny>,
+}
 
-    if pickled_rows.is_empty() {
-        return Ok(RecordBatch::new_empty(schema.clone()));
+impl RowReaderConverter {
+    pub(crate) fn try_new(py: Python<'_>, schema: SchemaRef) -> Result<Self> {
+        if let Some(field) = schema
+            .fields()
+            .iter()
+            .find(|field| !is_supported_row_type(field.data_type()))
+        {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Data type {:?} not supported in row-based read path. Use PyArrow RecordBatch output for full type support.",
+                field.data_type()
+            )));
+        }
+        let utc = py
+            .import("datetime")
+            .and_then(|module| module.getattr("timezone"))
+            .and_then(|timezone| timezone.getattr("utc"))
+            .map(Bound::unbind)
+            .map_err(py_err)?;
+        Ok(Self { schema, utc })
     }
 
-    Python::attach(|py| {
-        let cloudpickle = import_cloudpickle(py)?;
-
-        // Unpickle all rows
-        let rows: Vec<Bound<'_, PyAny>> = pickled_rows
-            .iter()
-            .map(|pickled| {
-                let bytes = PyBytes::new(py, pickled);
-                cloudpickle.call_method1("loads", (bytes,)).map_err(py_err)
-            })
-            .collect::<Result<_>>()?;
-
-        // Build arrays for each column
-        let arrays: Vec<ArrayRef> = schema
+    pub(crate) fn convert_rows(&self, py: Python<'_>, rows: &[Py<PyAny>]) -> Result<RecordBatch> {
+        if rows.is_empty() {
+            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
+        }
+        let arrays = self
+            .schema
             .fields()
             .iter()
             .enumerate()
-            .map(|(col_idx, field)| build_array_from_rows(py, &rows, col_idx, field))
-            .collect::<Result<_>>()?;
-
-        RecordBatch::try_new(schema.clone(), arrays).map_err(|e| {
+            .map(|(col_idx, field)| {
+                build_array_from_rows(py, rows, col_idx, field, self.utc.bind(py))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        RecordBatch::try_new(Arc::clone(&self.schema), arrays).map_err(|error| {
             DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Failed to create RecordBatch: {}",
-                e
+                "Failed to create RecordBatch: {error}"
             ))))
         })
-    })
+    }
 }
 
 /// Macro to reduce boilerplate in build_array_from_rows.
 ///
 /// Generates the common pattern of extracting values from rows and building an array.
 macro_rules! build_primitive_array {
-    ($rows:expr_2021, $col_idx:expr_2021, $rust_ty:ty, $array_ty:ty) => {{
+    ($py:expr_2021, $rows:expr_2021, $col_idx:expr_2021, $rust_ty:ty, $array_ty:ty) => {{
         let values: Vec<Option<$rust_ty>> = $rows
             .iter()
-            .map(|row| extract_value(row, $col_idx))
+            .map(|row| extract_value($py, row, $col_idx))
             .collect::<Result<_>>()?;
         Ok(Arc::new(<$array_ty>::from(values)))
     }};
@@ -525,17 +546,18 @@ macro_rules! build_primitive_array {
 
 /// Build an Arrow array from Python row values.
 fn build_array_from_rows(
-    _py: Python<'_>,
-    rows: &[Bound<'_, PyAny>],
+    py: Python<'_>,
+    rows: &[Py<PyAny>],
     col_idx: usize,
     field: &Arc<Field>,
+    utc: &Bound<'_, PyAny>,
 ) -> Result<ArrayRef> {
     /// Helper macro for string-like types.
     macro_rules! build_string_array {
         ($rows:expr_2021, $col_idx:expr_2021, $array_ty:ty) => {{
             let values: Vec<Option<String>> = $rows
                 .iter()
-                .map(|row| extract_value(row, $col_idx))
+                .map(|row| extract_value(py, row, $col_idx))
                 .collect::<Result<_>>()?;
             Ok(Arc::new(<$array_ty>::from(
                 values.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
@@ -548,7 +570,7 @@ fn build_array_from_rows(
         ($rows:expr_2021, $col_idx:expr_2021, $array_ty:ty) => {{
             let values: Vec<Option<Vec<u8>>> = $rows
                 .iter()
-                .map(|row| extract_value(row, $col_idx))
+                .map(|row| extract_value(py, row, $col_idx))
                 .collect::<Result<_>>()?;
             Ok(Arc::new(<$array_ty>::from_opt_vec(
                 values.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
@@ -558,28 +580,47 @@ fn build_array_from_rows(
 
     match field.data_type() {
         DataType::Null => Ok(Arc::new(NullArray::new(rows.len()))),
-        DataType::Boolean => build_primitive_array!(rows, col_idx, bool, BooleanArray),
-        DataType::Int8 => build_primitive_array!(rows, col_idx, i8, Int8Array),
-        DataType::Int16 => build_primitive_array!(rows, col_idx, i16, Int16Array),
-        DataType::Int32 => build_primitive_array!(rows, col_idx, i32, Int32Array),
-        DataType::Int64 => build_primitive_array!(rows, col_idx, i64, Int64Array),
-        DataType::UInt8 => build_primitive_array!(rows, col_idx, u8, UInt8Array),
-        DataType::UInt16 => build_primitive_array!(rows, col_idx, u16, UInt16Array),
-        DataType::UInt32 => build_primitive_array!(rows, col_idx, u32, UInt32Array),
-        DataType::UInt64 => build_primitive_array!(rows, col_idx, u64, UInt64Array),
-        DataType::Float32 => build_primitive_array!(rows, col_idx, f32, Float32Array),
-        DataType::Float64 => build_primitive_array!(rows, col_idx, f64, Float64Array),
+        DataType::Boolean => build_primitive_array!(py, rows, col_idx, bool, BooleanArray),
+        DataType::Int8 => build_primitive_array!(py, rows, col_idx, i8, Int8Array),
+        DataType::Int16 => build_primitive_array!(py, rows, col_idx, i16, Int16Array),
+        DataType::Int32 => build_primitive_array!(py, rows, col_idx, i32, Int32Array),
+        DataType::Int64 => build_primitive_array!(py, rows, col_idx, i64, Int64Array),
+        DataType::UInt8 => build_primitive_array!(py, rows, col_idx, u8, UInt8Array),
+        DataType::UInt16 => build_primitive_array!(py, rows, col_idx, u16, UInt16Array),
+        DataType::UInt32 => build_primitive_array!(py, rows, col_idx, u32, UInt32Array),
+        DataType::UInt64 => build_primitive_array!(py, rows, col_idx, u64, UInt64Array),
+        DataType::Float32 => build_primitive_array!(py, rows, col_idx, f32, Float32Array),
+        DataType::Float64 => build_primitive_array!(py, rows, col_idx, f64, Float64Array),
         DataType::Utf8 => build_string_array!(rows, col_idx, StringArray),
         DataType::LargeUtf8 => build_string_array!(rows, col_idx, LargeStringArray),
-        DataType::Date32 => build_primitive_array!(rows, col_idx, i32, Date32Array),
+        DataType::Date32 => {
+            let values = rows
+                .iter()
+                .map(|row| extract_date32_from_row(py, row, col_idx))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Date32Array::from(values)))
+        }
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            build_primitive_array!(rows, col_idx, i64, TimestampMicrosecondArray)
+            let values = rows
+                .iter()
+                .map(|row| extract_timestamp_from_row(py, row, col_idx, None, utc))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(TimestampMicrosecondArray::from(values)))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)) => {
+            let values = rows
+                .iter()
+                .map(|row| extract_timestamp_from_row(py, row, col_idx, Some(timezone), utc))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(
+                TimestampMicrosecondArray::from(values).with_timezone(Arc::clone(timezone)),
+            ))
         }
         DataType::Binary => build_binary_array!(rows, col_idx, arrow::array::BinaryArray),
         DataType::LargeBinary => build_binary_array!(rows, col_idx, LargeBinaryArray),
         other => Err(DataFusionError::NotImplemented(format!(
-            "Data type {:?} not supported in row-based write path. \
-             Use DataSourceArrowWriter for full type support.",
+            "Data type {:?} not supported in row-based read path. \
+             Use PyArrow RecordBatch output for full type support.",
             other
         ))),
     }
@@ -587,10 +628,11 @@ fn build_array_from_rows(
 
 /// Extract a value from a Python row tuple.
 fn extract_value<'py, T: for<'a> pyo3::FromPyObject<'a, 'py>>(
-    row: &Bound<'py, PyAny>,
+    py: Python<'py>,
+    row: &'py Py<PyAny>,
     col_idx: usize,
 ) -> Result<Option<T>> {
-    let item = row.get_item(col_idx).map_err(py_err)?;
+    let item = row.bind(py).get_item(col_idx).map_err(py_err)?;
 
     if item.is_none() {
         return Ok(None);
@@ -599,11 +641,97 @@ fn extract_value<'py, T: for<'a> pyo3::FromPyObject<'a, 'py>>(
     item.extract::<T>().map(Some).map_err(|e| py_err(e.into()))
 }
 
-/// Re-export py_err and import_cloudpickle from error module.
-use super::error::{import_cloudpickle, py_err};
+fn extract_date32_from_row(py: Python<'_>, row: &Py<PyAny>, col_idx: usize) -> Result<Option<i32>> {
+    let item = row.bind(py).get_item(col_idx).map_err(py_err)?;
+    if item.is_none() {
+        return Ok(None);
+    }
+    let date = item
+        .cast::<PyDate>()
+        .map_err(|error| py_err(error.into()))?;
+    let value = NaiveDate::from_ymd_opt(
+        py_datetime_component(date.as_any(), "year")?,
+        py_datetime_component(date.as_any(), "month")?,
+        py_datetime_component(date.as_any(), "day")?,
+    )
+    .ok_or_else(|| DataFusionError::Execution("Python date is out of range".to_string()))?;
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .ok_or_else(|| DataFusionError::Internal("invalid Unix epoch".to_string()))?;
+    i32::try_from((value - epoch).num_days())
+        .map(Some)
+        .map_err(|_| {
+            DataFusionError::Execution("Python date is out of Arrow Date32 range".to_string())
+        })
+}
+
+fn extract_timestamp_from_row(
+    py: Python<'_>,
+    row: &Py<PyAny>,
+    col_idx: usize,
+    timezone: Option<&Arc<str>>,
+    utc: &Bound<'_, PyAny>,
+) -> Result<Option<i64>> {
+    let item = row.bind(py).get_item(col_idx).map_err(py_err)?;
+    if item.is_none() {
+        return Ok(None);
+    }
+    let datetime = item
+        .cast::<PyDateTime>()
+        .map_err(|error| py_err(error.into()))?;
+    if timezone.is_none() {
+        if datetime.get_tzinfo().is_some() {
+            return Err(DataFusionError::Execution(
+                "TimestampNTZType cannot accept a timezone-aware datetime".to_string(),
+            ));
+        }
+        return datetime_to_micros(datetime).map(Some);
+    }
+
+    // This is deliberately Python's `astimezone(UTC)`: like PySpark it honors an
+    // aware value's own offset and treats a naive value in the process local zone.
+    let datetime = datetime
+        .call_method1("astimezone", (utc,))
+        .map_err(py_err)?;
+    datetime_to_micros(
+        datetime
+            .cast::<PyDateTime>()
+            .map_err(|error| py_err(error.into()))?,
+    )
+    .map(Some)
+}
+
+fn datetime_to_micros(value: &Bound<'_, PyDateTime>) -> Result<i64> {
+    let year = py_datetime_component(value.as_any(), "year")?;
+    let month = py_datetime_component(value.as_any(), "month")?;
+    let day = py_datetime_component(value.as_any(), "day")?;
+    let hour = py_datetime_component(value.as_any(), "hour")?;
+    let minute = py_datetime_component(value.as_any(), "minute")?;
+    let second = py_datetime_component(value.as_any(), "second")?;
+    let microsecond = py_datetime_component(value.as_any(), "microsecond")?;
+    let datetime = NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|date| date.and_hms_micro_opt(hour, minute, second, microsecond))
+        .ok_or_else(|| DataFusionError::Execution("Python datetime is out of range".to_string()))?;
+    Ok(datetime.and_utc().timestamp_micros())
+}
+
+fn py_datetime_component<T>(value: &Bound<'_, PyAny>, name: &str) -> Result<T>
+where
+    for<'py> T: FromPyObject<'py, 'py>,
+{
+    value
+        .getattr(name)
+        .map_err(py_err)?
+        .extract()
+        .map_err(|error: T::Error| py_err(error.into()))
+}
+
+use super::error::py_err;
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Array;
+    use pyo3::types::PyTuple;
+
     use super::*;
 
     fn init_python() {
@@ -818,6 +946,143 @@ mod tests {
                     eprintln!("Skipping test - pyspark not available: {}", e);
                 }
             }
+        });
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_row_writer_timestamp_semantics() {
+        init_python();
+        Python::attach(|py| {
+            let ltz: ArrayRef = Arc::new(
+                TimestampMicrosecondArray::from(vec![-3_723_000_000]).with_timezone("+01:02:03"),
+            );
+            let timezone = parse_spark_timezone("+01:02:03").unwrap();
+            let value = extract_timestamp_value(py, &ltz, 0, Some(&timezone)).unwrap();
+            assert_eq!(
+                value
+                    .bind(py)
+                    .call_method0("isoformat")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "1970-01-01T00:00:00"
+            );
+            assert!(value.bind(py).getattr("tzinfo").unwrap().is_none());
+
+            let ntz: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![0]));
+            let value = extract_timestamp_value(py, &ntz, 0, None).unwrap();
+            assert_eq!(
+                value
+                    .bind(py)
+                    .call_method0("isoformat")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "1970-01-01T00:00:00"
+            );
+            assert!(value.bind(py).getattr("tzinfo").unwrap().is_none());
+        });
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_row_reader_timestamp_semantics() {
+        init_python();
+        Python::attach(|py| {
+            let datetime = py.import("datetime").unwrap();
+            let offset = datetime
+                .getattr("timezone")
+                .unwrap()
+                .call1((datetime
+                    .getattr("timedelta")
+                    .unwrap()
+                    .call1((0, 3_723))
+                    .unwrap(),))
+                .unwrap();
+            let aware = datetime
+                .getattr("datetime")
+                .unwrap()
+                .call1((1970, 1, 1, 0, 0, 0, 0, offset))
+                .unwrap()
+                .unbind();
+            let naive = datetime
+                .getattr("datetime")
+                .unwrap()
+                .call1((1970, 1, 1))
+                .unwrap()
+                .unbind();
+            let row = PyTuple::new(py, [aware, naive])
+                .unwrap()
+                .into_any()
+                .unbind();
+            let schema = Arc::new(Schema::new(vec![
+                Field::new(
+                    "ltz",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+                    false,
+                ),
+                Field::new(
+                    "ntz",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+            ]));
+            let converter = RowReaderConverter::try_new(py, schema).unwrap();
+            let batch = converter.convert_rows(py, &[row]).unwrap();
+            let ltz = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            let ntz = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            assert_eq!(ltz.value(0), -3_723_000_000);
+            assert_eq!(
+                ltz.data_type(),
+                &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+            );
+            assert_eq!(ntz.value(0), 0);
+        });
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_row_reader_rejects_aware_timestamp_ntz() {
+        init_python();
+        Python::attach(|py| {
+            let datetime = py.import("datetime").unwrap();
+            let aware = datetime
+                .getattr("datetime")
+                .unwrap()
+                .call1((
+                    1970,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    datetime
+                        .getattr("timezone")
+                        .unwrap()
+                        .getattr("utc")
+                        .unwrap(),
+                ))
+                .unwrap()
+                .unbind();
+            let row = PyTuple::new(py, [aware]).unwrap().into_any().unbind();
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "ntz",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )]));
+            let converter = RowReaderConverter::try_new(py, schema).unwrap();
+            let error = converter.convert_rows(py, &[row]).unwrap_err();
+            assert!(error.to_string().contains("TimestampNTZType"));
         });
     }
 }

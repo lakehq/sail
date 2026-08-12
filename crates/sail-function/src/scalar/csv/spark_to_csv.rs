@@ -8,7 +8,7 @@ use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
-use sail_common_datafusion::utils::datetime::parse_spark_timezone;
+use sail_common_datafusion::utils::datetime::{SparkTimeZone, parse_spark_timezone};
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
@@ -74,6 +74,7 @@ struct SparkToCsvOptions {
     ignore_trailing_whitespace: bool,
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
+    session_timezone: SparkTimeZone,
 }
 
 impl SparkToCsvOptions {
@@ -158,6 +159,7 @@ impl SparkToCsvOptions {
             ignore_trailing_whitespace,
             timestamp_format,
             date_format,
+            session_timezone: SparkTimeZone::Fixed(Utc.fix()),
         })
     }
 }
@@ -177,6 +179,7 @@ impl Default for SparkToCsvOptions {
             ignore_trailing_whitespace: true,
             timestamp_format: DEFAULT_TIMESTAMP_FORMAT.clone(),
             date_format: DEFAULT_DATE_FORMAT.clone(),
+            session_timezone: SparkTimeZone::Fixed(Utc.fix()),
         }
     }
 }
@@ -288,7 +291,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
     // Option VALUES are validated lazily (inside `from_map`), so a bad option is not seen when
     // every input struct is NULL; a structurally invalid map (NULL key/value) is rejected eagerly.
     // See F2 in the #2255 review.
-    let options: SparkToCsvOptions = if let Some(opts) = args.get(1) {
+    let mut options: SparkToCsvOptions = if let Some(opts) = args.get(1) {
         let map = opts.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Execution(format!(
                 "`{}` function requires a MapArray as second argument",
@@ -304,6 +307,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
     } else {
         SparkToCsvOptions::default()
     };
+    options.session_timezone = parse_spark_timezone(session_timezone)?;
 
     let fields = struct_array.fields();
     let columns = struct_array.columns();
@@ -408,11 +412,10 @@ fn format_timestamp_field(
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
-        let tz = parse_spark_timezone(session_timezone)?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
-        let local_dt = utc_dt.with_timezone(&tz);
+        let local_dt = utc_dt.with_timezone(&options.session_timezone);
         let input = DateTimeFormatInput {
             datetime: local_dt.naive_local(),
             timezone: Some(TimeZoneDisplay {
@@ -1494,6 +1497,7 @@ mod tests {
 
         let options = SparkToCsvOptions {
             timestamp_format: DateTimeFormat::for_formatting("yyyy/MM/dd HH:mm:ss XXXXX")?,
+            session_timezone: parse_spark_timezone("+01:02:03")?,
             ..SparkToCsvOptions::default()
         };
         let struct_array = struct_array.as_struct();

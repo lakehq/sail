@@ -86,7 +86,7 @@ impl PhysicalOptimizerRule for HigherOrderProjectionPushdown {
                                     .exists(|expr| Ok(expr.is::<HigherOrderFunctionExpr>()))
                             }
                         })?;
-                if !has_higher_order_function {
+                if !has_higher_order_function || !projection.input().is::<ProjectionExec>() {
                     return Ok(Transformed::no(plan));
                 }
 
@@ -222,6 +222,7 @@ mod tests {
     use datafusion::functions_nested::array_transform::array_transform_higher_order_function;
     use datafusion::physical_expr::expressions::{Column, LambdaVariable, is_not_null, lambda};
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::NestedLoopJoinExec;
     use datafusion::physical_plan::joins::utils::JoinFilter;
     use datafusion::physical_plan::projection::ProjectionExpr;
@@ -281,6 +282,55 @@ mod tests {
 
         assert_eq!(projection.input().schema().fields().len(), 1);
         assert!(projection.input().is::<ProjectionExec>());
+        assert!(!optimized.exists(|plan| Ok(plan.is::<ProjectionBoundaryExec>()))?);
+        Ok(())
+    }
+
+    #[test]
+    fn pushes_higher_order_projection_through_filter() -> Result<()> {
+        let element = Arc::new(Field::new("item", DataType::Int32, false));
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("keep", DataType::Boolean, false),
+            Field::new("unused", DataType::Int32, false),
+            Field::new("array", DataType::List(Arc::clone(&element)), false),
+        ]));
+        let source = Arc::new(EmptyExec::new(source_schema)) as Arc<dyn ExecutionPlan>;
+        let filter = Arc::new(FilterExec::try_new(
+            Arc::new(Column::new("keep", 0)),
+            source,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let parameter = Arc::new(Field::new("x", DataType::Int32, false));
+        let lambda = lambda(
+            ["x"],
+            Arc::new(LambdaVariable::new(3, Arc::clone(&parameter))),
+        )?;
+        let higher_order = HigherOrderFunctionExpr::try_new_with_schema(
+            array_transform_higher_order_function(),
+            vec![Arc::new(Column::new("array", 2)), lambda],
+            filter.schema().as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?;
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("keep", 0)),
+                    alias: "keep".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(higher_order),
+                    alias: "result".to_string(),
+                },
+            ],
+            filter,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let optimized =
+            HigherOrderProjectionPushdown::new().optimize(plan, &ConfigOptions::default())?;
+        let filter = optimized
+            .downcast_ref::<FilterExec>()
+            .expect("projection should be pushed through the filter");
+        assert!(filter.input().is::<ProjectionExec>());
         assert!(!optimized.exists(|plan| Ok(plan.is::<ProjectionBoundaryExec>()))?);
         Ok(())
     }

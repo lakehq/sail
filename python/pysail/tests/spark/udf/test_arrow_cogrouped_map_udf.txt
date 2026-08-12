@@ -27,3 +27,33 @@
 ... ).select("a", "b").collect()
 [Row(a='first', b='second')]
 >>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", True)
+>>> def cogroup_wrong_names(_, __):
+...     return pa.Table.from_pydict({"id": [1], "extra": [1.0]})
+...
+>>> try:
+...     _ = df1.groupby("id").cogroup(df2.groupby("id")).applyInArrow(
+...         cogroup_wrong_names, schema="id long, value double"
+...     ).collect()
+... except Exception as error:
+...     cogroup_names_message = str(error)
+...
+>>> "Missing: value. Unexpected: extra." in cogroup_names_message
+True
+>>>
+>>> def cogroup_wrong_types(_, __):
+...     return pa.Table.from_arrays(
+...         [pa.array([1], type=pa.int64()), pa.array([2], type=pa.int32())],
+...         names=["a", "b"],
+...     )
+...
+>>> try:
+...     _ = df1.groupby("id").cogroup(df2.groupby("id")).applyInArrow(
+...         cogroup_wrong_types, schema="a int, b long"
+...     ).collect()
+... except Exception as error:
+...     cogroup_types_message = str(error)
+...
+>>> "column 'a' (expected int32, actual int64)" in cogroup_types_message
+True
+>>> "column 'b' (expected int64, actual int32)" in cogroup_types_message
+True

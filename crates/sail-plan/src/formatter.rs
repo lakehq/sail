@@ -12,6 +12,7 @@ use sail_common_datafusion::formatter::{
     Time32SecondFormatter, Time64MicrosecondFormatter, Time64NanosecondFormatter,
 };
 use sail_common_datafusion::session::plan::PlanFormatter;
+use sail_common_datafusion::utils::data_type::spark_time_precision;
 use sail_common_datafusion::utils::datetime::format_timestamp_literal;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -30,6 +31,16 @@ impl SparkPlanFormatter {
 }
 
 impl PlanFormatter for SparkPlanFormatter {
+    fn field_to_simple_string(
+        &self,
+        field: &datafusion::arrow::datatypes::Field,
+    ) -> Result<String> {
+        match spark_time_precision(field)? {
+            Some(precision) => Ok(format!("time({precision})")),
+            None => self.data_type_to_simple_string(field.data_type()),
+        }
+    }
+
     fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
         match data_type {
             DataType::Null => Ok("void".to_string()),
@@ -81,10 +92,9 @@ impl PlanFormatter for SparkPlanFormatter {
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field)
             | DataType::ListView(field)
-            | DataType::LargeListView(field) => Ok(format!(
-                "array<{}>",
-                self.data_type_to_simple_string(field.data_type())?
-            )),
+            | DataType::LargeListView(field) => {
+                Ok(format!("array<{}>", self.field_to_simple_string(field)?))
+            }
             DataType::Struct(fields) => {
                 let fields = fields
                     .iter()
@@ -92,7 +102,7 @@ impl PlanFormatter for SparkPlanFormatter {
                         Ok(format!(
                             "{}:{}",
                             field.name(),
-                            self.data_type_to_simple_string(field.data_type())?
+                            self.field_to_simple_string(field)?
                         ))
                     })
                     .collect::<Result<Vec<String>>>()?;
@@ -107,8 +117,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 };
                 Ok(format!(
                     "map<{},{}>",
-                    self.data_type_to_simple_string(key_field.data_type())?,
-                    self.data_type_to_simple_string(value_field.data_type())?
+                    self.field_to_simple_string(key_field)?,
+                    self.field_to_simple_string(value_field)?
                 ))
             }
             DataType::Union(_union_fields, _union_mode) => {

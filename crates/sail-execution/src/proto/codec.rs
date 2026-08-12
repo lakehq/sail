@@ -318,7 +318,7 @@ use crate::proto::encode::{
 
 pub struct RemoteExecutionCodec;
 
-fn decode_session_timezone(timezone: String) -> Arc<str> {
+pub(super) fn decode_session_timezone(timezone: String) -> Arc<str> {
     if timezone.is_empty() {
         Arc::from("UTC")
     } else {
@@ -664,14 +664,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 Ok(Arc::new(scan))
             }
-            NodeKind::Arrow(r#gen::ArrowExecNode { base_config }) => {
+            NodeKind::Arrow(r#gen::ArrowExecNode {
+                base_config,
+                stream_format,
+            }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let source = if stream_format {
+                    ArrowSource::new_stream_file_source(table_schema)
+                } else {
+                    ArrowSource::new_file_source(table_schema)
+                };
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
-                    Arc::new(ArrowSource::new_file_source(table_schema)),
+                    Arc::new(source),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
@@ -836,6 +844,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     metadata_configuration,
                     write_context,
                     lakehouse_table_json,
+                    session_timezone,
                 } = *delta_writer;
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let sink_schema = try_decode_schema(&sink_schema)?;
@@ -865,6 +874,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     write_context,
+                    decode_session_timezone(session_timezone),
                     lakehouse_table,
                 )?))
             }
@@ -1933,7 +1943,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self,
                         &RemotePhysicalProtoConverter {},
                     )?)?;
-                    NodeKind::Arrow(r#gen::ArrowExecNode { base_config })
+                    NodeKind::Arrow(r#gen::ArrowExecNode {
+                        base_config,
+                        stream_format: file_source.file_type() == "arrow_stream",
+                    })
                 } else if file_source.is::<AvroSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
@@ -1991,6 +2004,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_writer_exec.lakehouse_table())?,
+                session_timezone: delta_writer_exec.session_timezone().to_string(),
             }))
         } else if let Some(delta_commit_exec) = node.downcast_ref::<DeltaCommitExec>() {
             let input = try_encode_physical_plan(self, delta_commit_exec.input().clone())?;
@@ -2638,7 +2652,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 session_timezone,
                 ansi_mode,
             }) => {
-                let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
+                let udf = SparkSequence::new(decode_session_timezone(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
@@ -2820,7 +2834,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 case_sensitive,
             }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
-                let session_timezone = Arc::from(session_timezone);
+                let session_timezone = decode_session_timezone(session_timezone);
                 let function = if struct_by_name {
                     SparkTimezoneCast::new_by_name(
                         target_type,
@@ -5040,6 +5054,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_missing_sequence_timezone_defaults_to_utc() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let message = ExtendedScalarUdf {
+            udf_kind: Some(UdfKind::SparkSequence(r#gen::SparkSequenceUdf::default())),
+        };
+        let mut buffer = Vec::new();
+        message
+            .encode(&mut buffer)
+            .map_err(|error| plan_datafusion_err!("failed to encode test UDF: {error}"))?;
+        let decoded = codec.try_decode_udf("sequence", &buffer)?;
+        let sequence = downcast_udf::<SparkSequence>(&decoded, "SparkSequence")?;
+        assert_eq!(sequence.session_timezone(), "UTC");
+
+        let message = r#gen::HigherOrderUdf {
+            higher_order_udf_kind: Some(r#gen::higher_order_udf::HigherOrderUdfKind::Sequence(
+                r#gen::SparkSequenceUdf::default(),
+            )),
+        };
+        let decoded = crate::proto::decode::try_decode_higher_order_udf(&message)?;
+        let sequence = (decoded.inner().as_ref() as &dyn std::any::Any)
+            .downcast_ref::<sail_function::scalar::array::spark_sequence::SparkSequenceLazy>()
+            .ok_or_else(|| plan_datafusion_err!("decoded HOF should be SparkSequenceLazy"))?;
+        assert_eq!(sequence.session_timezone(), "UTC");
+        Ok(())
+    }
+
+    #[test]
+    fn test_missing_timezone_cast_timezone_defaults_to_utc() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let udf = ScalarUDF::from(SparkTimezoneCast::new(
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            Arc::from("America/Los_Angeles"),
+            false,
+        ));
+        let mut buffer = Vec::new();
+        codec.try_encode_udf(&udf, &mut buffer)?;
+        let mut message = ExtendedScalarUdf::decode(buffer.as_slice())
+            .map_err(|error| plan_datafusion_err!("failed to decode test UDF: {error}"))?;
+        let Some(UdfKind::SparkTimezoneCast(timezone_cast)) = message.udf_kind.as_mut() else {
+            return plan_err!("encoded UDF should be SparkTimezoneCast");
+        };
+        timezone_cast.session_timezone.clear();
+        buffer.clear();
+        message
+            .encode(&mut buffer)
+            .map_err(|error| plan_datafusion_err!("failed to encode test UDF: {error}"))?;
+
+        let decoded = codec.try_decode_udf(udf.name(), &buffer)?;
+        let timezone_cast = downcast_udf::<SparkTimezoneCast>(&decoded, "SparkTimezoneCast")?;
+        assert_eq!(timezone_cast.session_timezone(), "UTC");
+        Ok(())
+    }
+
     fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
         round_trip_udwf_arc(Arc::new(udwf))
     }
@@ -5099,6 +5167,33 @@ mod tests {
             .downcast_ref::<ConsoleSinkExec>()
             .ok_or_else(|| plan_datafusion_err!("decoded plan should be ConsoleSinkExec"))?;
         assert_eq!(decoded.session_timezone().as_ref(), "America/Los_Angeles");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_arrow_stream_source() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let table_schema = datafusion::datasource::table_schema::TableSchema::new(schema, vec![]);
+        let source = Arc::new(ArrowSource::new_stream_file_source(table_schema));
+        let config = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            source,
+        )
+        .build();
+        let scan = DataSourceExec::from_data_source(config);
+        let remote_scan = RemoteDataSourceExec::new(&scan);
+        let codec = RemoteExecutionCodec;
+
+        let bytes = try_encode_physical_plan(&codec, Arc::new(remote_scan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan should be DataSourceExec"))?;
+        let config = decoded
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .ok_or_else(|| plan_datafusion_err!("decoded source should be FileScanConfig"))?;
+        assert_eq!(config.file_source.file_type(), "arrow_stream");
         Ok(())
     }
 

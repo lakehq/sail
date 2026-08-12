@@ -24,8 +24,6 @@ mod udf;
 mod wildcard;
 mod window;
 
-pub(crate) use cast::needs_spark_timezone_cast;
-
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {
     /// The name of the expression to be used in projection.

@@ -716,6 +716,7 @@ message ParquetExecNode {
 
 message ArrowExecNode {
   bytes base_config = 1;
+  bool stream_format = 2;
 }
 
 message TextExecNode {
@@ -823,6 +824,7 @@ message DeltaWriterExecNode {
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
   string lakehouse_table_json = 10;
+  string session_timezone = 11;
 }
 
 message DeltaCommitExecNode {

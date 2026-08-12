@@ -25,3 +25,57 @@
 ... ).select("a", "b").collect()
 [Row(a='first', b='second')]
 >>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", True)
+>>> def reordered_by_name(_):
+...     return pa.Table.from_arrays(
+...         [pa.array([1], type=pa.int64()), pa.array(["named"])], names=["b", "a"]
+...     )
+...
+>>> spark.range(1).groupBy("id").applyInArrow(
+...     reordered_by_name, schema="a string, b long"
+... ).select("a", "b").collect()
+[Row(a='named', b=1)]
+>>>
+>>> def wrong_names(_):
+...     return pa.Table.from_pydict({"id": [1], "extra": [1.0]})
+...
+>>> try:
+...     _ = spark.range(1).groupBy("id").applyInArrow(
+...         wrong_names, schema="id long, value double"
+...     ).collect()
+... except Exception as error:
+...     wrong_names_message = str(error)
+...
+>>> "Missing: value. Unexpected: extra." in wrong_names_message
+True
+>>>
+>>> def wrong_types(_):
+...     return pa.Table.from_arrays(
+...         [pa.array([1], type=pa.int64()), pa.array([2], type=pa.int32())],
+...         names=["a", "b"],
+...     )
+...
+>>> try:
+...     _ = spark.range(1).groupBy("id").applyInArrow(
+...         wrong_types, schema="a int, b long"
+...     ).collect()
+... except Exception as error:
+...     wrong_types_message = str(error)
+...
+>>> "column 'a' (expected int32, actual int64)" in wrong_types_message
+True
+>>> "column 'b' (expected int64, actual int32)" in wrong_types_message
+True
+>>>
+>>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", False)
+>>> try:
+...     _ = spark.range(1).groupBy("id").applyInArrow(
+...         wrong_types, schema="x int, y long"
+...     ).collect()
+... except Exception as error:
+...     positional_types_message = str(error)
+...
+>>> "column 'x' (expected int32, actual int64)" in positional_types_message
+True
+>>> "column 'y' (expected int64, actual int32)" in positional_types_message
+True
+>>> spark.conf.set("spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName", True)

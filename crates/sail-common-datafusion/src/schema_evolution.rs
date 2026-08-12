@@ -18,7 +18,7 @@ use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{VariantArray, unshred_variant};
 
-use crate::array::record_batch::cast_array_recursively;
+use crate::array::record_batch::{cast_array_recursively, retag_timestamp_array_to_type};
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -803,6 +803,12 @@ fn cast_array_with_schema_evolution_inner(
 
     if source.data_type() == target_field.data_type() {
         return Ok(Arc::clone(source));
+    }
+
+    if relaxed_timezone
+        && let Some(retagged) = retag_timestamp_array_to_type(source, target_field.data_type())?
+    {
+        return Ok(retagged);
     }
 
     if relaxed_timezone

@@ -10,6 +10,7 @@ use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::utils::data_type::requires_spark_timezone_cast;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -148,7 +149,7 @@ impl PlanResolver<'_> {
                 is_try,
             )?))
             .call(vec![expr]),
-            (from, to, is_try) if needs_spark_timezone_cast(&from, &to) => {
+            (from, to, is_try) if requires_spark_timezone_cast(&from, &to) => {
                 ScalarUDF::new_from_impl(SparkTimezoneCast::new(
                     to,
                     self.config.session_timezone.clone(),
@@ -248,42 +249,6 @@ fn with_spark_time_precision(expr: Expr, precision: i32) -> Expr {
         precision.to_string(),
     )]));
     expr.alias_with_metadata("cast", Some(metadata))
-}
-
-pub(crate) fn needs_spark_timezone_cast(from: &DataType, to: &DataType) -> bool {
-    match (from, to) {
-        (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_)))
-        | (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
-        | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
-        | (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64)
-        | (
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            DataType::Timestamp(_, Some(_)),
-        )
-        | (
-            DataType::Timestamp(_, Some(_)),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-        ) => true,
-        (DataType::List(from), DataType::List(to))
-        | (DataType::LargeList(from), DataType::LargeList(to))
-        | (DataType::ListView(from), DataType::ListView(to))
-        | (DataType::LargeListView(from), DataType::LargeListView(to)) => {
-            needs_spark_timezone_cast(from.data_type(), to.data_type())
-        }
-        (DataType::FixedSizeList(from, from_size), DataType::FixedSizeList(to, to_size))
-            if from_size == to_size =>
-        {
-            needs_spark_timezone_cast(from.data_type(), to.data_type())
-        }
-        (DataType::Map(from, _), DataType::Map(to, _)) => {
-            needs_spark_timezone_cast(from.data_type(), to.data_type())
-        }
-        (DataType::Struct(from), DataType::Struct(to)) if from.len() == to.len() => from
-            .iter()
-            .zip(to.iter())
-            .any(|(from, to)| needs_spark_timezone_cast(from.data_type(), to.data_type())),
-        _ => false,
-    }
 }
 
 /// Returns true if the cast from `from` to `to` involves a Struct

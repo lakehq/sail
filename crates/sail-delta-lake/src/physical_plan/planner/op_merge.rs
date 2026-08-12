@@ -187,6 +187,7 @@ pub async fn build_merge_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
+        ctx.session_timezone(),
         ctx.lakehouse_table().cloned(),
     )
 }
@@ -268,6 +269,7 @@ pub async fn build_merge_plan_mor(
         true,
         table_schema.clone(),
         write_context.clone(),
+        ctx.session_timezone(),
         ctx.lakehouse_table().cloned(),
     )?);
 

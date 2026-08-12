@@ -1,10 +1,15 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::arrow::util::display::{
+    ArrayFormatter as ArrowArrayFormatter, ArrayFormatterFactory, DisplayIndex,
+    FormatOptions as ArrowFormatOptions, FormatResult,
+};
+use datafusion::arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -12,7 +17,10 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, plan_err};
 use futures::StreamExt;
-use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::array::record_batch::retag_record_batch_timestamp_timezone;
+use sail_common_datafusion::display::{
+    ArrayFormatter as SailArrayFormatter, FormatOptions as SailFormatOptions,
+};
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
@@ -125,40 +133,43 @@ impl ExecutionPlan for ConsoleSinkExec {
 }
 
 fn format_console_batch(batch: &RecordBatch, session_timezone: &str) -> Result<String> {
-    let options = FormatOptions::default().with_timestamp_timezone(Some(session_timezone));
-    let columns = batch
-        .columns()
-        .iter()
-        .map(|array| {
-            let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
-            let values = (0..array.len())
-                .map(|row| {
-                    if array.is_null(row) {
-                        Ok(None)
-                    } else {
-                        Ok(Some(formatter.value(row).try_to_string()?))
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StringArray::from(values)) as ArrayRef)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let schema = Arc::new(Schema::new(
-        batch
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| Field::new(field.name(), DataType::Utf8, field.is_nullable()))
-            .collect::<Vec<_>>(),
-    ));
-    let batch = RecordBatch::try_new(schema, columns)?;
-    Ok(pretty_format_batches(&[batch])?.to_string())
+    let batch = retag_record_batch_timestamp_timezone(batch, session_timezone)?;
+    let factory = ConsoleFormatterFactory;
+    let options = ArrowFormatOptions::default().with_formatter_factory(Some(&factory));
+    Ok(pretty_format_batches_with_options(&[batch], &options)?.to_string())
+}
+
+#[derive(Debug)]
+struct ConsoleFormatterFactory;
+
+impl ArrayFormatterFactory for ConsoleFormatterFactory {
+    fn create_array_formatter<'a>(
+        &self,
+        array: &'a dyn Array,
+        options: &ArrowFormatOptions<'a>,
+        _field: Option<&'a datafusion::arrow::datatypes::Field>,
+    ) -> Result<Option<ArrowArrayFormatter<'a>>, ArrowError> {
+        let sail_options = SailFormatOptions::default().with_null("");
+        let formatter = SailArrayFormatter::try_new(array, &sail_options)?;
+        Ok(Some(ArrowArrayFormatter::new(
+            Box::new(ConsoleDisplayIndex(formatter)),
+            options.safe(),
+        )))
+    }
+}
+
+struct ConsoleDisplayIndex<'a>(SailArrayFormatter<'a>);
+
+impl DisplayIndex for ConsoleDisplayIndex<'_> {
+    fn write(&self, idx: usize, output: &mut dyn std::fmt::Write) -> FormatResult {
+        self.0.value(idx).write(output).map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::TimestampMicrosecondArray;
-    use datafusion::arrow::datatypes::TimeUnit;
+    use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 
     use super::*;
 
@@ -182,6 +193,25 @@ mod tests {
              +---------------------+\n\
              | 1970-01-01 00:00:00 |\n\
              +---------------------+"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_empty_null_cells() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "i",
+            Arc::new(Int32Array::from(vec![None, Some(1)])) as _,
+        )])?;
+
+        assert_eq!(
+            format_console_batch(&batch, "UTC")?,
+            "+---+\n\
+             | i |\n\
+             +---+\n\
+             |   |\n\
+             | 1 |\n\
+             +---+"
         );
         Ok(())
     }

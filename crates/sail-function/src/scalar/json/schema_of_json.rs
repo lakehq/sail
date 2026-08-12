@@ -15,8 +15,10 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
+use sail_common::utils::string::is_spark_whitespace_or_iso_control;
 use sail_common_datafusion::utils::datetime::parse_spark_timezone;
 
+use crate::scalar::options::reject_null_options;
 use crate::schema_inference::{InferredType, TypeMerger};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -587,11 +589,6 @@ fn is_valid_timestamp_digits(segment: usize, digits: usize) -> bool {
         || (segment != 0 && segment != 6 && segment != 7 && (1..=2).contains(&digits))
 }
 
-/// Spark trims leading/trailing whitespace and ISO control characters.
-fn is_whitespace_or_iso_control(b: u8) -> bool {
-    b <= b' ' || b == 0x7f
-}
-
 /// A faithful port of Spark's `SparkDateTimeUtils.parseTimestampString`. Splits
 /// the input into timestamp segments using Spark's exact delimiter rules, or
 /// returns `None` if the string is not shaped like a timestamp.
@@ -603,11 +600,11 @@ fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
     let mut current_digits: usize = 0;
 
     let mut start = 0;
-    while start < bytes.len() && is_whitespace_or_iso_control(bytes[start]) {
+    while start < bytes.len() && is_spark_whitespace_or_iso_control(bytes[start]) {
         start += 1;
     }
     let mut str_end = bytes.len();
-    while str_end > start && is_whitespace_or_iso_control(bytes[str_end - 1]) {
+    while str_end > start && is_spark_whitespace_or_iso_control(bytes[str_end - 1]) {
         str_end -= 1;
     }
     if start == str_end {
@@ -921,6 +918,7 @@ impl Default for SparkSchemaOfJsonOptions {
 
 impl SparkSchemaOfJsonOptions {
     pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
+        reject_null_options(map_array, SparkSchemaOfJson::SCHEMA_OF_JSON_NAME)?;
         let inner_struct = map_array.value(0);
         // validate map is of type map<string, string>
         let (keys, values) = Self::get_keys_values_from_map(inner_struct)?;

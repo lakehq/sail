@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -10,11 +9,13 @@ use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_common_datafusion::utils::datetime::{localize_with_fallback, parse_spark_timezone};
+use sail_common_datafusion::utils::datetime::{
+    SparkTimeZone, localize_with_fallback, parse_spark_timezone,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::format::{DateTimeFormat, cached_format};
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -36,7 +37,7 @@ use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {
-    Ltz { default_timezone: String },
+    Ltz { default_timezone: SparkTimeZone },
     Ntz,
 }
 
@@ -53,11 +54,7 @@ impl TimestampParser {
         match self {
             TimestampParser::Ltz { default_timezone } => {
                 let tz = if timezone.is_empty() {
-                    match parse_spark_timezone(default_timezone) {
-                        Ok(v) => v,
-                        Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e),
-                    }
+                    *default_timezone
                 } else {
                     match parse_spark_timezone(timezone) {
                         Ok(v) => v,
@@ -97,11 +94,13 @@ impl TimestampParser {
                         .map(|x| x.to_utc())
                         .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
                 } else {
-                    let timezone_name = parsed.timezone.as_deref().unwrap_or(default_timezone);
-                    let timezone = match parse_spark_timezone(timezone_name) {
-                        Ok(v) => v,
-                        Err(_e) if is_try => return Ok(None),
-                        Err(e) => return Err(e),
+                    let timezone = match parsed.timezone.as_deref() {
+                        Some(timezone) => match parse_spark_timezone(timezone) {
+                            Ok(v) => v,
+                            Err(_e) if is_try => return Ok(None),
+                            Err(e) => return Err(e),
+                        },
+                        None => *default_timezone,
                     };
                     match localize_with_fallback(&timezone, &parsed.datetime) {
                         Ok(v) => v,
@@ -151,7 +150,7 @@ impl SparkTimestamp {
     pub fn try_new(timezone: Option<Arc<str>>, ansi_mode: bool, is_try: bool) -> Result<Self> {
         let parser = if let Some(ref timezone) = timezone {
             TimestampParser::Ltz {
-                default_timezone: timezone.as_ref().to_string(),
+                default_timezone: parse_spark_timezone(timezone)?,
             }
         } else {
             TimestampParser::Ntz
@@ -424,22 +423,12 @@ impl SparkTimestamp {
             .zip(formats)
             .map(|(value, format)| match (value, format) {
                 (Some(value), Some(format)) => {
-                    let format = get_or_parse_format(cache, format)?;
+                    let format = cached_format(cache, format, DateTimeFormat::for_parsing)?;
                     self.parser
                         .formatted_string_to_microseconds(value, format, safe)
                 }
                 _ => Ok(None),
             })
             .collect::<Result<_>>()
-    }
-}
-
-fn get_or_parse_format<'a>(
-    cache: &'a mut HashMap<String, DateTimeFormat>,
-    pattern: &str,
-) -> Result<&'a DateTimeFormat> {
-    match cache.entry(pattern.to_string()) {
-        Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
     }
 }

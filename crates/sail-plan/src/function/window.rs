@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
 };
-use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
@@ -15,12 +14,11 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, ExprSchemable, ScalarUDF, WindowFrame, WindowFunctionDefinition, WindowUDF, cast,
-    expr, lit, when,
+    AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
+    when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -39,10 +37,10 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::aggregate::{finish_listagg, prepare_listagg};
 use crate::function::common::{
     WinFunction, WinFunctionBuilder, WinFunctionInput, count_min_sketch_args,
     get_arguments_and_null_treatment, get_null_treatment, hll_args_with_default_lg,
@@ -569,22 +567,13 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let schema = function_context.schema;
-    let session_timezone = &function_context.plan_config.session_timezone;
-    let (agg_col, other_args) = arguments.at_least_one()?;
-    let agg_col_type = agg_col.get_type(schema)?;
-    if agg_col_type == DataType::Null {
+    let Some((agg_col, delim, agg_col_type)) = prepare_listagg(
+        arguments,
+        schema,
+        &function_context.plan_config.session_timezone,
+    )?
+    else {
         return Ok(lit(ScalarValue::Null));
-    }
-    let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
-    let agg_col = if matches!(&agg_col_type, DataType::Timestamp(_, Some(_))) {
-        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![agg_col])
-    } else {
-        agg_col
-    };
-    let delim = if matches!(delim.get_type(schema)?, DataType::Timestamp(_, Some(_))) {
-        ScalarUDF::from(SparkToUtf8::new(Arc::clone(session_timezone))).call(vec![delim])
-    } else {
-        delim.cast_to(&DataType::Utf8, schema)?
     };
 
     let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -593,11 +582,6 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![agg_col.clone()],
             partition_by,
             order_by,
-            // order_by: if input.distinct {
-            //     vec![agg_col.clone().sort(true, true)]
-            // } else {
-            //     input.order_by
-            // },
             window_frame,
             filter: None,
             null_treatment: get_null_treatment(Some(true)),
@@ -605,27 +589,7 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         },
     }));
 
-    let string_agg = array_to_string(
-        agg.cast_to(
-            &DataType::List(Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                DataType::Utf8,
-                true,
-            ))),
-            schema,
-        )?,
-        delim,
-    );
-
-    let casted_agg = match agg_col_type {
-        DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
-        DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
-        _ => string_agg,
-    };
-
-    Ok(when(casted_agg.clone().is_not_null(), casted_agg)
-        .when(lit(true), lit(ScalarValue::Null))
-        .end()?)
+    finish_listagg(agg, delim, agg_col_type, schema)
 }
 
 fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {

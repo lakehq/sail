@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -17,7 +16,7 @@ use sail_common_datafusion::utils::datetime::{
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::format::{DateTimeFormat, cached_format};
 
 const DEFAULT_PATTERN: &str = "yyyy-MM-dd HH:mm:ss";
 
@@ -118,15 +117,22 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
         };
         let safe = !self.ansi_mode;
         match first.data_type() {
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => match format {
-                Some(format) => self.invoke_with_format(first, format, safe),
-                None => self.invoke_with_scalar_format(
-                    first,
-                    ScalarUnixFormat::Format(DateTimeFormat::for_parsing(DEFAULT_PATTERN)?),
-                    safe,
-                ),
-            },
-            DataType::Date64 | DataType::Date32 => self.invoke_with_date(first),
+            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
+                let timezone = parse_spark_timezone(&self.session_timezone)?;
+                match format {
+                    Some(format) => self.invoke_with_format(first, format, &timezone, safe),
+                    None => self.invoke_with_scalar_format(
+                        first,
+                        ScalarUnixFormat::Format(DateTimeFormat::for_parsing(DEFAULT_PATTERN)?),
+                        &timezone,
+                        safe,
+                    ),
+                }
+            }
+            DataType::Date64 | DataType::Date32 => {
+                let timezone = parse_spark_timezone(&self.session_timezone)?;
+                self.invoke_with_date(first, &timezone)
+            }
             DataType::Timestamp(_, timezone) => first
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, timezone), None)?
                 .cast_to(&DataType::Int64, None),
@@ -143,22 +149,26 @@ impl SparkUnixTimestamp {
         &self,
         first: &ColumnarValue,
         format: &ColumnarValue,
+        timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<ColumnarValue> {
         match format {
-            ColumnarValue::Scalar(format_scalar) => {
-                self.invoke_with_scalar_format(first, parse_format_scalar(format_scalar)?, safe)
-            }
+            ColumnarValue::Scalar(format_scalar) => self.invoke_with_scalar_format(
+                first,
+                parse_format_scalar(format_scalar)?,
+                timezone,
+                safe,
+            ),
             ColumnarValue::Array(format_array) => match first {
                 ColumnarValue::Array(array) => {
-                    self.invoke_array_with_format_array(array, format_array, safe)
+                    self.invoke_array_with_format_array(array, format_array, timezone, safe)
                 }
                 ColumnarValue::Scalar(scalar) => {
                     let arrays = ColumnarValue::values_to_arrays(&[
                         ColumnarValue::Scalar(scalar.clone()),
                         ColumnarValue::Array(format_array.clone()),
                     ])?;
-                    self.invoke_array_with_format_array(&arrays[0], &arrays[1], safe)
+                    self.invoke_array_with_format_array(&arrays[0], &arrays[1], timezone, safe)
                 }
             },
         }
@@ -168,6 +178,7 @@ impl SparkUnixTimestamp {
         &self,
         first: &ColumnarValue,
         format: ScalarUnixFormat,
+        timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<ColumnarValue> {
         match first {
@@ -183,7 +194,9 @@ impl SparkUnixTimestamp {
                         .iter()
                         .map(|value| {
                             value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
+                                .map(|value| {
+                                    self.formatted_string_to_seconds(value, &format, timezone, safe)
+                                })
                                 .transpose()
                                 .map(Option::flatten)
                         })
@@ -192,7 +205,9 @@ impl SparkUnixTimestamp {
                         .iter()
                         .map(|value| {
                             value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
+                                .map(|value| {
+                                    self.formatted_string_to_seconds(value, &format, timezone, safe)
+                                })
                                 .transpose()
                                 .map(Option::flatten)
                         })
@@ -201,7 +216,9 @@ impl SparkUnixTimestamp {
                         .iter()
                         .map(|value| {
                             value
-                                .map(|value| self.formatted_string_to_seconds(value, &format, safe))
+                                .map(|value| {
+                                    self.formatted_string_to_seconds(value, &format, timezone, safe)
+                                })
                                 .transpose()
                                 .map(Option::flatten)
                         })
@@ -220,7 +237,9 @@ impl SparkUnixTimestamp {
                 };
                 let value = match scalar.try_as_str() {
                     Some(value) => value
-                        .map(|value| self.formatted_string_to_seconds(value, &format, safe))
+                        .map(|value| {
+                            self.formatted_string_to_seconds(value, &format, timezone, safe)
+                        })
                         .transpose()?
                         .flatten(),
                     None => {
@@ -234,15 +253,18 @@ impl SparkUnixTimestamp {
         }
     }
 
-    fn invoke_with_date(&self, first: &ColumnarValue) -> Result<ColumnarValue> {
-        let timezone = parse_spark_timezone(self.session_timezone.as_ref())?;
+    fn invoke_with_date(
+        &self,
+        first: &ColumnarValue,
+        timezone: &SparkTimeZone,
+    ) -> Result<ColumnarValue> {
         match first.cast_to(&DataType::Date32, None)? {
             ColumnarValue::Array(array) => {
                 let dates = as_date32_array(&array)?;
                 let seconds: PrimitiveArray<Int64Type> = dates
                     .iter()
                     .map(|days| {
-                        days.map(|days| date32_to_seconds(days, &timezone))
+                        days.map(|days| date32_to_seconds(days, timezone))
                             .transpose()
                     })
                     .collect::<Result<_>>()?;
@@ -250,7 +272,7 @@ impl SparkUnixTimestamp {
             }
             ColumnarValue::Scalar(ScalarValue::Date32(days)) => {
                 let seconds = days
-                    .map(|days| date32_to_seconds(days, &timezone))
+                    .map(|days| date32_to_seconds(days, timezone))
                     .transpose()?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(seconds)))
             }
@@ -265,6 +287,7 @@ impl SparkUnixTimestamp {
         &self,
         array: &dyn datafusion::arrow::array::Array,
         format_array: &dyn datafusion::arrow::array::Array,
+        timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<ColumnarValue> {
         if array.len() != format_array.len() {
@@ -276,15 +299,15 @@ impl SparkUnixTimestamp {
         let array = match format_array.data_type() {
             DataType::Utf8 => {
                 let formats = as_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, timezone, safe)?
             }
             DataType::LargeUtf8 => {
                 let formats = as_large_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, timezone, safe)?
             }
             DataType::Utf8View => {
                 let formats = as_string_view_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
+                self.parse_array_with_formats(array, formats.iter(), &mut cache, timezone, safe)?
             }
             _ => return exec_err!("spark_unix_timestamp format argument must be a string array"),
         };
@@ -296,22 +319,29 @@ impl SparkUnixTimestamp {
         array: &dyn datafusion::arrow::array::Array,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
+        timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<PrimitiveArray<Int64Type>> {
         match array.data_type() {
-            DataType::Utf8 => {
-                self.parse_values_with_formats(as_string_array(array)?.iter(), formats, cache, safe)
-            }
+            DataType::Utf8 => self.parse_values_with_formats(
+                as_string_array(array)?.iter(),
+                formats,
+                cache,
+                timezone,
+                safe,
+            ),
             DataType::LargeUtf8 => self.parse_values_with_formats(
                 as_large_string_array(array)?.iter(),
                 formats,
                 cache,
+                timezone,
                 safe,
             ),
             DataType::Utf8View => self.parse_values_with_formats(
                 as_string_view_array(array)?.iter(),
                 formats,
                 cache,
+                timezone,
                 safe,
             ),
             other => exec_err!(
@@ -325,14 +355,15 @@ impl SparkUnixTimestamp {
         values: impl Iterator<Item = Option<&'v str>>,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
+        timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<PrimitiveArray<Int64Type>> {
         values
             .zip(formats)
             .map(|(value, format)| match (value, format) {
                 (Some(value), Some(format)) => {
-                    let format = get_or_parse_format(cache, format)?;
-                    self.formatted_string_to_seconds(value, format, safe)
+                    let format = cached_format(cache, format, DateTimeFormat::for_parsing)?;
+                    self.formatted_string_to_seconds(value, format, timezone, safe)
                 }
                 _ => Ok(None),
             })
@@ -343,6 +374,7 @@ impl SparkUnixTimestamp {
         &self,
         value: &str,
         format: &DateTimeFormat,
+        session_timezone: &SparkTimeZone,
         safe: bool,
     ) -> Result<Option<i64>> {
         let Some(parsed) = timestamp_parse_result(format.parse_datetime_value(value), safe)? else {
@@ -359,14 +391,16 @@ impl SparkUnixTimestamp {
             };
             localized.to_utc().timestamp()
         } else {
-            let timezone = parse_spark_timezone(
-                parsed
-                    .timezone
-                    .as_deref()
-                    .unwrap_or(self.session_timezone.as_ref()),
-            );
-            let Some(timezone) = timestamp_parse_result(timezone, safe)? else {
-                return Ok(None);
+            let timezone = match parsed.timezone.as_deref() {
+                Some(timezone) => {
+                    let Some(timezone) =
+                        timestamp_parse_result(parse_spark_timezone(timezone), safe)?
+                    else {
+                        return Ok(None);
+                    };
+                    timezone
+                }
+                None => *session_timezone,
             };
             let Some(localized) =
                 timestamp_parse_result(localize_with_fallback(&timezone, &parsed.datetime), safe)?
@@ -422,14 +456,4 @@ where
 
 fn timestamp_parse_error(error: impl Display) -> DataFusionError {
     exec_datafusion_err!("Error parsing timestamp: [CANNOT_PARSE_TIMESTAMP] {error}")
-}
-
-fn get_or_parse_format<'a>(
-    cache: &'a mut HashMap<String, DateTimeFormat>,
-    pattern: &str,
-) -> Result<&'a DateTimeFormat> {
-    match cache.entry(pattern.to_string()) {
-        Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
-    }
 }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
@@ -10,7 +9,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_date;
 
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::format::{DateTimeFormat, cached_format};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDate {
@@ -245,20 +244,10 @@ fn parse_values_with_formats<'v, 'f>(
         .zip(formats)
         .map(|(value, format)| match (value, format) {
             (Some(value), Some(format)) => {
-                let format = get_or_parse_format(cache, format)?;
+                let format = cached_format(cache, format, DateTimeFormat::for_parsing)?;
                 SparkDate::formatted_string_to_date32(value, format, is_try)
             }
             _ => Ok(None),
         })
         .collect::<Result<_>>()
-}
-
-fn get_or_parse_format<'a>(
-    cache: &'a mut HashMap<String, DateTimeFormat>,
-    pattern: &str,
-) -> Result<&'a DateTimeFormat> {
-    match cache.entry(pattern.to_string()) {
-        Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
-    }
 }

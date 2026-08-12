@@ -293,7 +293,7 @@ Feature: Glue catalog table operations
       | string    | STRING     | string    |
       | binary    | BINARY     | binary    |
       | date      | DATE       | date      |
-      | timestamp | TIMESTAMP  | timestamp_ntz |
+      | timestamp | TIMESTAMP  | timestamp     |
 
   Scenario: Decimal with precision and scale round-trips via DESCRIBE
     Given statement

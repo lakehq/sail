@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
@@ -10,6 +10,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
 
+use super::array::{cast_list_value_nullability, make_spark_array};
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -46,13 +47,19 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    let keys = make_spark_array(keys, &input.function_context)?;
+    let values = make_spark_array(values, &input.function_context)?;
     let values = cast_list_value_nullability(values, schema, true)?;
+    let target_type = map_type_preserving_field_metadata(&keys, &values, schema)?;
     let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
+    let expr = if expr.get_type(schema.as_ref())? == target_type {
+        expr
+    } else {
+        cast(expr, target_type)
+    };
     cast_map_value_nullability(expr, schema, value_contains_null)
 }
 
@@ -66,11 +73,48 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         _ => true,
     };
     let values = cast_list_value_nullability(values, schema, true)?;
+    let target_type = map_type_preserving_field_metadata(&keys, &values, schema)?;
     let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
+    let expr = if expr.get_type(schema.as_ref())? == target_type {
+        expr
+    } else {
+        cast(expr, target_type)
+    };
     cast_map_value_nullability(expr, schema, value_contains_null)
+}
+
+fn map_type_preserving_field_metadata(
+    keys: &expr::Expr,
+    values: &expr::Expr,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<DataType> {
+    let element = |data_type: DataType| match data_type {
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            Ok(field)
+        }
+        DataType::Null => Ok(Arc::new(Field::new_list_field(DataType::Null, true))),
+        other => Err(PlanError::invalid(format!(
+            "map requires array inputs, got {other}"
+        ))),
+    };
+    let key = element(keys.get_type(schema.as_ref())?)?;
+    let value = element(values.get_type(schema.as_ref())?)?;
+    let fields = Fields::from(vec![
+        Arc::new(
+            Field::new("key", key.data_type().clone(), false).with_metadata(key.metadata().clone()),
+        ),
+        Arc::new(
+            Field::new("value", value.data_type().clone(), true)
+                .with_metadata(value.metadata().clone()),
+        ),
+    ]);
+    Ok(DataType::Map(
+        Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+        false,
+    ))
 }
 
 fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -125,24 +169,6 @@ fn map_entries_value_contains_null(data_type: &DataType) -> bool {
         .get(1)
         .map(|field| field.is_nullable())
         .unwrap_or(true)
-}
-
-fn cast_list_value_nullability(
-    expr: expr::Expr,
-    schema: &datafusion_common::DFSchemaRef,
-    nullable: bool,
-) -> PlanResult<expr::Expr> {
-    let data_type = expr.get_type(schema.as_ref())?;
-    let target_type = match data_type {
-        DataType::List(field) if field.is_nullable() != nullable => {
-            DataType::List(with_nullable(&field, nullable))
-        }
-        DataType::LargeList(field) if field.is_nullable() != nullable => {
-            DataType::LargeList(with_nullable(&field, nullable))
-        }
-        _ => return Ok(expr),
-    };
-    Ok(cast(expr, target_type))
 }
 
 fn cast_map_entries_value_nullability(

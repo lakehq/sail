@@ -21,6 +21,8 @@ use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::utils::data_type::requires_spark_timezone_cast_by_name;
+use sail_function::scalar::datetime::spark_timezone_cast::spark_timezone_cast_array_by_name;
 use url::Url;
 
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
@@ -93,19 +95,20 @@ impl IcebergTableWriter {
 
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
+        let batch = Self::adapt_batch_to_logical_schema(
+            batch,
+            &self.config.table_schema,
+            iceberg_schema,
+            &self.config.session_timezone,
+        )
+        .map_err(|e| e.to_string())?;
 
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
             let partition_values = Vec::new();
-            let padded = Self::align_batch_with_table_schema(
-                batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
             let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+                unshred_shredded_variants_for_write(&batch, &self.config.table_schema)?;
             let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_values, partition_dir, aligned)
@@ -113,18 +116,12 @@ impl IcebergTableWriter {
             return Ok(());
         }
 
-        let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
+        let parts = split_record_batch_by_partition(&batch, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
             let partition_values = p.partition_values;
-            let padded = Self::align_batch_with_table_schema(
-                &p.record_batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
             let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+                unshred_shredded_variants_for_write(&p.record_batch, &self.config.table_schema)?;
             let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_values, partition_dir, aligned)
@@ -339,6 +336,49 @@ impl IcebergTableWriter {
         Ok(RecordBatch::try_new(aligned_schema, columns)?)
     }
 
+    fn adapt_batch_to_logical_schema(
+        batch: &RecordBatch,
+        table_schema: &SchemaRef,
+        iceberg_schema: &IcebergSchema,
+        session_timezone: &str,
+    ) -> Result<RecordBatch, DataFusionError> {
+        let aligned = Self::align_batch_with_table_schema(batch, table_schema, iceberg_schema)?;
+        let mut fields = Vec::with_capacity(table_schema.fields().len());
+        let mut columns = Vec::with_capacity(table_schema.fields().len());
+
+        for ((source_field, source), target_field) in aligned
+            .schema_ref()
+            .fields()
+            .iter()
+            .zip(aligned.columns())
+            .zip(table_schema.fields())
+        {
+            if requires_spark_timezone_cast_by_name(
+                source_field.data_type(),
+                target_field.data_type(),
+                true,
+            ) {
+                columns.push(spark_timezone_cast_array_by_name(
+                    source,
+                    target_field.data_type(),
+                    session_timezone,
+                    false,
+                    true,
+                )?);
+                fields.push(Arc::clone(target_field));
+            } else {
+                columns.push(Arc::clone(source));
+                fields.push(Arc::clone(source_field));
+            }
+        }
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            aligned.schema_ref().metadata().clone(),
+        ));
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+
     fn build_missing_column_array(
         field: &FieldRef,
         iceberg_schema: &IcebergSchema,
@@ -381,5 +421,181 @@ impl IcebergTableWriter {
             return Ok(Some(array));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use chrono::NaiveDate;
+    use datafusion::arrow::array::{
+        Array, Int32Array, ListArray, StructArray, TimestampMicrosecondArray,
+    };
+    use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+
+    use super::*;
+    use crate::datasource::type_converter::arrow_schema_to_iceberg;
+    use crate::schema_evolution::SchemaEvolver;
+    use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+    use crate::spec::transform::Transform;
+
+    fn timestamp_type(timezone: Option<&str>) -> DataType {
+        DataType::Timestamp(TimeUnit::Microsecond, timezone.map(Arc::from))
+    }
+
+    fn timestamp_array(data_type: &DataType, value: i64) -> Result<ArrayRef> {
+        let DataType::Timestamp(TimeUnit::Microsecond, timezone) = data_type else {
+            return Err(DataFusionError::Internal(
+                "test timestamp must use microseconds".to_string(),
+            ));
+        };
+        Ok(Arc::new(
+            TimestampMicrosecondArray::from(vec![value]).with_timezone_opt(timezone.clone()),
+        ))
+    }
+
+    fn timestamp_batch(timestamp_type: &DataType, value: i64) -> Result<RecordBatch> {
+        let timestamp = timestamp_array(timestamp_type, value)?;
+        let payload_fields = Fields::from(vec![
+            Arc::new(Field::new("tag", DataType::Int32, false)),
+            Arc::new(Field::new("at", timestamp_type.clone(), true)),
+        ]);
+        let payload = Arc::new(StructArray::try_new(
+            payload_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+                Arc::clone(&timestamp),
+            ],
+            None,
+        )?) as ArrayRef;
+        let items = Arc::new(ListArray::try_new(
+            Arc::new(Field::new("element", timestamp_type.clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            Arc::clone(&timestamp),
+            None,
+        )?) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("event_time", timestamp_type.clone(), true),
+            Field::new("payload", DataType::Struct(payload_fields), true),
+            Field::new("items", items.data_type().clone(), true),
+        ]));
+        Ok(RecordBatch::try_new(
+            schema,
+            vec![timestamp, payload, items],
+        )?)
+    }
+
+    fn timestamp_micros(hour: u32) -> i64 {
+        NaiveDate::from_ymd_opt(2021, 3, 14)
+            .expect("test date")
+            .and_hms_opt(hour, 30, 0)
+            .expect("test time")
+            .and_utc()
+            .timestamp_micros()
+    }
+
+    #[test]
+    fn logical_assignment_casts_nested_timestamps_before_dst_hour_transform() -> Result<()> {
+        let ntz = timestamp_type(None);
+        let ltz = timestamp_type(Some("UTC"));
+        let local = timestamp_micros(3);
+        let instant = timestamp_micros(10);
+
+        for (source_type, target_type, source_value, expected_value, expected_partition) in [
+            (&ntz, &ltz, local, instant, "event_hour=2021-03-14-10"),
+            (&ltz, &ntz, instant, local, "event_hour=2021-03-14-03"),
+        ] {
+            let input = timestamp_batch(source_type, source_value)?;
+            let table_schema = Arc::new(Schema::new(vec![
+                Field::new("event_time", target_type.clone(), true),
+                Field::new(
+                    "payload",
+                    DataType::Struct(Fields::from(vec![
+                        Arc::new(Field::new("at", target_type.clone(), true)),
+                        Arc::new(Field::new("tag", DataType::Int32, false)),
+                    ])),
+                    true,
+                ),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new("element", target_type.clone(), true))),
+                    true,
+                ),
+            ]));
+            let iceberg_schema = SchemaEvolver::assign_schema_field_ids(&arrow_schema_to_iceberg(
+                table_schema.as_ref(),
+            )?)?;
+            let event_id = iceberg_schema
+                .field_id_by_name("event_time")
+                .expect("event_time field id");
+            let partition_spec = UnboundPartitionSpec {
+                fields: vec![UnboundPartitionField {
+                    source_id: event_id,
+                    name: "event_hour".to_string(),
+                    transform: Transform::Hour,
+                }],
+            };
+
+            let adapted = IcebergTableWriter::adapt_batch_to_logical_schema(
+                &input,
+                &table_schema,
+                &iceberg_schema,
+                "America/Los_Angeles",
+            )?;
+            let event_time = adapted
+                .column_by_name("event_time")
+                .expect("event_time")
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("event timestamp");
+            assert_eq!(event_time.data_type(), target_type);
+            assert_eq!(event_time.value(0), expected_value);
+            let nested = adapted
+                .column_by_name("payload")
+                .expect("payload")
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("payload struct")
+                .column_by_name("at")
+                .expect("nested timestamp")
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("timestamp array");
+            assert_eq!(nested.data_type(), target_type);
+            assert_eq!(nested.value(0), expected_value);
+            let tag = adapted
+                .column_by_name("payload")
+                .expect("payload")
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("payload struct")
+                .column_by_name("tag")
+                .expect("tag")
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("tag array");
+            assert_eq!(tag.value(0), 7);
+            let listed = adapted
+                .column_by_name("items")
+                .expect("items")
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("items list")
+                .values()
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("list timestamp");
+            assert_eq!(listed.data_type(), target_type);
+            assert_eq!(listed.value(0), expected_value);
+
+            let partitions =
+                split_record_batch_by_partition(&adapted, &partition_spec, &iceberg_schema)
+                    .map_err(DataFusionError::Execution)?;
+            assert_eq!(partitions.len(), 1);
+            assert_eq!(partitions[0].partition_dir, expected_partition);
+        }
+
+        Ok(())
     }
 }

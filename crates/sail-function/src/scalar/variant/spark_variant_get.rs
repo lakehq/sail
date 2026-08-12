@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
-use arrow::array::{Array, ArrayRef, Float32Array, Float64Array};
+use arrow::array::{Array, ArrayRef, BooleanArray, Float32Array, Float64Array};
+use arrow::compute::kernels::zip::zip;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -65,16 +66,14 @@ fn variant_decimal_as_float<T: std::str::FromStr>(value: Variant<'_, '_>) -> Opt
 fn fill_decimal_float_values(
     result: ArrayRef,
     input: &ArrayRef,
-    path: VariantPath<'_>,
+    path: &VariantPath<'_>,
     name: &str,
 ) -> Result<ArrayRef> {
     if result.null_count() == 0 || result.is_empty() {
         return Ok(result);
     }
 
-    let variants = variant_get(input, GetOptions::new_with_path(path))
-        .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
-    let variants = VariantArray::try_new(variants.as_ref())?;
+    let variants = VariantArray::try_new(input.as_ref())?;
 
     match result.data_type() {
         DataType::Float32 => {
@@ -89,7 +88,11 @@ fn fill_decimal_float_values(
                     } else if variants.is_null(index) {
                         Ok(None)
                     } else {
-                        Ok(variant_decimal_as_float::<f32>(variants.try_value(index)?))
+                        let variant = variants.try_value(index)?;
+                        let value = variant
+                            .get_path(path)
+                            .and_then(variant_decimal_as_float::<f32>);
+                        Ok(value)
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -107,7 +110,11 @@ fn fill_decimal_float_values(
                     } else if variants.is_null(index) {
                         Ok(None)
                     } else {
-                        Ok(variant_decimal_as_float::<f64>(variants.try_value(index)?))
+                        let variant = variants.try_value(index)?;
+                        let value = variant
+                            .get_path(path)
+                            .and_then(variant_decimal_as_float::<f64>);
+                        Ok(value)
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -115,6 +122,39 @@ fn fill_decimal_float_values(
         }
         _ => Ok(result),
     }
+}
+
+fn fill_boolean_integer_values(
+    result: ArrayRef,
+    input: &ArrayRef,
+    path: &VariantPath<'_>,
+    target_type: &DataType,
+) -> Result<ArrayRef> {
+    if result.null_count() == 0 || result.is_empty() || !target_type.is_integer() {
+        return Ok(result);
+    }
+
+    let variants = VariantArray::try_new(input.as_ref())?;
+    let mut has_boolean = false;
+    let booleans = (0..result.len())
+        .map(|index| {
+            if result.is_valid(index) || variants.is_null(index) {
+                return Ok(None);
+            }
+            let variant = variants.try_value(index)?;
+            let value = variant.get_path(path).and_then(|value| value.as_boolean());
+            has_boolean |= value.is_some();
+            Ok(value)
+        })
+        .collect::<Result<BooleanArray>>()?;
+    if !has_boolean {
+        return Ok(result);
+    }
+
+    let fallback = datafusion::arrow::compute::cast(&booleans, target_type)?;
+    let use_fallback =
+        BooleanArray::from_iter((0..result.len()).map(|index| result.is_null(index)));
+    Ok(zip(&use_fallback, &fallback, &result)?)
 }
 
 /// Shared return-field logic for variant_get / try_variant_get.
@@ -192,17 +232,10 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
 
     // Resolve the target type.
 
-    // For Decimal/Timestamp, parquet-variant doesn't support direct extraction,
-    // so we extract as an intermediate type and then cast.
-    // Decimal: extract as Float64 then cast (loses precision beyond ~15 digits;
-    //   a more precise approach would be String→Decimal parsing).
-    // Timestamp: extract as Utf8 then cast (preserves full precision).
+    // Timestamp is extracted as Utf8 and then cast. parquet-variant handles Decimal128
+    // directly, including exact rescaling and overflow behavior.
     let final_type = type_str.as_deref().map(spark_type_to_arrow).transpose()?;
     let (extract_field, needs_post_cast) = match &final_type {
-        Some(DataType::Decimal128(_, _)) => (
-            Some(Arc::new(Field::new(name, DataType::Float64, true))),
-            true,
-        ),
         Some(DataType::Timestamp(_, _)) => {
             (Some(Arc::new(Field::new(name, DataType::Utf8, true))), true)
         }
@@ -233,43 +266,15 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
         .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
 
     let result = if extracts_float {
-        fill_decimal_float_values(result, &variant_arr, variant_path.clone(), name)?
+        fill_decimal_float_values(result, &variant_arr, &variant_path, name)?
     } else {
         result
     };
 
-    // Fallback: if extracting as numeric type returned all NULLs,
-    // try extracting as Boolean and cast (Spark casts true→1, false→0)
-    let result = if !needs_post_cast && result.null_count() == result.len() && !result.is_empty() {
-        if let Some(ref dt) = final_type {
-            if dt.is_integer() {
-                let bool_field = Some(Arc::new(Field::new(name, DataType::Boolean, true)));
-                let bool_options = build_get_options(variant_path.clone(), &bool_field);
-                let bool_result = variant_get(&variant_arr, bool_options).map_err(|e| {
-                    datafusion_common::DataFusionError::Execution(format!("{name}: {e}"))
-                })?;
-                if bool_result.null_count() < bool_result.len() {
-                    if safe {
-                        datafusion::arrow::compute::cast_with_options(
-                            &bool_result,
-                            dt,
-                            &datafusion::arrow::compute::CastOptions {
-                                safe: true,
-                                ..Default::default()
-                            },
-                        )?
-                    } else {
-                        datafusion::arrow::compute::cast(&bool_result, dt)?
-                    }
-                } else {
-                    result
-                }
-            } else {
-                result
-            }
-        } else {
-            result
-        }
+    // parquet-variant does not currently apply Spark's Boolean-to-integral cast. Fill only the
+    // missing rows, preserving successful typed extraction and path-missing NULLs.
+    let result = if !needs_post_cast && let Some(ref data_type) = final_type {
+        fill_boolean_integer_values(result, &variant_arr, &variant_path, data_type)?
     } else {
         result
     };

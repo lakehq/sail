@@ -1,6 +1,7 @@
 use datafusion::arrow::datatypes as adt;
 use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
 use sail_common::spec;
+use sail_common_datafusion::utils::data_type::spark_time_precision;
 use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
@@ -67,32 +68,6 @@ impl SparkGeoMetadata {
             .map_err(|e| SparkError::invalid(format!("invalid geoarrow metadata JSON: {e}")))?;
         metadata.try_into()
     }
-}
-
-fn spark_time_precision(field: &adt::Field) -> SparkResult<Option<i32>> {
-    if !matches!(
-        field.data_type(),
-        adt::DataType::Time32(_) | adt::DataType::Time64(_)
-    ) {
-        return Ok(None);
-    }
-    let Some(value) = field
-        .metadata()
-        .get(spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
-    else {
-        return Ok(None);
-    };
-    let precision = value.parse::<i32>().map_err(|error| {
-        SparkError::invalid(format!(
-            "invalid Spark TIME precision metadata {value:?}: {error}"
-        ))
-    })?;
-    if !(0..=6).contains(&precision) {
-        return Err(SparkError::invalid(format!(
-            "Spark TIME precision metadata must be between 0 and 6, got {precision}"
-        )));
-    }
-    Ok(Some(precision))
 }
 
 impl TryFrom<adt::Field> for sdt::StructField {
