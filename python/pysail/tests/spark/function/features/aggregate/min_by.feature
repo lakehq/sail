@@ -113,6 +113,118 @@ Feature: min_by function
         """
       Then query error does not support ordering on type
 
+    # The rule is shared, but the two implementations are separate copies of every
+    # hook (opposite sort direction), so the accepted cases are asserted here too
+    # rather than only in `aggregate/max_by.feature`.
+    Scenario: min_by accepts an ARRAY ordering column
+      When query
+        """
+        SELECT min_by(v, o) AS result FROM VALUES ('lo', array(1, 2)), ('hi', array(3, 4)) AS t(v, o)
+        """
+      Then query result
+        | result |
+        | lo     |
+
+    Scenario: min_by accepts a STRUCT ordering column
+      When query
+        """
+        SELECT min_by(v, o) AS result FROM VALUES ('lo', named_struct('a', 1)), ('hi', named_struct('a', 2)) AS t(v, o)
+        """
+      Then query result
+        | result |
+        | lo     |
+
+    @sail-bug
+    Scenario: min_by rejects a MAP ordering column in a window frame
+      When query
+        """
+        SELECT min_by(v, o) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('lo', map('a', 1), 1), ('hi', map('b', 2), 2) AS t(v, o, i)
+        """
+      Then query error does not support ordering on type
+
+  Rule: IGNORE NULLS is not supported
+
+    # Same rule as `max_by`: `FunctionResolution.applyIgnoreNulls` has no case for
+    # MaxBy/MinBy. The flag used to reach `last_value`, which skips NULL VALUES,
+    # while the two-argument semantics skip NULL ORDERINGS only.
+    Scenario: min_by rejects IGNORE NULLS
+      When query
+        """
+        SELECT min_by(v, o) IGNORE NULLS AS result
+        FROM VALUES (CAST(NULL AS STRING), 1), ('b', 2), ('c', 3) AS t(v, o)
+        """
+      Then query error does not support IGNORE NULLS
+
+    Scenario: min_by rejects IGNORE NULLS in a window frame
+      When query
+        """
+        SELECT min_by(v, o) IGNORE NULLS OVER (ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (CAST(NULL AS STRING), 1), ('b', 2), ('c', 3) AS t(v, o)
+        """
+      Then query error does not support IGNORE NULLS
+
+    Scenario: min_by returns a NULL value at the minimum ordering
+      When query
+        """
+        SELECT min_by(v, o) AS result
+        FROM VALUES (CAST(NULL AS STRING), 1), ('b', 2), ('c', 3) AS t(v, o)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: The output type is the value argument's type
+
+    Scenario: min_by preserves a narrow integer value type
+      When query
+        """
+        SELECT min_by(CAST(1 AS TINYINT), 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: byte (nullable = true)
+        """
+
+    Scenario: min_by is nullable even over a non-nullable value column
+      When query
+        """
+        SELECT min_by(id, id) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+  Rule: A star argument is expanded before the function is resolved
+
+    @sail-bug
+    Scenario: min_by expands a star argument
+      When query
+        """
+        SELECT min_by(*) AS result FROM VALUES (1, 2) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+  Rule: Other aggregate clauses
+
+    @sail-bug
+    Scenario: min_by supports a sliding window frame
+      When query
+        """
+        SELECT min_by(v, o) OVER (ORDER BY o ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS t(v, o)
+        """
+      Then query result ordered
+        | result |
+        | a      |
+        | a      |
+        | b      |
+
   Rule: The three-argument form returns the k values at the extreme of the ordering column
 
     # Added in Spark 4.2 (`MaxMinByK.scala`, `MinByBuilder` accepts [2, 3] arguments):

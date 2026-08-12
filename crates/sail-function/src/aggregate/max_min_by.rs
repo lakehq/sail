@@ -40,14 +40,14 @@ impl MaxMinByAccumulator {
 
 impl Accumulator for MaxMinByAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<(), DataFusionError> {
-        let value_array = &values[0];
-        let ordering_array = &values[1];
+        let function_name = if self.is_max { "max_by" } else { "min_by" };
+        let (value_array, ordering_array) = max_min_by_args(function_name, values)?;
 
         for i in 0..ordering_array.len() {
             if ordering_array.is_null(i) {
                 continue;
             }
-            let ordering_val = ScalarValue::try_from_array(&values[1], i)?;
+            let ordering_val = ScalarValue::try_from_array(ordering_array, i)?;
             let should_update = if self.ordering.is_null() {
                 true
             } else {
@@ -110,9 +110,14 @@ impl MaxByFunction {
     }
 }
 
-/// Spark 4.2 accepts `[2, 3]` arguments: the 3-argument form is the top-k variant
-/// (`MaxMinByK`), which returns an array and is not implemented here, so only the
-/// 2-argument form is accepted and `max_by(x, y, k)` is reported as an arity error.
+/// The argument count this implementation accepts, which is what the arity error must
+/// describe -- deliberately narrower than Spark.
+///
+/// Spark 4.2 accepts `[2, 3]`: `MaxByBuilder`/`MinByBuilder` route the 3-argument form to
+/// the top-k variant `MaxMinByK`, which returns `ARRAY<value type>`. That form is not
+/// implemented here, so `max_by(x, y, k)` is reported as an arity error even though the
+/// function catalog (`crates/sail-plan/data/functions/aggregate.yaml`) documents it as a
+/// Spark 4.2 signature. Widen this to `(2, 3)` in the same change that ports `MaxMinByK`.
 const MAX_MIN_BY_ARG_COUNT: (i32, i32) = (2, 2);
 
 /// Splits the arguments into the value and the ordering one.
@@ -141,7 +146,9 @@ fn get_min_max_by_result_type(
     let (value_type, ordering_type) = max_min_by_args(function_name, input_types)?;
     match value_type {
         // The ordering type is carried over so that the coerced list keeps both arguments;
-        // returning the value type alone left the hooks below indexing a one-element slice.
+        // returning the value type alone made `coerce_types` answer one type for a
+        // two-argument call, which DataFusion rejects with a `Failed to coerce arguments`
+        // planning error rather than reaching the hooks below.
         // Not covered by a scenario because a `Dictionary` column cannot be built from SQL.
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type

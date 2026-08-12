@@ -262,7 +262,27 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// Rejects `IGNORE NULLS`, which Spark does not accept for `max_by`/`min_by`.
+///
+/// `FunctionResolution.applyIgnoreNulls` has no case for `MaxBy`/`MinBy`, so it falls
+/// through to `functionWithUnsupportedSyntaxError`. Silently honoring the flag would also
+/// change the answer rather than merely skip an error: `MaxMinBy.updateExpressions` skips
+/// NULL orderings only and may legitimately return a NULL value, whereas `last_value`
+/// (which these functions are rewritten to) skips NULL values.
+pub(crate) fn reject_ignore_nulls(
+    function_name: &str,
+    ignore_nulls: Option<bool>,
+) -> PlanResult<()> {
+    if ignore_nulls == Some(true) {
+        return Err(PlanError::unsupported(format!(
+            "The function `{function_name}` does not support IGNORE NULLS"
+        )));
+    }
+    Ok(())
+}
+
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    reject_ignore_nulls("max_by", input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
         params: AggregateFunctionParams {
@@ -276,6 +296,7 @@ fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    reject_ignore_nulls("min_by", input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
         params: AggregateFunctionParams {
