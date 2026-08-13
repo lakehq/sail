@@ -96,26 +96,6 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
         _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
 
 
-def test_dataframe_sample_error_formats_doubles_like_scala(spark):
-    with pytest.raises(
-        Exception,
-        match=r"Sampling fraction \(2\.0\) must be on interval \[0, 1\] without replacement",
-    ):
-        _sample_with_bounds(spark, 0.0, 2.0, with_replacement=False).collect()
-
-    with pytest.raises(
-        Exception,
-        match=r"Sampling fraction \(-1\.0\) must be nonnegative with replacement",
-    ):
-        _sample_with_bounds(spark, 1.0, 0.0).collect()
-
-    with pytest.raises(
-        Exception,
-        match=r"Lower bound \(-2\.0E-6\) must be >= 0\.0",
-    ):
-        _sample_with_bounds(spark, -0.000002, -0.000002, with_replacement=False).collect()
-
-
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="Known issue: seeded sampling repeats its pattern every batch",

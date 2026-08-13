@@ -9,7 +9,6 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
-use sail_common::utils::number::format_spark_double;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -161,29 +160,24 @@ impl PlanResolver<'_> {
                 "on interval [0, 1] without replacement"
             };
             return Err(PlanError::invalid(format!(
-                "Sampling fraction ({}) must be {requirement}",
-                format_spark_double(fraction)
+                "Sampling fraction ({fraction}) must be {requirement}"
             )));
         }
 
         if !with_replacement {
             if lower_bound > upper_bound + SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Lower bound ({}) must be <= upper bound ({})",
-                    format_spark_double(lower_bound),
-                    format_spark_double(upper_bound)
+                    "Lower bound ({lower_bound}) must be <= upper bound ({upper_bound})"
                 )));
             }
             if lower_bound < -SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Lower bound ({}) must be >= 0.0",
-                    format_spark_double(lower_bound)
+                    "Lower bound ({lower_bound}) must be >= 0.0"
                 )));
             }
             if upper_bound > 1.0 + SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Upper bound ({}) must be <= 1.0",
-                    format_spark_double(upper_bound)
+                    "Upper bound ({upper_bound}) must be <= 1.0"
                 )));
             }
         }
