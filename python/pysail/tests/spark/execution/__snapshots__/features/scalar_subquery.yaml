@@ -3743,9 +3743,9 @@ data:
   
   
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64;N]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
