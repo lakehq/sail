@@ -51,6 +51,8 @@ def _database_and_table_round_trip(database: str, uri: str, service_principal: s
     try:
         created_database = catalog.create_database(namespace)
         assert created_database.database == namespace
+        fetched_database = catalog.get_database(namespace)
+        assert fetched_database.database == namespace
 
         created_table = catalog.create_table(
             namespace,
@@ -58,6 +60,7 @@ def _database_and_table_round_trip(database: str, uri: str, service_principal: s
             _ITEM_COLUMNS,
             location=f"{_HMS_CONTAINER_TMP}/{database}_items",
         )
+        assert created_table.name == "items"
         assert created_table.kind == "table"
         assert created_table.format == "parquet"
         assert [(column.name, column.data_type) for column in created_table.columns] == [
