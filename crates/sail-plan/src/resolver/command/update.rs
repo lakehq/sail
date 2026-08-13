@@ -206,16 +206,15 @@ impl PlanResolver<'_> {
                 .iter()
                 .map(|part| part.as_ref().to_string())
                 .collect::<Vec<_>>();
-            if parts.len() > 1 && target_alias.is_some_and(|alias| names_equal(alias, &parts[0])) {
-                parts.remove(0);
-            } else if parts.len() > 1
-                && !resolved_target_field_names
-                    .iter()
-                    .any(|name| names_equal(name, &parts[0]))
-                && resolved_target_field_names
-                    .iter()
-                    .any(|name| names_equal(name, &parts[1]))
-            {
+            let has_target_qualifier = parts.len() > 1
+                && (target_alias.is_some_and(|alias| names_equal(alias, &parts[0]))
+                    || (!resolved_target_field_names
+                        .iter()
+                        .any(|name| names_equal(name, &parts[0]))
+                        && resolved_target_field_names
+                            .iter()
+                            .any(|name| names_equal(name, &parts[1]))));
+            if has_target_qualifier {
                 parts.remove(0);
             }
             let Some(root_index) = parts.first().and_then(|root| {
