@@ -130,28 +130,28 @@ mod tests {
     }
 
     #[test]
-    fn v1_sequence_numbers_are_normalized_and_omitted() {
-        let input = serde_json::to_vec(&metadata_json(1, 7)).expect("metadata JSON");
-        let metadata = TableMetadata::from_json(&input).expect("v1 metadata");
+    fn v1_sequence_numbers_are_normalized_and_omitted() -> Result<(), serde_json::Error> {
+        let input = serde_json::to_vec(&metadata_json(1, 7))?;
+        let metadata = TableMetadata::from_json(&input)?;
         assert_eq!(metadata.last_sequence_number, 0);
         assert_eq!(metadata.snapshots[0].sequence_number, 0);
 
-        let output: serde_json::Value =
-            serde_json::from_slice(&metadata.to_json().expect("serialized metadata"))
-                .expect("serialized metadata JSON");
+        let output_json = metadata.to_json()?;
+        let output: serde_json::Value = serde_json::from_slice(&output_json)?;
         assert!(output.get("last-sequence-number").is_none());
         assert!(output["snapshots"][0].get("sequence-number").is_none());
+        Ok(())
     }
 
     #[test]
-    fn v2_zero_sequence_number_remains_required_at_table_level() {
-        let input = serde_json::to_vec(&metadata_json(2, 0)).expect("metadata JSON");
-        let metadata = TableMetadata::from_json(&input).expect("v2 metadata");
-        let output: serde_json::Value =
-            serde_json::from_slice(&metadata.to_json().expect("serialized metadata"))
-                .expect("serialized metadata JSON");
+    fn v2_zero_sequence_number_remains_required_at_table_level() -> Result<(), serde_json::Error> {
+        let input = serde_json::to_vec(&metadata_json(2, 0))?;
+        let metadata = TableMetadata::from_json(&input)?;
+        let output_json = metadata.to_json()?;
+        let output: serde_json::Value = serde_json::from_slice(&output_json)?;
         assert_eq!(output["last-sequence-number"], 0);
         assert_eq!(output["snapshots"][0]["sequence-number"], 0);
+        Ok(())
     }
 }
 

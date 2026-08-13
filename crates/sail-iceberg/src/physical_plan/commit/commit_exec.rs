@@ -553,9 +553,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 Ok(())
             }
             .await;
-            if let Err(error) = input_result {
-                return Err(error);
-            }
+            input_result?;
 
             // Blocking-shuffle retries can replay these actions, so task files remain owned by
             // the job until a commit succeeds or orphan-file maintenance removes them.
