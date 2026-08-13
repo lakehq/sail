@@ -39,8 +39,8 @@ Feature: DataFrame sample operations
       Examples:
         | lower_bound | upper_bound | error                                    |
         | 5e-324      | -0.000001   | Lower bound .* must be <= upper bound .* |
-        | -0.000002   | -0.000002   | Lower bound .* must be >= 0\.0           |
-        | 1.000002    | 1.000002    | Upper bound .* must be <= 1\.0           |
+        | -0.000002   | -0.000002   | Lower bound .* must be >= 0[.]0          |
+        | 1.000002    | 1.000002    | Upper bound .* must be <= 1[.]0          |
 
   Rule: Random function with seed
 

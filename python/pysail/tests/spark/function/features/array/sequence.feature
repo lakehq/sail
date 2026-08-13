@@ -48,11 +48,7 @@ Feature: sequence output schema
           sequence(
             TIMESTAMP_NTZ '2018-01-01 00:00:00',
             TIMESTAMP_NTZ '2018-01-02 00:00:00'
-          ) AS timestamps,
-          sequence(
-            TIMESTAMP_NTZ '2018-01-01 00:00:00',
-            TIMESTAMP '2018-01-02 00:00:00'
-          ) AS mixed_timestamps
+          ) AS timestamps
         """
       Then query schema
         """
@@ -61,6 +57,21 @@ Feature: sequence output schema
          |    |-- element: date (containsNull = false)
          |-- timestamps: array (nullable = false)
          |    |-- element: timestamp_ntz (containsNull = false)
+        """
+
+    @sail-bug
+    Scenario: a mixed temporal sequence is non-nullable after timestamp widening
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT sequence(
+          TIMESTAMP_NTZ '2018-01-01 00:00:00',
+          TIMESTAMP '2018-01-02 00:00:00'
+        ) AS mixed_timestamps
+        """
+      Then query schema
+        """
+        root
          |-- mixed_timestamps: array (nullable = false)
          |    |-- element: timestamp (containsNull = false)
         """

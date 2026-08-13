@@ -38,7 +38,9 @@ impl SparkDate {
         match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
             Ok(v) => Ok(Some(v)),
             Err(_e) if is_try => Ok(None),
-            Err(e) => Err(exec_datafusion_err!("{e}")),
+            Err(_) => Err(exec_datafusion_err!(
+                "[CAST_INVALID_INPUT] The value '{value}' of the type \"STRING\" cannot be cast to \"DATE\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead."
+            )),
         }
     }
 

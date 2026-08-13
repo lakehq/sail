@@ -160,6 +160,35 @@ Feature: sequence() over DATE returns expected arrays
       Given config spark.sql.session.timeZone = UTC
       When query
         """
+        WITH values AS (
+          SELECT sequence(
+            CAST(timestamp_micros(CAST(-9223372036854775808 AS BIGINT)) AS TIMESTAMP_NTZ),
+            CAST(timestamp_micros(CAST(-9223371864054775808 AS BIGINT)) AS TIMESTAMP_NTZ),
+            INTERVAL 1 DAY
+          ) AS result
+        )
+        SELECT
+          size(result) = 3
+          AND element_at(result, 1) = CAST(
+            timestamp_micros(CAST(-9223372036854775808 AS BIGINT)) AS TIMESTAMP_NTZ
+          )
+          AND element_at(result, 2) = CAST(
+            timestamp_micros(CAST(-9223371950454775808 AS BIGINT)) AS TIMESTAMP_NTZ
+          )
+          AND element_at(result, 3) = CAST(
+            timestamp_micros(CAST(-9223371864054775808 AS BIGINT)) AS TIMESTAMP_NTZ
+          ) AS exact_values
+        FROM values
+        """
+      Then query result
+        | exact_values |
+        | true         |
+
+    @sail-bug
+    Scenario: timestamp_ntz sequence values convert to timestamp across Spark's full microsecond domain
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
         SELECT transform(
           sequence(
             CAST(timestamp_micros(CAST(-9223372036854775808 AS BIGINT)) AS TIMESTAMP_NTZ),
