@@ -9,6 +9,7 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
+use sail_common::utils::number::format_spark_double;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -18,39 +19,6 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
-
-/// Format an `f64` the way `java.lang.Double.toString` does, so the sampling error messages
-/// match Spark's byte for byte: `2.0` rather than `2`, and `-2.0E-6` rather than `-0.000002`
-/// (Java switches to scientific notation outside `[1e-3, 1e7)`).
-fn format_spark_double(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    let magnitude = value.abs();
-    if magnitude != 0.0 && !(1e-3..1e7).contains(&magnitude) {
-        let formatted = format!("{value:e}");
-        let (mantissa, exponent) = match formatted.split_once('e') {
-            Some(parts) => parts,
-            None => (formatted.as_str(), "0"),
-        };
-        let mantissa = if mantissa.contains('.') {
-            mantissa.to_string()
-        } else {
-            format!("{mantissa}.0")
-        };
-        format!("{mantissa}E{exponent}")
-    } else {
-        let formatted = format!("{value}");
-        if formatted.contains('.') {
-            formatted
-        } else {
-            format!("{formatted}.0")
-        }
-    }
-}
 
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {
